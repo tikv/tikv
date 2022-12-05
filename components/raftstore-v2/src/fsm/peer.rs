@@ -193,9 +193,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     fn on_tick(&mut self, tick: PeerTick) {
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
+            PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
             PeerTick::RaftLogGc => unimplemented!(),
             PeerTick::SplitRegionCheck => unimplemented!(),
-            PeerTick::PdHeartbeat => unimplemented!(),
             PeerTick::CheckMerge => unimplemented!(),
             PeerTick::CheckPeerStaleState => unimplemented!(),
             PeerTick::EntryCacheEvict => unimplemented!(),

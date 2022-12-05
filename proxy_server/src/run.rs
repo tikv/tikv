@@ -57,8 +57,8 @@ use raftstore::{
             RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
-        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
 };
 use security::SecurityManager;
@@ -468,8 +468,7 @@ struct TiKvServer<ER: RaftEngine> {
     flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
     flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     system: Option<RaftBatchSystem<TiFlashEngine, ER>>,
-    resolver: resolve::PdStoreAddrResolver,
-    state: Arc<Mutex<GlobalReplicationState>>,
+    resolver: Option<resolve::PdStoreAddrResolver>,
     store_path: PathBuf,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
@@ -500,8 +499,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     importer: Arc<SstImporter>,
 }
 
-type LocalServer<EK, ER> =
-    Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
+type LocalServer<EK, ER> = Server<resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
 impl<ER: RaftEngine> TiKvServer<ER> {
@@ -541,8 +539,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let background_worker = WorkerBuilder::new("background")
             .thread_count(thread_count)
             .create();
-        let (resolver, state) =
-            resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
         let mut coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
@@ -575,8 +571,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             pd_client,
             router,
             system: Some(system),
-            resolver,
-            state,
+            resolver: None,
             store_path,
             snap_mgr: None,
             encryption_key_manager: None,
@@ -822,14 +817,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<
-        RaftKv<TiFlashEngine, ServerRaftStoreRouter<TiFlashEngine, ER>>,
-        RaftRouter<TiFlashEngine, ER>,
-    > {
+    ) -> GcWorker<RaftKv<TiFlashEngine, ServerRaftStoreRouter<TiFlashEngine, ER>>> {
         let engines = self.engines.as_ref().unwrap();
         let gc_worker = GcWorker::new(
             engines.engine.clone(),
-            self.router.clone(),
             self.flow_info_sender.take().unwrap(),
             self.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
@@ -1000,6 +991,13 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             )),
         );
 
+        let (resolver, state) = resolve::new_resolver(
+            self.pd_client.clone(),
+            &self.background_worker,
+            storage.get_engine().raft_extension().clone(),
+        );
+        self.resolver = Some(resolver);
+
         ReplicaReadLockChecker::new(self.concurrency_manager.clone())
             .register(self.coprocessor_host.as_mut().unwrap());
 
@@ -1137,7 +1135,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             raft_store.clone(),
             self.config.storage.api_version(),
             self.pd_client.clone(),
-            self.state.clone(),
+            state,
             self.background_worker.clone(),
             Some(health_service.clone()),
             Some(default_store),
@@ -1204,8 +1202,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 Arc::clone(&self.quota_limiter),
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
-            self.router.clone(),
-            self.resolver.clone(),
+            self.resolver.clone().unwrap(),
             snap_mgr.clone(),
             gc_worker.clone(),
             check_leader_scheduler,
@@ -1361,7 +1358,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 raft: engines.engines.raft.clone(),
             },
             servers.server.get_debug_thread_pool().clone(),
-            self.router.clone(),
+            engines.engine.raft_extension().clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
         );
         if servers

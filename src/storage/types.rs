@@ -299,6 +299,48 @@ impl PessimisticLockResults {
         self.0.push(key_res);
     }
 
+    pub fn into_pb(self) -> (Vec<kvrpcpb::PessimisticLockKeyResult>, Option<SharedError>) {
+        let mut error = None;
+        let res = self
+            .0
+            .into_iter()
+            .map(|res| {
+                let mut res_pb = kvrpcpb::PessimisticLockKeyResult::default();
+                match res {
+                    PessimisticLockKeyResult::Empty => {
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultNormal)
+                    }
+                    PessimisticLockKeyResult::Value(v) => {
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultNormal);
+                        res_pb.set_existence(v.is_some());
+                        res_pb.set_value(v.unwrap_or_default());
+                    }
+                    PessimisticLockKeyResult::Existence(e) => {
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultNormal);
+                        res_pb.set_existence(e);
+                    }
+                    PessimisticLockKeyResult::LockedWithConflict { value, conflict_ts } => {
+                        res_pb.set_type(
+                            kvrpcpb::PessimisticLockKeyResultType::LockResultLockedWithConflict,
+                        );
+                        res_pb.set_existence(value.is_some());
+                        res_pb.set_value(value.unwrap_or_default());
+                        res_pb.set_locked_with_conflict_ts(conflict_ts.into_inner());
+                    }
+                    PessimisticLockKeyResult::Waiting => unreachable!(),
+                    PessimisticLockKeyResult::Failed(e) => {
+                        if error.is_none() {
+                            error = Some(e)
+                        }
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultFailed);
+                    }
+                }
+                res_pb
+            })
+            .collect();
+        (res, error)
+    }
+
     pub fn into_legacy_values_and_not_founds(self) -> (Vec<Value>, Vec<bool>) {
         if self.0.is_empty() {
             return (vec![], vec![]);

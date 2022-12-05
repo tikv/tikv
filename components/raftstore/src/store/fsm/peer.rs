@@ -1330,8 +1330,15 @@ where
     ) {
         fail_point!("raft_on_capture_change");
         let region_id = self.region_id();
-        let msg =
+        let mut msg =
             new_read_index_request(region_id, region_epoch.clone(), self.fsm.peer.peer.clone());
+        // Allow to capture change even is in flashback state.
+        // TODO: add a test case for this kind of situation.
+        if self.fsm.peer.is_in_flashback {
+            let mut flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
+            flags.insert(WriteBatchFlags::FLASHBACK);
+            msg.mut_header().set_flags(flags.bits());
+        }
         let apply_router = self.ctx.apply_router.clone();
         self.propose_raft_command_internal(
             msg,
@@ -3703,6 +3710,11 @@ where
         self.update_region(cp.region);
 
         fail_point!("change_peer_after_update_region");
+        fail_point!(
+            "change_peer_after_update_region_store_3",
+            self.store_id() == 3,
+            |_| panic!("should not use return")
+        );
 
         let now = Instant::now();
         let (mut remove_self, mut need_ping) = (false, false);

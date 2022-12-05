@@ -43,7 +43,8 @@ pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
 pub use flashback_to_version_read_phase::{
-    new_flashback_to_version_read_phase_cmd, FlashbackToVersionReadPhase, FlashbackToVersionState,
+    new_flashback_rollback_lock_cmd, new_flashback_write_cmd, FlashbackToVersionReadPhase,
+    FlashbackToVersionState,
 };
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
@@ -212,6 +213,11 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             })
             .collect();
 
+        let allow_lock_with_conflict = match req.get_wake_up_mode() {
+            PessimisticLockWakeUpMode::WakeUpModeNormal => false,
+            PessimisticLockWakeUpMode::WakeUpModeForceLock => true,
+        };
+
         AcquirePessimisticLock::new(
             keys,
             req.take_primary_lock(),
@@ -224,7 +230,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             req.get_min_commit_ts().into(),
             req.get_check_existence(),
             req.get_lock_only_if_exists(),
-            false,
+            allow_lock_with_conflict,
             req.take_context(),
         )
     }
@@ -356,9 +362,21 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
     }
 }
 
+impl From<PrepareFlashbackToVersionRequest> for TypedCommand<()> {
+    fn from(mut req: PrepareFlashbackToVersionRequest) -> Self {
+        new_flashback_rollback_lock_cmd(
+            req.get_start_ts().into(),
+            req.get_version().into(),
+            Key::from_raw(req.get_start_key()),
+            Key::from_raw(req.get_end_key()),
+            req.take_context(),
+        )
+    }
+}
+
 impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     fn from(mut req: FlashbackToVersionRequest) -> Self {
-        new_flashback_to_version_read_phase_cmd(
+        new_flashback_write_cmd(
             req.get_start_ts().into(),
             req.get_commit_ts().into(),
             req.get_version().into(),

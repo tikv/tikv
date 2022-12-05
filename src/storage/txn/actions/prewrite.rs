@@ -172,7 +172,7 @@ pub struct TransactionProperties<'a> {
     pub need_old_value: bool,
     pub is_retry_request: bool,
     pub assertion_level: AssertionLevel,
-    pub txn_source: u8,
+    pub txn_source: u64,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -438,6 +438,12 @@ impl<'a> PrewriteMutation<'a> {
             check_data_constraint(reader, self.should_not_exist, &write, commit_ts, &self.key)?;
 
             return Ok(Some((write, commit_ts)));
+        }
+        // If seek_ts is max and it goes here, there is no write record for this key.
+        if seek_ts == TimeStamp::max() {
+            // last_change_ts == 0 && versions_to_last_change > 0 means the key actually
+            // does not exist.
+            (self.last_change_ts, self.versions_to_last_change) = (TimeStamp::zero(), 1);
         }
         Ok(None)
     }
@@ -750,6 +756,10 @@ fn amend_pessimistic_lock<S: Snapshot>(
         }
         (mutation.last_change_ts, mutation.versions_to_last_change) =
             write.next_last_change_info(*commit_ts);
+    } else {
+        // last_change_ts == 0 && versions_to_last_change > 0 means the key actually
+        // does not exist.
+        (mutation.last_change_ts, mutation.versions_to_last_change) = (TimeStamp::zero(), 1);
     }
     // Used pipelined pessimistic lock acquiring in this txn but failed
     // Luckily no other txn modified this lock, amend it by treat it as optimistic
@@ -2240,6 +2250,13 @@ pub mod tests {
 
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let key = b"k";
+
+        // Latest version does not exist
+        prewrite_func(&mut engine, LockType::Lock, 2);
+        let lock = must_locked(&mut engine, key, 2);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 1);
+        must_rollback(&mut engine, key, 2, false);
 
         // Latest change ts should not be enabled on TiKV 6.4
         let feature_gate = FeatureGate::default();

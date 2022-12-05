@@ -76,8 +76,8 @@ use raftstore::{
             RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
-        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     RaftRouterCompactedEventSender,
 };
@@ -221,8 +221,7 @@ struct TikvServer<ER: RaftEngine> {
     flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
     flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
-    resolver: resolve::PdStoreAddrResolver,
-    state: Arc<Mutex<GlobalReplicationState>>,
+    resolver: Option<resolve::PdStoreAddrResolver>,
     store_path: PathBuf,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
@@ -260,8 +259,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
 }
 
-type LocalServer<EK, ER> =
-    Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
+type LocalServer<EK, ER> = Server<resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
 impl<ER> TikvServer<ER>
@@ -323,8 +321,6 @@ where
         let background_worker = WorkerBuilder::new("background")
             .thread_count(thread_count)
             .create();
-        let (resolver, state) =
-            resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
         let mut coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
@@ -375,8 +371,7 @@ where
             pd_client,
             router,
             system: Some(system),
-            resolver,
-            state,
+            resolver: None,
             store_path,
             snap_mgr: None,
             encryption_key_manager: None,
@@ -655,14 +650,10 @@ where
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<
-        RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
-        RaftRouter<RocksEngine, ER>,
-    > {
+    ) -> GcWorker<RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>> {
         let engines = self.engines.as_ref().unwrap();
         let gc_worker = GcWorker::new(
             engines.engine.clone(),
-            self.router.clone(),
             self.flow_info_sender.take().unwrap(),
             self.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
@@ -823,6 +814,13 @@ where
             )),
         );
 
+        let (resolver, state) = resolve::new_resolver(
+            self.pd_client.clone(),
+            &self.background_worker,
+            storage.get_engine().raft_extension().clone(),
+        );
+        self.resolver = Some(resolver);
+
         ReplicaReadLockChecker::new(self.concurrency_manager.clone())
             .register(self.coprocessor_host.as_mut().unwrap());
 
@@ -930,7 +928,7 @@ where
             raft_store.clone(),
             self.config.storage.api_version(),
             self.pd_client.clone(),
-            self.state.clone(),
+            state,
             self.background_worker.clone(),
             Some(health_service.clone()),
             None,
@@ -953,8 +951,7 @@ where
                 Arc::clone(&self.quota_limiter),
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
-            self.router.clone(),
-            self.resolver.clone(),
+            self.resolver.clone().unwrap(),
             snap_mgr.clone(),
             gc_worker.clone(),
             check_leader_scheduler,
@@ -1106,12 +1103,6 @@ where
         gc_worker
             .start(node.id())
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        gc_worker
-            .start_observe_lock_apply(
-                self.coprocessor_host.as_mut().unwrap(),
-                self.concurrency_manager.clone(),
-            )
-            .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
@@ -1158,8 +1149,6 @@ where
                 self.concurrency_manager.clone(),
                 server.env(),
                 self.security_mgr.clone(),
-                // TODO: replace to the cdc sinker
-                resolved_ts::DummySinker::new(),
             );
             rts_worker.start_with_timer(rts_endpoint);
             self.to_stop.push(rts_worker);
@@ -1211,7 +1200,7 @@ where
         let debug_service = DebugService::new(
             engines.engines.clone(),
             servers.server.get_debug_thread_pool().clone(),
-            self.router.clone(),
+            engines.engine.raft_extension().clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
         );
         if servers
@@ -1250,7 +1239,7 @@ where
             .start(
                 servers.node.id(),
                 self.pd_client.clone(),
-                self.resolver.clone(),
+                self.resolver.clone().unwrap(),
                 self.security_mgr.clone(),
                 &self.config.pessimistic_txn,
             )

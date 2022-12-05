@@ -393,6 +393,10 @@ opt-level = 1
 debug = 1
 opt-level = 1
 
+[profile.dev.package.tirocks-sys]
+debug = false
+opt-level = 1
+
 [profile.dev]
 opt-level = 0
 debug = 0

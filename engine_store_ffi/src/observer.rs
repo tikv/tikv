@@ -91,7 +91,7 @@ unsafe impl Send for PrehandleTask {}
 unsafe impl Sync for PrehandleTask {}
 
 pub struct TiFlashObserver {
-    pub peer_id: u64,
+    pub store_id: u64,
     pub engine_store_server_helper: &'static EngineStoreServerHelper,
     pub engine: TiFlashEngine,
     pub sst_importer: Arc<SstImporter>,
@@ -104,7 +104,7 @@ pub struct TiFlashObserver {
 impl Clone for TiFlashObserver {
     fn clone(&self) -> Self {
         TiFlashObserver {
-            peer_id: self.peer_id,
+            store_id: self.store_id,
             engine_store_server_helper: self.engine_store_server_helper,
             engine: self.engine.clone(),
             sst_importer: self.sst_importer.clone(),
@@ -122,7 +122,7 @@ const TIFLASH_OBSERVER_PRIORITY: u32 = 0;
 
 impl TiFlashObserver {
     pub fn new(
-        peer_id: u64,
+        store_id: u64,
         engine: engine_tiflash::RocksEngine,
         sst_importer: Arc<SstImporter>,
         snap_handle_pool_size: usize,
@@ -134,7 +134,7 @@ impl TiFlashObserver {
             .max_thread_count(snap_handle_pool_size)
             .build_future_pool();
         TiFlashObserver {
-            peer_id,
+            store_id,
             engine_store_server_helper,
             engine,
             sst_importer,
@@ -247,7 +247,7 @@ impl TiFlashObserver {
 
 impl Coprocessor for TiFlashObserver {
     fn stop(&self) {
-        info!("shutdown tiflash observer"; "peer_id" => self.peer_id);
+        info!("shutdown tiflash observer"; "store_id" => self.store_id);
         self.apply_snap_pool.as_ref().unwrap().shutdown();
     }
 }
@@ -604,7 +604,7 @@ impl RegionChangeObserver for TiFlashObserver {
             info!(
                 "observe destroy";
                 "region_id" => ob_ctx.region().get_id(),
-                "peer_id" => self.peer_id,
+                "store_id" => self.store_id,
             );
             self.engine_store_server_helper
                 .handle_destroy(ob_ctx.region().get_id());
@@ -636,13 +636,13 @@ impl RegionChangeObserver for TiFlashObserver {
             debug!(
             "observe pre_persist, persist";
             "region_id" => ob_ctx.region().get_id(),
-            "peer_id" => self.peer_id,
+            "store_id" => self.store_id,
             );
         } else {
             debug!(
             "observe pre_persist";
             "region_id" => ob_ctx.region().get_id(),
-            "peer_id" => self.peer_id,
+            "store_id" => self.store_id,
             "is_finished" => is_finished,
             );
         };

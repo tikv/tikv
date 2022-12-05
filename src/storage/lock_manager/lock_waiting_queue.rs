@@ -841,11 +841,11 @@ mod tests {
     }
 
     fn expect_write_conflict(
-        err: &StorageErrorInner,
+        err: &StorageError,
         expect_conflict_start_ts: impl Into<TimeStamp>,
         expect_conflict_commit_ts: impl Into<TimeStamp>,
     ) {
-        match err {
+        match &*err.0 {
             StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
                 box MvccErrorInner::WriteConflict {
                     conflict_start_ts,

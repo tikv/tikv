@@ -9,7 +9,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
-use causal_ts::CausalTsProvider;
+use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -32,7 +32,7 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
-    router::{LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
@@ -60,7 +60,7 @@ use tikv::{
     },
     storage::{
         self,
-        kv::SnapContext,
+        kv::{FakeExtension, SnapContext},
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine,
     },
@@ -84,8 +84,9 @@ use crate::config::Config;
 
 type SimulateStoreTransport =
     SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, engine_rocks::RocksEngine>>;
+type SimulateRaftExtension = <SimulateEngine as Engine>::RaftExtension;
 type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver, TiFlashEngine>>;
+    SimulateTransport<ServerTransport<SimulateRaftExtension, PdStoreAddrResolver>>;
 
 pub type SimulateEngine = RaftKv<TiFlashEngine, SimulateStoreTransport>;
 
@@ -125,13 +126,13 @@ impl StoreAddrResolver for AddressMap {
 
 struct ServerMeta {
     node: Node<TestPdClient, TiFlashEngine, engine_rocks::RocksEngine>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
+    server: Server<PdStoreAddrResolver, SimulateEngine>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>,
     raw_apply_router: ApplyRouter<TiFlashEngine>,
-    gc_worker: GcWorker<RaftKv<TiFlashEngine, SimulateStoreTransport>, SimulateStoreTransport>,
-    rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
+    gc_worker: GcWorker<RaftKv<TiFlashEngine, SimulateStoreTransport>>,
+    rts_worker: Option<LazyWorker<resolved_ts::Task>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
@@ -152,10 +153,10 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, SnapManager>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient<AddressMap, RaftStoreBlackHole, TiFlashEngine>,
+    raft_client: RaftClient<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
-    pub causal_ts_providers: HashMap<u64, Arc<dyn CausalTsProvider>>,
+    pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
 }
 
 impl ServerCluster {
@@ -176,7 +177,7 @@ impl ServerCluster {
             Arc::default(),
             security_mgr.clone(),
             map.clone(),
-            RaftStoreBlackHole,
+            FakeExtension,
             worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
@@ -218,7 +219,7 @@ impl ServerCluster {
     pub fn get_gc_worker(
         &self,
         node_id: u64,
-    ) -> &GcWorker<RaftKv<TiFlashEngine, SimulateStoreTransport>, SimulateStoreTransport> {
+    ) -> &GcWorker<RaftKv<TiFlashEngine, SimulateStoreTransport>> {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 
@@ -226,7 +227,7 @@ impl ServerCluster {
         self.concurrency_managers.get(&node_id).unwrap().clone()
     }
 
-    pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<dyn CausalTsProvider>> {
+    pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<CausalTsProviderImpl>> {
         self.causal_ts_providers.get(&node_id).cloned()
     }
 
@@ -334,16 +335,12 @@ impl ServerCluster {
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            sim_router.clone(),
             tx,
             cfg.gc.clone(),
             Default::default(),
             Arc::new(region_info_accessor.clone()),
         );
         gc_worker.start(node_id).unwrap();
-        gc_worker
-            .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
-            .unwrap();
 
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
@@ -360,7 +357,6 @@ impl ServerCluster {
                 concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
-                resolved_ts::DummySinker::new(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
@@ -368,21 +364,6 @@ impl ServerCluster {
         } else {
             None
         };
-
-        if ApiVersion::V2 == F::TAG {
-            let causal_ts_provider = Arc::new(
-                block_on(causal_ts::BatchTsoProvider::new_opt(
-                    self.pd_client.clone(),
-                    cfg.causal_ts.renew_interval.0,
-                    cfg.causal_ts.alloc_ahead_buffer.0,
-                    cfg.causal_ts.renew_batch_min_size,
-                    cfg.causal_ts.renew_batch_max_size,
-                ))
-                .unwrap(),
-            );
-            self.causal_ts_providers
-                .insert(node_id, causal_ts_provider.clone());
-        }
 
         // Start resource metering.
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
@@ -432,6 +413,7 @@ impl ServerCluster {
             cfg.quota.max_delay_duration,
             cfg.quota.enable_auto_tune,
         ));
+        let extension = engine.raft_extension().clone();
         let store = create_raft_storage::<_, _, _, F, _>(
             engine,
             &cfg.storage,
@@ -455,7 +437,7 @@ impl ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (resolver, state) =
-            resolve::new_resolver(Arc::clone(&self.pd_client), &bg_worker, router.clone());
+            resolve::new_resolver(Arc::clone(&self.pd_client), &bg_worker, extension.clone());
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
             .max_total_size(cfg.server.snap_max_total_size.0)
@@ -523,7 +505,6 @@ impl ServerCluster {
                 store.clone(),
                 copr.clone(),
                 copr_v2.clone(),
-                sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
                 gc_worker.clone(),
