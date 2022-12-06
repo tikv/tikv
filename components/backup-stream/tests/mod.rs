@@ -1286,4 +1286,38 @@ mod test {
             round1.union(&round2).map(|x| x.as_slice()),
         ));
     }
+
+    #[test]
+    fn test_service_safepoint() {
+        let suite = SuiteBuilder::new_named("safepoint").nodes(1).build();
+
+        suite.must_register_task(1, "safepoint");
+        let mut events = suite.flush_stream();
+        suite.sync();
+        suite.force_flush_files("safepoint");
+        run_async_test(events.next()).expect("failed to wait flush");
+        run_async_test(suite.get_meta_cli().remove_task("safepoint"))
+            .expect("failed to remove task");
+        suite.sync();
+        std::thread::sleep(Duration::from_millis(200));
+        let safepoints = suite
+            .cluster
+            .pd_client
+            .gc_safepoints
+            .read()
+            .unwrap()
+            .iter()
+            .map(|s| (s.serivce.clone(), s.ttl.as_secs(), s.safepoint.into_inner()))
+            .collect::<Vec<_>>();
+        let required = vec![
+            ("safepoint-1-pause-guard".to_owned(), 0, 0),
+            (
+                "backup-stream-safepoint-1".to_owned(),
+                86400,
+                0, // Because the global checkpoint wasn't advanced
+            ),
+            ("backup-stream-safepoint-1".to_owned(), 0, 0),
+        ];
+        assert_eq!(safepoints, required);
+    }
 }

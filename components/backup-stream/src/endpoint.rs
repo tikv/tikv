@@ -44,7 +44,7 @@ use crate::{
         BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
         GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
-    errors::{Error, Result},
+    errors::{Error, ReportableResult, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
     future,
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
@@ -673,6 +673,16 @@ where
         let _ = metrics::remove_task_status_metric(task).map_err(
             |err| info!("failed to remove checkpoint ts metric"; "task" => task, "err" => %err),
         );
+        self.pool
+            .block_on(self.pd_client.update_service_safe_point(
+                format!("backup-stream-{}-{}", task, self.store_id),
+                TimeStamp::zero(),
+                Duration::ZERO,
+            ))
+            .report_if_err(format_args!(
+                "during removing service safepoint for task {}",
+                task
+            ));
     }
 
     /// unload a task from memory: this would stop observe the changes required

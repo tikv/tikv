@@ -1798,13 +1798,11 @@ impl PdClient for TestPdClient {
         safepoint: TimeStamp,
         ttl: Duration,
     ) -> PdFuture<()> {
-        if ttl.as_secs() > 0 {
-            self.gc_safepoints.wl().push(GcSafePoint {
-                serivce: name,
-                ttl,
-                safepoint,
-            });
-        }
+        self.gc_safepoints.wl().push(GcSafePoint {
+            serivce: name,
+            ttl,
+            safepoint,
+        });
         Box::pin(ok(()))
     }
 
