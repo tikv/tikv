@@ -1,6 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(map_first_last)] // For `BTreeMap::pop_first`.
 #![feature(div_duration)]
 
 #[macro_use]

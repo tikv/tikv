@@ -76,8 +76,8 @@ use raftstore::{
             RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
-        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     RaftRouterCompactedEventSender,
 };
@@ -116,7 +116,10 @@ use tikv_util::{
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    sys::{cpu_time::ProcessStat, disk, register_memory_usage_high_water, SysQuota},
+    sys::{
+        cpu_time::ProcessStat, disk, path_in_diff_mount_point, register_memory_usage_high_water,
+        SysQuota,
+    },
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
@@ -218,8 +221,7 @@ struct TikvServer<ER: RaftEngine> {
     flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
     flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
-    resolver: resolve::PdStoreAddrResolver,
-    state: Arc<Mutex<GlobalReplicationState>>,
+    resolver: Option<resolve::PdStoreAddrResolver>,
     store_path: PathBuf,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
@@ -232,6 +234,7 @@ struct TikvServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
@@ -256,8 +259,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
 }
 
-type LocalServer<EK, ER> =
-    Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
+type LocalServer<EK, ER> = Server<resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
 impl<ER> TikvServer<ER>
@@ -319,8 +321,6 @@ where
         let background_worker = WorkerBuilder::new("background")
             .thread_count(thread_count)
             .create();
-        let (resolver, state) =
-            resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
         let mut coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
@@ -360,6 +360,10 @@ where
             info!("Causal timestamp provider startup.");
         }
 
+        // Run check leader in a dedicate thread, because it is time sensitive
+        // and crucial to TiCDC replication lag.
+        let check_leader_worker = WorkerBuilder::new("check_leader").thread_count(1).create();
+
         TikvServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -367,8 +371,7 @@ where
             pd_client,
             router,
             system: Some(system),
-            resolver,
-            state,
+            resolver: None,
             store_path,
             snap_mgr: None,
             encryption_key_manager: None,
@@ -381,6 +384,7 @@ where
             concurrency_manager,
             env,
             background_worker,
+            check_leader_worker,
             flow_info_sender: None,
             flow_info_receiver: None,
             sst_worker: None,
@@ -473,7 +477,7 @@ where
         let cur_port = cur_addr.port();
         let lock_dir = get_lock_dir();
 
-        let search_base = env::temp_dir().join(&lock_dir);
+        let search_base = env::temp_dir().join(lock_dir);
         file_system::create_dir_all(&search_base)
             .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
@@ -527,36 +531,66 @@ where
         // enough space to do compaction and region migration when TiKV recover.
         // This file is created in data_dir rather than db_path, because we must not
         // increase store size of db_path.
+        fn calculate_reserved_space(capacity: u64, reserved_size_from_config: u64) -> u64 {
+            let mut reserved_size = reserved_size_from_config;
+            if reserved_size_from_config != 0 {
+                reserved_size =
+                    cmp::max((capacity as f64 * 0.05) as u64, reserved_size_from_config);
+            }
+            reserved_size
+        }
+        fn reserve_physical_space(data_dir: &String, available: u64, reserved_size: u64) {
+            let path = Path::new(data_dir).join(file_system::SPACE_PLACEHOLDER_FILE);
+            if let Err(e) = file_system::remove_file(path) {
+                warn!("failed to remove space holder on starting: {}", e);
+            }
+
+            // place holder file size is 20% of total reserved space.
+            if available > reserved_size {
+                file_system::reserve_space_for_recover(data_dir, reserved_size / 5)
+                    .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
+                    .unwrap();
+            } else {
+                warn!("no enough disk space left to create the place holder file");
+            }
+        }
+
         let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
         let mut capacity = disk_stats.total_space();
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
-        let mut reserve_space = self.config.storage.reserve_space.0;
-        if self.config.storage.reserve_space.0 != 0 {
-            reserve_space = cmp::max(
-                (capacity as f64 * 0.05) as u64,
-                self.config.storage.reserve_space.0,
-            );
-        }
-        disk::set_disk_reserved_space(reserve_space);
-        let path =
-            Path::new(&self.config.storage.data_dir).join(file_system::SPACE_PLACEHOLDER_FILE);
-        if let Err(e) = file_system::remove_file(&path) {
-            warn!("failed to remove space holder on starting: {}", e);
-        }
+        // reserve space for kv engine
+        let kv_reserved_size =
+            calculate_reserved_space(capacity, self.config.storage.reserve_space.0);
+        disk::set_disk_reserved_space(kv_reserved_size);
+        reserve_physical_space(
+            &self.config.storage.data_dir,
+            disk_stats.available_space(),
+            kv_reserved_size,
+        );
 
-        let available = disk_stats.available_space();
-        // place holder file size is 20% of total reserved space.
-        if available > reserve_space {
-            file_system::reserve_space_for_recover(
-                &self.config.storage.data_dir,
-                reserve_space / 5,
-            )
-            .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
-            .unwrap();
+        let raft_data_dir = if self.config.raft_engine.enable {
+            self.config.raft_engine.config().dir
         } else {
-            warn!("no enough disk space left to create the place holder file");
+            self.config.raft_store.raftdb_path.clone()
+        };
+
+        let separated_raft_mount_path =
+            path_in_diff_mount_point(&self.config.storage.data_dir, &raft_data_dir);
+        if separated_raft_mount_path {
+            let raft_disk_stats = fs2::statvfs(&raft_data_dir).unwrap();
+            // reserve space for raft engine if raft engine is deployed separately
+            let raft_reserved_size = calculate_reserved_space(
+                raft_disk_stats.total_space(),
+                self.config.storage.reserve_raft_space.0,
+            );
+            disk::set_raft_disk_reserved_space(raft_reserved_size);
+            reserve_physical_space(
+                &raft_data_dir,
+                raft_disk_stats.available_space(),
+                raft_reserved_size,
+            );
         }
     }
 
@@ -616,14 +650,10 @@ where
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<
-        RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
-        RaftRouter<RocksEngine, ER>,
-    > {
+    ) -> GcWorker<RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>> {
         let engines = self.engines.as_ref().unwrap();
         let gc_worker = GcWorker::new(
             engines.engine.clone(),
-            self.router.clone(),
             self.flow_info_sender.take().unwrap(),
             self.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
@@ -784,6 +814,13 @@ where
             )),
         );
 
+        let (resolver, state) = resolve::new_resolver(
+            self.pd_client.clone(),
+            &self.background_worker,
+            storage.get_engine().raft_extension().clone(),
+        );
+        self.resolver = Some(resolver);
+
         ReplicaReadLockChecker::new(self.concurrency_manager.clone())
             .register(self.coprocessor_host.as_mut().unwrap());
 
@@ -870,7 +907,7 @@ where
             self.coprocessor_host.clone().unwrap(),
         );
         let check_leader_scheduler = self
-            .background_worker
+            .check_leader_worker
             .start("check-leader", check_leader_runner);
 
         let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
@@ -891,7 +928,7 @@ where
             raft_store.clone(),
             self.config.storage.api_version(),
             self.pd_client.clone(),
-            self.state.clone(),
+            state,
             self.background_worker.clone(),
             Some(health_service.clone()),
             None,
@@ -914,8 +951,7 @@ where
                 Arc::clone(&self.quota_limiter),
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
-            self.router.clone(),
-            self.resolver.clone(),
+            self.resolver.clone().unwrap(),
             snap_mgr.clone(),
             gc_worker.clone(),
             check_leader_scheduler,
@@ -954,7 +990,13 @@ where
                 ConnectionConfig {
                     keep_alive_interval: self.config.server.grpc_keepalive_time.0,
                     keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
-                    tls: self.security_mgr.tonic_tls_config(),
+                    tls: self
+                        .security_mgr
+                        .client_suite()
+                        .map_err(|err| {
+                            warn!("Failed to load client TLS suite, ignoring TLS config."; "err" => %err);
+                        })
+                        .ok(),
                 },
             );
             let backup_stream_endpoint = backup_stream::Endpoint::new(
@@ -1067,12 +1109,6 @@ where
         gc_worker
             .start(node.id())
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        gc_worker
-            .start_observe_lock_apply(
-                self.coprocessor_host.as_mut().unwrap(),
-                self.concurrency_manager.clone(),
-            )
-            .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
@@ -1119,8 +1155,6 @@ where
                 self.concurrency_manager.clone(),
                 server.env(),
                 self.security_mgr.clone(),
-                // TODO: replace to the cdc sinker
-                resolved_ts::DummySinker::new(),
             );
             rts_worker.start_with_timer(rts_endpoint);
             self.to_stop.push(rts_worker);
@@ -1172,7 +1206,7 @@ where
         let debug_service = DebugService::new(
             engines.engines.clone(),
             servers.server.get_debug_thread_pool().clone(),
-            self.router.clone(),
+            engines.engine.raft_extension().clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
         );
         if servers
@@ -1211,7 +1245,7 @@ where
             .start(
                 servers.node.id(),
                 self.pd_client.clone(),
-                self.resolver.clone(),
+                self.resolver.clone().unwrap(),
                 self.security_mgr.clone(),
                 &self.config.pessimistic_txn,
             )
@@ -1442,13 +1476,28 @@ where
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
-        if reserve_space == 0 {
+        let reserve_raft_space = disk::get_raft_disk_reserved_space();
+        if reserve_space == 0 && reserve_raft_space == 0 {
             info!("disk space checker not enabled");
             return;
         }
+        let raft_path = engines.raft.get_engine_path().to_string();
+        let separated_raft_mount_path =
+            path_in_diff_mount_point(raft_path.as_str(), engines.kv.path());
+        let raft_almost_full_threshold = reserve_raft_space;
+        let raft_already_full_threshold = reserve_raft_space / 2;
 
         let almost_full_threshold = reserve_space;
         let already_full_threshold = reserve_space / 2;
+        fn calculate_disk_usage(a: disk::DiskUsage, b: disk::DiskUsage) -> disk::DiskUsage {
+            match (a, b) {
+                (disk::DiskUsage::AlreadyFull, _) => disk::DiskUsage::AlreadyFull,
+                (_, disk::DiskUsage::AlreadyFull) => disk::DiskUsage::AlreadyFull,
+                (disk::DiskUsage::AlmostFull, _) => disk::DiskUsage::AlmostFull,
+                (_, disk::DiskUsage::AlmostFull) => disk::DiskUsage::AlmostFull,
+                (disk::DiskUsage::Normal, disk::DiskUsage::Normal) => disk::DiskUsage::Normal,
+            }
+        }
         self.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
                 let disk_stats = match fs2::statvfs(&store_path) {
@@ -1475,14 +1524,45 @@ where
                     .get_engine_size()
                     .expect("get raft engine size");
 
+                let mut raft_disk_status = disk::DiskUsage::Normal;
+                if separated_raft_mount_path && reserve_raft_space != 0 {
+                    let raft_disk_stats = match fs2::statvfs(&raft_path) {
+                        Err(e) => {
+                            error!(
+                                "get disk stat for raft engine failed";
+                                "raft engine path" => raft_path.clone(),
+                                "err" => ?e
+                            );
+                            return;
+                        }
+                        Ok(stats) => stats,
+                    };
+                    let raft_disk_cap = raft_disk_stats.total_space();
+                    let mut raft_disk_available =
+                        raft_disk_cap.checked_sub(raft_size).unwrap_or_default();
+                    raft_disk_available = cmp::min(raft_disk_available, raft_disk_stats.available_space());
+                    raft_disk_status = if raft_disk_available <= raft_already_full_threshold
+                    {
+                        disk::DiskUsage::AlreadyFull
+                    } else if raft_disk_available <= raft_almost_full_threshold
+                    {
+                        disk::DiskUsage::AlmostFull
+                    } else {
+                        disk::DiskUsage::Normal
+                    };
+                }
                 let placeholer_file_path = PathBuf::from_str(&data_dir)
                     .unwrap()
                     .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
 
                 let placeholder_size: u64 =
-                    file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
+                    file_system::get_file_size(placeholer_file_path).unwrap_or(0);
 
-                let used_size = snap_size + kv_size + raft_size + placeholder_size;
+                let used_size = if !separated_raft_mount_path {
+                    snap_size + kv_size + raft_size + placeholder_size
+                } else {
+                    snap_size + kv_size + placeholder_size
+                };
                 let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
                     disk_cap
                 } else {
@@ -1493,18 +1573,22 @@ where
                 available = cmp::min(available, disk_stats.available_space());
 
                 let prev_disk_status = disk::get_disk_status(0); //0 no need care about failpoint.
-                let cur_disk_status = if available <= already_full_threshold {
+                let cur_kv_disk_status = if available <= already_full_threshold {
                     disk::DiskUsage::AlreadyFull
                 } else if available <= almost_full_threshold {
                     disk::DiskUsage::AlmostFull
                 } else {
                     disk::DiskUsage::Normal
                 };
+                let cur_disk_status = calculate_disk_usage(raft_disk_status, cur_kv_disk_status);
                 if prev_disk_status != cur_disk_status {
                     warn!(
-                        "disk usage {:?}->{:?}, available={},snap={},kv={},raft={},capacity={}",
+                        "disk usage {:?}->{:?} (raft engine usage: {:?}, kv engine usage: {:?}), seperated raft mount={}, kv available={}, snap={}, kv={}, raft={}, capacity={}",
                         prev_disk_status,
                         cur_disk_status,
+                        raft_disk_status,
+                        cur_kv_disk_status,
+                        separated_raft_mount_path,
                         available,
                         snap_size,
                         kv_size,

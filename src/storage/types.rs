@@ -8,6 +8,7 @@ use kvproto::kvrpcpb;
 use txn_types::{Key, Value};
 
 use crate::storage::{
+    errors::SharedError,
     lock_manager::WaitTimeout,
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
@@ -52,6 +53,10 @@ impl MvccInfo {
                     write_info.set_start_ts(write.start_ts.into_inner());
                     write_info.set_commit_ts(commit_ts.into_inner());
                     write_info.set_short_value(write.short_value.unwrap_or_default());
+                    if !write.last_change_ts.is_zero() {
+                        write_info.set_last_change_ts(write.last_change_ts.into_inner());
+                        write_info.set_versions_to_last_change(write.versions_to_last_change);
+                    }
                     write_info
                 })
                 .collect()
@@ -70,6 +75,10 @@ impl MvccInfo {
             lock_info.set_start_ts(lock.ts.into_inner());
             lock_info.set_primary(lock.primary);
             lock_info.set_short_value(lock.short_value.unwrap_or_default());
+            if !lock.last_change_ts.is_zero() {
+                lock_info.set_last_change_ts(lock.last_change_ts.into_inner());
+                lock_info.set_versions_to_last_change(lock.versions_to_last_change);
+            }
             mvcc_info.set_lock(lock_info);
         }
         let vv = extract_2pc_values(self.values);
@@ -122,6 +131,7 @@ pub struct PrewriteResult {
     pub one_pc_commit_ts: TimeStamp,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(Default))]
 pub struct PessimisticLockParameters {
     pub pb_ctx: kvrpcpb::Context,
@@ -134,6 +144,7 @@ pub struct PessimisticLockParameters {
     pub min_commit_ts: TimeStamp,
     pub check_existence: bool,
     pub is_first_lock: bool,
+    pub lock_only_if_exists: bool,
 
     /// Whether it's allowed for an pessimistic lock request to acquire the lock
     /// even there is write conflict (i.e. the latest version's `commit_ts` is
@@ -147,42 +158,221 @@ pub struct PessimisticLockParameters {
     pub allow_lock_with_conflict: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum PessimisticLockRes {
-    /// The previous value is loaded while handling the `AcquirePessimisticLock`
-    /// command. The i-th item is the value of the i-th key in the
-    /// `AcquirePessimisticLock` command.
-    Values(Vec<Option<Value>>),
-    /// Checked whether the key exists while handling the
-    /// `AcquirePessimisticLock` command. The i-th item is true if the i-th key
-    /// in the `AcquirePessimisticLock` command exists.
-    Existence(Vec<bool>),
+/// Represents the result of pessimistic lock on a single key.
+#[derive(Debug, Clone)]
+pub enum PessimisticLockKeyResult {
+    /// The lock is acquired successfully, returning no additional information.
     Empty,
+    /// The lock is acquired successfully, and the previous value is read and
+    /// returned.
+    Value(Option<Value>),
+    /// The lock is acquired successfully, and also checked if the key exists
+    /// previously.
+    Existence(bool),
+    /// There is a write conflict, but the lock is acquired ignoring the write
+    /// conflict.
+    LockedWithConflict {
+        /// The previous value of the key.
+        value: Option<Value>,
+        /// The `commit_ts` of the latest Write record found on this key. This
+        /// is also the actual `for_update_ts` written to the lock.
+        conflict_ts: TimeStamp,
+    },
+    /// The key is already locked and lock-waiting is needed.
+    Waiting,
+    /// Failed to acquire the lock due to some error.
+    Failed(SharedError),
 }
 
-impl PessimisticLockRes {
-    pub fn push(&mut self, value: Option<Value>) {
-        match self {
-            PessimisticLockRes::Values(v) => v.push(value),
-            PessimisticLockRes::Existence(v) => v.push(value.is_some()),
-            _ => panic!("unexpected PessimisticLockRes"),
+impl PessimisticLockKeyResult {
+    pub fn new_success(
+        need_value: bool,
+        need_check_existence: bool,
+        locked_with_conflict_ts: Option<TimeStamp>,
+        value: Option<Value>,
+    ) -> Self {
+        if let Some(conflict_ts) = locked_with_conflict_ts {
+            Self::LockedWithConflict { value, conflict_ts }
+        } else if need_value {
+            Self::Value(value)
+        } else if need_check_existence {
+            Self::Existence(value.is_some())
+        } else {
+            Self::Empty
         }
     }
 
-    pub fn into_values_and_not_founds(self) -> (Vec<Value>, Vec<bool>) {
+    pub fn unwrap_value(self) -> Option<Value> {
         match self {
-            PessimisticLockRes::Values(vals) => vals
-                .into_iter()
-                .map(|v| {
-                    let is_not_found = v.is_none();
-                    (v.unwrap_or_default(), is_not_found)
-                })
-                .unzip(),
-            PessimisticLockRes::Existence(mut vals) => {
-                vals.iter_mut().for_each(|x| *x = !*x);
-                (vec![], vals)
+            Self::Value(v) => v,
+            x => panic!(
+                "pessimistic lock key result expected to be a value, got {:?}",
+                x
+            ),
+        }
+    }
+
+    pub fn unwrap_existence(self) -> bool {
+        match self {
+            Self::Existence(e) => e,
+            x => panic!(
+                "pessimistic lock key result expected to be existence, got {:?}",
+                x
+            ),
+        }
+    }
+
+    pub fn assert_empty(&self) {
+        assert!(matches!(self, Self::Empty));
+    }
+
+    #[cfg(test)]
+    pub fn assert_value(&self, expected_value: Option<&[u8]>) {
+        match self {
+            Self::Value(v) if v.as_ref().map(|v| v.as_slice()) == expected_value => (),
+            x => panic!(
+                "pessimistic lock key result not match, expected Value({:?}), got {:?}",
+                expected_value, x
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn assert_existence(&self, expected_existence: bool) {
+        match self {
+            Self::Existence(e) if *e == expected_existence => (),
+            x => panic!(
+                "pessimistic lock key result not match, expected Existence({:?}), got {:?}",
+                expected_existence, x
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn assert_locked_with_conflict(
+        &self,
+        expected_value: Option<&[u8]>,
+        expected_conflict_ts: impl Into<TimeStamp>,
+    ) {
+        let expected_conflict_ts = expected_conflict_ts.into();
+        match self {
+            Self::LockedWithConflict { value, conflict_ts }
+                if value.as_ref().map(|v| v.as_slice()) == expected_value
+                    && *conflict_ts == expected_conflict_ts => {}
+            x => panic!(
+                "pessimistic lock key result not match, expected LockedWithConflict{{ value: {:?}, conflict_ts: {} }}, got {:?}",
+                expected_value, expected_conflict_ts, x
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn assert_waiting(&self) {
+        assert!(matches!(self, Self::Waiting));
+    }
+
+    pub fn unwrap_err(&self) -> SharedError {
+        match self {
+            Self::Failed(e) => e.clone(),
+            x => panic!(
+                "pessimistic lock key result not match expected Failed, got {:?}",
+                x,
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PessimisticLockResults(pub Vec<PessimisticLockKeyResult>);
+
+impl PessimisticLockResults {
+    pub fn new() -> Self {
+        Self(vec![])
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    pub fn push(&mut self, key_res: PessimisticLockKeyResult) {
+        self.0.push(key_res);
+    }
+
+    pub fn into_pb(self) -> (Vec<kvrpcpb::PessimisticLockKeyResult>, Option<SharedError>) {
+        let mut error = None;
+        let res = self
+            .0
+            .into_iter()
+            .map(|res| {
+                let mut res_pb = kvrpcpb::PessimisticLockKeyResult::default();
+                match res {
+                    PessimisticLockKeyResult::Empty => {
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultNormal)
+                    }
+                    PessimisticLockKeyResult::Value(v) => {
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultNormal);
+                        res_pb.set_existence(v.is_some());
+                        res_pb.set_value(v.unwrap_or_default());
+                    }
+                    PessimisticLockKeyResult::Existence(e) => {
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultNormal);
+                        res_pb.set_existence(e);
+                    }
+                    PessimisticLockKeyResult::LockedWithConflict { value, conflict_ts } => {
+                        res_pb.set_type(
+                            kvrpcpb::PessimisticLockKeyResultType::LockResultLockedWithConflict,
+                        );
+                        res_pb.set_existence(value.is_some());
+                        res_pb.set_value(value.unwrap_or_default());
+                        res_pb.set_locked_with_conflict_ts(conflict_ts.into_inner());
+                    }
+                    PessimisticLockKeyResult::Waiting => unreachable!(),
+                    PessimisticLockKeyResult::Failed(e) => {
+                        if error.is_none() {
+                            error = Some(e)
+                        }
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultFailed);
+                    }
+                }
+                res_pb
+            })
+            .collect();
+        (res, error)
+    }
+
+    pub fn into_legacy_values_and_not_founds(self) -> (Vec<Value>, Vec<bool>) {
+        if self.0.is_empty() {
+            return (vec![], vec![]);
+        }
+
+        match &self.0[0] {
+            PessimisticLockKeyResult::Empty => {
+                self.0.into_iter().for_each(|res| res.assert_empty());
+                (vec![], vec![])
             }
-            PessimisticLockRes::Empty => (vec![], vec![]),
+            PessimisticLockKeyResult::Existence(_) => {
+                let not_founds = self.0.into_iter().map(|x| !x.unwrap_existence()).collect();
+                (vec![], not_founds)
+            }
+            PessimisticLockKeyResult::Value(_) => {
+                let mut not_founds = Vec::with_capacity(self.0.len());
+                let mut values = Vec::with_capacity(self.0.len());
+                self.0.into_iter().for_each(|x| {
+                    let v = x.unwrap_value();
+                    match v {
+                        Some(v) => {
+                            not_founds.push(false);
+                            values.push(v);
+                        }
+                        None => {
+                            not_founds.push(true);
+                            values.push(vec![]);
+                        }
+                    }
+                });
+                (values, not_founds)
+            }
+            _ => unreachable!(),
         }
     }
 }
@@ -238,7 +428,7 @@ storage_callback! {
     Locks(Vec<kvrpcpb::LockInfo>) ProcessResult::Locks { locks } => locks,
     TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
     Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,
-    PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
+    PessimisticLock(Result<PessimisticLockResults>) ProcessResult::PessimisticLockRes { res } => res,
     SecondaryLocksStatus(SecondaryLocksStatus) ProcessResult::SecondaryLocksStatus { status } => status,
     RawCompareAndSwap((Option<Value>, bool)) ProcessResult::RawCompareAndSwapRes { previous_value, succeed } => (previous_value, succeed),
 }

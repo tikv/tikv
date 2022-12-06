@@ -88,6 +88,8 @@ fn test_serde_custom_tikv_config() {
         max_grpc_send_msg_len: 6 * (1 << 20),
         raft_client_grpc_send_msg_buffer: 1234 * 1024,
         raft_client_queue_size: 1234,
+        raft_client_max_backoff: ReadableDuration::secs(5),
+        raft_client_initial_reconnect_backoff: ReadableDuration::secs(1),
         raft_msg_max_batch_size: 123,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
@@ -117,7 +119,6 @@ fn test_serde_custom_tikv_config() {
         heavy_load_wait_duration: Some(ReadableDuration::millis(2)),
         enable_request_batch: false,
         background_thread_count: 999,
-        raft_client_backoff_step: ReadableDuration::secs(1),
         end_point_slow_log_threshold: ReadableDuration::secs(1),
         forward_max_connections_per_address: 5,
         reject_messages_on_memory_ratio: 0.8,
@@ -230,6 +231,7 @@ fn test_serde_custom_tikv_config() {
         hibernate_regions: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
+        apply_yield_write_size: ReadableSize(12345),
         perf_level: PerfLevel::Disable,
         evict_cache_on_memory_ratio: 0.8,
         cmd_batch: false,
@@ -669,6 +671,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(10),
+        reserve_raft_space: ReadableSize::gb(2),
         enable_async_apply_prewrite: true,
         api_version: 1,
         enable_ttl: true,
@@ -762,6 +765,7 @@ fn test_serde_custom_tikv_config() {
         num_threads: 123,
         stream_channel_window: 123,
         import_mode_timeout: ReadableDuration::secs(1453),
+        memory_use_ratio: 0.3,
     };
     value.panic_when_unexpected_key_or_data = true;
     value.gc = GcConfig {
@@ -788,7 +792,6 @@ fn test_serde_custom_tikv_config() {
         tso_worker_threads: 2,
         old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),
-        raw_min_ts_outlier_threshold: ReadableDuration::secs(60),
     };
     value.resolved_ts = ResolvedTsConfig {
         enable: true,

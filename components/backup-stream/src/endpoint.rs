@@ -42,7 +42,7 @@ use crate::{
     annotate,
     checkpoint_manager::{
         BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
-        GetCheckpointResult, RegionIdWithVersion,
+        GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
     errors::{Error, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
@@ -169,6 +169,8 @@ where
             ((config.num_threads + 1) / 2).max(1),
         );
         pool.spawn(op_loop);
+        let mut checkpoint_mgr = CheckpointManager::default();
+        pool.spawn(checkpoint_mgr.spawn_subscription_mgr());
         Endpoint {
             meta_client,
             range_router,
@@ -187,7 +189,7 @@ where
             region_operator,
             failover_time: None,
             config,
-            checkpoint_mgr: Default::default(),
+            checkpoint_mgr,
         }
     }
 }
@@ -891,11 +893,7 @@ where
                 // Let's clear all stale checkpoints first.
                 // Or they may slow down the global checkpoint.
                 self.checkpoint_mgr.clear();
-                for (region, checkpoint) in u {
-                    debug!("setting region checkpoint"; "region" => %region.get_id(), "ts" => %checkpoint);
-                    self.checkpoint_mgr
-                        .update_region_checkpoint(&region, checkpoint)
-                }
+                self.checkpoint_mgr.update_region_checkpoints(u);
             }
             RegionCheckpointOperation::Get(g, cb) => {
                 let _guard = self.pool.handle().enter();
@@ -914,6 +912,14 @@ where
                         })
                         .collect()),
                 }
+            }
+            RegionCheckpointOperation::Subscribe(sub) => {
+                let fut = self.checkpoint_mgr.add_subscriber(sub);
+                self.pool.spawn(async move {
+                    if let Err(err) = fut.await {
+                        err.report("adding subscription");
+                    }
+                });
             }
         }
     }
@@ -961,6 +967,7 @@ pub enum RegionSet {
 pub enum RegionCheckpointOperation {
     Update(Vec<(Region, TimeStamp)>),
     Get(RegionSet, Box<dyn FnOnce(Vec<GetCheckpointResult>) + Send>),
+    Subscribe(Subscription),
 }
 
 impl fmt::Debug for RegionCheckpointOperation {
@@ -968,6 +975,7 @@ impl fmt::Debug for RegionCheckpointOperation {
         match self {
             Self::Update(arg0) => f.debug_tuple("Update").field(arg0).finish(),
             Self::Get(arg0, _) => f.debug_tuple("Get").field(arg0).finish(),
+            Self::Subscribe(_) => f.debug_tuple("Subscription").finish(),
         }
     }
 }

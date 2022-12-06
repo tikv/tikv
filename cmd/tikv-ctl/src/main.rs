@@ -68,7 +68,7 @@ fn main() {
             cfg
         },
         |path| {
-            let s = fs::read_to_string(&path).unwrap();
+            let s = fs::read_to_string(path).unwrap();
             toml::from_str(&s).unwrap()
         },
     );
@@ -169,7 +169,7 @@ fn main() {
                 .unwrap();
 
             let iv = Iv::from_slice(&file_info.iv).unwrap();
-            let f = File::open(&infile).unwrap();
+            let f = File::open(infile).unwrap();
             let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
 
             io::copy(&mut reader, &mut outf).unwrap();
@@ -272,9 +272,20 @@ fn main() {
                     RaftCmd::Region {
                         regions,
                         skip_tombstone,
+                        start,
+                        end,
+                        limit,
                         ..
                     } => {
-                        debug_executor.dump_region_info(regions, skip_tombstone);
+                        let start_key = from_hex(&start).unwrap();
+                        let end_key = from_hex(&end).unwrap();
+                        debug_executor.dump_region_info(
+                            regions,
+                            &start_key,
+                            &end_key,
+                            limit,
+                            skip_tombstone,
+                        );
                     }
                 },
                 Cmd::Size { region, cf } => {
@@ -333,7 +344,7 @@ fn main() {
                     let to_data_dir = to_data_dir.as_deref();
                     let to_host = to_host.as_deref();
                     let to_config = to_config.map_or_else(TikvConfig::default, |path| {
-                        let s = fs::read_to_string(&path).unwrap();
+                        let s = fs::read_to_string(path).unwrap();
                         toml::from_str(&s).unwrap()
                     });
                     debug_executor.diff_region(region, to_host, to_data_dir, &to_config, mgr);

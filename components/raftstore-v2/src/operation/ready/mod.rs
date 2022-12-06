@@ -18,25 +18,34 @@
 //! There two steps can be processed concurrently.
 
 mod async_writer;
+mod snapshot;
 
-use std::cmp;
+use std::{cmp, time::Instant};
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, MiscExt, OpenOptions, RaftEngine, TabletFactory};
 use error_code::ErrorCodeExt;
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::{
+    raft_cmdpb::AdminCmdType,
+    raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData},
+};
 use protobuf::Message as _;
-use raft::{eraftpb, Ready};
-use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
+use raft::{eraftpb, Ready, StateRole, INVALID_ID};
+use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 
-pub use self::async_writer::AsyncWriter;
+pub use self::{
+    async_writer::AsyncWriter,
+    snapshot::{GenSnapTask, SnapState},
+};
 use crate::{
     batch::StoreContext,
     fsm::PeerFsmDelegate,
     raft::{Peer, Storage},
-    router::PeerTick,
+    router::{ApplyTask, PeerTick},
+    Result,
 };
+
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
     /// peers.
@@ -107,7 +116,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
-        self.insert_peer_cache(msg.take_from_peer());
+        let from_peer = msg.take_from_peer();
+        if self.is_leader() && from_peer.get_id() != INVALID_ID {
+            self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
+        }
+        self.insert_peer_cache(from_peer);
         if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
             error!(self.logger, "raft step error"; "err" => ?e);
         }
@@ -115,7 +128,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Callback for fetching logs asynchronously.
-    pub fn on_fetched_logs(&mut self, fetched_logs: FetchedLogs) {
+    pub fn on_logs_fetched(&mut self, fetched_logs: FetchedLogs) {
         let FetchedLogs { context, logs } = fetched_logs;
         let low = logs.low;
         if !self.is_leader() {
@@ -243,7 +256,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     ctx.raft_metrics.commit_log.observe(duration_to_sec(
                         (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
                     ));
-                    self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
+                    self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
                     break;
                 }
             }
@@ -267,7 +280,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         ctx.has_ready = true;
 
-        if !self.raft_group().has_ready() && (self.serving() || self.postpond_destroy()) {
+        if !self.raft_group().has_ready() && (self.serving() || self.postponed_destroy()) {
             #[cfg(feature = "testexport")]
             self.async_writer.notify_flush();
             return;
@@ -284,6 +297,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             |entry| entry.index == self.raft_group().raft.raft_log.last_index()
         ));
 
+        self.on_role_changed(ctx, &ready);
+
+        if let Some(hs) = ready.hs() {
+            let prev_commit_index = self.entry_storage().commit_index();
+            assert!(
+                hs.get_commit() >= prev_commit_index,
+                "{:?} {:?} {}",
+                self.logger.list(),
+                hs,
+                prev_commit_index
+            );
+            if self.is_leader() && hs.get_commit() > prev_commit_index {
+                self.on_leader_commit_index_changed(hs.get_commit());
+            }
+        }
+
         if !ready.messages().is_empty() {
             debug_assert!(self.is_leader());
             for msg in ready.take_messages() {
@@ -298,10 +327,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
         }
 
+        // Check whether there is a pending generate snapshot task, the task
+        // needs to be sent to the apply system.
+        // Always sending snapshot task after apply task, so it gets latest
+        // snapshot.
+        if let Some(gen_task) = self.storage_mut().take_gen_snap_task() {
+            self.apply_scheduler().send(ApplyTask::Snapshot(gen_task));
+        }
+
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
         self.storage_mut()
-            .handle_raft_ready(&mut ready, &mut write_task);
+            .handle_raft_ready(ctx, &mut ready, &mut write_task);
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready
                 .take_persisted_messages()
@@ -355,17 +392,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(self.logger, "peer id not matched"; "persisted_peer_id" => peer_id, "persisted_number" => ready_number);
             return;
         }
-        let persisted_message = self
-            .async_writer
-            .on_persisted(ctx, ready_number, &self.logger);
+        let (persisted_message, has_snapshot) =
+            self.async_writer
+                .on_persisted(ctx, ready_number, &self.logger);
         for msgs in persisted_message {
             for msg in msgs {
                 self.send_raft_message(ctx, msg);
             }
         }
+
         let persisted_number = self.async_writer.persisted_number();
         self.raft_group_mut().on_persist_ready(persisted_number);
         let persisted_index = self.raft_group().raft.raft_log.persisted;
+        /// The apply snapshot process order would be:
+        /// - Get the snapshot from the ready
+        /// - Wait for async writer to load this tablet
+        /// In this step, the snapshot has loaded finish, but some apply state
+        /// need to update.
+        if has_snapshot {
+            self.on_applied_snapshot(ctx);
+        }
+
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
@@ -383,20 +430,118 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_wait_flush(&mut self, ch: crate::router::FlushChannel) {
         self.async_writer.subscirbe_flush(ch);
     }
+
+    pub fn on_role_changed<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, ready: &Ready) {
+        // Update leader lease when the Raft state changes.
+        if let Some(ss) = ready.ss() {
+            let term = self.term();
+            match ss.raft_state {
+                StateRole::Leader => {
+                    // The local read can only be performed after a new leader has applied
+                    // the first empty entry on its term. After that the lease expiring time
+                    // should be updated to
+                    //   send_to_quorum_ts + max_lease
+                    // as the comments in `Lease` explain.
+                    // It is recommended to update the lease expiring time right after
+                    // this peer becomes leader because it's more convenient to do it here and
+                    // it has no impact on the correctness.
+                    let progress_term = ReadProgress::term(term);
+                    self.maybe_renew_leader_lease(
+                        monotonic_raw_now(),
+                        &ctx.store_meta,
+                        Some(progress_term),
+                    );
+                    debug!(
+                        self.logger,
+                        "becomes leader with lease";
+                        "lease" => ?self.leader_lease(),
+                    );
+                    // If the predecessor reads index during transferring leader and receives
+                    // quorum's heartbeat response after that, it may wait for applying to
+                    // current term to apply the read. So broadcast eagerly to avoid unexpected
+                    // latency.
+                    self.raft_group_mut().skip_bcast_commit(false);
+
+                    // A more recent read may happen on the old leader. So max ts should
+                    // be updated after a peer becomes leader.
+                    self.require_updating_max_ts(ctx);
+                    // Exit entry cache warmup state when the peer becomes leader.
+                    self.entry_storage_mut().clear_entry_cache_warmup_state();
+
+                    self.region_heartbeat_pd(ctx);
+                }
+                StateRole::Follower => {
+                    self.leader_lease_mut().expire();
+                    self.storage_mut().cancel_generating_snap(None);
+                }
+                _ => {}
+            }
+            self.proposal_control_mut().maybe_update_term(term);
+        }
+    }
+
+    /// If leader commits new admin commands, it may break lease assumption. So
+    /// we need to cancel lease whenever necessary.
+    ///
+    /// Note this method should be called before sending out any messages.
+    fn on_leader_commit_index_changed(&mut self, commit_index: u64) {
+        let mut committed_prepare_merge = false;
+        self.proposal_control_mut().commit_to(commit_index, |cmd| {
+            committed_prepare_merge |= cmd.cmd_type() == AdminCmdType::PrepareMerge
+        });
+        // There are two types of operations that will change the ownership of a range:
+        // split and merge.
+        //
+        // - For split, after the split command is committed, it's
+        // possible that the same range is govened by different region on different
+        // nodes due to different apply progress. But because only the peers on the
+        // same node as old leader will campaign despite election timeout, so there
+        // will be no modification to the overlapped range until either the original
+        // leader apply the split command or an election timeout is passed since split
+        // is committed. We already forbid renewing lease after committing split, and
+        // original leader will update the reader delegate with latest epoch after
+        // applying split before the split peer starts campaign, so here the only thing
+        // we need to do is marking split is committed (which is done by `commit_to`
+        // above). It's correct to allow local read during split.
+        //
+        // - For merge, after the prepare merge command is committed, the target peers
+        // may apply commit merge at any time, so we need to forbid any type of read
+        // to avoid missing the modifications from target peers.
+        if committed_prepare_merge {
+            // After prepare_merge is committed and the leader broadcasts commit
+            // index to followers, the leader can not know when the target region
+            // merges majority of this region, also it can not know when the target
+            // region writes new values.
+            // To prevent unsafe local read, we suspect its leader lease.
+            self.leader_lease_mut().suspect(monotonic_raw_now());
+            // Stop updating `safe_ts`
+            self.read_progress_mut().discard();
+        }
+    }
 }
 
-impl<ER: RaftEngine> Storage<ER> {
+impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Apply the ready to the storage. If there is any states need to be
     /// persisted, it will be written to `write_task`.
-    fn handle_raft_ready<EK: KvEngine>(
+    fn handle_raft_ready<T: Transport>(
         &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
         ready: &mut Ready,
         write_task: &mut WriteTask<EK, ER>,
     ) {
         let prev_raft_state = self.entry_storage().raft_state().clone();
         let ever_persisted = self.ever_persisted();
 
-        // TODO: handle snapshot
+        if !ready.snapshot().is_empty() {
+            if let Err(e) = self.apply_snapshot(
+                ready.snapshot(),
+                write_task,
+                ctx.snap_mgr.clone(),
+                ctx.tablet_factory.clone(),
+            ) {
+                error!(self.logger(),"failed to apply snapshot";"error" => ?e)
+            }
+        }
 
         let entry_storage = self.entry_storage_mut();
         if !ready.entries().is_empty() {

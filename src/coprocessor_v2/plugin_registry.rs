@@ -130,7 +130,7 @@ impl PluginRegistry {
                 // Simple helper functions for loading/unloading plugins.
                 let maybe_load = |file: &PathBuf| {
                     let mut hot_reload_registry = hot_reload_registry.write().unwrap();
-                    if is_library_file(&file) {
+                    if is_library_file(file) {
                         // Ignore errors.
                         hot_reload_registry.load_plugin(file).ok();
                     }
@@ -243,7 +243,7 @@ impl PluginRegistry {
         let dir_name = dir_name.into();
         let mut loaded_plugins = Vec::new();
 
-        for entry in std::fs::read_dir(&dir_name)? {
+        for entry in std::fs::read_dir(dir_name)? {
             if let Ok(file) = entry.map(|f| f.path()) {
                 if is_library_file(&file) {
                     // Ignore errors.
@@ -481,7 +481,7 @@ mod tests {
 
     fn initialize_library() -> PathBuf {
         let mut path = std::env::current_exe().unwrap();
-        path.set_file_name(pkgname_to_libname("example-plugin"));
+        path.set_file_name(pkgname_to_libname("example-coprocessor-plugin"));
         path
     }
 
@@ -489,9 +489,9 @@ mod tests {
     fn load_plugin() {
         let library_path = initialize_library();
 
-        let loaded_plugin = unsafe { LoadedPlugin::new(&library_path).unwrap() };
+        let loaded_plugin = unsafe { LoadedPlugin::new(library_path).unwrap() };
 
-        assert_eq!(loaded_plugin.name(), "example_plugin");
+        assert_eq!(loaded_plugin.name(), "example_coprocessor_plugin");
         assert_eq!(loaded_plugin.version(), &Version::parse("0.1.0").unwrap());
     }
 
@@ -504,10 +504,15 @@ mod tests {
 
         let plugin = registry.get_plugin(&plugin_name).unwrap();
 
-        assert_eq!(plugin.name(), "example_plugin");
-        assert_eq!(registry.loaded_plugin_names(), vec!["example_plugin"]);
+        assert_eq!(plugin.name(), "example_coprocessor_plugin");
         assert_eq!(
-            registry.get_path_for_plugin("example_plugin").unwrap(),
+            registry.loaded_plugin_names(),
+            vec!["example_coprocessor_plugin"]
+        );
+        assert_eq!(
+            registry
+                .get_path_for_plugin("example_coprocessor_plugin")
+                .unwrap(),
             library_path.as_os_str()
         );
     }
@@ -519,7 +524,7 @@ mod tests {
         let library_path_2 = library_path
             .parent()
             .unwrap()
-            .join(pkgname_to_libname("example-plugin-2"));
+            .join(pkgname_to_libname("example-coprocessor-plugin-2"));
 
         let registry = PluginRegistry::new();
         let plugin_name = registry.load_plugin(&library_path).unwrap();
@@ -543,7 +548,7 @@ mod tests {
 
         let registry = PluginRegistry::new();
 
-        let plugin_name = registry.load_plugin(&library_path).unwrap();
+        let plugin_name = registry.load_plugin(library_path).unwrap();
 
         assert!(registry.get_plugin(&plugin_name).is_some());
 
@@ -558,9 +563,10 @@ mod tests {
         let original_library_path = initialize_library();
 
         let coprocessor_dir = std::env::temp_dir().join("coprocessors");
-        let library_path = coprocessor_dir.join(pkgname_to_libname("example-plugin"));
-        let library_path_2 = coprocessor_dir.join(pkgname_to_libname("example-plugin-2"));
-        let plugin_name = "example_plugin";
+        let library_path = coprocessor_dir.join(pkgname_to_libname("example-coprocessor-plugin"));
+        let library_path_2 =
+            coprocessor_dir.join(pkgname_to_libname("example-coprocessor-plugin-2"));
+        let plugin_name = "example_coprocessor_plugin";
 
         // Make the coprocessor directory is empty.
         std::fs::create_dir_all(&coprocessor_dir).unwrap();
@@ -570,7 +576,7 @@ mod tests {
         registry.start_hot_reloading(&coprocessor_dir).unwrap();
 
         // trigger loading
-        std::fs::copy(&original_library_path, &library_path).unwrap();
+        std::fs::copy(original_library_path, &library_path).unwrap();
         // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so
         // as to make sure the watcher is triggered.
         std::thread::sleep(Duration::from_secs(4));

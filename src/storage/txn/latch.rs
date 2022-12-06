@@ -79,6 +79,11 @@ impl Latch {
         self.waiting.push_back(Some((key_hash, cid)));
     }
 
+    /// Pushes the cid to the front of the queue. Be careful when using it.
+    fn push_preemptive(&mut self, key_hash: u64, cid: u64) {
+        self.waiting.push_front(Some((key_hash, cid)));
+    }
+
     /// For some hot keys, the waiting list maybe very long, so we should shrink
     /// the waiting VecDeque after pop.
     fn maybe_shrink(&mut self) {
@@ -116,14 +121,7 @@ impl Lock {
         I: IntoIterator<Item = &'a K>,
     {
         // prevent from deadlock, so we sort and deduplicate the index
-        let mut required_hashes: Vec<u64> = keys
-            .into_iter()
-            .map(|key| {
-                let mut s = DefaultHasher::new();
-                key.hash(&mut s);
-                s.finish()
-            })
-            .collect();
+        let mut required_hashes: Vec<u64> = keys.into_iter().map(|key| Self::hash(key)).collect();
         required_hashes.sort_unstable();
         required_hashes.dedup();
         Lock {
@@ -132,10 +130,22 @@ impl Lock {
         }
     }
 
+    pub fn hash<K: Hash>(key: &K) -> u64 {
+        let mut s = DefaultHasher::new();
+        key.hash(&mut s);
+        s.finish()
+    }
+
     /// Returns true if all the required latches have be acquired, false
     /// otherwise.
     pub fn acquired(&self) -> bool {
         self.required_hashes.len() == self.owned_count
+    }
+
+    /// Force set the state of the `Lock` to be already-acquired. Be careful
+    /// when using it.
+    pub fn force_assume_acquired(&mut self) {
+        self.owned_count = self.required_hashes.len();
     }
 
     pub fn is_write_lock(&self) -> bool {
@@ -197,19 +207,62 @@ impl Latches {
     /// Releases all latches owned by the `lock` of command with ID `who`,
     /// returns the wakeup list.
     ///
+    /// Optionally, this function can release partial of the given `Lock` while
+    /// leaving the renaming unlocked, so that some of the latches can be
+    /// used in another command. This can be done by passing the cid of the
+    /// command who will use the kept latch slots later, and the `Lock` that
+    /// need to be kept via the parameter `keep_latches_for_next_cmd`. Note
+    /// that the lock in it is assumed to be a subset of the parameter
+    /// `lock` which is going to be released.
+    ///
     /// Preconditions: the caller must ensure the command is at the front of the
     /// latches.
-    pub fn release(&self, lock: &Lock, who: u64) -> Vec<u64> {
+    pub fn release(
+        &self,
+        lock: &Lock,
+        who: u64,
+        keep_latches_for_next_cmd: Option<(u64, &Lock)>,
+    ) -> Vec<u64> {
+        // Used to
+        let dummy_vec = vec![];
+        let (keep_latches_for_cid, mut keep_latches_it) = match keep_latches_for_next_cmd {
+            Some((cid, lock)) => (Some(cid), lock.required_hashes.iter().peekable()),
+            None => (None, dummy_vec.iter().peekable()),
+        };
+
+        // `keep_latches_it` must be sorted and deduped since it's retrieved from a
+        // `Lock` object.
+
         let mut wakeup_list: Vec<u64> = vec![];
         for &key_hash in &lock.required_hashes[..lock.owned_count] {
             let mut latch = self.lock_latch(key_hash);
             let (v, front) = latch.pop_front(key_hash).unwrap();
             assert_eq!(front, who);
             assert_eq!(v, key_hash);
-            if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
-                wakeup_list.push(wakeup);
+
+            let keep_for_next_cmd = if let Some(&&next_keep_hash) = keep_latches_it.peek() {
+                assert!(next_keep_hash >= key_hash);
+                if next_keep_hash == key_hash {
+                    keep_latches_it.next();
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !keep_for_next_cmd {
+                if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
+                    wakeup_list.push(wakeup);
+                }
+            } else {
+                latch.push_preemptive(key_hash, keep_latches_for_cid.unwrap());
             }
         }
+
+        assert!(keep_latches_it.next().is_none());
+
         wakeup_list
     }
 
@@ -221,6 +274,8 @@ impl Latches {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::once;
+
     use super::*;
 
     #[test]
@@ -243,7 +298,7 @@ mod tests {
         assert_eq!(acquired_b, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a);
+        let wakeup = latches.release(&lock_a, cid_a, None);
         assert_eq!(wakeup[0], cid_b);
 
         // b acquire lock success
@@ -278,7 +333,7 @@ mod tests {
         assert_eq!(acquired_c, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a);
+        let wakeup = latches.release(&lock_a, cid_a, None);
         assert_eq!(wakeup[0], cid_c);
 
         // c acquire lock failed again, cause b occupied slot 4
@@ -286,7 +341,7 @@ mod tests {
         assert_eq!(acquired_c, false);
 
         // b release lock, and get wakeup list
-        let wakeup = latches.release(&lock_b, cid_b);
+        let wakeup = latches.release(&lock_b, cid_b, None);
         assert_eq!(wakeup[0], cid_c);
 
         // finally c acquire lock success
@@ -327,7 +382,7 @@ mod tests {
         assert_eq!(acquired_d, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a);
+        let wakeup = latches.release(&lock_a, cid_a, None);
         assert_eq!(wakeup[0], cid_c);
 
         // c acquire lock success
@@ -335,11 +390,169 @@ mod tests {
         assert_eq!(acquired_c, true);
 
         // b release lock, and get wakeup list
-        let wakeup = latches.release(&lock_b, cid_b);
+        let wakeup = latches.release(&lock_b, cid_b, None);
         assert_eq!(wakeup[0], cid_d);
 
         // finally d acquire lock success
         acquired_d = latches.acquire(&mut lock_d, cid_d);
         assert_eq!(acquired_d, true);
+    }
+
+    fn check_latch_holder(latches: &Latches, key: &[u8], expected_holder_cid: Option<u64>) {
+        let hash = Lock::hash(&key);
+        let actual_holder = latches.lock_latch(hash).get_first_req_by_hash(hash);
+        assert_eq!(actual_holder, expected_holder_cid);
+    }
+
+    fn is_latches_empty(latches: &Latches) -> bool {
+        for i in 0..(latches.size as u64) {
+            if !latches.lock_latch(i).waiting.iter().all(|x| x.is_none()) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn test_partially_releasing_impl(size: usize) {
+        let latches = Latches::new(size);
+
+        // Single key.
+        let key = b"k1";
+        let mut lock = Lock::new(once(key));
+        assert!(latches.acquire(&mut lock, 1));
+        assert!(!is_latches_empty(&latches));
+        let mut lock2 = Lock::new(once(key));
+        let wakeup = latches.release(&lock, 1, Some((2, &lock2)));
+        assert!(wakeup.is_empty());
+        check_latch_holder(&latches, key, Some(2));
+        lock2.force_assume_acquired();
+        let wakeup = latches.release(&lock2, 2, None);
+        assert!(wakeup.is_empty());
+        assert!(is_latches_empty(&latches));
+
+        // Single key with queueing commands.
+        let mut lock = Lock::new(once(key));
+        let mut queueing_lock = Lock::new(once(key));
+        assert!(latches.acquire(&mut lock, 3));
+        assert!(!latches.acquire(&mut queueing_lock, 4));
+        let mut lock2 = Lock::new(once(key));
+        let wakeup = latches.release(&lock, 3, Some((5, &lock2)));
+        assert!(wakeup.is_empty());
+        check_latch_holder(&latches, key, Some(5));
+        lock2.force_assume_acquired();
+        let wakeup = latches.release(&lock2, 5, None);
+        assert_eq!(wakeup, vec![4u64]);
+        assert!(latches.acquire(&mut queueing_lock, 4));
+        let wakeup = latches.release(&queueing_lock, 4, None);
+        assert!(wakeup.is_empty());
+        assert!(is_latches_empty(&latches));
+
+        // Multi keys, keep all.
+        let keys = vec![b"k1", b"k2", b"k3", b"k4"];
+        let mut lock = Lock::new(keys.iter());
+        assert!(latches.acquire(&mut lock, 11));
+        let mut lock2 = Lock::new(keys.iter());
+        let wakeup = latches.release(&lock, 11, Some((12, &lock2)));
+        assert!(wakeup.is_empty());
+        for &key in &keys {
+            check_latch_holder(&latches, key, Some(12));
+        }
+        assert!(!is_latches_empty(&latches));
+        lock2.force_assume_acquired();
+        let wakeup = latches.release(&lock2, 12, None);
+        assert!(wakeup.is_empty());
+        assert!(is_latches_empty(&latches));
+
+        // Multi keys, keep all, with queueing command.
+        let mut lock = Lock::new(keys.iter());
+        assert!(latches.acquire(&mut lock, 11));
+        let mut queueing_locks: Vec<_> = keys.iter().map(|k| Lock::new(once(k))).collect();
+        for (cid, lock) in (12..16).zip(queueing_locks.iter_mut()) {
+            assert!(!latches.acquire(lock, cid));
+        }
+        let mut lock2 = Lock::new(keys.iter());
+        let wakeup = latches.release(&lock, 11, Some((17, &lock2)));
+        assert!(wakeup.is_empty());
+        for &key in &keys {
+            check_latch_holder(&latches, key, Some(17));
+        }
+        assert!(!is_latches_empty(&latches));
+        lock2.force_assume_acquired();
+        let mut wakeup = latches.release(&lock2, 17, None);
+        wakeup.sort_unstable();
+        // Wake up queueing commands.
+        assert_eq!(wakeup, vec![12u64, 13, 14, 15]);
+        for (cid, mut lock) in (12..16).zip(queueing_locks) {
+            assert!(latches.acquire(&mut lock, cid));
+            let wakeup = latches.release(&lock, cid, None);
+            assert!(wakeup.is_empty());
+        }
+        assert!(is_latches_empty(&latches));
+
+        // 4 keys, keep 2 of them.
+        for (i1, &k1) in keys[0..3].iter().enumerate() {
+            for &k2 in keys[i1 + 1..4].iter() {
+                let mut lock = Lock::new(keys.iter());
+                assert!(latches.acquire(&mut lock, 21));
+                let mut lock2 = Lock::new(vec![k1, k2]);
+                let wakeup = latches.release(&lock, 21, Some((22, &lock2)));
+                assert!(wakeup.is_empty());
+                check_latch_holder(&latches, k1, Some(22));
+                check_latch_holder(&latches, k2, Some(22));
+                lock2.force_assume_acquired();
+                let wakeup = latches.release(&lock2, 22, None);
+                assert!(wakeup.is_empty());
+                assert!(is_latches_empty(&latches));
+            }
+        }
+
+        // 4 keys keep 2 of them, with queueing commands.
+        for (i1, &k1) in keys[0..3].iter().enumerate() {
+            for (i2, &k2) in keys[i1 + 1..4].iter().enumerate() {
+                let mut lock = Lock::new(keys.iter());
+                assert!(latches.acquire(&mut lock, 21));
+
+                let mut queueing_locks: Vec<_> = keys.iter().map(|k| Lock::new(once(k))).collect();
+                for (cid, lock) in (22..26).zip(queueing_locks.iter_mut()) {
+                    assert!(!latches.acquire(lock, cid));
+                }
+
+                let mut lock2 = Lock::new(vec![k1, k2]);
+                let mut wakeup = latches.release(&lock, 21, Some((27, &lock2)));
+                assert_eq!(wakeup.len(), 2);
+
+                // The latch of k1 and k2 is preempted, and queueing locks on the other two keys
+                // will be woken up.
+                let preempted_cids = vec![(i1 + 22) as u64, (i1 + 1 + i2 + 22) as u64];
+                let expected_wakeup_cids: Vec<_> = (22..26u64)
+                    .filter(|x| !preempted_cids.contains(x))
+                    .collect();
+                wakeup.sort_unstable();
+                assert_eq!(wakeup, expected_wakeup_cids);
+
+                check_latch_holder(&latches, k1, Some(27));
+                check_latch_holder(&latches, k2, Some(27));
+
+                lock2.force_assume_acquired();
+                let mut wakeup = latches.release(&lock2, 27, None);
+                wakeup.sort_unstable();
+                assert_eq!(wakeup, preempted_cids);
+
+                for (cid, mut lock) in (22..26).zip(queueing_locks) {
+                    assert!(latches.acquire(&mut lock, cid));
+                    let wakeup = latches.release(&lock, cid, None);
+                    assert!(wakeup.is_empty());
+                }
+
+                assert!(is_latches_empty(&latches));
+            }
+        }
+    }
+
+    #[test]
+    fn test_partially_releasing() {
+        test_partially_releasing_impl(256);
+        test_partially_releasing_impl(4);
+        test_partially_releasing_impl(2);
     }
 }

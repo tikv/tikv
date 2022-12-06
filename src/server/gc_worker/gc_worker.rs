@@ -22,16 +22,9 @@ use engine_traits::{
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
-use kvproto::{
-    kvrpcpb::{Context, LockInfo},
-    metapb::Region,
-};
+use kvproto::{kvrpcpb::Context, metapb::Region};
 use pd_client::{FeatureGate, PdClient};
-use raftstore::{
-    coprocessor::{CoprocessorHost, RegionInfoProvider},
-    router::RaftStoreRouter,
-    store::msg::StoreMsg,
-};
+use raftstore::coprocessor::RegionInfoProvider;
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
@@ -43,7 +36,6 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp};
 
 use super::{
-    applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback},
     check_need_gc,
     compaction_filter::{
         CompactionFilterInitializer, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
@@ -115,14 +107,6 @@ where
         callback: Callback<()>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     },
-    PhysicalScanLock {
-        ctx: Context,
-        max_ts: TimeStamp,
-        start_key: Key,
-        limit: usize,
-        callback: Callback<Vec<LockInfo>>,
-        region_info_provider: Arc<dyn RegionInfoProvider>,
-    },
     /// If GC in compaction filter is enabled, versions on default CF will be
     /// handled with `DB::delete` in write CF's compaction filter. However if
     /// the compaction filter finds the DB is stalled, it will send the task
@@ -149,7 +133,6 @@ where
             GcTask::GcKeys { .. } => GcCommandKind::gc_keys,
             GcTask::RawGcKeys { .. } => GcCommandKind::raw_gc_keys,
             GcTask::UnsafeDestroyRange { .. } => GcCommandKind::unsafe_destroy_range,
-            GcTask::PhysicalScanLock { .. } => GcCommandKind::physical_scan_lock,
             GcTask::OrphanVersions { .. } => GcCommandKind::orphan_versions,
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => GcCommandKind::validate_config,
@@ -179,10 +162,6 @@ where
                 .field("start_key", &format!("{}", start_key))
                 .field("end_key", &format!("{}", end_key))
                 .finish(),
-            GcTask::PhysicalScanLock { max_ts, .. } => f
-                .debug_struct("PhysicalScanLock")
-                .field("max_ts", max_ts)
-                .finish(),
             GcTask::OrphanVersions { id, wb } => f
                 .debug_struct("OrphanVersions")
                 .field("id", id)
@@ -195,15 +174,10 @@ where
 }
 
 /// Used to perform GC operations on the engine.
-pub struct GcRunner<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local>,
-{
+pub struct GcRunner<E: Engine> {
     store_id: u64,
     engine: E,
 
-    raft_store_router: RR,
     flow_info_sender: Sender<FlowInfo>,
 
     /// Used to limit the write flow of GC.
@@ -304,15 +278,10 @@ fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
     ctx
 }
 
-impl<E, RR> GcRunner<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local>,
-{
+impl<E: Engine> GcRunner<E> {
     pub fn new(
         store_id: u64,
         engine: E,
-        raft_store_router: RR,
         flow_info_sender: Sender<FlowInfo>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
@@ -325,7 +294,6 @@ where
         Self {
             store_id,
             engine,
-            raft_store_router,
             flow_info_sender,
             limiter,
             cfg,
@@ -492,7 +460,7 @@ where
                             "versions" => gc_info.found_versions,
                         );
                     }
-                    if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
+                    if gc_info.deleted_versions >= GC_LOG_DELETED_VERSION_THRESHOLD {
                         debug!(
                             "GC deleted plenty versions for a key";
                             "key" => %key,
@@ -818,15 +786,10 @@ where
                 .send(FlowInfo::AfterUnsafeDestroyRange(ctx.region_id))
                 .unwrap();
 
-            self.raft_store_router
-            .send_store_msg(StoreMsg::ClearRegionSizeInRange {
-                start_key: start_key.as_encoded().to_vec(),
-                end_key: end_key.as_encoded().to_vec(),
-            })
-            .unwrap_or_else(|e| {
-                // Warn and ignore it.
-                warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
-            });
+            self.engine.hint_change_in_range(
+                start_key.as_encoded().to_vec(),
+                end_key.as_encoded().to_vec(),
+            );
         } else {
             let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
             let keys = vec![start_key.clone(), end_key.clone()];
@@ -870,47 +833,6 @@ where
         Ok(())
     }
 
-    fn handle_physical_scan_lock(
-        &mut self,
-        _: &Context,
-        max_ts: TimeStamp,
-        start_key: &Key,
-        limit: usize,
-        regions_provider: Arc<dyn RegionInfoProvider>,
-    ) -> Result<Vec<LockInfo>> {
-        let store_id = self.store_id;
-        let regions = box_try!(regions_provider.get_regions_in_range(start_key.as_encoded(), &[]))
-            .into_iter()
-            .filter(move |r| find_peer(r, store_id).is_some());
-
-        let mut first_round = true;
-        let mut locks = Vec::new();
-        for region in regions {
-            let start_key = {
-                if first_round {
-                    first_round = false;
-                    start_key.clone()
-                } else {
-                    Key::from_raw(region.get_start_key())
-                }
-            };
-            let snap = self.get_snapshot(store_id, &region)?;
-            let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
-            let (locks_this_region, _) = reader
-                .scan_locks(Some(&start_key), None, |l| l.ts <= max_ts, limit)
-                .map_err(TxnError::from_mvcc)?;
-
-            locks.extend(locks_this_region);
-        }
-
-        let mut lock_infos = Vec::with_capacity(locks.len());
-        for (key, lock) in locks {
-            let raw_key = key.into_raw().map_err(TxnError::from_mvcc)?;
-            lock_infos.push(lock.into_lock_info(raw_key));
-        }
-        Ok(lock_infos)
-    }
-
     fn update_statistics_metrics(&mut self, key_mode: GcKeyMode) {
         if let Some(mut_stats) = self.stats_map.get_mut(&key_mode) {
             let stats = mem::take(mut_stats);
@@ -951,11 +873,7 @@ where
     }
 }
 
-impl<E, RR> Runnable for GcRunner<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local>,
-{
+impl<E: Engine> Runnable for GcRunner<E> {
     type Task = GcTask<E::Local>;
 
     #[inline]
@@ -1064,31 +982,6 @@ where
                     end_key
                 );
             }
-            GcTask::PhysicalScanLock {
-                ctx,
-                max_ts,
-                start_key,
-                limit,
-                callback,
-                region_info_provider,
-            } => {
-                let res = self.handle_physical_scan_lock(
-                    &ctx,
-                    max_ts,
-                    &start_key,
-                    limit,
-                    region_info_provider,
-                );
-                update_metrics(res.is_err());
-                callback(res);
-                slow_log!(
-                    T timer,
-                    "PhysicalScanLock start_key {:?}, max_ts {}, limit {}",
-                    start_key,
-                    max_ts,
-                    limit,
-                );
-            }
             GcTask::OrphanVersions { mut wb, id } => {
                 info!("handling GcTask::OrphanVersions"; "id" => id);
                 let mut wopts = WriteOptions::default();
@@ -1119,9 +1012,6 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
     let res = Err(box_err!("failed to schedule gc task: {:?}", e));
     match e.into_inner() {
         GcTask::Gc { callback, .. } | GcTask::UnsafeDestroyRange { callback, .. } => {
-            callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
-        }
-        GcTask::PhysicalScanLock { callback, .. } => {
             callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
         }
         // Attention: If you are adding a new GcTask, do not forget to call the callback if it has a
@@ -1162,16 +1052,12 @@ pub fn sync_gc(
 }
 
 /// Used to schedule GC operations.
-pub struct GcWorker<E, RR>
+pub struct GcWorker<E>
 where
     E: Engine,
-    RR: RaftStoreRouter<E::Local> + 'static,
 {
     engine: E,
 
-    /// `raft_store_router` is useful to signal raftstore clean region size
-    /// informations.
-    raft_store_router: RR,
     /// Used to signal unsafe destroy range is executed.
     flow_info_sender: Option<Sender<FlowInfo>>,
     region_info_provider: Arc<dyn RegionInfoProvider>,
@@ -1184,30 +1070,22 @@ where
     worker: Arc<Mutex<LazyWorker<GcTask<E::Local>>>>,
     worker_scheduler: Scheduler<GcTask<E::Local>>,
 
-    applied_lock_collector: Option<Arc<AppliedLockCollector>>,
-
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     feature_gate: FeatureGate,
 }
 
-impl<E, RR> Clone for GcWorker<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local>,
-{
+impl<E: Engine> Clone for GcWorker<E> {
     #[inline]
     fn clone(&self) -> Self {
         self.refs.fetch_add(1, Ordering::SeqCst);
 
         Self {
             engine: self.engine.clone(),
-            raft_store_router: self.raft_store_router.clone(),
             flow_info_sender: self.flow_info_sender.clone(),
             config_manager: self.config_manager.clone(),
             refs: self.refs.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
-            applied_lock_collector: self.applied_lock_collector.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
@@ -1215,11 +1093,7 @@ where
     }
 }
 
-impl<E, RR> Drop for GcWorker<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local> + 'static,
-{
+impl<E: Engine> Drop for GcWorker<E> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, Ordering::SeqCst);
@@ -1235,31 +1109,24 @@ where
     }
 }
 
-impl<E, RR> GcWorker<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local>,
-{
+impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
-        raft_store_router: RR,
         flow_info_sender: Sender<FlowInfo>,
         cfg: GcConfig,
         feature_gate: FeatureGate,
         region_info_provider: Arc<dyn RegionInfoProvider>,
-    ) -> GcWorker<E, RR> {
+    ) -> Self {
         let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
         let worker = worker_builder.create().lazy_build("gc-worker");
         let worker_scheduler = worker.scheduler();
         GcWorker {
             engine,
-            raft_store_router,
             flow_info_sender: Some(flow_info_sender),
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             refs: Arc::new(AtomicUsize::new(1)),
             worker: Arc::new(Mutex::new(worker)),
             worker_scheduler,
-            applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
             feature_gate,
             region_info_provider,
@@ -1305,26 +1172,11 @@ where
         let runner = GcRunner::new(
             store_id,
             self.engine.clone(),
-            self.raft_store_router.clone(),
             self.flow_info_sender.take().unwrap(),
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
         );
         self.worker.lock().unwrap().start(runner);
-        Ok(())
-    }
-
-    pub fn start_observe_lock_apply(
-        &mut self,
-        coprocessor_host: &mut CoprocessorHost<E::Local>,
-        concurrency_manager: ConcurrencyManager,
-    ) -> Result<()> {
-        assert!(self.applied_lock_collector.is_none());
-        let collector = Arc::new(AppliedLockCollector::new(
-            coprocessor_host,
-            concurrency_manager,
-        )?);
-        self.applied_lock_collector = Some(collector);
         Ok(())
     }
 
@@ -1387,61 +1239,6 @@ where
     pub fn get_config_manager(&self) -> GcWorkerConfigManager {
         self.config_manager.clone()
     }
-
-    pub fn physical_scan_lock(
-        &self,
-        ctx: Context,
-        max_ts: TimeStamp,
-        start_key: Key,
-        limit: usize,
-        callback: Callback<Vec<LockInfo>>,
-    ) -> Result<()> {
-        GC_COMMAND_COUNTER_VEC_STATIC.physical_scan_lock.inc();
-
-        self.worker_scheduler
-            .schedule(GcTask::PhysicalScanLock {
-                ctx,
-                max_ts,
-                start_key,
-                limit,
-                callback,
-                region_info_provider: self.region_info_provider.clone(),
-            })
-            .or_else(handle_gc_task_schedule_error)
-    }
-
-    pub fn start_collecting(
-        &self,
-        max_ts: TimeStamp,
-        callback: LockCollectorCallback<()>,
-    ) -> Result<()> {
-        self.applied_lock_collector
-            .as_ref()
-            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
-            .and_then(move |c| c.start_collecting(max_ts, callback))
-    }
-
-    pub fn get_collected_locks(
-        &self,
-        max_ts: TimeStamp,
-        callback: LockCollectorCallback<(Vec<LockInfo>, bool)>,
-    ) -> Result<()> {
-        self.applied_lock_collector
-            .as_ref()
-            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
-            .and_then(move |c| c.get_collected_locks(max_ts, callback))
-    }
-
-    pub fn stop_collecting(
-        &self,
-        max_ts: TimeStamp,
-        callback: LockCollectorCallback<()>,
-    ) -> Result<()> {
-        self.applied_lock_collector
-            .as_ref()
-            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
-            .and_then(move |c| c.stop_collecting(max_ts, callback))
-    }
 }
 
 #[cfg(any(test, feature = "testexport"))]
@@ -1450,21 +1247,19 @@ pub mod test_gc_worker {
 
     use collections::HashMap;
     use engine_rocks::{RocksEngine, RocksSnapshot};
+    use futures::Future;
     use kvproto::{
         kvrpcpb::Context,
         metapb::{Peer, Region},
     };
     use raftstore::store::RegionSnapshot;
-    use tikv_kv::write_modifies;
+    use tikv_kv::{write_modifies, OnAppliedCb};
     use txn_types::{Key, TimeStamp};
 
     use crate::{
         server::gc_worker::{GcSafePointProvider, Result as GcWorkerResult},
         storage::{
-            kv::{
-                self, Callback as EngineCallback, Modify, Result as EngineResult, SnapContext,
-                WriteData,
-            },
+            kv::{self, Modify, Result as EngineResult, SnapContext, WriteData},
             Engine,
         },
     };
@@ -1517,12 +1312,14 @@ pub mod test_gc_worker {
             write_modifies(&self.kv_engine().unwrap(), modifies)
         }
 
+        type WriteRes = <kv::RocksEngine as Engine>::WriteRes;
         fn async_write(
             &self,
             ctx: &Context,
             mut batch: WriteData,
-            callback: EngineCallback<()>,
-        ) -> EngineResult<()> {
+            subscribed: u8,
+            on_applied: Option<OnAppliedCb>,
+        ) -> Self::WriteRes {
             batch.modifies.iter_mut().for_each(|modify| match modify {
                 Modify::Delete(_, ref mut key) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
@@ -1538,25 +1335,19 @@ pub mod test_gc_worker {
                     *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
                 }
             });
-            self.0.async_write(ctx, batch, callback)
+            self.0.async_write(ctx, batch, subscribed, on_applied)
         }
 
-        fn async_snapshot(
-            &mut self,
-            ctx: SnapContext<'_>,
-            callback: EngineCallback<Self::Snap>,
-        ) -> EngineResult<()> {
-            self.0.async_snapshot(
-                ctx,
-                Box::new(move |r| {
-                    callback(r.map(|snap| {
-                        let mut region = Region::default();
-                        // Add a peer to pass initialized check.
-                        region.mut_peers().push(Peer::default());
-                        RegionSnapshot::from_snapshot(snap, Arc::new(region))
-                    }))
-                }),
-            )
+        type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+        fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
+            let f = self.0.async_snapshot(ctx);
+            async move {
+                let snap = f.await?;
+                let mut region = Region::default();
+                // Add a peer to pass initialized check.
+                region.mut_peers().push(Peer::default());
+                Ok(RegionSnapshot::from_snapshot(snap, Arc::new(region)))
+            }
         }
     }
 
@@ -1595,27 +1386,27 @@ pub mod test_gc_worker {
             Ok(())
         }
 
+        type WriteRes = <PrefixedEngine as Engine>::WriteRes;
         fn async_write(
             &self,
             ctx: &Context,
             batch: WriteData,
-            callback: EngineCallback<()>,
-        ) -> EngineResult<()> {
-            self.engines.lock().unwrap()[&ctx.region_id].async_write(ctx, batch, callback)
+            subscribed: u8,
+            on_applied: Option<OnAppliedCb>,
+        ) -> Self::WriteRes {
+            self.engines.lock().unwrap()[&ctx.region_id]
+                .async_write(ctx, batch, subscribed, on_applied)
         }
 
-        fn async_snapshot(
-            &mut self,
-            ctx: SnapContext<'_>,
-            callback: EngineCallback<Self::Snap>,
-        ) -> EngineResult<()> {
+        type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+        fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
             let region_id = ctx.pb_ctx.region_id;
             self.engines
                 .lock()
                 .unwrap()
                 .get_mut(&region_id)
                 .unwrap()
-                .async_snapshot(ctx, callback)
+                .async_snapshot(ctx)
         }
     }
 }
@@ -1626,7 +1417,7 @@ mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,
-        sync::mpsc::{self, channel},
+        sync::mpsc,
         thread,
         time::Duration,
     };
@@ -1635,23 +1426,15 @@ mod tests {
     use engine_rocks::{util::get_cf_handle, RocksEngine};
     use engine_traits::Peekable as _;
     use futures::executor::block_on;
-    use kvproto::{
-        kvrpcpb::{ApiVersion, Op},
-        metapb::Peer,
-    };
+    use kvproto::{kvrpcpb::ApiVersion, metapb::Peer};
     use raft::StateRole;
-    use raftstore::{
-        coprocessor::{
-            region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
-            RegionChangeEvent,
-        },
-        router::RaftStoreBlackHole,
+    use raftstore::coprocessor::{
+        region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
+        CoprocessorHost, RegionChangeEvent,
     };
     use tempfile::Builder;
     use tikv_kv::Snapshot;
-    use tikv_util::{
-        codec::number::NumberEncoder, future::paired_future_callback, store::new_peer,
-    };
+    use tikv_util::store::new_peer;
     use txn_types::Mutation;
 
     use super::{test_gc_worker::MultiRocksEngine, *};
@@ -1794,7 +1577,6 @@ mod tests {
 
         let mut gc_worker = GcWorker::new(
             engine,
-            RaftStoreBlackHole,
             tx,
             GcConfig::default(),
             gate,
@@ -1956,88 +1738,6 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_scan_lock() {
-        let store_id = 1;
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine);
-        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
-            prefixed_engine.clone(),
-            MockLockManager::new(),
-        )
-        .build()
-        .unwrap();
-        let (tx, _rx) = mpsc::channel();
-        let mut region = Region::default();
-        region.mut_peers().push(new_peer(store_id, 0));
-        let mut gc_worker = GcWorker::new(
-            prefixed_engine,
-            RaftStoreBlackHole,
-            tx,
-            GcConfig::default(),
-            FeatureGate::default(),
-            Arc::new(MockRegionInfoProvider::new(vec![region])),
-        );
-        gc_worker.start(store_id).unwrap();
-
-        let physical_scan_lock = |max_ts: u64, start_key, limit| {
-            let (cb, f) = paired_future_callback();
-            gc_worker
-                .physical_scan_lock(Context::default(), max_ts.into(), start_key, limit, cb)
-                .unwrap();
-            block_on(f).unwrap()
-        };
-
-        let mut expected_lock_info = Vec::new();
-
-        // Put locks into the storage.
-        for i in 0..50 {
-            let mut k = vec![];
-            k.encode_u64(i).unwrap();
-            let v = k.clone();
-
-            let mutation = Mutation::make_put(Key::from_raw(&k), v);
-
-            let lock_ts = 10 + i % 3;
-
-            // Collect all locks with ts <= 11 to check the result of physical_scan_lock.
-            if lock_ts <= 11 {
-                let mut info = LockInfo::default();
-                info.set_primary_lock(k.clone());
-                info.set_lock_version(lock_ts);
-                info.set_key(k.clone());
-                info.set_lock_type(Op::Put);
-                expected_lock_info.push(info)
-            }
-
-            let (tx, rx) = channel();
-            storage
-                .sched_txn_command(
-                    commands::Prewrite::with_defaults(vec![mutation], k, lock_ts.into()),
-                    Box::new(move |res| tx.send(res).unwrap()),
-                )
-                .unwrap();
-            rx.recv()
-                .unwrap()
-                .unwrap()
-                .locks
-                .into_iter()
-                .for_each(|r| r.unwrap());
-        }
-
-        let res = physical_scan_lock(11, Key::from_raw(b""), 50).unwrap();
-        assert_eq!(res, expected_lock_info);
-
-        let res = physical_scan_lock(11, Key::from_raw(b""), 5).unwrap();
-        assert_eq!(res[..], expected_lock_info[..5]);
-
-        let mut start_key = vec![];
-        start_key.encode_u64(4).unwrap();
-        let res = physical_scan_lock(11, Key::from_raw(&start_key), 6).unwrap();
-        // expected_locks[3] is the key 4.
-        assert_eq!(res[..], expected_lock_info[3..9]);
-    }
-
-    #[test]
     fn test_gc_keys_with_region_info_provider() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -2053,7 +1753,6 @@ mod tests {
 
         let mut gc_worker = GcWorker::new(
             prefixed_engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcConfig::default(),
             feature_gate,
@@ -2145,7 +1844,6 @@ mod tests {
         let mut runner = GcRunner::new(
             store_id,
             prefixed_engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
@@ -2208,7 +1906,6 @@ mod tests {
         let mut runner = GcRunner::new(
             store_id,
             prefixed_engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
@@ -2310,7 +2007,6 @@ mod tests {
         let mut runner = GcRunner::new(
             1,
             prefixed_engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
@@ -2439,7 +2135,6 @@ mod tests {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcConfig::default(),
             gate,
@@ -2569,7 +2264,7 @@ mod tests {
     ) -> (
         MultiRocksEngine,
         Arc<MockRegionInfoProvider>,
-        GcRunner<MultiRocksEngine, RaftStoreBlackHole>,
+        GcRunner<MultiRocksEngine>,
         Vec<Region>,
         mpsc::Receiver<FlowInfo>,
     ) {
@@ -2625,7 +2320,6 @@ mod tests {
         let gc_runner = GcRunner::new(
             store_id,
             engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
@@ -2804,7 +2498,6 @@ mod tests {
         let mut gc_runner = GcRunner::new(
             store_id,
             engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0

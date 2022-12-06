@@ -63,7 +63,7 @@ fn test_resolved_ts_basic() {
     sst_epoch.set_conf_ver(1);
     sst_epoch.set_version(4);
 
-    let (mut meta, data) = gen_sst_file(&sst_path, sst_range);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     meta.set_region_id(r1.id);
     meta.set_region_epoch(sst_epoch);
 

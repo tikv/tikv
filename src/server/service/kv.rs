@@ -6,7 +6,6 @@ use std::{mem, sync::Arc};
 use api_version::KvFormat;
 use fail::fail_point;
 use futures::{
-    channel::oneshot,
     compat::Future01CompatExt,
     future::{self, Future, FutureExt, TryFutureExt},
     sink::SinkExt,
@@ -16,30 +15,19 @@ use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use kvproto::{
-    coprocessor::*,
-    errorpb::{Error as RegionError, *},
-    kvrpcpb::*,
-    mpp::*,
-    raft_cmdpb::{
-        AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftRequestHeader,
-        Request as RaftRequest,
-    },
-    raft_serverpb::*,
-    tikvpb::*,
-};
+use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
 use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    router::RaftStoreRouter,
     store::{
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::RAFT_ENTRIES_CACHES_GAUGE,
-        Callback, CasualMessage, CheckLeaderTask, RaftCmdExtraOpts,
+        CheckLeaderTask,
     },
-    DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
+    Error as RaftStoreError, Result as RaftStoreResult,
 };
 use tikv_alloc::trace::MemoryTraceGuard;
+use tikv_kv::RaftExtension;
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
     mpsc::future::{unbounded, BatchReceiver, Sender, WakePolicy},
@@ -47,9 +35,8 @@ use tikv_util::{
     time::{duration_to_ms, duration_to_sec, Instant},
     worker::Scheduler,
 };
-use tokio::sync::Mutex;
 use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
-use txn_types::{self, Key, WriteBatchFlags};
+use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::{
@@ -60,9 +47,10 @@ use crate::{
         Error, Proxy, Result as ServerResult,
     },
     storage::{
+        self,
         errors::{
             extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-            extract_region_error, map_kv_pairs,
+            extract_region_error, extract_region_error_from_error, map_kv_pairs,
         },
         kv::Engine,
         lock_manager::LockManager,
@@ -74,18 +62,16 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
-pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat> {
+pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     store_id: u64,
     /// Used to handle requests related to GC.
-    gc_worker: GcWorker<E, T>,
+    gc_worker: GcWorker<E>,
     // For handling KV requests.
     storage: Storage<E, L, F>,
     // For handling coprocessor requests.
     copr: Endpoint<E>,
     // For handling corprocessor v2 requests.
     copr_v2: coprocessor_v2::Endpoint,
-    // For handling raft messages.
-    ch: T,
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
     // For handling `CheckLeader` request.
@@ -101,13 +87,7 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
     reject_messages_on_memory_ratio: f64,
 }
 
-impl<
-    T: RaftStoreRouter<E::Local> + Clone + 'static,
-    E: Engine + Clone,
-    L: LockManager + Clone,
-    F: KvFormat,
-> Clone for Service<T, E, L, F>
-{
+impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E, L, F> {
     fn clone(&self) -> Self {
         Service {
             store_id: self.store_id,
@@ -115,7 +95,6 @@ impl<
             storage: self.storage.clone(),
             copr: self.copr.clone(),
             copr_v2: self.copr_v2.clone(),
-            ch: self.ch.clone(),
             snap_scheduler: self.snap_scheduler.clone(),
             check_leader_scheduler: self.check_leader_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
@@ -126,17 +105,14 @@ impl<
     }
 }
 
-impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat>
-    Service<T, E, L, F>
-{
+impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         store_id: u64,
         storage: Storage<E, L, F>,
-        gc_worker: GcWorker<E, T>,
+        gc_worker: GcWorker<E>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
-        ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         grpc_thread_load: Arc<ThreadLoadPool>,
@@ -150,7 +126,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             storage,
             copr,
             copr_v2,
-            ch,
             snap_scheduler,
             check_leader_scheduler,
             enable_req_batch,
@@ -162,7 +137,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
 
     fn handle_raft_message(
         store_id: u64,
-        ch: &T,
+        ch: &E::RaftExtension,
         msg: RaftMessage,
         reject: bool,
     ) -> RaftStoreResult<()> {
@@ -177,13 +152,11 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             RAFT_APPEND_REJECTS.inc();
             let id = msg.get_region_id();
             let peer_id = msg.get_message().get_from();
-            let m = CasualMessage::RejectRaftAppend { peer_id };
-            let _ = ch.send_casual_msg(id, m);
+            ch.report_reject_message(id, peer_id);
             return Ok(());
         }
-        // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
-        // `RaftStoreError::Transport(DiscardReason::Full)`
-        ch.send_raft_msg(msg)
+        ch.feed(msg, false);
+        Ok(())
     }
 }
 
@@ -233,9 +206,7 @@ macro_rules! set_total_time {
     };
 }
 
-impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat> Tikv
-    for Service<T, E, L, F>
-{
+impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     handle_request!(kv_get, future_get, GetRequest, GetResponse, has_time_detail);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(
@@ -414,7 +385,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         let begin_instant = Instant::now();
 
         let source = req.mut_context().take_request_source();
-        let resp = future_prepare_flashback_to_version(&self.storage, &self.ch, req);
+        let resp = future_prepare_flashback_to_version(&self.storage, req);
         let task = async move {
             let resp = resp.await?;
             let elapsed = begin_instant.saturating_elapsed();
@@ -445,7 +416,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         let begin_instant = Instant::now();
 
         let source = req.mut_context().take_request_source();
-        let resp = future_flashback_to_version(&self.storage, &self.ch, req);
+        let resp = future_flashback_to_version(&self.storage, req);
         let task = async move {
             let resp = resp.await?;
             let elapsed = begin_instant.saturating_elapsed();
@@ -517,169 +488,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
                 "request" => "coprocessor_v2"
             );
             GRPC_MSG_FAIL_COUNTER.raw_coprocessor.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
-    }
-
-    fn register_lock_observer(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: RegisterLockObserverRequest,
-        sink: UnarySink<RegisterLockObserverResponse>,
-    ) {
-        let begin_instant = Instant::now();
-
-        let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.start_collecting(req.get_max_ts().into(), cb);
-
-        let task = async move {
-            // Here except for the receiving error of `futures::channel::oneshot`,
-            // other errors will be returned as the successful response of rpc.
-            let res = match res {
-                Err(e) => Err(e),
-                Ok(_) => f.await?,
-            };
-            let mut resp = RegisterLockObserverResponse::default();
-            if let Err(e) = res {
-                resp.set_error(format!("{}", e));
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .register_lock_observer
-                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "register_lock_observer"
-            );
-            GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
-    }
-
-    fn check_lock_observer(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: CheckLockObserverRequest,
-        sink: UnarySink<CheckLockObserverResponse>,
-    ) {
-        let begin_instant = Instant::now();
-
-        let (cb, f) = paired_future_callback();
-        let res = self
-            .gc_worker
-            .get_collected_locks(req.get_max_ts().into(), cb);
-
-        let task = async move {
-            let res = match res {
-                Err(e) => Err(e),
-                Ok(_) => f.await?,
-            };
-            let mut resp = CheckLockObserverResponse::default();
-            match res {
-                Ok((locks, is_clean)) => {
-                    resp.set_is_clean(is_clean);
-                    resp.set_locks(locks.into());
-                }
-                Err(e) => resp.set_error(format!("{}", e)),
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .check_lock_observer
-                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "check_lock_observer"
-            );
-            GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
-    }
-
-    fn remove_lock_observer(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: RemoveLockObserverRequest,
-        sink: UnarySink<RemoveLockObserverResponse>,
-    ) {
-        let begin_instant = Instant::now();
-
-        let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
-
-        let task = async move {
-            let res = match res {
-                Err(e) => Err(e),
-                Ok(_) => f.await?,
-            };
-            let mut resp = RemoveLockObserverResponse::default();
-            if let Err(e) = res {
-                resp.set_error(format!("{}", e));
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .remove_lock_observer
-                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "remove_lock_observer"
-            );
-            GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
-    }
-
-    fn physical_scan_lock(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut req: PhysicalScanLockRequest,
-        sink: UnarySink<PhysicalScanLockResponse>,
-    ) {
-        let begin_instant = Instant::now();
-
-        let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.physical_scan_lock(
-            req.take_context(),
-            req.get_max_ts().into(),
-            Key::from_raw(req.get_start_key()),
-            req.get_limit() as _,
-            cb,
-        );
-
-        let task = async move {
-            let res = match res {
-                Err(e) => Err(e),
-                Ok(_) => f.await?,
-            };
-            let mut resp = PhysicalScanLockResponse::default();
-            match res {
-                Ok(locks) => resp.set_locks(locks.into()),
-                Err(e) => resp.set_error(format!("{}", e)),
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .physical_scan_lock
-                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "physical_scan_lock"
-            );
-            GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
         })
         .map(|_| ());
 
@@ -782,7 +590,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         sink: ClientStreamingSink<Done>,
     ) {
         let store_id = self.store_id;
-        let ch = self.ch.clone();
+        let ch = self.storage.get_engine().raft_extension().clone();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
@@ -825,7 +633,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
     ) {
         info!("batch_raft RPC is called, new gRPC stream established");
         let store_id = self.store_id;
-        let ch = self.ch.clone();
+        let ch = self.storage.get_engine().raft_extension().clone();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
@@ -894,7 +702,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         let begin_instant = Instant::now();
 
         let region_id = req.get_context().get_region_id();
-        let (cb, f) = paired_future_callback();
         let mut split_keys = if req.is_raw_kv {
             if !req.get_split_key().is_empty() {
                 vec![F::encode_raw_key_owned(req.take_split_key(), None).into_encoded()]
@@ -915,52 +722,45 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             }
         };
         split_keys.sort();
-        let req = CasualMessage::SplitRegion {
-            region_epoch: req.take_context().take_region_epoch(),
+        let engine = self.storage.get_engine();
+        let f = engine.raft_extension().split(
+            region_id,
+            req.take_context().take_region_epoch(),
             split_keys,
-            callback: Callback::write(cb),
-            source: ctx.peer().into(),
-        };
-
-        if let Err(e) = self.ch.send_casual_msg(region_id, req) {
-            // Retrun region error instead a gRPC error.
-            let mut resp = SplitRegionResponse::default();
-            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
-            ctx.spawn(
-                async move {
-                    sink.success(resp).await?;
-                    ServerResult::Ok(())
-                }
-                .map_err(|_| ())
-                .map(|_| ()),
-            );
-            return;
-        }
+            ctx.peer(),
+        );
 
         let task = async move {
-            let mut res = f.await?;
+            let res = f.await;
             let mut resp = SplitRegionResponse::default();
-            if res.response.get_header().has_error() {
-                resp.set_region_error(res.response.mut_header().take_error());
-            } else {
-                let admin_resp = res.response.mut_admin_response();
-                let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
-                if regions.len() < 2 {
-                    error!(
-                        "invalid split response";
-                        "region_id" => region_id,
-                        "resp" => ?admin_resp
-                    );
-                    resp.mut_region_error().set_message(format!(
-                        "Internal Error: invalid response: {:?}",
-                        admin_resp
-                    ));
-                } else {
-                    if regions.len() == 2 {
-                        resp.set_left(regions[0].clone());
-                        resp.set_right(regions[1].clone());
+            match res {
+                Ok(regions) => {
+                    if regions.len() < 2 {
+                        error!(
+                            "invalid split response";
+                            "region_id" => region_id,
+                            "resp" => ?regions
+                        );
+                        resp.mut_region_error().set_message(format!(
+                            "Internal Error: invalid response: {:?}",
+                            regions
+                        ));
+                    } else {
+                        if regions.len() == 2 {
+                            resp.set_left(regions[0].clone());
+                            resp.set_right(regions[1].clone());
+                        }
+                        resp.set_regions(regions.into());
                     }
-                    resp.set_regions(regions.into());
+                }
+                Err(e) => {
+                    let err: crate::storage::Result<()> = Err(e.into());
+                    if let Some(err) = extract_region_error(&err) {
+                        resp.set_region_error(err)
+                    } else {
+                        resp.mut_region_error()
+                            .set_message(format!("failed to split: {:?}", err));
+                    }
                 }
             }
             sink.success(resp).await?;
@@ -974,103 +774,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
                 "request" => "split_region"
             );
             GRPC_MSG_FAIL_COUNTER.split_region.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
-    }
-
-    fn read_index(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: ReadIndexRequest,
-        sink: UnarySink<ReadIndexResponse>,
-    ) {
-        forward_unary!(self.proxy, read_index, ctx, req, sink);
-        let begin_instant = Instant::now();
-
-        let region_id = req.get_context().get_region_id();
-        let mut cmd = RaftCmdRequest::default();
-        let mut header = RaftRequestHeader::default();
-        let mut inner_req = RaftRequest::default();
-        inner_req.set_cmd_type(CmdType::ReadIndex);
-        inner_req.mut_read_index().set_start_ts(req.get_start_ts());
-        for r in req.get_ranges() {
-            let mut range = kvproto::kvrpcpb::KeyRange::default();
-            range.set_start_key(Key::from_raw(r.get_start_key()).into_encoded());
-            range.set_end_key(Key::from_raw(r.get_end_key()).into_encoded());
-            inner_req.mut_read_index().mut_key_ranges().push(range);
-        }
-        header.set_region_id(req.get_context().get_region_id());
-        header.set_peer(req.get_context().get_peer().clone());
-        header.set_region_epoch(req.get_context().get_region_epoch().clone());
-        if req.get_context().get_term() != 0 {
-            header.set_term(req.get_context().get_term());
-        }
-        header.set_sync_log(req.get_context().get_sync_log());
-        header.set_read_quorum(true);
-        cmd.set_header(header);
-        cmd.set_requests(vec![inner_req].into());
-
-        let (cb, f) = paired_future_callback();
-
-        // We must deal with all requests which acquire read-quorum in raftstore-thread,
-        // so just send it as an command.
-        if let Err(e) = self
-            .ch
-            .send_command(cmd, Callback::read(cb), RaftCmdExtraOpts::default())
-        {
-            // Retrun region error instead a gRPC error.
-            let mut resp = ReadIndexResponse::default();
-            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
-            ctx.spawn(
-                async move {
-                    sink.success(resp).await?;
-                    ServerResult::Ok(())
-                }
-                .map_err(|_| ())
-                .map(|_| ()),
-            );
-            return;
-        }
-
-        let task = async move {
-            let mut res = f.await?;
-            let mut resp = ReadIndexResponse::default();
-            if res.response.get_header().has_error() {
-                resp.set_region_error(res.response.mut_header().take_error());
-            } else {
-                let mut raft_resps = res.response.take_responses();
-                if raft_resps.len() != 1 {
-                    error!(
-                        "invalid read index response";
-                        "region_id" => region_id,
-                        "response" => ?raft_resps
-                    );
-                    resp.mut_region_error().set_message(format!(
-                        "Internal Error: invalid response: {:?}",
-                        raft_resps
-                    ));
-                } else {
-                    let mut read_index_resp = raft_resps[0].take_read_index();
-                    if read_index_resp.has_locked() {
-                        resp.set_locked(read_index_resp.take_locked());
-                    } else {
-                        resp.set_read_index(read_index_resp.get_read_index());
-                    }
-                }
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .read_index
-                .observe(begin_instant.saturating_elapsed_secs());
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "read_index"
-            );
-            GRPC_MSG_FAIL_COUNTER.read_index.inc();
         })
         .map(|_| ());
 
@@ -1093,7 +796,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         let copr_v2 = self.copr_v2.clone();
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
-        let ch = self.ch.clone();
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
@@ -1110,7 +812,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
                     id,
                     req,
                     &tx,
-                    &ch,
                 );
                 if let Some(batch) = batcher.as_mut() {
                     batch.maybe_commit(&storage, &tx);
@@ -1311,12 +1012,7 @@ fn response_batch_commands_request<F, T>(
     poll_future_notify(task);
 }
 
-fn handle_batch_commands_request<
-    T: RaftStoreRouter<E::Local> + 'static,
-    E: Engine,
-    L: LockManager,
-    F: KvFormat,
->(
+fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L, F>,
     copr: &Endpoint<E>,
@@ -1325,7 +1021,6 @@ fn handle_batch_commands_request<
     id: u64,
     req: batch_commands_request::Request,
     tx: &Sender<MeasuredSingleResponse>,
-    ch: &T,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
@@ -1428,8 +1123,8 @@ fn handle_batch_commands_request<
         ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
         Gc, future_gc(), kv_gc;
         DeleteRange, future_delete_range(storage), kv_delete_range;
-        PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage, ch), kv_prepare_flashback_to_version;
-        FlashbackToVersion, future_flashback_to_version(storage, ch), kv_flashback_to_version;
+        PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage), kv_prepare_flashback_to_version;
+        FlashbackToVersion, future_flashback_to_version(storage), kv_flashback_to_version;
         RawBatchGet, future_raw_batch_get(storage), raw_batch_get;
         RawPut, future_raw_put(storage), raw_put;
         RawBatchPut, future_raw_batch_put(storage), raw_batch_put;
@@ -1725,77 +1420,64 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
 // Preparing the flashback for a region will "lock" the region so that
 // there is no any read, write or scheduling operation could be proposed before
 // the actual flashback operation.
-fn future_prepare_flashback_to_version<
-    E: Engine,
-    L: LockManager,
-    F: KvFormat,
-    T: RaftStoreRouter<E::Local> + 'static,
->(
+// NOTICE: the caller needs to make sure the version we want to flashback won't
+// be between any transactions that have not been fully committed.
+fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
     // Keep this param to hint the type of E for the compiler.
-    _storage: &Storage<E, L, F>,
-    raft_router: &T,
+    storage: &Storage<E, L, F>,
     req: PrepareFlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
-    let raft_router = Mutex::new(raft_router.clone());
+    let storage = storage.clone();
     async move {
-        // Send an `AdminCmdType::PrepareFlashback` to prepare the raftstore for the
-        // later flashback. Once invoked, we will update the persistent region meta and
-        // the memory state of the flashback in Peer FSM to reject all read, write
-        // and scheduling operations for this region when propose/apply before we
-        // start the actual data flashback transaction command in the next phase.
-        send_flashback_msg::<T, E>(
-            &raft_router,
-            req.get_context(),
-            AdminCmdType::PrepareFlashback,
-        )
-        .await?;
-        Ok(PrepareFlashbackToVersionResponse::default())
+        let f = storage.get_engine().start_flashback(req.get_context());
+        let mut res = f.await.map_err(storage::Error::from);
+        if matches!(res, Ok(())) {
+            // After the region is put into the flashback state, we need to do a special
+            // prewrite to prevent `resolved_ts` from advancing.
+            let (cb, f) = paired_future_callback();
+            res = storage.sched_txn_command(req.clone().into(), cb);
+            if matches!(res, Ok(())) {
+                res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
+            }
+        }
+        let mut resp = PrepareFlashbackToVersionResponse::default();
+        if let Some(e) = extract_region_error(&res) {
+            resp.set_region_error(e);
+        } else if let Err(e) = res {
+            resp.set_error(format!("{}", e));
+        }
+        Ok(resp)
     }
 }
 
 // Flashback the region to a specific point with the given `version`, please
 // make sure the region is "locked" by `PrepareFlashbackToVersion` first,
 // otherwise this request will fail.
-fn future_flashback_to_version<
-    T: RaftStoreRouter<E::Local> + 'static,
-    E: Engine,
-    L: LockManager,
-    F: KvFormat,
->(
+fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
-    raft_router: &T,
     req: FlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
-    let storage_clone = storage.clone();
-    let raft_router = Mutex::new(raft_router.clone());
+    let storage = storage.clone();
     async move {
         // Perform the data flashback transaction command. We will check if the region
         // is in the flashback state when proposing the flashback modification.
         let (cb, f) = paired_future_callback();
-        let res = storage_clone.sched_txn_command(req.clone().into(), cb);
-        // Avoid crossing `.await` to bypass the `Send` constraint.
-        drop(storage_clone);
-        let v = match res {
-            Err(e) => Err(e),
-            Ok(_) => f.await?,
-        };
-        fail_point!("skip_finish_flashback_to_version", |_| {
-            Ok(FlashbackToVersionResponse::default())
-        });
-        // Send an `AdminCmdType::FinishFlashback` to unset the persistence state
-        // in `RegionLocalState` and region's meta, and when that
-        // admin cmd is applied, will update the memory
-        // state of the flashback
-        send_flashback_msg::<T, E>(
-            &raft_router,
-            req.get_context(),
-            AdminCmdType::FinishFlashback,
-        )
-        .await?;
+        let mut res = storage.sched_txn_command(req.clone().into(), cb);
+        if matches!(res, Ok(())) {
+            res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
+        }
+        if matches!(res, Ok(())) {
+            // Only finish flashback when Flashback executed successfully.
+            fail_point!("skip_finish_flashback_to_version", |_| {
+                Ok(FlashbackToVersionResponse::default())
+            });
+            let f = storage.get_engine().end_flashback(req.get_context());
+            res = f.await.map_err(storage::Error::from);
+        }
         let mut resp = FlashbackToVersionResponse::default();
-        if let Some(err) = extract_region_error(&v) {
+        if let Some(err) = extract_region_error(&res) {
             resp.set_region_error(err);
-        } else if let Err(e) = v {
+        } else if let Err(e) = res {
             resp.set_error(format!("{}", e));
         }
         Ok(resp)
@@ -2185,12 +1867,12 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 macro_rules! txn_command_future {
-    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident, $tracker: ident) { $else_branch: expr }) => {
+    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) {$($prelude: stmt)*}; ($v: ident, $resp: ident, $tracker: ident) { $else_branch: expr }) => {
         fn $fn_name<E: Engine, L: LockManager, F: KvFormat>(
             storage: &Storage<E, L, F>,
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
-            $prelude
+            $($prelude)*
             let $tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
                 $req.get_context(),
                 RequestType::Unknown,
@@ -2237,22 +1919,42 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
     }
     resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
 }});
-txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp, tracker) {{
-    match v {
-        Ok(Ok(res)) => {
-            let (values, not_founds) = res.into_values_and_not_founds();
-            resp.set_values(values.into());
-            resp.set_not_founds(not_founds);
-        },
-        Err(e) | Ok(Err(e)) =>  {
-            resp.set_errors(vec![extract_key_error(&e)].into())
-        },
-    }
-    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-    });
-}});
+txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse,
+    (req) {
+        let mode = req.get_wake_up_mode()
+    };
+    (v, resp, tracker) {{
+        match v {
+            Ok(Ok(res)) => {
+                match mode {
+                    PessimisticLockWakeUpMode::WakeUpModeForceLock => {
+                        let (res, error) = res.into_pb();
+                        resp.set_results(res.into());
+                        if let Some(e) = error {
+                            if let Some(region_error) = extract_region_error_from_error(&e.0) {
+                                resp.set_region_error(region_error);
+                            } else {
+                                resp.set_errors(vec![extract_key_error(&e.0)].into());
+                            }
+                        }
+                    }
+                    PessimisticLockWakeUpMode::WakeUpModeNormal => {
+                        let (values, not_founds) = res.into_legacy_values_and_not_founds();
+                        resp.set_values(values.into());
+                        resp.set_not_founds(not_founds);
+                    }
+                }
+            },
+            Err(e) | Ok(Err(e)) => {
+                resp.set_errors(vec![extract_key_error(&e)].into())
+            },
+        }
+        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+            tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
+            tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
+        });
+    }}
+);
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())
 });
@@ -2425,20 +2127,6 @@ fn collect_batch_resp(v: &mut MeasuredBatchResponse, mut e: MeasuredSingleRespon
     v.measures.push(e.measure);
 }
 
-fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionError {
-    if let RaftStoreError::Transport(DiscardReason::Disconnected) = e {
-        // `From::from(RaftStoreError) -> RegionError` treats `Disconnected` as `Other`.
-        let mut region_error = RegionError::default();
-        let region_not_found = RegionNotFound {
-            region_id,
-            ..Default::default()
-        };
-        region_error.set_region_not_found(region_not_found);
-        return region_error;
-    }
-    e.into()
-}
-
 fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
     fail_point!("needs_reject_raft_append", |_| true);
     if reject_messages_on_memory_ratio < f64::EPSILON {
@@ -2463,61 +2151,6 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
         }
     }
     false
-}
-
-async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
-    raft_router: &Mutex<T>,
-    ctx: &Context,
-    cmd_type: AdminCmdType,
-) -> ServerResult<()> {
-    let region_id = ctx.get_region_id();
-    let (result_tx, result_rx) = oneshot::channel();
-    let cb = Callback::write(Box::new(move |resp| {
-        if resp.response.get_header().has_error() {
-            result_tx.send(false).unwrap();
-            error!("exec flashback msg failed";
-                "region_id" => region_id,
-                "type" => ?cmd_type,
-                "error" => ?resp.response.get_header().get_error());
-            return;
-        }
-        result_tx.send(true).unwrap();
-    }));
-    let mut admin = AdminRequest::default();
-    admin.set_cmd_type(cmd_type);
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_region_id(region_id);
-    req.mut_header()
-        .set_region_epoch(ctx.get_region_epoch().clone());
-    req.mut_header().set_peer(ctx.get_peer().clone());
-    req.set_admin_request(admin);
-    req.mut_header()
-        .set_flags(WriteBatchFlags::FLASHBACK.bits());
-    // call admin request directly
-    let raft_router = raft_router.lock().await;
-    if let Err(e) = raft_router.send_command(
-        req,
-        cb,
-        RaftCmdExtraOpts {
-            deadline: None,
-            disk_full_opt: DiskFullOpt::AllowedOnAlmostFull,
-        },
-    ) {
-        return Err(Error::Other(box_err!(
-            "send flashback msg {:?} failed for region {}, error {:?}",
-            cmd_type,
-            region_id,
-            e
-        )));
-    }
-    if !result_rx.await? {
-        return Err(Error::Other(box_err!(
-            "wait flashback msg {:?} result failed for region {} failed",
-            cmd_type,
-            region_id
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
