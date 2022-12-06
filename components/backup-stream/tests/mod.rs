@@ -1293,13 +1293,16 @@ mod test {
 
         suite.must_register_task(1, "safepoint");
         let mut events = suite.flush_stream();
+        // Wait until the subscription has been registered...
+        std::thread::sleep(Duration::from_millis(200));
         suite.sync();
         suite.force_flush_files("safepoint");
         run_async_test(events.next()).expect("failed to wait flush");
         run_async_test(suite.get_meta_cli().remove_task("safepoint"))
             .expect("failed to remove task");
-        suite.sync();
+        // Wait until the event has been observed...
         std::thread::sleep(Duration::from_millis(200));
+        suite.sync();
         let safepoints = suite
             .cluster
             .pd_client
