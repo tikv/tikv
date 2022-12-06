@@ -372,7 +372,7 @@ impl From<PrepareFlashbackToVersionRequest> for TypedCommand<()> {
             req.get_start_ts().into(),
             req.get_version().into(),
             Key::from_raw(req.get_start_key()),
-            Key::from_raw(req.get_end_key()),
+            Key::from_raw_maybe_unbounded(req.get_end_key()),
             req.take_context(),
         )
     }
@@ -385,7 +385,7 @@ impl From<FlashbackToVersionRequest> for TypedCommand<()> {
             req.get_commit_ts().into(),
             req.get_version().into(),
             Key::from_raw(req.get_start_key()),
-            Key::from_raw(req.get_end_key()),
+            Key::from_raw_maybe_unbounded(req.get_end_key()),
             req.take_context(),
         )
     }
