@@ -37,7 +37,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
-    router::{CmdResChannel, QueryResChannel},
+    router::{CmdResChannel, PeerTick, QueryResChannel},
     tablet::CachedTablet,
     worker::PdTask,
     Result,
@@ -85,7 +85,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    need_register_reactivate_memory_lock_tick: bool,
+    pending_ticks: Vec<PeerTick>,
 
     /// Check whether this proposal can be proposed based on its epoch.
     proposal_control: ProposalControl,
@@ -161,8 +161,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             last_region_buckets: None,
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            need_register_reactivate_memory_lock_tick: false,
             proposal_control: ProposalControl::new(0),
+            pending_ticks: Vec::new(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -544,16 +544,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group().snap().is_some()
     }
 
-    pub fn set_need_register_reactivate_memory_lock_tick(&mut self) {
-        self.need_register_reactivate_memory_lock_tick = true;
+    #[inline]
+    pub fn add_pending_tick(&mut self, tick: PeerTick) {
+        self.pending_ticks.push(tick);
     }
 
-    /// Returns `true` if we need to register ReactivateMemoryLock tick
-    /// It will be set to false when it is called
-    pub fn need_register_reactivate_memory_lock_tick(&mut self) -> bool {
-        let ret = self.need_register_reactivate_memory_lock_tick;
-        self.need_register_reactivate_memory_lock_tick = false;
-        ret
+    #[inline]
+    pub fn take_pending_ticks(&mut self) -> Vec<PeerTick> {
+        mem::take(&mut self.pending_ticks)
     }
 
     pub fn activate_in_memory_pessimistic_locks(&mut self) {

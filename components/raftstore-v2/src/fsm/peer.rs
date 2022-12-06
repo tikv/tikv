@@ -129,6 +129,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         Self { fsm, store_ctx }
     }
 
+    #[inline]
+    fn schedule_pending_ticks(&mut self) {
+        let pending_ticks = self.fsm.peer.take_pending_ticks();
+        for tick in pending_ticks {
+            if tick == PeerTick::ReactivateMemoryLock {
+                self.register_reactivate_memory_lock_tick()
+            } else {
+                self.schedule_tick(tick);
+            }
+        }
+    }
+
     pub fn schedule_tick(&mut self, tick: PeerTick) {
         assert!(PeerTick::VARIANT_COUNT <= u16::BITS as usize);
         let idx = tick as usize;
@@ -213,10 +225,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             match msg {
                 PeerMsg::RaftMessage(msg) => {
                     self.fsm.peer.on_raft_message(self.store_ctx, msg);
-                    if self.fsm.peer.need_register_reactivate_memory_lock_tick() {
-                        self.fsm.reactivate_memory_lock_ticks = 0;
-                        self.register_reactivate_memory_lock_tick();
-                    }
+                    self.schedule_pending_ticks();
                 }
                 PeerMsg::RaftQuery(cmd) => {
                     self.on_receive_command(cmd.send_time);
@@ -284,6 +293,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     pub fn register_reactivate_memory_lock_tick(&mut self) {
-        self.schedule_tick(PeerTick::ReactivateMemoryLock)
+        self.schedule_tick(PeerTick::ReactivateMemoryLock);
     }
 }
