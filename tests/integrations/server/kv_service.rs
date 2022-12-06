@@ -782,7 +782,32 @@ fn test_mvcc_flashback_unprepared() {
     req.set_end_key(b"z".to_vec());
     let resp = client.kv_flashback_to_version(&req).unwrap();
     assert!(resp.get_error().contains("txn lock not found"));
-    must_kv_read_equal(&client, ctx, k, v, 6);
+    must_kv_read_equal(&client, ctx.clone(), k.clone(), v, 6);
+    // Flashback with preparing.
+    must_flashback_to_version(&client, ctx.clone(), 0, 6, 7);
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k;
+    get_req.version = 7;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(!get_resp.has_error());
+    assert_eq!(get_resp.value, b"".to_vec());
+    // Mock the flashback retry.
+    let mut req = FlashbackToVersionRequest::default();
+    req.set_context(ctx);
+    req.set_start_ts(6);
+    req.set_commit_ts(7);
+    req.version = 0;
+    req.start_key = b"a".to_vec();
+    req.end_key = b"z".to_vec();
+    let resp = client.kv_flashback_to_version(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_error().is_empty());
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(!get_resp.has_error());
+    assert_eq!(get_resp.value, b"".to_vec());
 }
 
 #[test]
