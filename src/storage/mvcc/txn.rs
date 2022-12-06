@@ -128,7 +128,11 @@ impl MvccTxn {
         self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
     }
 
-    pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock) {
+    pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock, is_new: bool) {
+        if is_new {
+            self.new_locks
+                .push(lock.to_lock().into_lock_info(key.to_raw().unwrap()));
+        }
         self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
