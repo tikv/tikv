@@ -76,7 +76,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     lock_manager::{
         lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
-        LockManager, LockWaitToken,
+        KeyLockWaitInfo, LockDigest, LockManager, LockWaitToken, UpdateWaitForEvent,
     },
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
@@ -597,6 +597,36 @@ impl<L: LockManager> LockWaitQueues<L> {
         }
 
         result
+    }
+
+    pub fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) {
+        let mut update_wait_for_events = vec![];
+        for lock_info in lock_info {
+            let key = Key::from_raw(lock_info.get_key());
+            if let Some(mut key_state) = self.inner.queue_map.get_mut(&key) {
+                key_state.current_lock = lock_info;
+                update_wait_for_events.reserve(key_state.queue.len());
+                for (&token, entry) in key_state.queue.iter() {
+                    let event = UpdateWaitForEvent {
+                        token,
+                        start_ts: entry.parameters.start_ts,
+                        is_first_lock: entry.parameters.is_first_lock,
+                        wait_info: KeyLockWaitInfo {
+                            key: key.clone(),
+                            lock_digest: LockDigest {
+                                ts: key_state.current_lock.lock_version.into(),
+                                hash: entry.lock_hash,
+                            },
+                            lock_info: key_state.current_lock.clone(),
+                        },
+                    };
+                    update_wait_for_events.push(event);
+                }
+            }
+        }
+        if !update_wait_for_events.is_empty() {
+            self.inner.lock_mgr.update_wait_for(update_wait_for_events);
+        }
     }
 
     /// Gets the count of entries currently waiting in queues.
