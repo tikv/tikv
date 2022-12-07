@@ -4651,16 +4651,11 @@ mod tests {
             "rocksdb.defaultcf.target-file-size-base".to_owned(),
             "32MB".to_owned(),
         );
-        change.insert(
-            "rocksdb.defaultcf.block-cache-size".to_owned(),
-            "256MB".to_owned(),
-        );
         cfg_controller.update(change).unwrap();
 
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(32).0);
-        assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(256).0);
     }
 
     #[test]
