@@ -273,19 +273,33 @@ where
         meta_client: MetadataClient<S>,
         scheduler: Scheduler<Task>,
     ) -> Result<()> {
-        let tasks = meta_client.get_tasks().await?;
-        for task in tasks.inner {
-            info!("backup stream watch task"; "task" => ?task);
-            if task.is_paused {
-                continue;
+        let mut revision = 0;
+
+        loop {
+            let tasks = meta_client.get_tasks().await;
+            match  tasks {
+                Err(e) => {
+                    e.report("failed to get backup stream task");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                },
+                Ok(tasks) => {
+                    revision = tasks.revision;
+                    for task in tasks.inner {
+                        info!("backup stream watch task"; "task" => ?task);
+                        if task.is_paused {
+                            continue;
+                        }
+                        // We have meet task upon store start, we must in a failover.
+                        scheduler.schedule(Task::MarkFailover(Instant::now()))?;
+                        // move task to schedule
+                        scheduler.schedule_force(Task::WatchTask(TaskOp::AddTask(task)))?;
+                    }       
+                    break;
+                },
             }
-            // We have meet task upon store start, we must in a failover.
-            scheduler.schedule(Task::MarkFailover(Instant::now()))?;
-            // move task to schedule
-            scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
         }
 
-        let revision = tasks.revision;
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
 
