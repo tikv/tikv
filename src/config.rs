@@ -4641,7 +4641,6 @@ mod tests {
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
         assert_eq!(cf_opts.get_disable_auto_compactions(), false);
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(64).0);
-        assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(8).0);
 
         let mut change = HashMap::new();
         change.insert(
