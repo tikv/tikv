@@ -537,6 +537,7 @@ dependencies = [
  "lazy_static",
  "online_config",
  "prometheus",
+ "resource_control",
  "serde",
  "serde_derive",
  "slog",
@@ -2726,7 +2727,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/Connor1996/kvproto?branch=pri#91fcac8841d439c07b789e1416c3717a7a2d7551"
+source = "git+https://github.com/Connor1996/kvproto?branch=pri#745cf25bfe6cc72f33db220444704511eb0dd3a6"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4331,6 +4332,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "raftstore",
+ "resource_control",
  "slog",
  "slog-global",
  "smallvec",
@@ -5895,6 +5897,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.3",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "server",

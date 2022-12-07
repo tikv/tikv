@@ -15,6 +15,7 @@ use std::{
 
 use crossbeam::channel::Sender;
 use engine_traits::{KvEngine, RaftEngine};
+use resource_control::{ResourceController, ResourceType};
 use tikv_util::{info, mpsc::priority_queue, time::Instant};
 
 use crate::store::{
@@ -29,7 +30,6 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn resource_ctl(&self) -> &ResourceController<EK, ER>;
     fn write_senders(&self) -> &WriteSenders<EK, ER>;
     fn config(&self) -> &Config;
     fn raft_metrics(&self) -> &RaftMetrics;
@@ -40,10 +40,6 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn resource_ctl(&self) -> &ResourceController<EK, ER> {
-        &self.resource_ctl
-    }
-
     fn write_senders(&self) -> &WriteSenders<EK, ER> {
         &self.write_senders
     }
@@ -228,8 +224,25 @@ where
     }
 
     fn send<C: WriteRouterContext<EK, ER>>(&self, ctx: &mut C, msg: WriteMsg<EK, ER>) {
-        let pri = ctx.resource_ctl().get_priority("default", msg.priority());
-        ctx.write_senders().pri_write_sender.send(msg, pri).unwrap();
+        let sender = ctx.write_senders();
+        let mut dominant_group = "default";
+        let mut max_write_bytes = 0;
+        if let Some(groups) = msg.resource_consumptions() {
+            for (group_name, write_bytes) in groups {
+                if *write_bytes > max_write_bytes {
+                    dominant_group = group_name;
+                    max_write_bytes = *write_bytes;
+                }
+                sender
+                    .resource_ctl
+                    .consume(group_name, ResourceType::Bytes(*write_bytes));
+            }
+        }
+        let pri = sender
+            .resource_ctl
+            .get_priority(dominant_group, msg.priority());
+        sender.resource_ctl.maybe_update_min_virtual_time();
+        sender.pri_write_sender.send(msg, pri).unwrap();
         // match ctx.write_senders()[self.writer_id].try_send(msg) {
         //     Ok(()) => (),
         //     Err(TrySendError::Full(msg)) => {
@@ -254,6 +267,7 @@ where
 /// you should use `WriteRouter` to decide which sender to be used.
 #[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
+    resource_ctl: Arc<ResourceController>,
     pri_write_sender: priority_queue::Sender<WriteMsg<EK, ER>>,
     write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
@@ -261,10 +275,12 @@ pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
 
 impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
     pub fn new(
+        resource_ctl: Arc<ResourceController>,
         write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
         pri_write_sender: priority_queue::Sender<WriteMsg<EK, ER>>,
     ) -> Self {
         WriteSenders {
+            resource_ctl,
             pri_write_sender,
             write_senders,
             io_reschedule_concurrent_count: Arc::default(),

@@ -27,7 +27,7 @@ use fail::fail_point;
 use getset::{Getters, MutGetters};
 use kvproto::{
     errorpb,
-    kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
+    kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
     metapb::{self, PeerRole},
     pdpb::{self, PeerStats},
     raft_cmdpb::{
@@ -263,6 +263,11 @@ impl ProposalContext {
         }
     }
 }
+
+// pub struct ProposalContext {
+//     bits: ProposalContextBits,
+//     // extended:
+// }
 
 /// `ConsistencyState` is used for consistency check.
 pub struct ConsistencyState {
@@ -4277,11 +4282,11 @@ where
             _ => {}
         }
 
-        if req.get_header().get_priority() == CommandPri::High {
-            ctx.insert(ProposalContext::HIGH_PRIORITY);
-        } else if req.get_header().get_priority() == CommandPri::Low {
-            ctx.insert(ProposalContext::LOW_PRIORITY);
-        }
+        // if req.get_header().get_priority() == CommandPri::High {
+        //     ctx.insert(ProposalContext::HIGH_PRIORITY);
+        // } else if req.get_header().get_priority() == CommandPri::Low {
+        //     ctx.insert(ProposalContext::LOW_PRIORITY);
+        // }
 
         Ok(ctx)
     }

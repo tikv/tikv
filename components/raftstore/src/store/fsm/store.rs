@@ -42,7 +42,7 @@ use kvproto::{
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
-use resource_control::ResourceController;
+use resource_control::{ResourceController, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -526,8 +526,6 @@ where
     pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
-
-    pub resource_ctl: Arc<ResourceController>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -1111,7 +1109,6 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
     write_senders: WriteSenders<EK, ER>,
-    resource_ctl: Arc<ResourceController>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1358,7 +1355,6 @@ where
             write_senders: self.write_senders.clone(),
             sync_write_worker,
             pending_latency_inspect: vec![],
-            resource_ctl: self.resource_ctl.clone(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1410,7 +1406,6 @@ where
             global_replication_state: self.global_replication_state.clone(),
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
-            resource_ctl: self.resource_ctl.clone(),
         }
     }
 }
@@ -1483,7 +1478,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        resource_ctl: Arc<ResourceController>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1609,7 +1603,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
-            resource_ctl,
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -1768,11 +1761,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
 pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
     cfg: &Config,
+    resource_manager: &Arc<ResourceGroupManager>,
 ) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
-    let (apply_router, apply_system) = create_apply_batch_system(cfg);
-    let (router, system) =
-        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
+    let (apply_router, apply_system) = create_apply_batch_system(
+        cfg,
+        Arc::new(ResourceController::new(resource_manager.clone())),
+    );
+    let (router, system) = batch_system::create_system(
+        &cfg.store_batch_system,
+        store_tx,
+        store_fsm,
+        Arc::new(ResourceController::new(resource_manager.clone())),
+    );
     let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
         system,
@@ -1780,7 +1781,9 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         apply_router,
         apply_system,
         router: raft_router.clone(),
-        store_writers: StoreWriters::default(),
+        store_writers: StoreWriters::new(Arc::new(ResourceController::new(
+            resource_manager.clone(),
+        ))),
     };
     (raft_router, system)
 }

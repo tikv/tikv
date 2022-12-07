@@ -10,7 +10,6 @@ use std::{
 
 use crossbeam::channel::{RecvError, SendError, TryRecvError, TrySendError};
 use crossbeam_skiplist::SkipMap;
-use kvproto::kvrpcpb::CommandPri;
 use parking_lot::{Condvar, Mutex};
 
 pub fn unbounded<T: Send>() -> (Sender<T>, Receiver<T>) {
@@ -54,7 +53,7 @@ impl<T> Drop for Cell<T> {
 
 #[derive(Default)]
 struct PriorityQueue<T> {
-    queue: SkipMap<u64, Cell<T>>,
+    queue: SkipMap<MapKey, Cell<T>>,
     disconnected: Mutex<bool>,
     available: Condvar,
 
@@ -87,7 +86,7 @@ impl<T> PriorityQueue<T> {
 
 #[derive(Eq, PartialEq)]
 struct MapKey {
-    priority: CommandPri,
+    priority: u64,
     sequence: u64,
 }
 
@@ -99,20 +98,11 @@ impl PartialOrd for MapKey {
 
 impl Ord for MapKey {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
-        match self.priority {
-            CommandPri::Normal => match other.priority {
-                CommandPri::Normal => self.sequence.cmp(&other.sequence),
-                CommandPri::High => cmp::Ordering::Less,
-                CommandPri::Low => cmp::Ordering::Greater,
-            },
-            CommandPri::High => match other.priority {
-                CommandPri::High => self.sequence.cmp(&other.sequence),
-                _ => cmp::Ordering::Greater,
-            },
-            CommandPri::Low => match other.priority {
-                CommandPri::Low => self.sequence.cmp(&other.sequence),
-                _ => cmp::Ordering::Less,
-            },
+        let ord = self.priority.cmp(&other.priority);
+        if ord == cmp::Ordering::Equal {
+            self.sequence.cmp(&other.sequence)
+        } else {
+            ord
         }
     }
 }
@@ -131,11 +121,14 @@ impl<T: Send + 'static> Sender<T> {
         if self.inner.receivers.load(Ordering::Acquire) == 0 {
             return Err(SendError(msg));
         }
-        self.inner.queue.insert(pri, Cell::new(msg));
+        self.inner
+            .queue
+            .insert(self.inner.get_map_key(pri), Cell::new(msg));
         self.inner.available.notify_one();
         Ok(())
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.inner.queue.len()
     }
@@ -193,6 +186,7 @@ impl<T: Send + 'static> Receiver<T> {
         }
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.inner.queue.len()
     }

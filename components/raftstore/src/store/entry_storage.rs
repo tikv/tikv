@@ -28,14 +28,10 @@ use tikv_alloc::TraceEvent;
 use tikv_util::{box_err, debug, error, info, time::Instant, warn, worker::Scheduler};
 
 use super::{
-    metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
-    RAFT_INIT_LOG_TERM,
+    metrics::*, peer_storage::storage_error, util, WriteTask, MEMTRACE_ENTRY_CACHE,
+    RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
-use crate::{
-    bytes_capacity,
-    store::{ProposalContext, ReadTask},
-    Result,
-};
+use crate::{bytes_capacity, store::ReadTask, Result};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -71,6 +67,13 @@ impl CachedEntries {
         CachedEntries {
             entries: Arc::new(Mutex::new((entries, 0))),
             range,
+        }
+    }
+
+    pub fn iter_entries(&self, mut f: impl FnMut(&Entry)) {
+        let entries = self.entries.lock().unwrap();
+        for entry in &entries.0 {
+            f(entry);
         }
     }
 
@@ -1073,11 +1076,15 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         task.priority = {
             let mut pri = CommandPri::Low;
             for entry in &entries {
-                let ctx = ProposalContext::from_bytes(&entry.get_context());
-                if ctx.contains(ProposalContext::HIGH_PRIORITY) {
+                let header = util::get_entry_header(entry);
+                let group_name =
+                    String::from_utf8_lossy(header.get_resource_group_tag().into()).into_owned();
+                *task.groups.entry(group_name).or_default() += entry.compute_size() as u64;
+                let ent_pri = header.get_priority();
+                if ent_pri == CommandPri::High {
                     pri = CommandPri::High;
                     break;
-                } else if ctx.contains(ProposalContext::LOW_PRIORITY) {
+                } else if ent_pri == CommandPri::Low {
                     // do nothing
                 } else {
                     pri = CommandPri::Normal;

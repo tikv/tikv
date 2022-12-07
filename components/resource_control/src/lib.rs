@@ -35,6 +35,11 @@ lazy_static! {
     .unwrap();
 }
 
+pub enum ResourceType {
+    CPUTime(Duration),
+    Bytes(u64),
+}
+
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroupConfig>,
     total_cpu_quota: f64,
@@ -138,8 +143,8 @@ impl ResourceController {
         self.resource_group(name).get_priority(priority)
     }
 
-    pub fn consume(&self, name: &str, cpu_duration: Duration) {
-        self.resource_group(name).consume(cpu_duration)
+    pub fn consume(&self, name: &str, delta: ResourceType) {
+        self.resource_group(name).consume(delta)
     }
 
     pub fn maybe_update_min_virtual_time(&self) {
@@ -180,7 +185,7 @@ impl ResourceController {
             }
         });
 
-        // needn't do update if the virtual different is less than 100ms.
+        // needn't do update if the virtual different is less than 100ms/100KB.
         if min_vt + 100_000 >= max_vt {
             return;
         }
@@ -257,9 +262,13 @@ impl ResourceGroup {
         self.virtual_time.fetch_add(vt_delta, Ordering::Relaxed);
     }
 
+    // TODO: make it delta type as generic to avoid mixed consume different types.
     #[inline]
-    fn consume(&self, cpu_duration: Duration) {
-        let vt_delta = cpu_duration.as_micros() as u64 * self.priority_factor;
+    fn consume(&self, delta: ResourceType) {
+        let vt_delta = match delta {
+            ResourceType::CPUTime(dur) => dur.as_micros() as u64,
+            ResourceType::Bytes(bytes) => bytes,
+        } * self.priority_factor;
         self.increase_vt(vt_delta);
     }
 }
@@ -296,8 +305,10 @@ impl<F: Future> Future for ControlledFuture<F> {
         let this = self.project();
         let now = Instant::now();
         let res = this.future.poll(cx);
-        this.controller
-            .consume(this.group_name, now.saturating_elapsed());
+        this.controller.consume(
+            this.group_name,
+            ResourceType::CPUTime(now.saturating_elapsed()),
+        );
         if res.is_pending() {
             set_task_priority(
                 this.controller

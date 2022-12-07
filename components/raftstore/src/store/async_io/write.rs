@@ -26,6 +26,7 @@ use kvproto::{
 };
 use protobuf::Message;
 use raft::eraftpb::Entry;
+use resource_control::ResourceController;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
@@ -174,6 +175,7 @@ where
     pub raft_wb: Option<ER::LogBatch>,
     pub entries: Vec<Entry>,
     pub priority: CommandPri,
+    pub groups: HashMap<String, u64>, // group_name -> write_bytes
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
     pub extra_write: ExtraWrite<EK::WriteBatch>,
@@ -195,6 +197,7 @@ where
             raft_wb: None,
             entries: vec![],
             priority: CommandPri::Normal,
+            groups: HashMap::default(),
             cut_logs: None,
             raft_state: None,
             extra_write: ExtraWrite::None,
@@ -255,6 +258,13 @@ where
             WriteMsg::WriteTask(t) => t.priority,
             WriteMsg::Shutdown => CommandPri::Normal,
             WriteMsg::LatencyInspect { .. } => CommandPri::Normal,
+        }
+    }
+
+    pub fn resource_consumptions(&self) -> Option<&HashMap<String, u64>> {
+        match self {
+            WriteMsg::WriteTask(t) => Some(&t.groups),
+            _ => None,
         }
     }
 }
@@ -873,14 +883,16 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    resource_ctl: Arc<ResourceController>,
     pri_writer: Option<priority_queue::Sender<WriteMsg<EK, ER>>>,
     writers: Vec<Sender<WriteMsg<EK, ER>>>,
     handlers: Vec<JoinHandle<()>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Default for StoreWriters<EK, ER> {
-    fn default() -> Self {
+impl<EK: KvEngine, ER: RaftEngine> StoreWriters<EK, ER> {
+    pub fn new(resource_ctl: Arc<ResourceController>) -> Self {
         Self {
+            resource_ctl,
             pri_writer: None,
             writers: vec![],
             handlers: vec![],
@@ -895,6 +907,7 @@ where
 {
     pub fn senders(&self) -> WriteSenders<EK, ER> {
         WriteSenders::new(
+            self.resource_ctl.clone(),
             self.writers.clone(),
             self.pri_writer.as_ref().unwrap().clone(),
         )

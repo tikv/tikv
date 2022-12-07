@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::{borrow::Cow, fmt};
 
+use batch_system::ResourceMetered;
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
@@ -757,6 +758,8 @@ pub enum PeerMsg<EK: KvEngine> {
     Destroy(u64),
 }
 
+impl<EK: KvEngine> ResourceMetered for PeerMsg<EK> {}
+
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -851,6 +854,8 @@ where
         abnormal_stores: Vec<u64>,
     },
 }
+
+impl<EK: KvEngine> ResourceMetered for StoreMsg<EK> {}
 
 impl<EK> fmt::Debug for StoreMsg<EK>
 where

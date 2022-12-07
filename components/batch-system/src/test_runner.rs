@@ -14,7 +14,7 @@ use std::{
 use derive_more::{Add, AddAssign};
 use tikv_util::mpsc;
 
-use crate::*;
+use crate::{fsm::ResourceMetered, *};
 
 /// Message `Runner` can accepts.
 pub enum Message {
@@ -23,6 +23,8 @@ pub enum Message {
     /// `Runner` will call the callback directly.
     Callback(Box<dyn FnOnce(&Handler, &mut Runner) + Send + 'static>),
 }
+
+impl ResourceMetered for Message {}
 
 /// A simple runner used for benchmarking only.
 pub struct Runner {
@@ -53,6 +55,10 @@ impl Fsm for Runner {
 
     fn get_priority(&self) -> Priority {
         self.priority
+    }
+
+    fn get_last_msg_group(&self) -> &str {
+        "default"
     }
 }
 

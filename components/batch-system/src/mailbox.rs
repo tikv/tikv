@@ -3,13 +3,15 @@
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
+    cell::RefCell,
     sync::{atomic::AtomicUsize, Arc},
 };
 
 use crossbeam::channel::{SendError, TrySendError};
+use resource_control::{ResourceController, ResourceType};
 use tikv_util::mpsc;
 
-use crate::fsm::{Fsm, FsmScheduler, FsmState};
+use crate::fsm::{Fsm, FsmScheduler, FsmState, ResourceMetered};
 
 /// A basic mailbox.
 ///
@@ -31,6 +33,7 @@ use crate::fsm::{Fsm, FsmScheduler, FsmState};
 pub struct BasicMailbox<Owner: Fsm> {
     sender: mpsc::LooseBoundedSender<Owner::Message>,
     state: Arc<FsmState<Owner>>,
+    last_msg_group: RefCell<String>,
 }
 
 impl<Owner: Fsm> BasicMailbox<Owner> {
@@ -43,6 +46,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         BasicMailbox {
             sender,
             state: Arc::new(FsmState::new(fsm, state_cnt)),
+            last_msg_group: RefCell::new("default".to_string()),
         }
     }
 
@@ -68,6 +72,26 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         self.sender.is_empty()
     }
 
+    #[inline]
+    pub fn last_msg_group(&self) -> &str {
+        unsafe { &*self.last_msg_group.as_ptr() }
+    }
+
+    fn consume(&self, msg: &Owner::Message, resource_ctl: &ResourceController) {
+        let mut dominant_group = "default".to_owned();
+        let mut max_write_bytes = 0;
+        if let Some(mut groups) = msg.get_resource_consumptions() {
+            for (group_name, write_bytes) in groups.drain() {
+                resource_ctl.consume(&group_name, ResourceType::Bytes(write_bytes));
+                if write_bytes > max_write_bytes {
+                    dominant_group = group_name;
+                    max_write_bytes = write_bytes;
+                }
+            }
+        }
+        *self.last_msg_group.borrow_mut() = dominant_group;
+    }
+
     /// Force sending a message despite the capacity limit on channel.
     #[inline]
     pub fn force_send<S: FsmScheduler<Fsm = Owner>>(
@@ -75,6 +99,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         msg: Owner::Message,
         scheduler: &S,
     ) -> Result<(), SendError<Owner::Message>> {
+        self.consume(&msg, scheduler.resource_ctl());
         self.sender.force_send(msg)?;
         self.state.notify(scheduler, Cow::Borrowed(self));
         Ok(())
@@ -89,6 +114,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         msg: Owner::Message,
         scheduler: &S,
     ) -> Result<(), TrySendError<Owner::Message>> {
+        self.consume(&msg, scheduler.resource_ctl());
         self.sender.try_send(msg)?;
         self.state.notify(scheduler, Cow::Borrowed(self));
         Ok(())
@@ -108,6 +134,7 @@ impl<Owner: Fsm> Clone for BasicMailbox<Owner> {
         BasicMailbox {
             sender: self.sender.clone(),
             state: self.state.clone(),
+            last_msg_group: RefCell::new("default".to_owned()),
         }
     }
 }

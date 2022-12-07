@@ -318,8 +318,10 @@ where
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
+        let resource_manager = Arc::new(ResourceGroupManager::new());
+
         // Initialize raftstore channels.
-        let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
+        let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 
         let thread_count = config.server.background_thread_count;
         let background_worker = WorkerBuilder::new("background")
@@ -369,7 +371,6 @@ where
         // Run check leader in a dedicate thread, because it is time sensitive
         // and crucial to TiCDC replication lag.
         let check_leader_worker = WorkerBuilder::new("check_leader").thread_count(1).create();
-        let resource_manager = Arc::new(ResourceGroupManager::new());
 
         TikvServer {
             config,
@@ -966,7 +967,6 @@ where
             check_leader_scheduler,
             self.env.clone(),
             unified_read_pool,
-            self.resource_manager.clone(),
             debug_thread_pool,
             health_service,
         )
@@ -1099,7 +1099,6 @@ where
             self.concurrency_manager.clone(),
             collector_reg_handle,
             self.causal_ts_provider.clone(),
-            Arc::new(ResourceController::new(self.resource_manager.clone())),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

@@ -1,4 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(cell_leak)]
+#![feature(string_leak)]
 
 mod batch;
 mod config;
@@ -16,7 +18,7 @@ pub use self::{
         PollHandler, Poller, PoolState,
     },
     config::Config,
-    fsm::{Fsm, FsmScheduler, Priority},
+    fsm::{Fsm, FsmScheduler, Priority, ResourceMetered},
     mailbox::{BasicMailbox, Mailbox},
     router::Router,
 };

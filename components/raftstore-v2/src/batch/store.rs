@@ -24,6 +24,7 @@ use raftstore::store::{
     fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
     StoreWriters, TabletSnapManager, Transport, WriteSenders,
 };
+use resource_control::ResourceController;
 use slog::Logger;
 use tikv_util::{
     box_err,
@@ -344,11 +345,11 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     store_writers: StoreWriters<EK, ER>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Default for Workers<EK, ER> {
-    fn default() -> Self {
+impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
+    fn new(resource_ctl: Arc<ResourceController>) -> Self {
         Self {
             async_read_worker: Worker::new("async-read-worker"),
-            store_writers: StoreWriters::default(),
+            store_writers: StoreWriters::new(resource_ctl),
         }
     }
 }
@@ -371,11 +372,12 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router: &StoreRouter<EK, ER>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
         snap_mgr: TabletSnapManager,
+        resource_ctl: Arc<ResourceController>,
     ) -> Result<()>
     where
         T: Transport + 'static,
     {
-        let mut workers = Workers::default();
+        let mut workers = Workers::new(resource_ctl);
         workers
             .store_writers
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
@@ -508,6 +510,7 @@ pub fn create_store_batch_system<EK, ER>(
     cfg: &Config,
     store_id: u64,
     logger: Logger,
+    resource_ctl: Arc<ResourceController>,
 ) -> (StoreRouter<EK, ER>, StoreSystem<EK, ER>)
 where
     EK: KvEngine,
@@ -515,7 +518,7 @@ where
 {
     let (store_tx, store_fsm) = StoreFsm::new(cfg, store_id, logger.clone());
     let (router, system) =
-        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
+        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm, resource_ctl);
     let system = StoreSystem {
         system,
         workers: None,

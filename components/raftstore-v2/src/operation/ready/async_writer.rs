@@ -8,6 +8,7 @@ use raftstore::store::{
     local_metrics::RaftMetrics, Config, PersistedNotifier, WriteRouter, WriteRouterContext,
     WriteSenders, WriteTask,
 };
+use resource_control::ResourceController;
 use slog::{warn, Logger};
 
 use crate::{

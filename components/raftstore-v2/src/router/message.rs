@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
+use batch_system::ResourceMetered;
 use engine_traits::Snapshot;
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::eraftpb::Snapshot as RaftSnapshot;
@@ -145,6 +146,8 @@ pub enum PeerMsg {
     WaitFlush(super::FlushChannel),
 }
 
+impl ResourceMetered for PeerMsg {}
+
 impl PeerMsg {
     pub fn raft_query(req: RaftCmdRequest) -> (Self, QueryResSubscriber) {
         let (ch, sub) = QueryResChannel::pair();
@@ -197,6 +200,8 @@ pub enum StoreMsg {
     Tick(StoreTick),
     Start,
 }
+
+impl ResourceMetered for StoreMsg {}
 
 impl fmt::Debug for StoreMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {

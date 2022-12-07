@@ -24,7 +24,7 @@ use std::{
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
-    HandlerBuilder, PollHandler, Priority,
+    HandlerBuilder, PollHandler, Priority, ResourceMetered,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -46,11 +46,12 @@ use kvproto::{
 };
 use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
-use protobuf::{wire_format::WireType, CodedInputStream};
+use protobuf::{wire_format::WireType, CodedInputStream, Message};
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
+use resource_control::ResourceController;
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -3448,6 +3449,28 @@ where
     Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
 }
 
+impl<EK: KvEngine> ResourceMetered for Msg<EK> {
+    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+        match self {
+            Msg::Apply { apply, .. } => {
+                let mut map = HashMap::default();
+                for cached_entries in &apply.entries {
+                    cached_entries.iter_entries(|entry| {
+                        let header = util::get_entry_header(entry);
+                        let group_name =
+                            String::from_utf8_lossy(header.get_resource_group_tag().into())
+                                .into_owned();
+                        // TODO: compute size is not accurate enough
+                        *map.entry(group_name).or_default() += entry.compute_size() as u64;
+                    });
+                }
+                Some(map)
+            }
+            _ => None,
+        }
+    }
+}
+
 impl<EK> Msg<EK>
 where
     EK: KvEngine,
@@ -4050,6 +4073,11 @@ where
     fn get_priority(&self) -> Priority {
         self.delegate.priority
     }
+
+    #[inline]
+    fn get_last_msg_group(&self) -> &str {
+        self.mailbox.as_ref().unwrap().last_msg_group()
+    }
 }
 
 impl<EK> Drop for ApplyFsm<EK>
@@ -4074,6 +4102,8 @@ pub enum ControlMsg {
         inspector: LatencyInspector,
     },
 }
+
+impl ResourceMetered for ControlMsg {}
 
 pub struct ControlFsm {
     receiver: Receiver<ControlMsg>,
@@ -4493,10 +4523,15 @@ impl<EK: KvEngine> ApplyBatchSystem<EK> {
 
 pub fn create_apply_batch_system<EK: KvEngine>(
     cfg: &Config,
+    resource_ctl: Arc<ResourceController>,
 ) -> (ApplyRouter<EK>, ApplyBatchSystem<EK>) {
     let (control_tx, control_fsm) = ControlFsm::new();
-    let (router, system) =
-        batch_system::create_system(&cfg.apply_batch_system, control_tx, control_fsm);
+    let (router, system) = batch_system::create_system(
+        &cfg.apply_batch_system,
+        control_tx,
+        control_fsm,
+        resource_ctl,
+    );
     (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 

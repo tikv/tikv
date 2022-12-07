@@ -19,6 +19,7 @@ use crossbeam::channel::SendError;
 use fail::fail_point;
 use file_system::{set_io_type, IoType};
 use kvproto::kvrpcpb::CommandPri;
+use resource_control::ResourceController;
 use tikv_util::{
     debug, error, info, mpsc, mpsc::priority_queue, safe_panic, sys::thread::StdThreadBuildWrapper,
     thd_name, time::Instant, warn,
@@ -43,6 +44,7 @@ pub enum FsmTypes<N, C> {
 macro_rules! impl_sched {
     ($name:ident, $ty:path,Fsm = $fsm:tt) => {
         pub struct $name<N: Fsm, C: Fsm> {
+            resource_ctl: Arc<ResourceController>,
             sender: priority_queue::Sender<FsmTypes<N, C>>,
             low_sender: priority_queue::Sender<FsmTypes<N, C>>,
         }
@@ -51,6 +53,7 @@ macro_rules! impl_sched {
             #[inline]
             fn clone(&self) -> $name<N, C> {
                 $name {
+                    resource_ctl: self.resource_ctl.clone(),
                     sender: self.sender.clone(),
                     low_sender: self.low_sender.clone(),
                 }
@@ -71,8 +74,11 @@ macro_rules! impl_sched {
                     Priority::Normal => &self.sender,
                     Priority::Low => &self.low_sender,
                 };
+
                 // TODO: pass different priority.
-                match sender.send($ty(fsm), CommandPri::Normal) {
+                self.resource_ctl
+                    .get_priority(&fsm.get_last_msg_group(), CommandPri::Normal);
+                match sender.send($ty(fsm), 0) {
                     Ok(()) => {}
                     // TODO: use debug instead.
                     Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
@@ -84,9 +90,13 @@ macro_rules! impl_sched {
                 // TODO: close it explicitly once it's supported.
                 // Magic number, actually any number greater than poll pool size works.
                 for _ in 0..256 {
-                    let _ = self.sender.send(FsmTypes::Empty, CommandPri::Normal);
-                    let _ = self.low_sender.send(FsmTypes::Empty, CommandPri::Normal);
+                    let _ = self.sender.send(FsmTypes::Empty, 0);
+                    let _ = self.low_sender.send(FsmTypes::Empty, 0);
                 }
+            }
+
+            fn resource_ctl(&self) -> &ResourceController {
+                &self.resource_ctl
             }
         }
     };
@@ -172,7 +182,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     ///
     /// When pending messages of the FSM is different than `expected_len`,
     /// attempts to schedule it in this poller again. Returns the `fsm` if the
-    /// re-scheduling suceeds.
+    /// re-scheduling succeeds.
     fn release(&mut self, mut fsm: NormalFsm<N>, expected_len: usize) -> Option<NormalFsm<N>> {
         let mailbox = fsm.take_mailbox().unwrap();
         mailbox.release(fsm.fsm);
@@ -711,6 +721,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
     cfg: &Config,
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
+    resource_ctl: Arc<ResourceController>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
     let state_cnt = Arc::new(AtomicUsize::new(0));
     let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
@@ -719,10 +730,12 @@ pub fn create_system<N: Fsm, C: Fsm>(
     let normal_scheduler = NormalScheduler {
         sender: tx.clone(),
         low_sender: tx2.clone(),
+        resource_ctl: resource_ctl.clone(),
     };
     let control_scheduler = ControlScheduler {
         sender: tx.clone(),
         low_sender: tx2,
+        resource_ctl,
     };
     let pool_state_builder = PoolStateBuilder {
         max_batch_size: cfg.max_batch_size(),

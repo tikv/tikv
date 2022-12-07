@@ -19,12 +19,14 @@ use engine_traits::KvEngine;
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
-    raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest},
+    raft_cmdpb::{
+        AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, RaftRequestHeader,
+    },
     raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
-use protobuf::{self, Message};
+use protobuf::{self, parse_length_delimited_from, CodedInputStream, Message};
 use raft::{
-    eraftpb::{self, ConfChangeType, ConfState, MessageType, Snapshot},
+    eraftpb::{self, ConfChangeType, ConfState, Entry, MessageType, Snapshot},
     Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
@@ -705,6 +707,21 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
     let sec = u >> TIMESPEC_SEC_SHIFT;
     let nsec = (u & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
     Timespec::new(sec as i64, nsec as i32)
+}
+
+pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
+    // TODO: parse partially
+    let mut is = CodedInputStream::from_bytes(entry.get_data());
+    if is.eof().unwrap() {
+        return RaftRequestHeader::default();
+    }
+    let (field_number, _) = is.read_tag_unpack().unwrap();
+    // Header field is of number 1
+    if field_number != 1 {
+        panic!("unexpected field number: {}", field_number);
+    }
+
+    parse_length_delimited_from(&mut is).unwrap()
 }
 
 /// Parse data of entry `index`.
