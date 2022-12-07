@@ -28,6 +28,7 @@ use raftstore::{
     },
     store::util::is_region_initialized,
 };
+use raftstore_v2::LockManagerNotifier;
 use security::SecurityManager;
 use tikv_util::{
     future::paired_future_callback,
@@ -603,6 +604,18 @@ impl RegionChangeObserver for RoleChangeNotifier {
                 RegionChangeEvent::UpdateBuckets(_) => {}
             }
         }
+    }
+}
+
+impl LockManagerNotifier for RoleChangeNotifier {
+    fn on_role_change(&self, region: &Region, role_change: RoleChange) {
+        let mut ctx = ObserverContext::new(region);
+        RoleObserver::on_role_change(self, &mut ctx, &role_change);
+    }
+
+    fn on_region_changed(&self, region: &Region, event: RegionChangeEvent, role: StateRole) {
+        let mut ctx = ObserverContext::new(region);
+        RegionChangeObserver::on_region_changed(self, &mut ctx, event, role);
     }
 }
 

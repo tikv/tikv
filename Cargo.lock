@@ -6306,6 +6306,7 @@ dependencies = [
  "raft",
  "raft_log_engine",
  "raftstore",
+ "raftstore-v2",
  "rand 0.7.3",
  "regex",
  "reqwest",

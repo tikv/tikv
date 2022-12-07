@@ -7,8 +7,9 @@ use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{metapb::Region, raft_serverpb::RaftMessage};
+use raft::StateRole;
 use raftstore::{
-    coprocessor::RegionChangeReason,
+    coprocessor::{RegionChangeEvent, RegionChangeReason, RoleChange},
     store::{Config, ReadDelegate, RegionReadProgressRegistry},
 };
 use slog::{info, o, Logger};
@@ -189,4 +190,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             }
         }
     }
+}
+
+// A simplified version of CoprocessorHost used to convey information to
+// LockManager only.
+// It is replaced by CoprocessorHost in the future.
+pub trait LockManagerNotifier: Send + Sync {
+    fn on_role_change(&self, region: &Region, role_change: RoleChange);
+
+    fn on_region_changed(&self, region: &Region, event: RegionChangeEvent, role: StateRole);
 }

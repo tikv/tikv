@@ -20,6 +20,7 @@ use protobuf::Message;
 use raft::prelude::*;
 use raft_proto::ConfChangeI;
 use raftstore::{
+    coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
         metrics::{PEER_ADMIN_CMD_COUNTER_VEC, PEER_PROPOSE_LOG_SIZE_HISTOGRAM},
         util::{self, ChangePeerI, ConfChangeKind},
@@ -33,6 +34,7 @@ use tikv_util::box_err;
 use super::AdminCmdResult;
 use crate::{
     batch::StoreContext,
+    fsm::LockManagerNotifier,
     raft::{Apply, Peer},
     router::ApplyRes,
 };
@@ -150,6 +152,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let remove_self = conf_change.region_state.get_state() == PeerState::Tombstone;
         self.storage_mut()
             .set_region_state(conf_change.region_state);
+
+        ctx.lock_manager_notifier.on_region_changed(
+            self.region(),
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
+            self.get_role(),
+        );
+
         if self.is_leader() {
             info!(
                 self.logger,

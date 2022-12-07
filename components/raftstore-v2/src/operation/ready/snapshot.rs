@@ -129,7 +129,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .open_tablet(region_id, Some(persisted_index), OpenOptions::default())
                 .unwrap();
             self.tablet_mut().set(tablet);
-            self.schedule_apply_fsm(ctx);
+            self.activate(ctx);
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);
             self.read_progress_mut()

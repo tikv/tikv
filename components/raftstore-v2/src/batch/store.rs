@@ -25,10 +25,13 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftMessage},
 };
 use pd_client::PdClient;
-use raft::INVALID_ID;
-use raftstore::store::{
-    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
-    StoreWriters, TabletSnapManager, Transport, WriteSenders,
+use raft::{StateRole, INVALID_ID};
+use raftstore::{
+    coprocessor::RegionChangeEvent,
+    store::{
+        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
+        StoreWriters, TabletSnapManager, Transport, WriteSenders,
+    },
 };
 use slog::Logger;
 use tikv_util::{
@@ -46,7 +49,10 @@ use tikv_util::{
 use time::Timespec;
 
 use crate::{
-    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
+    fsm::{
+        LockManagerNotifier, PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate,
+        StoreMeta,
+    },
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
     worker::{PdRunner, PdTask},
@@ -79,6 +85,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub read_scheduler: Scheduler<ReadTask<EK>>,
     pub snap_mgr: TabletSnapManager,
     pub pd_scheduler: Scheduler<PdTask>,
+    pub lock_manager_notifier: Arc<dyn LockManagerNotifier>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -232,6 +239,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
     snap_mgr: TabletSnapManager,
+    lock_manager_notifier: Arc<dyn LockManagerNotifier>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -248,6 +256,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
         snap_mgr: TabletSnapManager,
+        lock_manager_notifier: Arc<dyn LockManagerNotifier>,
     ) -> Self {
         let pool_size = cfg.value().apply_batch_system.pool_size;
         let max_pool_size = std::cmp::max(
@@ -273,6 +282,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             write_senders: store_writers.senders(),
             store_meta,
             snap_mgr,
+            lock_manager_notifier,
         }
     }
 
@@ -294,6 +304,12 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     Some(p) => p,
                     None => return Ok(()),
                 };
+                self.lock_manager_notifier.on_region_changed(
+                    storage.region_state().get_region(),
+                    RegionChangeEvent::Create,
+                    StateRole::Follower,
+                );
+
                 let (sender, peer_fsm) = PeerFsm::new(&cfg, &*self.tablet_factory, storage)?;
                 meta.region_read_progress
                     .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
@@ -347,6 +363,7 @@ where
             read_scheduler: self.read_scheduler.clone(),
             snap_mgr: self.snap_mgr.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
+            lock_manager_notifier: self.lock_manager_notifier.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -394,6 +411,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        lock_manager_notifier: Arc<dyn LockManagerNotifier>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -447,6 +465,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             self.logger.clone(),
             store_meta.clone(),
             snap_mgr,
+            lock_manager_notifier,
         );
         self.workers = Some(workers);
         let peers = builder.init()?;

@@ -28,15 +28,18 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
-use raft::eraftpb::MessageType;
-use raftstore::store::{
-    region_meta::{RegionLocalState, RegionMeta},
-    Config, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+use raft::{eraftpb::MessageType, StateRole};
+use raftstore::{
+    coprocessor::{RegionChangeEvent, RoleChange},
+    store::{
+        region_meta::{RegionLocalState, RegionMeta},
+        Config, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+    },
 };
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
-    Bootstrap, StoreMeta, StoreSystem,
+    Bootstrap, LockManagerNotifier, StoreMeta, StoreSystem,
 };
 use slog::{debug, o, Logger};
 use tempfile::TempDir;
@@ -255,6 +258,7 @@ impl RunningState {
                 snap_mgr.clone(),
                 concurrency_manager,
                 causal_ts_provider,
+                Arc::new(DummyLockManagerObserver {}),
             )
             .unwrap();
 
@@ -539,4 +543,12 @@ impl Cluster {
             }
         }
     }
+}
+
+struct DummyLockManagerObserver {}
+
+impl LockManagerNotifier for DummyLockManagerObserver {
+    fn on_region_changed(&self, _: &metapb::Region, _: RegionChangeEvent, _: StateRole) {}
+
+    fn on_role_change(&self, _: &metapb::Region, _: RoleChange) {}
 }
