@@ -84,27 +84,13 @@ impl<T> PriorityQueue<T> {
     }
 }
 
-#[derive(Eq, PartialEq)]
+// When derived `PartialOrd` on structs, it will produce a lexicographic
+// ordering based on the top-to-bottom declaration order of the struct’s
+// members.
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
 struct MapKey {
     priority: u64,
     sequence: u64,
-}
-
-impl PartialOrd for MapKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for MapKey {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
-        let ord = self.priority.cmp(&other.priority);
-        if ord == cmp::Ordering::Equal {
-            self.sequence.cmp(&other.sequence)
-        } else {
-            ord
-        }
-    }
 }
 
 pub struct Sender<T: Send> {
