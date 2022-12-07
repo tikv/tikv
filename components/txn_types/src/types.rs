@@ -532,8 +532,8 @@ pub struct TxnExtra {
     // Marks that this transaction is a 1PC transaction. RaftKv should set this flag
     // in the raft command request.
     pub one_pc: bool,
-    // Marks that this transaction is a flashback transaction.
-    pub for_flashback: bool,
+    // Marks that this transaction is allowed in the flashback state.
+    pub allowed_in_flashback: bool,
 }
 
 impl TxnExtra {
