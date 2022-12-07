@@ -4,6 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use etcd_client::{ConnectOptions, Error as EtcdError, OpenSslClientConfig};
 use futures::Future;
+use slog_global::info;
 use tikv_util::stream::{RetryError, RetryExt};
 use tokio::sync::OnceCell;
 
@@ -113,7 +114,7 @@ where
     use futures::TryFutureExt;
     let r = tikv_util::stream::retry_ext(
         move || action().err_into::<RetryableEtcdError>(),
-        RetryExt::default().with_fail_hook(|err| println!("meet error {:?}", err)),
+        RetryExt::default().with_fail_hook(|err| info!("retry it"; "err" => ?err)),
     )
     .await;
     r.map_err(|err| err.0.into())
