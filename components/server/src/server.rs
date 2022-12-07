@@ -81,7 +81,7 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use resource_control::{ResourceController, ResourceGroupManager};
+use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use snap_recovery::RecoveryService;
 use tikv::{
@@ -327,6 +327,13 @@ where
         let background_worker = WorkerBuilder::new("background")
             .thread_count(thread_count)
             .create();
+        let resource_manager1 = resource_manager.clone();
+        background_worker.spawn_interval_task(
+            resource_control::MIN_DURATION_UPDATE_INTERVAL,
+            move || {
+                resource_manager1.advance_min_virtual_time();
+            },
+        );
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
@@ -742,7 +749,8 @@ where
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                Arc::new(ResourceController::new(self.resource_manager.clone())),
+                self.resource_manager
+                    .derive_controller("unified-read-pool".to_owned()),
                 self.config.readpool.unified.enable_priority,
             ))
         } else {

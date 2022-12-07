@@ -42,7 +42,7 @@ use kvproto::{
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
-use resource_control::{ResourceController, ResourceGroupManager};
+use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -1764,15 +1764,13 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
     resource_manager: &Arc<ResourceGroupManager>,
 ) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
-    let (apply_router, apply_system) = create_apply_batch_system(
-        cfg,
-        Arc::new(ResourceController::new(resource_manager.clone())),
-    );
+    let (apply_router, apply_system) =
+        create_apply_batch_system(cfg, resource_manager.derive_controller("apply".to_owned()));
     let (router, system) = batch_system::create_system(
         &cfg.store_batch_system,
         store_tx,
         store_fsm,
-        Arc::new(ResourceController::new(resource_manager.clone())),
+        resource_manager.derive_controller("store".to_owned()),
     );
     let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
@@ -1781,9 +1779,9 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         apply_router,
         apply_system,
         router: raft_router.clone(),
-        store_writers: StoreWriters::new(Arc::new(ResourceController::new(
-            resource_manager.clone(),
-        ))),
+        store_writers: StoreWriters::new(
+            resource_manager.derive_controller("store-writer".to_owned()),
+        ),
     };
     (raft_router, system)
 }

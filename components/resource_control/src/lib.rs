@@ -1,12 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::Cell,
     future::Future,
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     task::{Context, Poll},
     time::Duration,
@@ -24,13 +23,13 @@ use yatp::queue::priority::set_task_priority;
 const DEFAULT_PRIORITY_PER_TASK: u64 = 100; // a task cost at least 100us.
 // extra task schedule factor
 const TASK_EXTRA_FACTOR_BY_LEVEL: [u64; 3] = [1, 20, 100];
-const MIN_DURATION_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
+pub const MIN_DURATION_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 
 lazy_static! {
     static ref GROUP_PRIORITY: GaugeVec = register_gauge_vec!(
         "tikv_rc_group_priority",
-        "Current group prioitry",
-        &["group"],
+        "Current group priority",
+        &["component", "group"],
     )
     .unwrap();
 }
@@ -42,6 +41,7 @@ pub enum ResourceType {
 
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroupConfig>,
+    registry: Mutex<Vec<Arc<ResourceController>>>,
     total_cpu_quota: f64,
 }
 
@@ -50,6 +50,7 @@ impl ResourceGroupManager {
         let total_cpu_quota = SysQuota::cpu_cores_quota() * 1000.0;
         let r = Self {
             resource_groups: DashMap::new(),
+            registry: Mutex::new(vec![]),
             total_cpu_quota,
         };
         r.init_default_group();
@@ -70,6 +71,11 @@ impl ResourceGroupManager {
     }
 
     pub fn add_resource_group(&self, config: ResourceGroupConfig) -> Option<ResourceGroupConfig> {
+        // TODO: calculate based on cpu quota temporarily
+        let priority_factor = (self.total_cpu_quota / config.cpu_quota * 100.0) as u64;
+        for controller in self.registry.lock().unwrap().iter() {
+            controller.add_resource_group(&config.name, priority_factor);
+        }
         self.resource_groups
             .insert(config.name.to_lowercase(), config)
     }
@@ -78,12 +84,11 @@ impl ResourceGroupManager {
         if name == "default" {
             self.init_default_group()
         } else {
+            for controller in self.registry.lock().unwrap().iter() {
+                controller.remove_resource_group(name);
+            }
             self.resource_groups.remove(name).map(|(_, v)| v)
         }
-    }
-
-    pub fn total_cpu_quota(&self) -> f64 {
-        self.total_cpu_quota
     }
 
     pub fn get_resource_group(&self, name: &str) -> Option<Ref<String, ResourceGroupConfig>> {
@@ -93,49 +98,55 @@ impl ResourceGroupManager {
     pub fn get_all_resource_groups(&self) -> Vec<ResourceGroupConfig> {
         self.resource_groups.iter().map(|g| g.clone()).collect()
     }
+
+    pub fn derive_controller(&self, name: String) -> Arc<ResourceController> {
+        let controller = Arc::new(ResourceController::new(name));
+        self.registry.lock().unwrap().push(controller.clone());
+        controller
+    }
+
+    pub fn advance_min_virtual_time(&self) {
+        for controller in self.registry.lock().unwrap().iter() {
+            controller.update_min_virtual_time();
+        }
+    }
 }
 
 pub struct ResourceController {
-    manager: Arc<ResourceGroupManager>,
+    name: String,
     // record consumption of each resource group
     resource_consumptions: DashMap<String, ResourceGroup>,
     last_min_vt: AtomicU64,
-    start_ts: Instant,
-    // the value is the duration delta(in ms) from start_ts
-    last_vt_update_time: AtomicU64,
 }
 
 impl ResourceController {
-    pub fn new(manager: Arc<ResourceGroupManager>) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
-            manager,
+            name,
             resource_consumptions: DashMap::new(),
             last_min_vt: AtomicU64::new(0),
-            start_ts: Instant::now_coarse(),
-            last_vt_update_time: AtomicU64::new(0),
         }
+    }
+
+    fn add_resource_group(&self, name: &str, priority_factor: u64) {
+        let group = ResourceGroup {
+            priority_factor,
+            virtual_time: AtomicU64::new(self.last_min_vt.load(Ordering::Acquire)),
+        };
+        // maybe update existed group
+        self.resource_consumptions.insert(name.to_string(), group);
+    }
+
+    fn remove_resource_group(&self, name: &str) {
+        self.resource_consumptions.remove(name);
     }
 
     #[inline]
     fn resource_group(&self, name: &str) -> Ref<String, ResourceGroup> {
         if let Some(g) = self.resource_consumptions.get(name) {
-            return g;
+            g
         } else {
-            // get the resource group config from the manager
-            if let Some(g) = self.manager.get_resource_group(name) {
-                let config = g.value();
-                let priority_factor =
-                    (self.manager.total_cpu_quota() / config.cpu_quota * 100.0) as u64;
-                let group = ResourceGroup {
-                    priority_factor,
-                    virtual_time: AtomicU64::new(self.last_min_vt.load(Ordering::Acquire)),
-                };
-                self.resource_consumptions
-                    .insert(config.name.to_lowercase(), group);
-                return self.resource_consumptions.get(name).unwrap();
-            } else {
-                self.resource_consumptions.get("default").unwrap()
-            }
+            self.resource_consumptions.get("default").unwrap()
         }
     }
 
@@ -147,36 +158,15 @@ impl ResourceController {
         self.resource_group(name).consume(delta)
     }
 
-    pub fn maybe_update_min_virtual_time(&self) {
-        thread_local! {
-            static TASK_COUNTER: Cell<u64> = Cell::new(0);
-        }
-        if !TASK_COUNTER.with(|c| {
-            let count = c.get() + 1;
-            c.set(count);
-            count % 1000 == 0
-        }) {
-            return;
-        }
-        let last_update_since = self.last_vt_update_time.load(Ordering::Acquire);
-        let now = self.start_ts.saturating_elapsed().as_millis() as u64;
-        if now < last_update_since + MIN_DURATION_UPDATE_INTERVAL.as_millis() as u64 {
-            return;
-        }
-        // updated by other thread
-        if self
-            .last_vt_update_time
-            .compare_exchange(last_update_since, now, Ordering::SeqCst, Ordering::Relaxed)
-            .is_err()
-        {
-            return;
-        }
-
+    pub fn update_min_virtual_time(&self) {
         let mut min_vt = u64::MAX;
         let mut max_vt = 0;
         self.resource_consumptions.iter().for_each(|g| {
             let vt = g.current_vt();
-            GROUP_PRIORITY.with_label_values(&[&g.key()]).set(vt as f64);
+            // TODO: make it static
+            GROUP_PRIORITY
+                .with_label_values(&[&self.name, &g.key()])
+                .set(vt as f64);
             if min_vt > vt {
                 min_vt = vt;
             }
@@ -185,6 +175,7 @@ impl ResourceController {
             }
         });
 
+        // TODO: use different threshold for different resource type
         // needn't do update if the virtual different is less than 100ms/100KB.
         if min_vt + 100_000 >= max_vt {
             return;
@@ -315,7 +306,6 @@ impl<F: Future> Future for ControlledFuture<F> {
                     .get_priority(this.group_name, *this.priority),
             );
         }
-        this.controller.maybe_update_min_virtual_time();
         res
     }
 }

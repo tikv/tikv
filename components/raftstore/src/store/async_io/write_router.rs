@@ -241,7 +241,6 @@ where
         let pri = sender
             .resource_ctl
             .get_priority(dominant_group, msg.priority());
-        sender.resource_ctl.maybe_update_min_virtual_time();
         sender.pri_write_sender.send(msg, pri).unwrap();
         // match ctx.write_senders()[self.writer_id].try_send(msg) {
         //     Ok(()) => (),
