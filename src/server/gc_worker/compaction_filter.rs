@@ -918,8 +918,6 @@ pub mod test_utils {
 
 #[cfg(test)]
 pub mod tests {
-    use std::mem::MaybeUninit;
-
     use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
 
     use super::{test_utils::*, *};
@@ -981,6 +979,12 @@ pub mod tests {
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
+
+        must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 210);
+        must_commit(&mut engine, b"zkey", 210, 220);
+        gc_runner.ratio_threshold = Some(-1.0);
+        gc_runner.safe_point(256).gc(&raw_engine);
+        must_get(&mut engine, b"zkey", 210, &value);
     }
 
     // Test dirty versions before a deletion mark can be handled correctly.
