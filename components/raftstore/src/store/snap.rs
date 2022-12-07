@@ -2006,8 +2006,9 @@ pub mod tests {
         raft::RaftTestEngine,
     };
     use engine_traits::{
-        Engines, ExternalSstFileInfo, KvEngine, RaftEngine, Snapshot as EngineSnapshot, SstExt,
-        SstWriter, SstWriterBuilder, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+        Engines, ExternalSstFileInfo, KvEngine, RaftEngine, RaftLogBatch,
+        Snapshot as EngineSnapshot, SstExt, SstWriter, SstWriterBuilder, SyncMutable, ALL_CFS,
+        CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
     };
     use kvproto::{
         encryptionpb::EncryptionMethod,
@@ -2114,6 +2115,7 @@ pub mod tests {
         let kv: KvTestEngine = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
         let raft: RaftTestEngine =
             engine_test::raft::new_engine(p.join("raft").to_str().unwrap(), raft_db_opt)?;
+        let mut lb = raft.log_batch(regions.len() * 128);
         for &region_id in regions {
             // Put apply state into kv engine.
             let mut apply_state = RaftApplyState::default();
@@ -2123,7 +2125,7 @@ pub mod tests {
             apply_entry.set_term(0);
             apply_state.mut_truncated_state().set_index(10);
             kv.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
-            raft.append(region_id, vec![apply_entry])?;
+            lb.append(region_id, vec![apply_entry])?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
@@ -2131,6 +2133,7 @@ pub mod tests {
             region_state.set_region(region);
             kv.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
+        raft.consume(&mut lb, false).unwrap();
         Ok(Engines::new(kv, raft))
     }
 
