@@ -672,7 +672,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 old_values: self.old_values,
                 // Set one_pc flag in TxnExtra to let CDC skip handling the resolver.
                 one_pc: self.try_one_pc,
-                for_flashback: false,
+                allowed_in_flashback: false,
             };
             // Here the lock guards are taken and will be released after the write finishes.
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
