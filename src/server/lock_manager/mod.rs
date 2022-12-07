@@ -205,6 +205,11 @@ impl LockManager {
         role_change_notifier.register(host);
     }
 
+    /// Creates a `RoleChangeNotifier` of the deadlock detector worker
+    pub fn generate_notifier(&self) -> RoleChangeNotifier {
+        RoleChangeNotifier::new(self.detector_scheduler.clone())
+    }
+
     /// Creates a `DeadlockService` to handle deadlock detect requests from
     /// other nodes.
     pub fn deadlock_service(&self) -> DeadlockService {

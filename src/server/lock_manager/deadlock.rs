@@ -525,7 +525,7 @@ const LEADER_KEY: &[u8] = b"";
 /// way to change the node from the leader of deadlock detector to follower, and
 /// vice versa.
 #[derive(Clone)]
-pub(crate) struct RoleChangeNotifier {
+pub struct RoleChangeNotifier {
     /// The id of the valid leader region.
     // raftstore.coprocessor needs it to be Sync + Send.
     leader_region_id: Arc<Mutex<u64>>,
