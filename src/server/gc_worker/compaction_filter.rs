@@ -685,6 +685,15 @@ pub fn check_need_gc(
     context: &CompactionFilterContext,
 ) -> bool {
     let check_props = |props: &MvccProperties| -> (bool, bool /* skip_more_checks */) {
+        // Disable GC directly once the config is negative or +inf.
+        // Disabling GC is useful in some abnormal scenarios where the transaction model
+        // would be break (e.g. writes with higher commit TS would be written BEFORE
+        // writes with lower commit TS, or write data with TS lower than current GC safe
+        // point). Use this at your own risk.
+        if ratio_threshold.is_sign_negative() || ratio_threshold.is_infinite() {
+            return (false, false);
+        }
+
         if props.min_ts > safe_point {
             return (false, false);
         }
@@ -909,6 +918,8 @@ pub mod test_utils {
 
 #[cfg(test)]
 pub mod tests {
+    use std::mem::MaybeUninit;
+
     use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
 
     use super::{test_utils::*, *};
