@@ -142,13 +142,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.read_progress_mut()
                 .update_applied_core(persisted_index);
-            match self.storage_mut().split_init_mut().take() {
-                Some(init) => {
-                    assert_eq!(persisted_index, RAFT_INIT_LOG_INDEX);
-                    info!(self.logger, "init with snapshot finished");
-                    self.post_split_init(ctx, init);
-                }
-                None => info!(self.logger, "apply tablet snapshot completely"),
+            let split = self.storage_mut().split_init_mut().take();
+            if split.as_ref().map_or(true, |s| {
+                !s.scheduled || persisted_index != RAFT_INIT_LOG_INDEX
+            }) {
+                info!(self.logger, "apply tablet snapshot completely");
+            }
+            if let Some(init) = split {
+                info!(self.logger, "init with snapshot finished");
+                self.post_split_init(ctx, init);
             }
         }
     }
