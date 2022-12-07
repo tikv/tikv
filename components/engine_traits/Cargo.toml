@@ -12,7 +12,7 @@ case_macros = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 protobuf = "2"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }

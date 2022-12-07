@@ -26,9 +26,7 @@ use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
-use super::{
-    local_metrics::TimeTracker, region_meta::RegionMeta, worker::FetchedLogs, RegionSnapshot,
-};
+use super::{local_metrics::TimeTracker, region_meta::RegionMeta, FetchedLogs, RegionSnapshot};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
@@ -721,6 +719,7 @@ pub struct InspectedRaftMessage {
 }
 
 /// Message that can be sent to a peer.
+#[allow(clippy::large_enum_variant)]
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
@@ -847,6 +846,10 @@ where
     },
 
     GcSnapshotFinish,
+
+    AwakenRegions {
+        abnormal_stores: Vec<u64>,
+    },
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -880,6 +883,7 @@ where
                 write!(fmt, "UnsafeRecoveryCreatePeer")
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
+            StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
         }
     }
 }

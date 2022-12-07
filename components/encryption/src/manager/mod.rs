@@ -815,7 +815,7 @@ mod tests {
     }
 
     fn new_mock_backend() -> Box<MockBackend> {
-        Box::new(MockBackend::default())
+        Box::<MockBackend>::default()
     }
 
     fn new_key_manager_def(
@@ -829,7 +829,7 @@ mod tests {
         }
         match DataKeyManager::new_previous_loaded(
             master_backend,
-            Box::new(MockBackend::default()),
+            Box::<MockBackend>::default(),
             args,
         ) {
             Ok(None) => panic!("expected encryption"),
@@ -932,7 +932,7 @@ mod tests {
         let manager = new_key_manager(
             &tmp_dir,
             Some(EncryptionMethod::Aes256Ctr),
-            Box::new(PlaintextBackend::default()),
+            Box::<PlaintextBackend>::default(),
             new_mock_backend() as Box<dyn Backend>,
         );
         manager.err().unwrap();
@@ -1301,13 +1301,13 @@ mod tests {
             encrypt_fail: false,
             ..MockBackend::default()
         });
-        let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
+        let previous = Box::<PlaintextBackend>::default() as Box<dyn Backend>;
 
         let result = new_key_manager(&tmp_dir, None, wrong_key, previous);
         // When the master key is invalid, the key manager left a empty file dict and
         // return errors.
         assert!(result.is_err());
-        let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
+        let previous = Box::<PlaintextBackend>::default() as Box<dyn Backend>;
         new_key_manager(&tmp_dir, None, right_key, previous).unwrap();
     }
 

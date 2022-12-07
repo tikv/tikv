@@ -2,10 +2,12 @@
 
 use std::{
     fmt::{self, Debug, Display, Formatter},
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
+    task::Poll,
     time::Duration,
 };
 
@@ -18,6 +20,10 @@ use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
 use file_system::IoRateLimiter;
+use futures::{
+    channel::{mpsc, oneshot},
+    stream, Future, Stream,
+};
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
@@ -25,16 +31,17 @@ use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, Value};
 
 use super::{
-    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
+    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
     Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
+use crate::{FakeExtension, OnAppliedCb, RaftExtension, WriteEvent};
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
-    Snapshot(Callback<Arc<RocksSnapshot>>),
+    Snapshot(oneshot::Sender<Arc<RocksSnapshot>>),
     Pause(Duration),
 }
 
@@ -56,7 +63,9 @@ impl Runnable for Runner {
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => cb(write_modifies(&self.0.kv, modifies)),
-            Task::Snapshot(cb) => cb(Ok(Arc::new(self.0.kv.snapshot()))),
+            Task::Snapshot(sender) => {
+                let _ = sender.send(Arc::new(self.0.kv.snapshot()));
+            }
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -78,12 +87,26 @@ impl Drop for RocksEngineCore {
 ///
 /// This is intended for **testing use only**.
 #[derive(Clone)]
-pub struct RocksEngine {
+pub struct RocksEngine<RE = FakeExtension> {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
     engines: Engines<BaseRocksEngine, BaseRocksEngine>,
     not_leader: Arc<AtomicBool>,
     coprocessor: CoprocessorHost<BaseRocksEngine>,
+    ext: RE,
+}
+
+impl<RE> RocksEngine<RE> {
+    pub fn with_raft_extension<NRE>(self, ext: NRE) -> RocksEngine<NRE> {
+        RocksEngine {
+            core: self.core,
+            sched: self.sched,
+            engines: self.engines,
+            not_leader: self.not_leader,
+            coprocessor: self.coprocessor,
+            ext,
+        }
+    }
 }
 
 impl RocksEngine {
@@ -123,9 +146,12 @@ impl RocksEngine {
             not_leader: Arc::new(AtomicBool::new(false)),
             engines,
             coprocessor: CoprocessorHost::default(),
+            ext: FakeExtension,
         })
     }
+}
 
+impl<RE> RocksEngine<RE> {
     pub fn trigger_not_leader(&self) {
         self.not_leader.store(true, Ordering::SeqCst);
     }
@@ -187,13 +213,13 @@ impl RocksEngine {
     }
 }
 
-impl Display for RocksEngine {
+impl<RE> Display for RocksEngine<RE> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RocksDB")
     }
 }
 
-impl Debug for RocksEngine {
+impl<RE> Debug for RocksEngine<RE> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -203,12 +229,17 @@ impl Debug for RocksEngine {
     }
 }
 
-impl Engine for RocksEngine {
+impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
     type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 
     fn kv_engine(&self) -> Option<BaseRocksEngine> {
         Some(self.engines.kv.clone())
+    }
+
+    type RaftExtension = RE;
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        &self.ext
     }
 
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
@@ -223,48 +254,67 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, cb, None, None)
-    }
-
-    fn async_write_ext(
+    type WriteRes = impl Stream<Item = crate::WriteEvent> + Send + 'static;
+    fn async_write(
         &self,
-        _: &Context,
+        _ctx: &Context,
         batch: WriteData,
-        cb: Callback<()>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
+        subscribed: u8,
+        on_applied: Option<OnAppliedCb>,
+    ) -> Self::WriteRes {
+        let (mut tx, mut rx) = mpsc::channel::<WriteEvent>(WriteEvent::event_capacity(subscribed));
+        let res = (move || {
+            fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
-        if batch.modifies.is_empty() {
-            return Err(Error::from(ErrorInner::EmptyRequest));
-        }
+            if batch.modifies.is_empty() {
+                return Err(Error::from(ErrorInner::EmptyRequest));
+            }
 
-        let batch = self.pre_propose(batch)?;
+            let batch = self.pre_propose(batch)?;
 
-        if let Some(cb) = proposed_cb {
-            cb();
-        }
-        if let Some(cb) = committed_cb {
-            cb();
-        }
-        box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
-        Ok(())
+            if WriteEvent::subscribed_proposed(subscribed) {
+                let _ = tx.try_send(WriteEvent::Proposed);
+            }
+            if WriteEvent::subscribed_committed(subscribed) {
+                let _ = tx.try_send(WriteEvent::Committed);
+            }
+            let cb = Box::new(move |mut res| {
+                if let Some(cb) = on_applied {
+                    cb(&mut res);
+                }
+                let _ = tx.try_send(WriteEvent::Finished(res));
+            });
+            box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
+            Ok(())
+        })();
+        let mut res = Some(res);
+        stream::poll_fn(move |cx| {
+            if res.as_ref().map_or(false, |r| r.is_err()) {
+                return Poll::Ready(res.take().map(WriteEvent::Finished));
+            }
+            // If it's none, it means an error is returned, it should not be polled again.
+            assert!(res.is_some());
+            Pin::new(&mut rx).poll_next(cx)
+        })
     }
 
-    fn async_snapshot(&mut self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
-        fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
-            "snapshot failed"
-        )));
-        fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(self.not_leader_error())
-        });
-        if self.not_leader.load(Ordering::SeqCst) {
-            return Err(self.not_leader_error());
-        }
-        box_try!(self.sched.schedule(Task::Snapshot(cb)));
-        Ok(())
+    type SnapshotRes = impl Future<Output = Result<Self::Snap>> + Send;
+    fn async_snapshot(&mut self, _: SnapContext<'_>) -> Self::SnapshotRes {
+        let res = (|| {
+            fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
+                "snapshot failed"
+            )));
+            if self.not_leader.load(Ordering::SeqCst) {
+                return Err(self.not_leader_error());
+            }
+            let (tx, rx) = oneshot::channel();
+            if self.sched.schedule(Task::Snapshot(tx)).is_err() {
+                return Err(box_err!("failed to schedule snapshot"));
+            }
+            Ok(rx)
+        })();
+
+        async move { Ok(res?.await.unwrap()) }
     }
 }
 

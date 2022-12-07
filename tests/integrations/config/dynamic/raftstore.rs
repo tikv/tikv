@@ -76,7 +76,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SstImporter::new(&cfg.import, &p, None, cfg.storage.api_version()).unwrap())
+        Arc::new(SstImporter::new(&cfg.import, p, None, cfg.storage.api_version()).unwrap())
     };
     let snap_mgr = {
         let p = dir
@@ -162,6 +162,7 @@ fn test_update_raftstore_config() {
         ("raftstore.apply-max-batch-size", "1234"),
         ("raftstore.store-max-batch-size", "4321"),
         ("raftstore.raft-entry-max-size", "32MiB"),
+        ("raftstore.apply-yield-write-size", "10KiB"),
     ]);
 
     cfg_controller.update(change).unwrap();
@@ -169,6 +170,7 @@ fn test_update_raftstore_config() {
     // config should be updated
     let mut raft_store = config.raft_store;
     raft_store.messages_per_tick = 12345;
+    raft_store.apply_yield_write_size = ReadableSize::kb(10);
     raft_store.raft_log_gc_threshold = 54321;
     raft_store.apply_batch_system.max_batch_size = Some(1234);
     raft_store.store_batch_system.max_batch_size = Some(4321);

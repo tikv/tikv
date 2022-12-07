@@ -16,7 +16,6 @@
 //! Please read the engine_trait crate docs before hacking.
 
 #![cfg_attr(test, feature(test))]
-#![feature(generic_associated_types)]
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
@@ -28,6 +27,8 @@ mod cf_names;
 pub use crate::cf_names::*;
 mod cf_options;
 pub use crate::cf_options::*;
+mod checkpoint;
+pub use crate::checkpoint::*;
 mod compact;
 pub use crate::compact::*;
 mod db_options;

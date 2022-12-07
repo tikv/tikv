@@ -5,6 +5,7 @@
 #[macro_use]
 mod macros;
 pub(crate) mod acquire_pessimistic_lock;
+pub(crate) mod acquire_pessimistic_lock_resumed;
 pub(crate) mod atomic_store;
 pub(crate) mod check_secondary_locks;
 pub(crate) mod check_txn_status;
@@ -29,9 +30,11 @@ use std::{
     iter,
     marker::PhantomData,
     ops::{Deref, DerefMut},
+    sync::Arc,
 };
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
+pub use acquire_pessimistic_lock_resumed::AcquirePessimisticLockResumed;
 pub use atomic_store::RawAtomicStore;
 pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
@@ -40,7 +43,10 @@ pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
-pub use flashback_to_version_read_phase::FlashbackToVersionReadPhase;
+pub use flashback_to_version_read_phase::{
+    new_flashback_rollback_lock_cmd, new_flashback_write_cmd, FlashbackToVersionReadPhase,
+    FlashbackToVersionState,
+};
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
@@ -54,16 +60,19 @@ pub use rollback::Rollback;
 use tikv_util::deadline::Deadline;
 use tracker::RequestType;
 pub use txn_heart_beat::TxnHeartBeat;
-use txn_types::{Key, OldValues, TimeStamp, Value, Write};
+use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::{self, LockManager, WaitTimeout},
+    lock_manager::{
+        self, lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken,
+        WaitTimeout,
+    },
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
     txn::{latch, ProcessResult, Result},
     types::{
-        MvccInfo, PessimisticLockParameters, PessimisticLockRes, PrewriteResult,
+        MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
         SecondaryLocksStatus, StorageCallbackType, TxnStatus,
     },
     Result as StorageResult, Snapshot, Statistics,
@@ -81,6 +90,7 @@ pub enum Command {
     Prewrite(Prewrite),
     PrewritePessimistic(PrewritePessimistic),
     AcquirePessimisticLock(AcquirePessimisticLock),
+    AcquirePessimisticLockResumed(AcquirePessimisticLockResumed),
     Commit(Commit),
     Cleanup(Cleanup),
     Rollback(Rollback),
@@ -193,7 +203,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     }
 }
 
-impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockRes>> {
+impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockResults>> {
     fn from(mut req: PessimisticLockRequest) -> Self {
         let keys = req
             .take_mutations()
@@ -207,6 +217,11 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             })
             .collect();
 
+        let allow_lock_with_conflict = match req.get_wake_up_mode() {
+            PessimisticLockWakeUpMode::WakeUpModeNormal => false,
+            PessimisticLockWakeUpMode::WakeUpModeForceLock => true,
+        };
+
         AcquirePessimisticLock::new(
             keys,
             req.take_primary_lock(),
@@ -217,9 +232,9 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.get_return_values(),
             req.get_min_commit_ts().into(),
-            OldValues::default(),
             req.get_check_existence(),
             req.get_lock_only_if_exists(),
+            allow_lock_with_conflict,
             req.take_context(),
         )
     }
@@ -351,15 +366,26 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
     }
 }
 
+impl From<PrepareFlashbackToVersionRequest> for TypedCommand<()> {
+    fn from(mut req: PrepareFlashbackToVersionRequest) -> Self {
+        new_flashback_rollback_lock_cmd(
+            req.get_start_ts().into(),
+            req.get_version().into(),
+            Key::from_raw(req.get_start_key()),
+            Key::from_raw_maybe_unbounded(req.get_end_key()),
+            req.take_context(),
+        )
+    }
+}
+
 impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     fn from(mut req: FlashbackToVersionRequest) -> Self {
-        FlashbackToVersionReadPhase::new(
+        new_flashback_write_cmd(
             req.get_start_ts().into(),
             req.get_commit_ts().into(),
             req.get_version().into(),
-            Some(Key::from_raw(req.get_end_key())),
-            Some(Key::from_raw(req.get_start_key())),
-            Some(Key::from_raw(req.get_start_key())),
+            Key::from_raw(req.get_start_key()),
+            Key::from_raw_maybe_unbounded(req.get_end_key()),
             req.take_context(),
         )
     }
@@ -389,7 +415,7 @@ pub struct WriteResult {
     pub to_be_write: WriteData,
     pub rows: usize,
     pub pr: ProcessResult,
-    pub lock_info: Option<WriteResultLockInfo>,
+    pub lock_info: Vec<WriteResultLockInfo>,
     pub released_locks: ReleasedLocks,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
@@ -398,22 +424,40 @@ pub struct WriteResult {
 pub struct WriteResultLockInfo {
     pub lock_digest: lock_manager::LockDigest,
     pub key: Key,
+    pub should_not_exist: bool,
     pub lock_info_pb: LockInfo,
     pub parameters: PessimisticLockParameters,
+    pub hash_for_latch: u64,
+    /// If a request is woken up after waiting for some lock, and it encounters
+    /// another lock again after resuming, this field will carry the token
+    /// that was already allocated before.
+    pub lock_wait_token: LockWaitToken,
+    /// For resumed pessimistic lock requests, this is needed to check if it's
+    /// canceled outside.
+    pub req_states: Option<Arc<LockWaitContextSharedState>>,
 }
 
 impl WriteResultLockInfo {
-    pub fn new(lock_info_pb: LockInfo, parameters: PessimisticLockParameters) -> Self {
+    pub fn new(
+        lock_info_pb: LockInfo,
+        parameters: PessimisticLockParameters,
+        key: Key,
+        should_not_exist: bool,
+    ) -> Self {
         let lock = lock_manager::LockDigest {
             ts: lock_info_pb.get_lock_version().into(),
-            hash: Key::from_raw(lock_info_pb.get_key()).gen_hash(),
+            hash: key.gen_hash(),
         };
-        let key = Key::from_raw(lock_info_pb.get_key());
+        let hash_for_latch = latch::Lock::hash(&key);
         Self {
             lock_digest: lock,
             key,
+            should_not_exist,
             lock_info_pb,
             parameters,
+            hash_for_latch,
+            lock_wait_token: LockWaitToken(None),
+            req_states: None,
         }
     }
 }
@@ -567,6 +611,7 @@ impl Command {
             Command::Prewrite(t) => t,
             Command::PrewritePessimistic(t) => t,
             Command::AcquirePessimisticLock(t) => t,
+            Command::AcquirePessimisticLockResumed(t) => t,
             Command::Commit(t) => t,
             Command::Cleanup(t) => t,
             Command::Rollback(t) => t,
@@ -592,6 +637,7 @@ impl Command {
             Command::Prewrite(t) => t,
             Command::PrewritePessimistic(t) => t,
             Command::AcquirePessimisticLock(t) => t,
+            Command::AcquirePessimisticLockResumed(t) => t,
             Command::Commit(t) => t,
             Command::Cleanup(t) => t,
             Command::Rollback(t) => t,
@@ -635,6 +681,7 @@ impl Command {
             Command::Prewrite(t) => t.process_write(snapshot, context),
             Command::PrewritePessimistic(t) => t.process_write(snapshot, context),
             Command::AcquirePessimisticLock(t) => t.process_write(snapshot, context),
+            Command::AcquirePessimisticLockResumed(t) => t.process_write(snapshot, context),
             Command::Commit(t) => t.process_write(snapshot, context),
             Command::Cleanup(t) => t.process_write(snapshot, context),
             Command::Rollback(t) => t.process_write(snapshot, context),

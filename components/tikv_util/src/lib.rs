@@ -91,7 +91,7 @@ pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
 
 pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
     let file = panic_mark_file_path(data_dir);
-    File::create(&file).unwrap();
+    File::create(file).unwrap();
 }
 
 // Copied from file_system to avoid cyclic dependency

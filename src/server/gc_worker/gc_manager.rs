@@ -197,7 +197,7 @@ fn set_status_metrics(state: GcManagerState) {
     ] {
         AUTO_GC_STATUS_GAUGE_VEC
             .with_label_values(&[s.tag()])
-            .set(if state == *s { 1 } else { 0 });
+            .set((state == *s) as i64);
     }
 }
 
@@ -653,7 +653,6 @@ mod tests {
             } => callback,
             GcTask::GcKeys { .. } => unreachable!(),
             GcTask::RawGcKeys { .. } => unreachable!(),
-            GcTask::PhysicalScanLock { .. } => unreachable!(),
             GcTask::OrphanVersions { .. } => unreachable!(),
             GcTask::Validate(_) => unreachable!(),
         };

@@ -4,7 +4,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{channel, RecvTimeoutError},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -42,7 +42,7 @@ use tikv::{
     },
 };
 use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
-use txn_types::{Key, Mutation, OldValues, TimeStamp};
+use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
 fn test_scheduler_leader_change_twice() {
@@ -389,7 +389,7 @@ fn test_pipelined_pessimistic_lock() {
             new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
-                PessimisticLockRes::Values(vec![None]),
+                PessimisticLockResults(vec![PessimisticLockKeyResult::Value(None)]),
             ),
         )
         .unwrap();
@@ -452,7 +452,9 @@ fn test_pipelined_pessimistic_lock() {
                 ),
                 expect_pessimistic_lock_res_callback(
                     tx.clone(),
-                    PessimisticLockRes::Values(vec![Some(val.clone())]),
+                    PessimisticLockResults(vec![PessimisticLockKeyResult::Value(Some(
+                        val.clone(),
+                    ))]),
                 ),
             )
             .unwrap();
@@ -475,7 +477,7 @@ fn test_pipelined_pessimistic_lock() {
             new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
-                PessimisticLockRes::Values(vec![Some(val.clone())]),
+                PessimisticLockResults(vec![PessimisticLockKeyResult::Value(Some(val.clone()))]),
             ),
         )
         .unwrap();
@@ -498,13 +500,180 @@ fn test_pipelined_pessimistic_lock() {
             ),
             expect_pessimistic_lock_res_callback(
                 tx,
-                PessimisticLockRes::Values(vec![Some(val), None]),
+                PessimisticLockResults(vec![
+                    PessimisticLockKeyResult::Value(Some(val)),
+                    PessimisticLockKeyResult::Value(None),
+                ]),
             ),
         )
         .unwrap();
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
     fail::remove(before_pipelined_write_finish_fp);
     delete_pessimistic_lock(&storage, key, 60, 60);
+}
+
+fn test_pessimistic_lock_resumable_blocked_twice_impl(canceled_when_resumed: bool) {
+    let lock_mgr = MockLockManager::new();
+    let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
+        .wake_up_delay_duration(100)
+        .build()
+        .unwrap();
+    let (tx, rx) = channel();
+
+    let empty = PessimisticLockResults(vec![PessimisticLockKeyResult::Empty]);
+
+    fail::cfg("lock_waiting_queue_before_delayed_notify_all", "pause").unwrap();
+    let (first_resume_tx, first_resume_rx) = channel();
+    let (first_resume_continue_tx, first_resume_continue_rx) = channel();
+    let first_resume_tx = Mutex::new(first_resume_tx);
+    let first_resume_continue_rx = Mutex::new(first_resume_continue_rx);
+    fail::cfg_callback(
+        "acquire_pessimistic_lock_resumed_before_process_write",
+        move || {
+            // Notify that the failpoint is reached, and block until it receives a continue
+            // signal.
+            first_resume_tx.lock().unwrap().send(()).unwrap();
+            first_resume_continue_rx.lock().unwrap().recv().unwrap();
+        },
+    )
+    .unwrap();
+
+    let key = Key::from_raw(b"key");
+
+    // Lock the key.
+    storage
+        .sched_txn_command(
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, false, false),
+            expect_pessimistic_lock_res_callback(tx, empty.clone()),
+        )
+        .unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    // Another non-resumable request blocked.
+    let (tx_blocked_1, rx_blocked_1) = channel();
+    storage
+        .sched_txn_command(
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 11, 11, false, false),
+            expect_fail_callback(tx_blocked_1, 0, |e| match e {
+                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                    box mvcc::ErrorInner::WriteConflict { .. },
+                ))))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            }),
+        )
+        .unwrap();
+    rx_blocked_1
+        .recv_timeout(Duration::from_millis(50))
+        .unwrap_err();
+
+    let tokens_before = lock_mgr.get_all_tokens();
+    // Another resumable request blocked, and is queued behind the above one.
+    let (tx_blocked_2, rx_blocked_2) = channel();
+    storage
+        .sched_txn_command(
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 12, 12, false, false)
+                .allow_lock_with_conflict(true),
+            if !canceled_when_resumed {
+                expect_pessimistic_lock_res_callback(tx_blocked_2, empty.clone())
+            } else {
+                expect_value_with_checker_callback(
+                    tx_blocked_2,
+                    0,
+                    |res: storage::Result<PessimisticLockResults>| {
+                        let res = res.unwrap().0;
+                        assert_eq!(res.len(), 1);
+                        let e = res[0].unwrap_err();
+                        match e.inner() {
+                            ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                                box mvcc::ErrorInner::KeyIsLocked(_),
+                            )))) => (),
+                            e => panic!("unexpected error chain: {:?}", e),
+                        }
+                    },
+                )
+            },
+        )
+        .unwrap();
+    rx_blocked_2
+        .recv_timeout(Duration::from_millis(50))
+        .unwrap_err();
+    // Find the lock wait token of the above request.
+    let tokens_after = lock_mgr.get_all_tokens();
+    let token_of_12 = {
+        use std::ops::Sub;
+        let diff = tokens_after.sub(&tokens_before);
+        assert_eq!(diff.len(), 1);
+        diff.into_iter().next().unwrap()
+    };
+
+    // Release the lock, so that the former (non-resumable) request will be woken
+    // up, and the other one (resumable) will be woken up after delaying for
+    // `wake_up_delay_duration`.
+    delete_pessimistic_lock(&storage, key.clone(), 10, 10);
+    rx_blocked_1.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    // The key should be unlocked at this time.
+    must_have_locks(&storage, 100, b"", b"\xff\xff\xff", &[]);
+
+    // Simulate the transaction at ts=11 retries the pessimistic lock request, and
+    // succeeds.
+    let (tx, rx) = channel();
+    storage
+        .sched_txn_command(
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 11, 11, false, false),
+            expect_pessimistic_lock_res_callback(tx, empty),
+        )
+        .unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    // Remove `pause` in delayed wake up, so that the request of txn 12 can be woken
+    // up.
+    fail::remove("lock_waiting_queue_before_delayed_notify_all");
+    first_resume_rx.recv().unwrap();
+
+    if canceled_when_resumed {
+        lock_mgr.simulate_timeout(token_of_12);
+    }
+
+    fail::remove("acquire_pessimistic_lock_resumed_before_process_write");
+    first_resume_continue_tx.send(()).unwrap();
+
+    if canceled_when_resumed {
+        rx_blocked_2.recv_timeout(Duration::from_secs(1)).unwrap();
+        must_have_locks(
+            &storage,
+            100,
+            b"",
+            b"\xff\xff\xff",
+            &[(&key.to_raw().unwrap(), Op::PessimisticLock, 11, 11)],
+        );
+    } else {
+        rx_blocked_2
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+        must_have_locks(
+            &storage,
+            100,
+            b"",
+            b"\xff\xff\xff",
+            &[(&key.to_raw().unwrap(), Op::PessimisticLock, 11, 11)],
+        );
+        delete_pessimistic_lock(&storage, key.clone(), 11, 11);
+        rx_blocked_2.recv_timeout(Duration::from_secs(1)).unwrap();
+        must_have_locks(
+            &storage,
+            100,
+            b"",
+            b"\xff\xff\xff",
+            &[(&key.to_raw().unwrap(), Op::PessimisticLock, 12, 12)],
+        );
+    }
+}
+
+#[test]
+fn test_pessimistic_lock_resumable_blocked_twice() {
+    test_pessimistic_lock_resumable_blocked_twice_impl(false);
+    test_pessimistic_lock_resumable_blocked_twice_impl(true);
 }
 
 #[test]
@@ -674,7 +843,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     ctx.clone(),
@@ -1013,7 +1182,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     ctx.clone(),

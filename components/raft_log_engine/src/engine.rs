@@ -305,13 +305,17 @@ impl RaftLogEngine {
         )))
     }
 
+    pub fn path(&self) -> &str {
+        self.0.path()
+    }
+
     /// If path is not an empty directory, we say db exists.
     pub fn exists(path: &str) -> bool {
         let path = Path::new(path);
         if !path.exists() || !path.is_dir() {
             return false;
         }
-        fs::read_dir(&path).unwrap().next().is_some()
+        fs::read_dir(path).unwrap().next().is_some()
     }
 
     pub fn raft_groups(&self) -> Vec<u64> {
@@ -536,30 +540,21 @@ impl RaftEngine for RaftLogEngine {
 
     fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
         let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .add_entries::<MessageExtTyped>(raft_group_id, &entries)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)
+        batch.append(raft_group_id, entries)?;
+        self.consume(&mut batch, false)
     }
 
     fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
         let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .put_message(STORE_STATE_ID, STORE_IDENT_KEY.to_vec(), ident)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
+        batch.put_store_ident(ident)?;
+        self.consume(&mut batch, true)?;
         Ok(())
     }
 
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        batch.put_raft_state(raft_group_id, state)?;
+        self.consume(&mut batch, false)?;
         Ok(())
     }
 
@@ -581,7 +576,7 @@ impl RaftEngine for RaftLogEngine {
             old_first_index.push(self.0.first_index(task.raft_group_id));
         }
 
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        self.consume(&mut batch, false)?;
 
         let mut total = 0;
         for (old_first_index, task) in old_first_index.iter().zip(tasks) {
@@ -613,6 +608,10 @@ impl RaftEngine for RaftLogEngine {
 
     fn get_engine_size(&self) -> Result<u64> {
         Ok(self.0.get_used_size() as u64)
+    }
+
+    fn get_engine_path(&self) -> &str {
+        self.path()
     }
 
     fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>

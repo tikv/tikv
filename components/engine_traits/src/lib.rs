@@ -251,7 +251,6 @@
 #![cfg_attr(test, feature(test))]
 #![feature(min_specialization)]
 #![feature(assert_matches)]
-#![feature(generic_associated_types)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -303,6 +302,8 @@ mod flow_control_factors;
 pub use crate::flow_control_factors::*;
 mod table_properties;
 pub use crate::table_properties::*;
+mod checkpoint;
+pub use crate::checkpoint::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.

@@ -565,7 +565,7 @@ mod tests {
         region1.set_region_epoch(epoch13.clone());
         let term6 = 6;
         let mut lease = Lease::new(Duration::seconds(10), Duration::milliseconds(2500));
-        let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned()));
+        let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, 1));
 
         let mut cmd = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();

@@ -26,11 +26,12 @@ futures = { version = "0.3", features = ["compat", "thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true }
 http = "0.2.0"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 lazy_static = "1.3"
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { workspace = true }
+mnt = "0.3.1"
 nix = "0.24"
 num-traits = "0.2"
 num_cpus = "1"
@@ -55,10 +56,10 @@ tikv_alloc = { workspace = true }
 time = "0.1"
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-executor = "0.1"
-tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tokio-timer = { workspace = true }
 tracker = { workspace = true }
 url = "2"
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }

@@ -22,6 +22,7 @@ struct UnpersistedReady {
     /// Max number of following ready whose data to be persisted is empty.
     max_empty_number: u64,
     raft_msgs: Vec<Vec<RaftMessage>>,
+    has_snapshot: bool,
 }
 
 /// A writer that handles asynchronous writes.
@@ -70,6 +71,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
 
     fn send(&mut self, ctx: &mut impl WriteRouterContext<EK, ER>, task: WriteTask<EK, ER>) {
         let ready_number = task.ready_number();
+        let has_snapshot = task.has_snapshot;
         self.write_router.send_write_msg(
             ctx,
             self.unpersisted_readies.back().map(|r| r.number),
@@ -79,6 +81,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
             number: ready_number,
             max_empty_number: ready_number,
             raft_msgs: vec![],
+            has_snapshot,
         });
     }
 
@@ -108,9 +111,9 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
         ctx: &mut impl WriteRouterContext<EK, ER>,
         ready_number: u64,
         logger: &Logger,
-    ) -> Vec<Vec<RaftMessage>> {
+    ) -> (Vec<Vec<RaftMessage>>, bool) {
         if self.persisted_number >= ready_number {
-            return vec![];
+            return (vec![], false);
         }
 
         let last_unpersisted = self.unpersisted_readies.back();
@@ -124,11 +127,13 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
         }
 
         let mut raft_messages = vec![];
+        let mut has_snapshot = false;
         // There must be a match in `self.unpersisted_readies`.
         loop {
             let Some(v) = self.unpersisted_readies.pop_front() else {
                 panic!("{:?} ready number not found {}", logger.list(), ready_number);
             };
+            has_snapshot |= v.has_snapshot;
             if v.number > ready_number {
                 panic!(
                     "{:?} ready number not matched {:?} vs {}",
@@ -151,7 +156,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
         self.write_router
             .check_new_persisted(ctx, self.persisted_number);
 
-        raft_messages
+        (raft_messages, has_snapshot)
     }
 
     pub fn persisted_number(&self) -> u64 {
