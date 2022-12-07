@@ -76,9 +76,10 @@ macro_rules! impl_sched {
                 };
 
                 // TODO: pass different priority.
-                self.resource_ctl
+                let pri = self
+                    .resource_ctl
                     .get_priority(&fsm.get_last_msg_group(), CommandPri::Normal);
-                match sender.send($ty(fsm), 0) {
+                match sender.send($ty(fsm), pri) {
                     Ok(()) => {}
                     // TODO: use debug instead.
                     Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
