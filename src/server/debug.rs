@@ -16,8 +16,8 @@ use engine_rocks::{
 };
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, MvccProperties, Peekable,
-    RaftEngine, Range, RangePropertiesExt, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    RaftEngine, RaftLogBatch, Range, RangePropertiesExt, SyncMutable, WriteBatch, WriteBatchExt,
+    WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use kvproto::{
     debugpb::{self, Db as DbType},
@@ -735,7 +735,10 @@ impl<ER: RaftEngine> Debugger<ER> {
                 &keys::apply_state_key(region_id),
                 &new_raft_apply_state
             ));
-            box_try!(raft.put_raft_state(region_id, &new_raft_local_state));
+            let mut lb = raft.log_batch(0);
+            box_try!(lb.put_raft_state(region_id, &new_raft_local_state));
+            // Will sync later.
+            box_try!(raft.consume(&mut lb, false));
             let deleted_logs = box_try!(raft.gc(region_id, applied_index + 1, last_index + 1));
             raft.sync().unwrap();
             kv.sync().unwrap();
