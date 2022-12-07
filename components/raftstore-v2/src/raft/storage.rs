@@ -22,7 +22,7 @@ use slog::{info, o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
 use crate::{
-    operation::{GenSnapTask, SnapState},
+    operation::{GenSnapTask, SnapState, SplitInit},
     Result,
 };
 
@@ -69,6 +69,7 @@ pub struct Storage<EK: KvEngine, ER> {
     /// Snapshot part.
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
+    split_init: Option<Box<SplitInit>>,
 }
 
 impl<EK: KvEngine, ER> Debug for Storage<EK, ER> {
@@ -202,49 +203,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         .map(Some)
     }
 
-    /// Creates a new storage for split peer.
-    ///
-    /// Except for region local state which uses the `region` provided with the
-    /// inital tablet index, all uses the inital states.
-    pub fn with_split(
-        store_id: u64,
-        region: &metapb::Region,
-        engine: ER,
-        read_scheduler: Scheduler<ReadTask<EK>>,
-        logger: &Logger,
-    ) -> Result<Option<Storage<EK, ER>>> {
-        let mut region_state = RegionLocalState::default();
-        region_state.set_region(region.clone());
-        region_state.set_state(PeerState::Normal);
-        region_state.set_tablet_index(RAFT_INIT_LOG_INDEX);
-
-        let mut apply_state = RaftApplyState::default();
-        apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
-        apply_state
-            .mut_truncated_state()
-            .set_index(RAFT_INIT_LOG_INDEX);
-        apply_state
-            .mut_truncated_state()
-            .set_term(RAFT_INIT_LOG_TERM);
-
-        let mut raft_state = RaftLocalState::default();
-        raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
-        raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
-        raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-
-        Self::create(
-            store_id,
-            region_state,
-            raft_state,
-            apply_state,
-            engine,
-            read_scheduler,
-            true,
-            logger,
-        )
-        .map(Some)
-    }
-
     fn create(
         store_id: u64,
         region_state: RegionLocalState,
@@ -281,12 +239,18 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             logger,
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(Box::new(None)),
+            split_init: None,
         })
     }
 
     #[inline]
     pub fn region_state_mut(&mut self) -> &mut RegionLocalState {
         &mut self.region_state
+    }
+
+    #[inline]
+    pub fn split_init_mut(&mut self) -> &mut Option<Box<SplitInit>> {
+        &mut self.split_init
     }
 
     #[inline]
