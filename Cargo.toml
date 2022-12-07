@@ -153,7 +153,7 @@ smallvec = "1.4"
 sst_importer = { workspace = true }
 strum = { version = "0.20", features = ["derive"] }
 sync_wrapper = "0.1.1"
-sysinfo = "0.16"
+sysinfo = "0.26"
 tempfile = "3.0"
 thiserror = "1.0"
 tidb_query_aggr = { workspace = true }
