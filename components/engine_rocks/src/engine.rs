@@ -25,7 +25,6 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct RocksEngine {
     db: Arc<DB>,
-    shared_block_cache: bool,
     support_multi_batch_write: bool,
 }
 
@@ -37,7 +36,6 @@ impl RocksEngine {
     pub fn from_db(db: Arc<DB>) -> Self {
         RocksEngine {
             db: db.clone(),
-            shared_block_cache: false,
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
         }
     }
@@ -48,14 +46,6 @@ impl RocksEngine {
 
     pub fn get_sync_db(&self) -> Arc<DB> {
         self.db.clone()
-    }
-
-    pub fn set_shared_block_cache(&mut self, enable: bool) {
-        self.shared_block_cache = enable;
-    }
-
-    pub fn shared_block_cache(&self) -> bool {
-        self.shared_block_cache
     }
 
     pub fn support_multi_batch_write(&self) -> bool {
@@ -95,7 +85,7 @@ impl KvEngine for RocksEngine {
                 }
             }
         }
-        flush_engine_properties(&self.db, instance, self.shared_block_cache);
+        flush_engine_properties(&self.db, instance);
         flush_engine_iostall_properties(&self.db, instance);
     }
 
