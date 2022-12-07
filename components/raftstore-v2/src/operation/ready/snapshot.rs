@@ -397,13 +397,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         self.entry_storage_mut().set_last_term(last_term);
 
         let (path, clean_split) = match self.split_init_mut() {
-            Some(init) if init.scheduled => {
-                assert_eq!(last_index, RAFT_INIT_LOG_INDEX);
-                (
-                    tablet_factory.tablet_path_with_prefix(SPLIT_PREFIX, region_id, last_index),
-                    false,
-                )
-            }
+            // If index not match, the peer may accept a newer snapshot after split.
+            Some(init) if init.scheduled && last_index == RAFT_INIT_LOG_INDEX => (
+                tablet_factory.tablet_path_with_prefix(SPLIT_PREFIX, region_id, last_index),
+                false,
+            ),
             si => {
                 let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
                 (snap_mgr.final_recv_path(&key), si.is_some())

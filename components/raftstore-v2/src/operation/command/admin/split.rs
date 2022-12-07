@@ -464,13 +464,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         assert!(found, "{:?} {}", self.logger.list(), region_id);
         let split_trace = self.split_trace_mut();
-        if !split_trace.first().unwrap().1.is_empty() {
-            return;
+        let mut off = 0;
+        let mut admin_flushed = 0;
+        for (tablet_index, ids) in split_trace.iter() {
+            if !ids.is_empty() {
+                break;
+            }
+            admin_flushed = *tablet_index;
+            off += 1;
         }
-        // There should be very few elements in the vector.
-        let tablet_index = split_trace.remove(0).0;
-        // Persist apply index.
-        self.set_has_ready();
+        if off > 0 {
+            // There should be very few elements in the vector.
+            split_trace.drain(..off);
+            // Persist admin flushed.
+            self.set_has_ready();
+        }
     }
 }
 
