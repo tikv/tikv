@@ -684,6 +684,7 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: ReadableSize(1),
         },
         block_cache: BlockCacheConfig {
+            shared: None,
             capacity: Some(ReadableSize::gb(40)),
             num_shard_bits: 10,
             strict_capacity_limit: true,
