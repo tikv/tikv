@@ -316,13 +316,10 @@ pub fn create_local_engine_service(
     let db_path = config
         .infer_kv_engine_path(None)
         .map_err(|e| format!("infer kvdb path: {}", e))?;
-    let mut kv_db = match new_engine_opt(&db_path, db_opts, cf_opts) {
+    let kv_db = match new_engine_opt(&db_path, db_opts, cf_opts) {
         Ok(db) => db,
         Err(e) => handle_engine_error(e),
     };
-
-    let shared_block_cache = block_cache.is_some();
-    kv_db.set_shared_block_cache(shared_block_cache);
 
     // init raft engine, either is rocksdb or raft engine
     if !config.raft_engine.enable {
@@ -333,12 +330,10 @@ pub fn create_local_engine_service(
         let raft_path = config
             .infer_raft_db_path(None)
             .map_err(|e| format!("infer raftdb path: {}", e))?;
-        let mut raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
+        let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
             Ok(db) => db,
             Err(e) => handle_engine_error(e),
         };
-        //       let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
-        raft_db.set_shared_block_cache(shared_block_cache);
 
         let local_engines = LocalEngines::new(Engines::new(kv_db, raft_db));
         Ok(Box::new(local_engines) as Box<dyn LocalEngineService>)
