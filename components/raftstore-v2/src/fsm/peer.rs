@@ -133,11 +133,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     fn schedule_pending_ticks(&mut self) {
         let pending_ticks = self.fsm.peer.take_pending_ticks();
         for tick in pending_ticks {
-            if tick == PeerTick::ReactivateMemoryLock {
-                self.register_reactivate_memory_lock_tick()
-            } else {
-                self.schedule_tick(tick);
-            }
+            self.schedule_tick(tick);
         }
     }
 
@@ -288,11 +284,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             self.fsm.reactivate_memory_lock_ticks = 0;
         } else {
             drop(pessimistic_locks);
-            self.register_reactivate_memory_lock_tick();
+            self.schedule_tick(PeerTick::ReactivateMemoryLock);
         }
-    }
-
-    pub fn register_reactivate_memory_lock_tick(&mut self) {
-        self.schedule_tick(PeerTick::ReactivateMemoryLock);
     }
 }
