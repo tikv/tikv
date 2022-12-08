@@ -194,21 +194,17 @@ impl<C> PendingCmdQueue<C> {
     }
 
     fn pop_compact(&mut self, index: u64) -> Option<PendingCmd<C>> {
-        let mut pos: usize = 0;
-        let mut found = false;
-
-        for (i, c) in self.compacts.iter().enumerate() {
-            if c.index < index {
-                pos = i;
-                found = true;
-                break;
+        match self.compacts.iter().position(|c| c.index < index) {
+            Some(pos) => {
+                self.compacts.truncate(pos + 1);
+                self.compacts.pop_back()
             }
+            None => None,
         }
-        if !found {
-            return None;
-        }
-        self.compacts.truncate(pos + 1);
-        self.compacts.pop_back()
+    }
+
+    fn has_compact(&mut self) -> bool {
+        !self.compacts.is_empty()
     }
 }
 
@@ -301,6 +297,7 @@ pub enum ExecResult<S> {
     SetFlashbackState {
         region: Region,
     },
+    PendingCompactCmd,
 }
 
 /// The possible returned value when applying logs.
@@ -1508,7 +1505,8 @@ where
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. }
-                | ExecResult::TransferLeader { .. } => {}
+                | ExecResult::TransferLeader { .. }
+                | ExecResult::PendingCompactCmd => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -2960,7 +2958,7 @@ where
     fn try_compact_log(
         &mut self,
         voter_replicated_index: u64,
-    ) -> Result<Option<(RaftTruncatedState, u64)>> {
+    ) -> Result<Option<TaskRes<EK::Snapshot>>> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
         let first_index = entry_storage::first_index(&self.apply_state);
 
@@ -2979,10 +2977,11 @@ where
                 // compact failure is safe to be omitted, no need to assert.
                 compact_raft_log(&self.tag, &mut self.apply_state, cmd.index, cmd.term)?;
                 PEER_ADMIN_CMD_COUNTER.compact.success.inc();
-                Ok(Some((
-                    self.apply_state.get_truncated_state().clone(),
+                Ok(Some(TaskRes::Compact {
+                    state: self.apply_state.get_truncated_state().clone(),
                     first_index,
-                )))
+                    has_pending: self.pending_cmds.has_compact(),
+                }))
             }
             None => {
                 info!(
@@ -3065,7 +3064,7 @@ where
                         compact_term,
                         None,
                     ));
-                    return Ok((resp, ApplyResult::None));
+                    return Ok((resp, ApplyResult::Res(ExecResult::PendingCompactCmd)));
                 }
             }
         }
@@ -3639,7 +3638,11 @@ where
         // Whether destroy request is from its target region's snapshot
         merge_from_snapshot: bool,
     },
-    Compact(RaftTruncatedState, u64),
+    Compact {
+        state: RaftTruncatedState,
+        first_index: u64,
+        has_pending: bool,
+    },
 }
 
 pub struct ApplyFsm<EK>
@@ -4054,12 +4057,8 @@ where
         match res {
             Ok(res) => {
                 if let Some(res) = res {
-                    ctx.notifier.notify_one(
-                        self.delegate.region_id(),
-                        PeerMsg::ApplyRes {
-                            res: TaskRes::Compact(res.0, res.1),
-                        },
-                    );
+                    ctx.notifier
+                        .notify_one(self.delegate.region_id(), PeerMsg::ApplyRes { res });
                 }
             }
             Err(e) => error!(?e;

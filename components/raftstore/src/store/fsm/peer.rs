@@ -1204,9 +1204,6 @@ where
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
-        if self.fsm.peer.is_witness() {
-            self.register_pull_voter_replicated_index_tick();
-        }
         // Apply committed entries more quickly.
         // Or if it's a leader. This implicitly means it's a singleton
         // because it becomes leader in `Peer::new` when it's a
@@ -2312,7 +2309,12 @@ where
                     *is_ready = true;
                 }
             }
-            ApplyTaskRes::Compact(state, first_index) => {
+            ApplyTaskRes::Compact {
+                state,
+                first_index,
+                has_pending,
+            } => {
+                self.fsm.peer.has_pending_compact_cmd = has_pending;
                 self.on_ready_compact_log(first_index, state);
             }
         }
@@ -3799,9 +3801,6 @@ where
                             .raft
                             .adjust_max_inflight_msgs(peer_id, self.ctx.cfg.raft_max_inflight_msgs);
                     }
-                    if self.fsm.peer.is_witness() {
-                        self.register_pull_voter_replicated_index_tick();
-                    }
                 }
                 ConfChangeType::RemoveNode => {
                     // Remove this peer from cache.
@@ -4950,6 +4949,10 @@ where
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
                 ExecResult::SetFlashbackState { region } => self.on_set_flashback_state(region),
+                ExecResult::PendingCompactCmd => {
+                    self.fsm.peer.has_pending_compact_cmd = true;
+                    self.register_pull_voter_replicated_index_tick();
+                }
             }
         }
 
@@ -5508,7 +5511,7 @@ where
     }
 
     fn on_request_voter_replicated_index(&mut self) {
-        if !self.fsm.peer.is_witness() {
+        if !self.fsm.peer.is_witness() || !self.fsm.peer.has_pending_compact_cmd {
             return;
         }
         // TODO: make it configurable
