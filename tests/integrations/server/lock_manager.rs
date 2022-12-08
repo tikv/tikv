@@ -312,7 +312,7 @@ fn test_detect_deadlock_when_updating_wait_info() {
         let key = vec![key.to_vec()];
         thread::spawn(move || {
             let resp =
-                kv_pessimistic_lock_resumable(&*client, ctx, key, ts, ts, Some(1000), false, false);
+                kv_pessimistic_lock_resumable(&client, ctx, key, ts, ts, Some(1000), false, false);
             tx.send(resp).unwrap();
         });
         rx
@@ -321,7 +321,7 @@ fn test_detect_deadlock_when_updating_wait_info() {
     // key1: txn 11 and 12 waits for 10
     // key2: txn 11 waits for 12
     let resp = kv_pessimistic_lock_resumable(
-        &*client,
+        &client,
         ctx.clone(),
         vec![key1.to_vec()],
         10,
@@ -334,7 +334,7 @@ fn test_detect_deadlock_when_updating_wait_info() {
     assert!(resp.errors.is_empty());
     assert_eq!(resp.results[0].get_type(), LockResultNormal);
     let resp = kv_pessimistic_lock_resumable(
-        &*client,
+        &client,
         ctx.clone(),
         vec![key2.to_vec()],
         12,
@@ -360,7 +360,7 @@ fn test_detect_deadlock_when_updating_wait_info() {
     assert_eq!(rx_txn11_k2.try_recv().unwrap_err(), TryRecvError::Empty);
 
     // Release lock at ts=10 on key1 so that txn 11 will be granted the lock.
-    must_kv_pessimistic_rollback(&*client, ctx.clone(), key1.to_vec(), 10, 10);
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key1.to_vec(), 10, 10);
     let resp = rx_txn11_k1
         .recv_timeout(Duration::from_millis(200))
         .unwrap();
@@ -384,13 +384,13 @@ fn test_detect_deadlock_when_updating_wait_info() {
     assert_eq!(wait_chain[1].get_key(), key1);
 
     // Clean up.
-    must_kv_pessimistic_rollback(&*client, ctx.clone(), key1.to_vec(), 11, 11);
-    must_kv_pessimistic_rollback(&*client, ctx.clone(), key2.to_vec(), 12, 12);
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key1.to_vec(), 11, 11);
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key2.to_vec(), 12, 12);
     let resp = rx_txn11_k2
         .recv_timeout(Duration::from_millis(500))
         .unwrap();
     assert!(resp.region_error.is_none());
     assert!(resp.errors.is_empty());
     assert_eq!(resp.results[0].get_type(), LockResultNormal);
-    must_kv_pessimistic_rollback(&*client, ctx.clone(), key2.to_vec(), 11, 11);
+    must_kv_pessimistic_rollback(&client, ctx, key2.to_vec(), 11, 11);
 }
