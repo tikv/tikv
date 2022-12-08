@@ -4,8 +4,10 @@ use std::{sync::Arc, time::Duration};
 
 use etcd_client::{ConnectOptions, Error as EtcdError, OpenSslClientConfig};
 use futures::Future;
-use slog_global::info;
-use tikv_util::stream::{RetryError, RetryExt};
+use tikv_util::{
+    info,
+    stream::{RetryError, RetryExt},
+};
 use tokio::sync::OnceCell;
 
 use super::{etcd::EtcdSnapshot, EtcdStore, MetaStore};
