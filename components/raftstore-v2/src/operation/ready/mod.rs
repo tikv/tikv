@@ -22,7 +22,7 @@ mod snapshot;
 
 use std::{cmp, time::Instant};
 
-use engine_traits::{KvEngine, MiscExt, OpenOptions, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, MiscExt, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{
     raft_cmdpb::AdminCmdType,
@@ -537,7 +537,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 ready.snapshot(),
                 write_task,
                 ctx.snap_mgr.clone(),
-                ctx.tablet_factory.clone(),
+                ctx.tablet_registry.clone(),
             ) {
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)
             }

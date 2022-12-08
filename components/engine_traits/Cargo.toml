@@ -9,6 +9,7 @@ failpoints = ["fail/failpoints"]
 
 [dependencies]
 case_macros = { workspace = true }
+collections = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }

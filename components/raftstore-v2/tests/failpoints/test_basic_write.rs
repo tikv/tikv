@@ -2,7 +2,7 @@
 
 use std::{assert_matches::assert_matches, time::Duration};
 
-use engine_traits::{OpenOptions, Peekable, TabletFactory};
+use engine_traits::Peekable;
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{CmdType, Request};
 use raftstore_v2::router::PeerMsg;
@@ -25,10 +25,8 @@ fn test_write_batch_rollback() {
     // Make several entries to batch in apply thread.
     fail::cfg("APPLY_COMMITTED_ENTRIES", "pause").unwrap();
 
-    let tablet_factory = cluster.node(0).tablet_factory();
-    let tablet = tablet_factory
-        .open_tablet(2, None, OpenOptions::default().set_cache_only(true))
-        .unwrap();
+    let tablet_registry = cluster.node(0).tablet_registry();
+    let tablet = tablet_registry.get(2).unwrap().latest().unwrap().clone();
 
     // Good proposal should be committed.
     let (msg, mut sub0) = PeerMsg::raft_command(req.clone());

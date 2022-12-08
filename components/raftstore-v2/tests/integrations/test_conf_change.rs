@@ -2,7 +2,7 @@
 
 use std::{self, time::Duration};
 
-use engine_traits::{OpenOptions, Peekable, TabletFactory};
+use engine_traits::Peekable;
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
 use raft::prelude::ConfChangeType;
 use raftstore_v2::router::{PeerMsg, PeerTick};
@@ -77,10 +77,8 @@ fn test_simple_change() {
     // read the new written kv.
     assert_eq!(match_index, meta.raft_apply.truncated_state.index);
     assert!(meta.raft_apply.applied_index >= match_index);
-    let tablet_factory = cluster.node(1).tablet_factory();
-    let tablet = tablet_factory
-        .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-        .unwrap();
+    let registry = cluster.node(1).tablet_registry();
+    let tablet = registry.get(region_id).unwrap().latest().unwrap().clone();
     assert_eq!(tablet.get_value(key).unwrap().unwrap(), val);
 
     req.mut_header()

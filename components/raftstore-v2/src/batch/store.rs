@@ -17,7 +17,7 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{Sender, TrySendError};
-use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{Engines, KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
@@ -72,9 +72,9 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub timer: SteadyTimer,
     pub write_senders: WriteSenders<EK, ER>,
     /// store meta
-    pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    pub store_meta: Arc<Mutex<StoreMeta>>,
     pub engine: ER,
-    pub tablet_factory: Arc<dyn TabletFactory<EK>>,
+    pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
     pub read_scheduler: Scheduler<ReadTask<EK>>,
     pub snap_mgr: TabletSnapManager,
@@ -222,7 +222,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     cfg: Arc<VersionTrack<Config>>,
     store_id: u64,
     engine: ER,
-    tablet_factory: Arc<dyn TabletFactory<EK>>,
+    tablet_registry: TabletRegistry<EK>,
     trans: T,
     router: StoreRouter<EK, ER>,
     read_scheduler: Scheduler<ReadTask<EK>>,
@@ -230,7 +230,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     write_senders: WriteSenders<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
-    store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
     snap_mgr: TabletSnapManager,
 }
 
@@ -239,14 +239,14 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         cfg: Arc<VersionTrack<Config>>,
         store_id: u64,
         engine: ER,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        tablet_registry: TabletRegistry<EK>,
         trans: T,
         router: StoreRouter<EK, ER>,
         read_scheduler: Scheduler<ReadTask<EK>>,
         pd_scheduler: Scheduler<PdTask>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
-        store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         snap_mgr: TabletSnapManager,
     ) -> Self {
         let pool_size = cfg.value().apply_batch_system.pool_size;
@@ -263,7 +263,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             cfg,
             store_id,
             engine,
-            tablet_factory,
+            tablet_registry,
             trans,
             router,
             read_scheduler,
@@ -294,7 +294,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     Some(p) => p,
                     None => return Ok(()),
                 };
-                let (sender, peer_fsm) = PeerFsm::new(&cfg, &*self.tablet_factory, storage)?;
+                let (sender, peer_fsm) = PeerFsm::new(&cfg, &self.tablet_registry, storage)?;
                 meta.region_read_progress
                     .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
 
@@ -342,7 +342,7 @@ where
             write_senders: self.write_senders.clone(),
             store_meta: self.store_meta.clone(),
             engine: self.engine.clone(),
-            tablet_factory: self.tablet_factory.clone(),
+            tablet_registry: self.tablet_registry.clone(),
             apply_pool: self.apply_pool.clone(),
             read_scheduler: self.read_scheduler.clone(),
             snap_mgr: self.snap_mgr.clone(),
@@ -386,11 +386,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         store_id: u64,
         cfg: Arc<VersionTrack<Config>>,
         raft_engine: ER,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        tablet_registry: TabletRegistry<EK>,
         trans: T,
         pd_client: Arc<C>,
         router: &StoreRouter<EK, ER>,
-        store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
@@ -424,7 +424,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 store_id,
                 pd_client,
                 raft_engine.clone(),
-                tablet_factory.clone(),
+                tablet_registry.clone(),
                 router.clone(),
                 workers.pd_worker.remote(),
                 concurrency_manager,
@@ -438,7 +438,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             cfg.clone(),
             store_id,
             raft_engine,
-            tablet_factory,
+            tablet_registry,
             trans,
             router.clone(),
             read_scheduler,
@@ -462,8 +462,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             for (region_id, (tx, fsm)) in peers {
                 meta.readers
                     .insert(region_id, fsm.peer().generate_read_delegate());
-                meta.tablet_caches
-                    .insert(region_id, fsm.peer().tablet().clone());
 
                 address.push(region_id);
                 mailboxes.push((
