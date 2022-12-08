@@ -8,7 +8,7 @@ edition = "2018"
 encryption = { workspace = true }
 engine_traits = { workspace = true }
 file_system = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 lazy_static = "1.4.0"
 num_cpus = "1"
 online_config = { workspace = true }

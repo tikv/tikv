@@ -21,7 +21,6 @@ use crate::{
 
 pub struct StorageConfigManger<E: Engine, K: KvEngine, L: LockManager> {
     tablet_factory: Arc<dyn TabletFactory<K> + Send + Sync>,
-    shared_block_cache: bool,
     ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
     flow_controller: Arc<FlowController>,
     scheduler: TxnScheduler<E, L>,
@@ -33,14 +32,12 @@ unsafe impl<E: Engine, K: KvEngine, L: LockManager> Sync for StorageConfigManger
 impl<E: Engine, K: KvEngine, L: LockManager> StorageConfigManger<E, K, L> {
     pub fn new(
         tablet_factory: Arc<dyn TabletFactory<K> + Send + Sync>,
-        shared_block_cache: bool,
         ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
         flow_controller: Arc<FlowController>,
         scheduler: TxnScheduler<E, L>,
     ) -> Self {
         StorageConfigManger {
             tablet_factory,
-            shared_block_cache,
             ttl_checker_scheduler,
             flow_controller,
             scheduler,
@@ -51,9 +48,6 @@ impl<E: Engine, K: KvEngine, L: LockManager> StorageConfigManger<E, K, L> {
 impl<EK: Engine, K: KvEngine, L: LockManager> ConfigManager for StorageConfigManger<EK, K, L> {
     fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {
         if let Some(ConfigValue::Module(mut block_cache)) = change.remove("block_cache") {
-            if !self.shared_block_cache {
-                return Err("shared block cache is disabled".into());
-            }
             if let Some(size) = block_cache.remove("capacity") {
                 if size != ConfigValue::None {
                     let s: ReadableSize = size.into();

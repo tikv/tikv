@@ -412,6 +412,12 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .put_message(raft_group_id, APPLY_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)
     }
+
+    fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {
+        self.0
+            .put_message(STORE_STATE_ID, RECOVER_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)
+    }
 }
 
 impl RaftEngineReadOnly for RaftLogEngine {
@@ -538,35 +544,6 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
-        let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .add_entries::<MessageExtTyped>(raft_group_id, &entries)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)
-    }
-
-    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
-        let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .put_message(STORE_STATE_ID, STORE_IDENT_KEY.to_vec(), ident)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
-        Ok(())
-    }
-
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
-        Ok(())
-    }
-
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
         self.batch_gc(vec![RaftLogGcTask {
             raft_group_id,
@@ -585,7 +562,7 @@ impl RaftEngine for RaftLogEngine {
             old_first_index.push(self.0.first_index(task.raft_group_id));
         }
 
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        self.consume(&mut batch, false)?;
 
         let mut total = 0;
         for (old_first_index, task) in old_first_index.iter().zip(tasks) {
@@ -633,16 +610,6 @@ impl RaftEngine for RaftLogEngine {
                 f(id)?;
             }
         }
-        Ok(())
-    }
-
-    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
-        let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .put_message(STORE_STATE_ID, RECOVER_STATE_KEY.to_vec(), state)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
     }
 }

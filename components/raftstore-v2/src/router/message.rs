@@ -132,6 +132,7 @@ pub enum PeerMsg {
     Start,
     /// Messages from peer to peer in the same store
     SplitInit(Box<SplitInit>),
+    SplitInitFinish(u64),
     /// A message only used to notify a peer.
     Noop,
     /// A message that indicates an asynchronous write has finished.
@@ -172,6 +173,13 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::SplitInit(_) => {
                 write!(fmt, "Split initialization")
+            }
+            PeerMsg::SplitInitFinish(region_id) => {
+                write!(
+                    fmt,
+                    "Split initialization finished from region {}",
+                    region_id
+                )
             }
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {

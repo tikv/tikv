@@ -119,7 +119,7 @@ impl Diagnostics for Service {
                     let load = (
                         sys::cpu_time_snapshot(),
                         system
-                            .get_networks()
+                            .networks()
                             .into_iter()
                             .map(|(n, d)| (n.to_owned(), sys::NicSnapshot::from_network_data(d)))
                             .collect(),

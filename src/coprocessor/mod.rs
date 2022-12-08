@@ -142,6 +142,9 @@ pub struct ReqContext {
 
     /// Perf level
     pub perf_level: PerfLevel,
+
+    /// Whether the request is allowed in the flashback state.
+    pub allowed_in_flashback: bool,
 }
 
 impl ReqContext {
@@ -181,6 +184,7 @@ impl ReqContext {
             lower_bound,
             upper_bound,
             perf_level,
+            allowed_in_flashback: false,
         }
     }
 

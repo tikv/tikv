@@ -194,7 +194,7 @@ impl Default for FlowControlConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct BlockCacheConfig {
     #[online_config(skip)]
-    pub shared: bool,
+    pub shared: Option<bool>,
     pub capacity: Option<ReadableSize>,
     #[online_config(skip)]
     pub num_shard_bits: i32,
@@ -209,7 +209,7 @@ pub struct BlockCacheConfig {
 impl Default for BlockCacheConfig {
     fn default() -> BlockCacheConfig {
         BlockCacheConfig {
-            shared: true,
+            shared: None,
             capacity: None,
             num_shard_bits: 6,
             strict_capacity_limit: false,
@@ -229,9 +229,9 @@ impl BlockCacheConfig {
         }
     }
 
-    pub fn build_shared_cache(&self) -> Option<Cache> {
-        if !self.shared {
-            return None;
+    pub fn build_shared_cache(&self) -> Cache {
+        if self.shared == Some(false) {
+            warn!("storage.block-cache.shared is deprecated, cache is always shared.");
         }
         let capacity = match self.capacity {
             None => {
@@ -248,7 +248,7 @@ impl BlockCacheConfig {
         if let Some(allocator) = self.new_memory_allocator() {
             cache_opts.set_memory_allocator(allocator);
         }
-        Some(Cache::new_lru_cache(cache_opts))
+        Cache::new_lru_cache(cache_opts)
     }
 
     fn new_memory_allocator(&self) -> Option<MemoryAllocator> {

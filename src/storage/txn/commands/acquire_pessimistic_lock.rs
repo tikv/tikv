@@ -191,7 +191,7 @@ pub(super) fn make_write_data(modifies: Vec<Modify>, old_values: OldValues) -> W
             old_values,
             // One pc status is unknown in AcquirePessimisticLock stage.
             one_pc: false,
-            for_flashback: false,
+            allowed_in_flashback: false,
         };
         WriteData::new(modifies, extra)
     } else {
