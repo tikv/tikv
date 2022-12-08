@@ -1061,15 +1061,15 @@ impl std::fmt::Debug for ObserveOp {
                 .finish(),
             Self::Stop { region } => f
                 .debug_struct("Stop")
-                .field("region", &utils::debug_region(&region))
+                .field("region", &utils::debug_region(region))
                 .finish(),
             Self::Destroy { region } => f
                 .debug_struct("Destroy")
-                .field("region", &utils::debug_region(&region))
+                .field("region", &utils::debug_region(region))
                 .finish(),
             Self::RefreshResolver { region } => f
                 .debug_struct("RefreshResolver")
-                .field("region", &utils::debug_region(&region))
+                .field("region", &utils::debug_region(region))
                 .finish(),
             Self::NotifyFailToStartObserve {
                 region,
@@ -1077,7 +1077,7 @@ impl std::fmt::Debug for ObserveOp {
                 err,
             } => f
                 .debug_struct("NotifyFailToStartObserve")
-                .field("region", &utils::debug_region(&region))
+                .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
                 .finish(),

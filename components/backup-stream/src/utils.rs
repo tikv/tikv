@@ -808,7 +808,7 @@ struct SlogRegion<'a>(&'a Region);
 impl<'a> slog::KV for SlogRegion<'a> {
     fn serialize(
         &self,
-        _record: &slog::Record,
+        _record: &slog::Record<'_>,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         let r = self.0;
