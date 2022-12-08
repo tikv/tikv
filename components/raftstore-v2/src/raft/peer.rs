@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
@@ -91,6 +91,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// Check whether this proposal can be proposed based on its epoch.
     proposal_control: ProposalControl,
+
+    // Trace which peers have not finished split.
+    split_trace: Vec<(u64, HashSet<u64>)>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -165,6 +168,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             proposal_control: ProposalControl::new(0),
             lead_transferee: raft::INVALID_ID,
+            split_trace: vec![],
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -338,6 +342,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn set_raft_group(&mut self, raft_group: RawNode<Storage<EK, ER>>) {
         self.raft_group = raft_group;
+    }
+
+    #[inline]
+    pub fn persisted_index(&self) -> u64 {
+        self.raft_group.raft.raft_log.persisted
     }
 
     #[inline]
@@ -642,5 +651,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .store(initial_status, Ordering::SeqCst);
 
         self.update_max_timestamp_pd(ctx, initial_status);
+    }
+
+    #[inline]
+    pub fn split_trace_mut(&mut self) -> &mut Vec<(u64, HashSet<u64>)> {
+        &mut self.split_trace
     }
 }

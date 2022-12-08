@@ -11,8 +11,8 @@ use std::{
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
-    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE,
+    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, SyncMutable, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
@@ -965,7 +965,9 @@ fn test_debug_raft_log() {
     entry.set_index(log_index);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42].into());
-    engine.append(region_id, vec![entry.clone()]).unwrap();
+    let mut lb = engine.log_batch(0);
+    lb.append(region_id, vec![entry.clone()]).unwrap();
+    engine.consume(&mut lb, false).unwrap();
     assert_eq!(
         engine.get_entry(region_id, log_index).unwrap().unwrap(),
         entry
@@ -999,7 +1001,9 @@ fn test_debug_region_info() {
     let region_id = 100;
     let mut raft_state = raft_serverpb::RaftLocalState::default();
     raft_state.set_last_index(42);
-    raft_engine.put_raft_state(region_id, &raft_state).unwrap();
+    let mut lb = raft_engine.log_batch(0);
+    lb.put_raft_state(region_id, &raft_state).unwrap();
+    raft_engine.consume(&mut lb, false).unwrap();
     assert_eq!(
         raft_engine.get_raft_state(region_id).unwrap().unwrap(),
         raft_state
