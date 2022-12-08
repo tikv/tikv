@@ -46,7 +46,6 @@ use tikv_util::{
     store::new_peer,
 };
 
-#[derive(Clone)]
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
@@ -411,7 +410,7 @@ pub struct Cluster {
     pd_server: test_pd::Server<Service>,
     nodes: Vec<TestNode>,
     receivers: Vec<Receiver<RaftMessage>>,
-    routers: Vec<TestRouter>,
+    pub routers: Vec<TestRouter>,
     logger: Logger,
 }
 
@@ -454,16 +453,13 @@ impl Cluster {
     }
 
     pub fn restart(&mut self, offset: usize) {
+        self.routers.remove(offset);
         let router = self.nodes[offset].restart();
-        self.routers[offset] = router;
+        self.routers.insert(offset, router);
     }
 
     pub fn node(&self, offset: usize) -> &TestNode {
         &self.nodes[offset]
-    }
-
-    pub fn router(&self, offset: usize) -> TestRouter {
-        self.routers[offset].clone()
     }
 
     /// Send messages and wait for side effects are all handled.

@@ -215,6 +215,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 }
             }
             SnapState::Generated(ref s) => {
+                // TODO: `to` may not be equal to the generated snapshot.
                 let SnapState::Generated(snap) = mem::replace(&mut *snap_state, SnapState::Relax) else { unreachable!() };
                 if self.validate_snap(&snap, request_index) {
                     return Ok(*snap);

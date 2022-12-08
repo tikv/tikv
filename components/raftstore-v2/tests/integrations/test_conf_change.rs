@@ -14,7 +14,7 @@ use crate::cluster::Cluster;
 fn test_simple_change() {
     let cluster = Cluster::with_node_count(2, None);
     let region_id = 2;
-    let router0 = cluster.router(0);
+    let router0 = &cluster.routers[0];
     let mut req = router0.new_request_for(2);
     let admin_req = req.mut_admin_request();
     admin_req.set_cmd_type(AdminCmdType::ChangePeer);
@@ -39,7 +39,7 @@ fn test_simple_change() {
 
     // So heartbeat will create a learner.
     cluster.dispatch(2, vec![]);
-    let router1 = cluster.router(1);
+    let router1 = &cluster.routers[1];
     let meta = router1
         .must_query_debug_info(2, Duration::from_secs(3))
         .unwrap();

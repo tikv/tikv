@@ -13,7 +13,7 @@ use crate::cluster::Cluster;
 #[test]
 fn test_write_batch_rollback() {
     let cluster = Cluster::default();
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     let mut req = router.new_request_for(2);
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);

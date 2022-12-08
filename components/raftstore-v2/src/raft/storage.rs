@@ -526,8 +526,7 @@ mod tests {
         let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
         let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
-        // create tablet with region_id 1
-        reg.load(1, 10, true).unwrap();
+        reg.load(region.get_id(), 10, true).unwrap();
         // setup read runner worker and peer storage
         let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
@@ -539,10 +538,12 @@ mod tests {
         let mut read_runner = ReadRunner::new(router.clone(), raft_engine);
         read_runner.set_snap_mgr(mgr.clone());
         worker.start(read_runner);
+        let mut state = RegionLocalState::default();
+        state.set_region(region.clone());
         // setup peer applyer
         let mut apply = Apply::new(
             region.get_peers()[0].clone(),
-            RegionLocalState::default(),
+            state,
             router,
             reg,
             sched,
@@ -567,6 +568,7 @@ mod tests {
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
         let checkpointer_path = mgr.tablet_gen_path(&snap_key);
         assert!(checkpointer_path.exists());
+        s.snapshot(0, 7).unwrap();
 
         // Test cancel snapshot
         let snap = s.snapshot(0, 0);
