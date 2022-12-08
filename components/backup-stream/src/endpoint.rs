@@ -1196,14 +1196,16 @@ mod test {
     async fn test_start() {
         let cli = test::test_meta_cli();
         let (sched, mut rx) = dummy_scheduler();
-
         let task = test::simple_task("simple_3");
         cli.insert_task_with_range(&task, &[]).await.unwrap();
 
+        fail::cfg("failed_to_get_tasks", "1*return").unwrap();
         Endpoint::<_, MockRegionInfoProvider, RocksEngine, MockRaftStoreRouter, MockPdClient>::start_and_watch_tasks(cli, sched).await.unwrap();
+        fail::remove("failed_to_get_tasks");
 
         let _t1 = rx.recv().unwrap();
         let t2 = rx.recv().unwrap();
+
         match t2 {
             Task::WatchTask(t) => match t {
                 endpoint::TaskOp::AddTask(t) => {
