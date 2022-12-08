@@ -508,6 +508,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone()),
             ),
             engines.kv.clone(),
+            self.region_info_accessor.region_leaders(),
         );
 
         self.engines = Some(TiKvEngines {
