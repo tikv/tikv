@@ -984,13 +984,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return;
         }
 
-        let lock_wait_queues = self.inner.lock_wait_queues.clone();
-        self.get_sched_pool(CommandPri::High)
-            .pool
-            .spawn(async move {
-                lock_wait_queues.update_lock_wait(new_acquired_locks);
-            })
-            .unwrap();
+        // If there are not too many new locks, do not spawn the task to the high
+        // priority pool since it may consume more CPU.
+        if new_acquired_locks.len() < 30 {
+            self.inner
+                .lock_wait_queues
+                .update_lock_wait(new_acquired_locks);
+        } else {
+            let lock_wait_queues = self.inner.lock_wait_queues.clone();
+            self.get_sched_pool(CommandPri::High)
+                .pool
+                .spawn(async move {
+                    lock_wait_queues.update_lock_wait(new_acquired_locks);
+                })
+                .unwrap();
+        }
     }
 
     fn wake_up_legacy_pessimistic_locks(
