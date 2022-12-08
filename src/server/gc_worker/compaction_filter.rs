@@ -980,6 +980,7 @@ pub mod tests {
         let default_key = default_key.into_encoded();
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
 
+        // If the ratio threshold is less than 0, GC would be skipped.
         must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 210);
         must_commit(&mut engine, b"zkey", 210, 220);
         gc_runner.ratio_threshold = Some(-1.0);
