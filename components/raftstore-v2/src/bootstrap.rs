@@ -97,8 +97,9 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         let mut ident = StoreIdent::default();
         ident.set_cluster_id(self.cluster_id);
         ident.set_store_id(id);
-        self.engine.put_store_ident(&ident)?;
-        self.engine.sync()?;
+        let mut lb = self.engine.log_batch(1);
+        lb.put_store_ident(&ident)?;
+        self.engine.consume(&mut lb, true)?;
         fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
             "injected error: node_after_bootstrap_store"
         )));

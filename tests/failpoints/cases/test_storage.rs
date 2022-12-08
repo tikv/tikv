@@ -262,13 +262,12 @@ fn test_scale_scheduler_pool() {
         rx,
     )));
 
-    let cfg_controller = ConfigController::new(cfg.clone());
+    let cfg_controller = ConfigController::new(cfg);
     let (scheduler, _receiver) = dummy_scheduler();
     cfg_controller.register(
         Module::Storage,
         Box::new(StorageConfigManger::new(
             Arc::new(DummyFactory::new(Some(kv_engine), "".to_string())),
-            cfg.storage.block_cache.shared,
             scheduler,
             flow_controller,
             storage.get_scheduler(),

@@ -25,8 +25,9 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::collections::VecDeque;
+use std::{cmp, collections::VecDeque};
 
+use collections::HashSet;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{
     Checkpointer, DeleteStrategy, KvEngine, OpenOptions, RaftEngine, RaftLogBatch, Range,
@@ -37,17 +38,18 @@ use keys::enc_end_key;
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
-    raft_serverpb::RegionLocalState,
+    raft_serverpb::{RaftMessage, RaftSnapshotData, RegionLocalState},
 };
 use protobuf::Message;
-use raft::RawNode;
+use raft::{prelude::Snapshot, RawNode, INVALID_ID};
 use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
         fsm::apply::validate_batch_split,
         metrics::PEER_ADMIN_CMD_COUNTER,
+        snap::TABLET_SNAPSHOT_VERSION,
         util::{self, KeysInfoFormatter},
-        PeerPessimisticLocks, PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX,
+        PeerPessimisticLocks, PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
     Result,
 };
@@ -69,14 +71,36 @@ pub struct SplitResult {
     pub derived_index: usize,
     pub tablet_index: u64,
 }
+
+#[derive(Debug)]
 pub struct SplitInit {
     /// Split region
     pub region: metapb::Region,
     pub check_split: bool,
-    pub parent_is_leader: bool,
+    pub scheduled: bool,
+    pub source_leader: bool,
+    pub source_id: u64,
 
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
+}
+
+impl SplitInit {
+    fn to_snapshot(&self) -> Snapshot {
+        let mut snapshot = Snapshot::default();
+        // Set snapshot metadata.
+        snapshot.mut_metadata().set_term(RAFT_INIT_LOG_TERM);
+        snapshot.mut_metadata().set_index(RAFT_INIT_LOG_INDEX);
+        let conf_state = util::conf_state_from_region(&self.region);
+        snapshot.mut_metadata().set_conf_state(conf_state);
+        // Set snapshot data.
+        let mut snap_data = RaftSnapshotData::default();
+        snap_data.set_region(self.region.clone());
+        snap_data.set_version(TABLET_SNAPSHOT_VERSION);
+        snap_data.mut_meta().set_for_balance(false);
+        snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
+        snapshot
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -263,7 +287,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn on_ready_split_region<T>(
+    pub fn on_apply_res_split<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         derived_index: usize,
@@ -321,16 +345,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         let last_region_id = regions.last().unwrap().get_id();
+        let mut new_ids = HashSet::default();
         for (new_region, locks) in regions.into_iter().zip(region_locks) {
             let new_region_id = new_region.get_id();
             if new_region_id == region_id {
                 continue;
             }
 
+            new_ids.insert(new_region_id);
             let split_init = PeerMsg::SplitInit(Box::new(SplitInit {
                 region: new_region,
-                parent_is_leader: self.is_leader(),
+                source_leader: self.is_leader(),
+                source_id: region_id,
                 check_split: last_region_id == new_region_id,
+                scheduled: false,
                 locks,
             }));
 
@@ -353,108 +381,104 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 _ => unreachable!(),
             }
         }
+        self.split_trace_mut().push((tablet_index, new_ids));
     }
 
     pub fn on_split_init<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        split_init: Box<SplitInit>,
+        mut split_init: Box<SplitInit>,
     ) {
         let region_id = split_init.region.id;
-        let replace = split_init.region.get_region_epoch().get_version()
-            > self
-                .storage()
-                .region_state()
-                .get_region()
-                .get_region_epoch()
-                .get_version();
-
-        if !self.storage().is_initialized() || replace {
-            let split_temp_path = store_ctx.tablet_factory.tablet_path_with_prefix(
-                SPLIT_PREFIX,
-                region_id,
-                RAFT_INIT_LOG_INDEX,
-            );
-
-            let tablet = store_ctx
-                .tablet_factory
-                .load_tablet(&split_temp_path, region_id, RAFT_INIT_LOG_INDEX)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{:?} fails to load tablet {:?} :{:?}",
-                        self.logger.list(),
-                        split_temp_path,
-                        e
-                    )
-                });
-
-            self.tablet_mut().set(tablet);
-
-            let storage = Storage::with_split(
-                self.peer().get_store_id(),
-                &split_init.region,
-                store_ctx.engine.clone(),
-                store_ctx.read_scheduler.clone(),
-                &store_ctx.logger,
-            )
-            .unwrap_or_else(|e| panic!("fail to create storage: {:?}", e))
-            .unwrap();
-
-            let applied_index = storage.apply_state().get_applied_index();
-            let peer_id = storage.peer().get_id();
-            let raft_cfg = store_ctx.cfg.new_raft_config(peer_id, applied_index);
-
-            let mut raft_group = RawNode::new(&raft_cfg, storage, &self.logger).unwrap();
-            // If this region has only one peer and I am the one, campaign directly.
-            if split_init.region.get_peers().len() == 1 {
-                raft_group.campaign().unwrap();
-                self.set_has_ready();
-            }
-            self.set_raft_group(raft_group);
-        } else {
-            // TODO: when reaching here (peer is initalized before and cannot be replaced),
-            // it is much complexer.
+        if self.storage().is_initialized() && self.persisted_index() >= RAFT_INIT_LOG_INDEX {
+            let _ = store_ctx
+                .router
+                .force_send(split_init.source_id, PeerMsg::SplitInitFinish(region_id));
             return;
         }
 
-        {
-            let mut meta = store_ctx.store_meta.lock().unwrap();
-
-            info!(
-                self.logger,
-                "init split region";
-                "region" => ?split_init.region,
-            );
-
-            // TODO: GlobalReplicationState
-
-            for p in split_init.region.get_peers() {
-                self.insert_peer_cache(p.clone());
-            }
-
-            if split_init.parent_is_leader {
-                if self.maybe_campaign() {
-                    self.set_has_ready();
-                }
-
-                *self.txn_ext().pessimistic_locks.write() = split_init.locks;
-                // The new peer is likely to become leader, send a heartbeat immediately to
-                // reduce client query miss.
-                self.region_heartbeat_pd(store_ctx);
-            }
-
-            meta.tablet_caches.insert(region_id, self.tablet().clone());
-            meta.readers
-                .insert(region_id, self.generate_read_delegate());
-            meta.region_read_progress
-                .insert(region_id, self.read_progress().clone());
+        if self.storage().is_initialized() || self.raft_group().snap().is_some() {
+            // It accepts a snapshot already but not finish applied yet.
+            let prev = self.storage_mut().split_init_mut().replace(split_init);
+            assert!(prev.is_none(), "{:?}", prev);
+            return;
         }
+
+        split_init.scheduled = true;
+        let snap = split_init.to_snapshot();
+        let mut msg = raft::eraftpb::Message::default();
+        msg.set_to(self.peer_id());
+        msg.set_from(self.leader_id());
+        msg.set_msg_type(raft::eraftpb::MessageType::MsgSnapshot);
+        msg.set_snapshot(snap);
+        msg.set_term(cmp::max(self.term(), RAFT_INIT_LOG_TERM));
+        let res = self.raft_group_mut().step(msg);
+        let accept_snap = self.raft_group().snap().is_some();
+        if res.is_err() || !accept_snap {
+            panic!(
+                "{:?} failed to accept snapshot {:?} with error {}",
+                self.logger.list(),
+                res,
+                accept_snap
+            );
+        }
+        let prev = self.storage_mut().split_init_mut().replace(split_init);
+        assert!(prev.is_none(), "{:?}", prev);
+        self.set_has_ready();
+    }
+
+    pub fn post_split_init<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        split_init: Box<SplitInit>,
+    ) {
+        if split_init.source_leader
+            && self.leader_id() == INVALID_ID
+            && self.term() == RAFT_INIT_LOG_TERM
+        {
+            let _ = self.raft_group_mut().campaign();
+            self.set_has_ready();
+
+            *self.txn_ext().pessimistic_locks.write() = split_init.locks;
+            // The new peer is likely to become leader, send a heartbeat immediately to
+            // reduce client query miss.
+            self.region_heartbeat_pd(store_ctx);
+        }
+        let region_id = self.region_id();
 
         if split_init.check_split {
             // TODO: check if the last region needs to split again
         }
+        let _ = store_ctx
+            .router
+            .force_send(split_init.source_id, PeerMsg::SplitInitFinish(region_id));
+    }
 
-        self.schedule_apply_fsm(store_ctx);
+    pub fn on_split_init_finish<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, region_id: u64) {
+        let mut found = false;
+        for (tablet_index, ids) in self.split_trace_mut() {
+            if ids.remove(&region_id) {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "{:?} {}", self.logger.list(), region_id);
+        let split_trace = self.split_trace_mut();
+        let mut off = 0;
+        let mut admin_flushed = 0;
+        for (tablet_index, ids) in split_trace.iter() {
+            if !ids.is_empty() {
+                break;
+            }
+            admin_flushed = *tablet_index;
+            off += 1;
+        }
+        if off > 0 {
+            // There should be very few elements in the vector.
+            split_trace.drain(..off);
+            // Persist admin flushed.
+            self.set_has_ready();
+        }
     }
 }
 

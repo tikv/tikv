@@ -102,7 +102,6 @@ enable-ttl = true
 ttl-check-poll-interval = "0s"
 
 [storage.block-cache]
-shared = true
 capacity = "40GB"
 num-shard-bits = 10
 strict-capacity-limit = true
