@@ -1180,3 +1180,39 @@ where
         self.run_task(task)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use engine_rocks::RocksEngine;
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use test_raftstore::MockRaftStoreRouter;
+    use tikv_util::worker::dummy_scheduler;
+
+    use crate::{
+        checkpoint_manager::tests::MockPdClient, endpoint, endpoint::Endpoint, metadata::test, Task,
+    };
+
+    #[tokio::test]
+    async fn test_start() {
+        let cli = test::test_meta_cli();
+        let (sched, mut rx) = dummy_scheduler();
+
+        let task = test::simple_task("simple_3");
+        cli.insert_task_with_range(&task, &[]).await.unwrap();
+
+        Endpoint::<_, MockRegionInfoProvider, RocksEngine, MockRaftStoreRouter, MockPdClient>::start_and_watch_tasks(cli, sched).await.unwrap();
+
+        let _t1 = rx.recv().unwrap();
+        let t2 = rx.recv().unwrap();
+        match t2 {
+            Task::WatchTask(t) => match t {
+                endpoint::TaskOp::AddTask(t) => {
+                    assert_eq!(t.info, task.info);
+                    assert!(!t.is_paused);
+                }
+                _ => panic!("not match TaskOp type"),
+            },
+            _ => panic!("not match Task type {:?}", t2),
+        }
+    }
+}
