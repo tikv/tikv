@@ -318,7 +318,7 @@ impl TwoPhaseResolver {
     /// try to get one of the key of the oldest lock in the resolver.
     pub fn sample_far_lock(&self) -> Option<Arc<[u8]>> {
         let (_, keys) = self.resolver.locks().first_key_value()?;
-        keys.iter().cloned().next()
+        keys.iter().next().cloned()
     }
 
     pub fn in_phase_one(&self) -> bool {
