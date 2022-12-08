@@ -107,41 +107,52 @@ where
         req: RaftCmdRequest,
     ) -> std::result::Result<Option<RegionSnapshot<E::Snapshot>>, RaftCmdResponse> {
         match self.pre_propose_raft_command(&req) {
-            Ok(Some((mut delegate, policy))) => match policy {
-                RequestPolicy::ReadLocal => {
-                    let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
-                    // Ensures the snapshot is acquired before getting the time
-                    atomic::fence(atomic::Ordering::Release);
-                    let snapshot_ts = monotonic_raw_now();
+            Ok(Some((mut delegate, policy))) => {
+                let snap = match policy {
+                    RequestPolicy::ReadLocal => {
+                        let region = Arc::clone(&delegate.region);
+                        let snap =
+                            RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
+                        // Ensures the snapshot is acquired before getting the time
+                        atomic::fence(atomic::Ordering::Release);
+                        let snapshot_ts = monotonic_raw_now();
 
-                    if !delegate.is_in_leader_lease(snapshot_ts) {
-                        return Ok(None);
+                        if !delegate.is_in_leader_lease(snapshot_ts) {
+                            return Ok(None);
+                        }
+
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_requests.inc());
+
+                        // Try renew lease in advance
+                        self.maybe_renew_lease_in_advance(&delegate, &req, snapshot_ts);
+                        snap
                     }
+                    RequestPolicy::StaleRead => {
+                        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+                        delegate.check_stale_read_safe(read_ts)?;
 
-                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
+                        let region = Arc::clone(&delegate.region);
+                        let snap =
+                            RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
 
-                    // Try renew lease in advance
-                    self.maybe_renew_lease_in_advance(&delegate, &req, snapshot_ts);
-                    Ok(Some(snap))
-                }
-                RequestPolicy::StaleRead => {
-                    let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                    delegate.check_stale_read_safe(read_ts)?;
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_requests.inc());
 
-                    let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
+                        delegate.check_stale_read_safe(read_ts)?;
 
-                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
+                        snap
+                    }
+                    _ => unreachable!(),
+                };
 
-                    delegate.check_stale_read_safe(read_ts)?;
+                snap.txn_ext = Some(delegate.txn_ext.clone());
+                snap.bucket_meta = delegate.bucket_meta.clone();
 
-                    TLS_LOCAL_READ_METRICS
-                        .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
-                    Ok(Some(snap))
-                }
-                _ => unreachable!(),
-            },
+                Ok(Some(snap))
+            }
             Ok(None) => Ok(None),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
