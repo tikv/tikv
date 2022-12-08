@@ -221,8 +221,9 @@ impl RunningState {
                     .destroy_tablet(region.get_id(), Some(RAFT_INIT_LOG_INDEX), &path)
                     .unwrap();
             }
-            registry
-                .load(region.get_id(), RAFT_INIT_LOG_INDEX, true)
+            // Create the tablet without loading it in cache.
+            factory
+                .open_tablet(region.get_id(), Some(RAFT_INIT_LOG_INDEX), &path)
                 .unwrap();
         }
 
