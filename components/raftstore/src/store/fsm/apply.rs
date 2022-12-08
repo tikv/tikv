@@ -3552,7 +3552,7 @@ where
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
     Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
-    Replay {
+    ApplyGap {
         start: Instant,
         apply: Apply<Callback<EK::Snapshot>>,
     },
@@ -3581,8 +3581,8 @@ where
         })
     }
 
-    pub fn replay(apply: Apply<Callback<EK::Snapshot>>) -> Msg<EK> {
-        Msg::Replay {
+    pub fn apply_gap(apply: Apply<Callback<EK::Snapshot>>) -> Msg<EK> {
+        Msg::ApplyGap {
             start: Instant::now(),
             apply,
         }
@@ -3611,7 +3611,7 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
-            Msg::Replay { apply, .. } => write!(f, "[region {}] replay", apply.region_id),
+            Msg::ApplyGap { apply, .. } => write!(f, "[region {}] replay", apply.region_id),
             Msg::Recover(region_id) => {
                 write!(f, "[region {}] recover apply", region_id)
             }
@@ -4128,7 +4128,7 @@ where
                         batch_apply = Some(apply);
                     }
                 }
-                Msg::Replay { start, apply } => {
+                Msg::ApplyGap { start, apply } => {
                     self.delegate.wait_data = false;
                     let apply_wait = start.saturating_elapsed();
                     apply_ctx.apply_wait.observe(apply_wait.as_secs_f64());
@@ -4575,7 +4575,7 @@ where
                 }
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => return,
-                Msg::Replay { apply, .. } => {
+                Msg::ApplyGap { apply, .. } => {
                     info!(
                         "target region is not found, drop proposals";
                         "region_id" => apply.region_id
@@ -4719,7 +4719,7 @@ mod memtrace {
                 | Msg::Change { .. } => 0,
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => 0,
-                Msg::Replay { .. } => 0,
+                Msg::ApplyGap { .. } => 0,
                 Msg::Recover { .. } => 0,
             }
         }

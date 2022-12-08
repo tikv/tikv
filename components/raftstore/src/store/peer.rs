@@ -2590,7 +2590,7 @@ where
                                     self.region_buckets.as_ref().map(|b| b.meta.clone()),
                                 );
                                 ctx.apply_router
-                                    .schedule_task(self.region_id, ApplyTask::replay(apply));
+                                    .schedule_task(self.region_id, ApplyTask::apply_gap(apply));
                             }
                             Err(e) => {
                                 panic!("replay failed to get entries, {:?}", e)
