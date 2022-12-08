@@ -567,10 +567,12 @@ mod tests {
         apply.schedule_gen_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.on_snapshot_generated(res);
-        let snap = match *s.snap_state.borrow() {
+        assert_eq!(s.snapshot(0, 8).unwrap_err(), unavailable);
+        let (snap, to_peer_id) = match *s.snap_state.borrow() {
             SnapState::Generated(ref snap) => *snap.clone(),
             ref s => panic!("unexpected state: {:?}", s),
         };
+        assert_eq!(7, to_peer_id);
         assert_eq!(snap.get_metadata().get_index(), 0);
         assert_eq!(snap.get_metadata().get_term(), 0);
         assert_eq!(snap.get_data().is_empty(), false);
@@ -579,7 +581,7 @@ mod tests {
         assert!(checkpointer_path.exists());
 
         // Test cancel snapshot
-        let snap = s.snapshot(0, 0);
+        let snap = s.snapshot(0, 7);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);

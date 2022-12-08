@@ -53,7 +53,7 @@ pub enum SnapState {
         canceled: Arc<AtomicBool>,
         index: Arc<AtomicU64>,
     },
-    Generated(Box<Snapshot>),
+    Generated(Box<(Snapshot, u64)>),
 }
 
 impl PartialEq for SnapState {
@@ -217,9 +217,18 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 }
             }
             SnapState::Generated(ref s) => {
+                if s.1 != to {
+                    info!(self.logger(),
+                        "need previous peer to call the snapshot";
+                        "previous_peer_id" => s.1,
+                    );
+                    return Err(raft::Error::Store(
+                        raft::StorageError::SnapshotTemporarilyUnavailable,
+                    ));
+                }
                 let SnapState::Generated(snap) = mem::replace(&mut *snap_state, SnapState::Relax) else { unreachable!() };
-                if self.validate_snap(&snap, request_index) {
-                    return Ok(*snap);
+                if self.validate_snap(&snap.0, request_index) {
+                    return Ok(snap.0);
                 }
             }
             _ => {}
@@ -337,11 +346,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             ref index,
          } = *snap_state else { return false };
 
-        if snap.get_metadata().get_index() < index.load(Ordering::SeqCst) {
+        if snap.0.get_metadata().get_index() < index.load(Ordering::SeqCst) {
             warn!(
                 self.logger(),
                 "snapshot is staled, skip";
-                "snap index" => snap.get_metadata().get_index(),
+                "snap index" => snap.0.get_metadata().get_index(),
                 "required index" => index.load(Ordering::SeqCst),
             );
             return false;
