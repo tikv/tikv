@@ -931,7 +931,7 @@ pub fn flush_engine_iostall_properties(engine: &DB, name: &str) {
     }
 }
 
-pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool) {
+pub fn flush_engine_properties(engine: &DB, name: &str) {
     for cf in engine.cf_names() {
         let handle = crate::util::get_cf_handle(engine, cf).unwrap();
         // It is important to monitor each cf's size, especially the "raft" and "lock"
@@ -940,13 +940,6 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         STORE_ENGINE_SIZE_GAUGE_VEC
             .with_label_values(&[name, cf])
             .set(cf_used_size as i64);
-
-        if !shared_block_cache {
-            let block_cache_usage = engine.get_block_cache_usage_cf(handle);
-            STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
-                .with_label_values(&[name, cf])
-                .set(block_cache_usage as i64);
-        }
 
         let blob_cache_usage = engine.get_blob_cache_usage_cf(handle);
         STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
@@ -1110,15 +1103,13 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
             .set(d as i64);
     }
 
-    if shared_block_cache {
-        // Since block cache is shared, getting cache size from any CF is fine. Here we
-        // get from default CF.
-        let handle = crate::util::get_cf_handle(engine, CF_DEFAULT).unwrap();
-        let block_cache_usage = engine.get_block_cache_usage_cf(handle);
-        STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
-            .with_label_values(&[name, "all"])
-            .set(block_cache_usage as i64);
-    }
+    // Since block cache is shared, getting cache size from any CF is fine. Here we
+    // get from default CF.
+    let handle = crate::util::get_cf_handle(engine, CF_DEFAULT).unwrap();
+    let block_cache_usage = engine.get_block_cache_usage_cf(handle);
+    STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+        .with_label_values(&[name, "all"])
+        .set(block_cache_usage as i64);
 }
 
 // For property metrics
@@ -1627,8 +1618,7 @@ mod tests {
             flush_engine_histogram_metrics(*tp, HistogramData::default(), "kv");
         }
 
-        let shared_block_cache = false;
-        flush_engine_properties(engine.as_inner(), "kv", shared_block_cache);
+        flush_engine_properties(engine.as_inner(), "kv");
         let handle = engine.as_inner().cf_handle("default").unwrap();
         let info = engine
             .as_inner()

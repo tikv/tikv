@@ -37,7 +37,7 @@ pub trait ApplyResReporter {
 impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for Mailbox<F, S> {
     fn report(&self, apply_res: ApplyRes) {
         // TODO: check shutdown.
-        self.force_send(PeerMsg::ApplyRes(apply_res)).unwrap();
+        let _ = self.force_send(PeerMsg::ApplyRes(apply_res));
     }
 }
 

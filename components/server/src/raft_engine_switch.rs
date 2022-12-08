@@ -237,6 +237,7 @@ mod tests {
         cfg.raft_store.raftdb_path = raftdb_path.to_str().unwrap().to_owned();
         cfg.raftdb.wal_dir = raftdb_wal_path.to_str().unwrap().to_owned();
         cfg.raft_engine.mut_config().dir = raft_engine_path.to_str().unwrap().to_owned();
+        let cache = cfg.storage.block_cache.build_shared_cache();
 
         // Dump logs from RocksEngine to RaftLogEngine.
         let raft_engine = RaftLogEngine::new(
@@ -251,7 +252,7 @@ mod tests {
             let raftdb = engine_rocks::util::new_engine_opt(
                 &cfg.raft_store.raftdb_path,
                 cfg.raftdb.build_opt(),
-                cfg.raftdb.build_cf_opts(&None),
+                cfg.raftdb.build_cf_opts(&cache),
             )
             .unwrap();
             let mut batch = raftdb.log_batch(0);

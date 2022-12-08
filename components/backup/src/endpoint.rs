@@ -330,6 +330,7 @@ impl BackupRange {
         assert!(!ctx.get_replica_read());
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
+            allowed_in_flashback: self.region.is_in_flashback,
             ..Default::default()
         };
 

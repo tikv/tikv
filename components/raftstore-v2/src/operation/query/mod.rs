@@ -388,7 +388,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // V2 doesn't persist commit index and term, fill them with in-memory values.
         meta.raft_apply.commit_index = cmp::min(
             self.raft_group().raft.raft_log.committed,
-            self.raft_group().raft.raft_log.persisted,
+            self.persisted_index(),
         );
         meta.raft_apply.commit_term = self
             .raft_group()
@@ -426,8 +426,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if progress_to_be_updated && self.is_leader() {
             // TODO: add coprocessor_host hook
             let progress = ReadProgress::applied_term(applied_term);
-            // TODO: remove it
-            self.add_reader_if_necessary(&ctx.store_meta);
             let mut meta = ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id()).unwrap();
             self.maybe_update_read_progress(reader, progress);

@@ -62,7 +62,6 @@ pub fn new_debug_executor(
         .map(Arc::new);
 
     let cache = cfg.storage.block_cache.build_shared_cache();
-    let shared_block_cache = cache.is_some();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
@@ -75,11 +74,10 @@ pub fn new_debug_executor(
         .build_cf_opts(&cache, None, cfg.storage.api_version());
     let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
     let kv_path = kv_path.to_str().unwrap();
-    let mut kv_db = match new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {
+    let kv_db = match new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {
         Ok(db) => db,
         Err(e) => handle_engine_error(e),
     };
-    kv_db.set_shared_block_cache(shared_block_cache);
 
     let cfg_controller = ConfigController::default();
     if !cfg.raft_engine.enable {
@@ -91,11 +89,10 @@ pub fn new_debug_executor(
             error!("raft db not exists: {}", raft_path);
             tikv_util::logger::exit_process_gracefully(-1);
         }
-        let mut raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
+        let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
             Ok(db) => db,
             Err(e) => handle_engine_error(e),
         };
-        raft_db.set_shared_block_cache(shared_block_cache);
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {

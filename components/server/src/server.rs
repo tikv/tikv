@@ -807,7 +807,6 @@ where
             tikv::config::Module::Storage,
             Box::new(StorageConfigManger::new(
                 self.tablet_factory.as_ref().unwrap().clone(),
-                self.config.storage.block_cache.shared,
                 ttl_scheduler,
                 flow_controller,
                 storage.get_scheduler(),
@@ -1676,14 +1675,9 @@ where
 }
 
 pub trait ConfiguredRaftEngine: RaftEngine {
-    fn build(
-        _: &TikvConfig,
-        _: &Arc<Env>,
-        _: &Option<Arc<DataKeyManager>>,
-        _: &Option<Cache>,
-    ) -> Self;
+    fn build(_: &TikvConfig, _: &Arc<Env>, _: &Option<Arc<DataKeyManager>>, _: &Cache) -> Self;
     fn as_rocks_engine(&self) -> Option<&RocksEngine>;
-    fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool);
+    fn register_config(&self, _cfg_controller: &mut ConfigController);
 }
 
 impl<T: RaftEngine> ConfiguredRaftEngine for T {
@@ -1691,14 +1685,14 @@ impl<T: RaftEngine> ConfiguredRaftEngine for T {
         _: &TikvConfig,
         _: &Arc<Env>,
         _: &Option<Arc<DataKeyManager>>,
-        _: &Option<Cache>,
+        _: &Cache,
     ) -> Self {
         unimplemented!()
     }
     default fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         None
     }
-    default fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool) {}
+    default fn register_config(&self, _cfg_controller: &mut ConfigController) {}
 }
 
 impl ConfiguredRaftEngine for RocksEngine {
@@ -1706,7 +1700,7 @@ impl ConfiguredRaftEngine for RocksEngine {
         config: &TikvConfig,
         env: &Arc<Env>,
         key_manager: &Option<Arc<DataKeyManager>>,
-        block_cache: &Option<Cache>,
+        block_cache: &Cache,
     ) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &config.storage.data_dir,
@@ -1720,10 +1714,8 @@ impl ConfiguredRaftEngine for RocksEngine {
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-        let mut raftdb =
-            engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
-                .expect("failed to open raftdb");
-        raftdb.set_shared_block_cache(block_cache.is_some());
+        let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
+            .expect("failed to open raftdb");
 
         if should_dump {
             let raft_engine =
@@ -1741,14 +1733,10 @@ impl ConfiguredRaftEngine for RocksEngine {
         Some(self)
     }
 
-    fn register_config(&self, cfg_controller: &mut ConfigController, share_cache: bool) {
+    fn register_config(&self, cfg_controller: &mut ConfigController) {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DbConfigManger::new(
-                Arc::new(self.clone()),
-                DbType::Raft,
-                share_cache,
-            )),
+            Box::new(DbConfigManger::new(Arc::new(self.clone()), DbType::Raft)),
         );
     }
 }
@@ -1758,7 +1746,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
         config: &TikvConfig,
         env: &Arc<Env>,
         key_manager: &Option<Arc<DataKeyManager>>,
-        block_cache: &Option<Cache>,
+        block_cache: &Cache,
     ) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &config.storage.data_dir,
@@ -1812,16 +1800,13 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         );
 
         // Create kv engine.
-        let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
+        let builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path, block_cache)
             .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
                 router: Mutex::new(self.router.clone()),
             }))
             .region_info_accessor(self.region_info_accessor.clone())
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
-        if let Some(cache) = block_cache {
-            builder = builder.block_cache(cache);
-        }
         let factory = Arc::new(builder.build());
         let kv_engine = factory
             .create_shared_db()
@@ -1831,16 +1816,10 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DbConfigManger::new(
-                factory.clone(),
-                DbType::Kv,
-                self.config.storage.block_cache.shared,
-            )),
+            Box::new(DbConfigManger::new(factory.clone(), DbType::Kv)),
         );
         self.tablet_factory = Some(factory.clone());
-        engines
-            .raft
-            .register_config(cfg_controller, self.config.storage.block_cache.shared);
+        engines.raft.register_config(cfg_controller);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
             factory,
@@ -2129,8 +2108,9 @@ mod test {
         config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
+        let cache = config.storage.block_cache.build_shared_cache();
 
-        let builder = KvEngineFactoryBuilder::new(env, &config, path.path());
+        let builder = KvEngineFactoryBuilder::new(env, &config, path.path(), cache);
         let factory = builder.build_v2();
 
         for i in 1..6 {
