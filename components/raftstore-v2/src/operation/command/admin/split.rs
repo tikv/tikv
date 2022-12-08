@@ -264,7 +264,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .open_tablet(region_id, Some(log_index), OpenOptions::default())
             .unwrap();
         // Remove the old write batch.
-        self.write_batch_mut().take();
+        self.write_batch.take();
         self.publish_tablet(tablet);
 
         self.region_state_mut()
@@ -843,16 +843,21 @@ mod test {
         // Split will create checkpoint tablet, so if there are some writes before
         // split, they should be flushed immediately.
         apply.apply_put(CF_DEFAULT, b"k04", b"v4").unwrap();
-        assert!(!WriteBatch::is_empty(
-            apply.write_batch_mut().as_ref().unwrap()
-        ));
+        assert!(!WriteBatch::is_empty(apply.write_batch.as_ref().unwrap()));
         splits.mut_requests().clear();
         splits
             .mut_requests()
             .push(new_split_req(b"k05", 70, vec![71, 72, 73]));
         req.set_splits(splits);
         apply.apply_batch_split(&req, 50).unwrap();
-        assert!(apply.write_batch_mut().is_none());
-        assert_eq!(apply.tablet().get_value(b"k04").unwrap().unwrap(), b"v4");
+        assert!(apply.write_batch.is_none());
+        assert_eq!(
+            apply
+                .tablet()
+                .get_value(&keys::data_key(b"k04"))
+                .unwrap()
+                .unwrap(),
+            b"v4"
+        );
     }
 }

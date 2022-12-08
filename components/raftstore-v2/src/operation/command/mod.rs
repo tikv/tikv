@@ -342,14 +342,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
             if !e.get_data().is_empty() {
                 let mut set_save_point = false;
-                if let Some(wb) = self.write_batch_mut() {
+                if let Some(wb) = &mut self.write_batch {
                     wb.set_save_point();
                     set_save_point = true;
                 }
                 let resp = match self.apply_entry(&e).await {
                     Ok(resp) => resp,
                     Err(e) => {
-                        if let Some(wb) = self.write_batch_mut() {
+                        if let Some(wb) = &mut self.write_batch {
                             if set_save_point {
                                 wb.rollback_to_save_point().unwrap();
                             } else {
@@ -501,7 +501,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
     #[inline]
     pub fn flush(&mut self) {
-        if let Some(wb) = self.write_batch_mut() && !wb.is_empty() {
+        if let Some(wb) = &mut self.write_batch && !wb.is_empty() {
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);
             if let Err(e) = wb.write_opt(&write_opt) {
@@ -510,7 +510,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             if wb.data_size() <= APPLY_WB_SHRINK_SIZE {
                 wb.clear();
             } else {
-                self.write_batch_mut().take();
+                self.write_batch.take();
             }
         }
         let callbacks = self.callbacks_mut();

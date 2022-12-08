@@ -7,17 +7,19 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
+    time::{Duration, Instant},
 };
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, TabletFactory};
-use futures::{Future, StreamExt};
+use futures::{compat::Future01CompatExt, Future, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use raftstore::store::ReadTask;
 use slog::Logger;
 use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
+    timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
 
@@ -92,9 +94,22 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
 impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
     pub async fn handle_all_tasks(&mut self) {
         loop {
-            let mut task = match self.receiver.next().await {
-                Some(t) => t,
-                None => return,
+            let timeout = GLOBAL_TIMER_HANDLE
+                .delay(Instant::now() + Duration::from_secs(10))
+                .compat();
+            let res = futures::select! {
+                res = self.receiver.next().fuse() => res,
+                _ = timeout.fuse() => None,
+            };
+            let mut task = match res {
+                Some(r) => r,
+                None => {
+                    self.apply.release_memory();
+                    match self.receiver.next().await {
+                        Some(t) => t,
+                        None => return,
+                    }
+                }
             };
             loop {
                 match task {
