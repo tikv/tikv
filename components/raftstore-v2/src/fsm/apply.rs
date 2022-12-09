@@ -12,7 +12,7 @@ use std::{
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{KvEngine, TabletFactory};
+use engine_traits::{KvEngine, TabletRegistry};
 use futures::{compat::Future01CompatExt, Future, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use raftstore::store::ReadTask;
@@ -26,7 +26,6 @@ use tikv_util::{
 use crate::{
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
-    tablet::CachedTablet,
 };
 
 /// A trait for reporting apply result.
@@ -66,8 +65,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
-        remote_tablet: CachedTablet<EK>,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
@@ -76,8 +74,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             peer,
             region_state,
             res_reporter,
-            remote_tablet,
-            tablet_factory,
+            tablet_registry,
             read_scheduler,
             logger,
         );

@@ -8,7 +8,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
+use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
@@ -38,7 +38,6 @@ use crate::{
     fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
-    tablet::CachedTablet,
     worker::PdTask,
     Result,
 };
@@ -99,7 +98,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// If peer is destroyed, `None` is returned.
     pub fn new(
         cfg: &Config,
-        tablet_factory: &dyn TabletFactory<EK>,
+        tablet_registry: &TabletRegistry<EK>,
         storage: Storage<EK, ER>,
     ) -> Result<Self> {
         let logger = storage.logger().clone();
@@ -110,33 +109,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
+        let cached_tablet = tablet_registry.get_or_default(region_id);
         // Another option is always create tablet even if tablet index is 0. But this
         // can introduce race when gc old tablet and create new peer.
-        let tablet = if tablet_index != 0 {
-            if !tablet_factory.exists(region_id, tablet_index) {
-                return Err(box_err!(
-                    "missing tablet {} for region {}",
-                    tablet_index,
-                    region_id
-                ));
-            }
+        if tablet_index != 0 {
             // TODO: Perhaps we should stop create the tablet automatically.
-            Some(tablet_factory.open_tablet(
-                region_id,
-                Some(tablet_index),
-                OpenOptions::default().set_create(true),
-            )?)
-        } else {
-            None
-        };
-
-        let tablet = CachedTablet::new(tablet);
+            tablet_registry.load(region_id, tablet_index, false)?;
+        }
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
-            tablet,
+            tablet: cached_tablet,
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),

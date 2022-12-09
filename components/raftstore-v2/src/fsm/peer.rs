@@ -6,7 +6,7 @@ use std::borrow::Cow;
 
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use raftstore::store::{Config, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
@@ -39,10 +39,10 @@ pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
 impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     pub fn new(
         cfg: &Config,
-        tablet_factory: &dyn TabletFactory<EK>,
+        tablet_registry: &TabletRegistry<EK>,
         storage: Storage<EK, ER>,
     ) -> Result<SenderFsmPair<EK, ER>> {
-        let peer = Peer::new(cfg, tablet_factory, storage)?;
+        let peer = Peer::new(cfg, tablet_registry, storage)?;
         info!(peer.logger, "create peer");
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(PeerFsm {

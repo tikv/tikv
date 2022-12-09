@@ -2,9 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use engine_traits::{
-    IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable, TabletAccessor,
-};
+use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::{
@@ -96,16 +94,6 @@ impl KvEngine for RocksEngine {
     fn bad_downcast<T: 'static>(&self) -> &T {
         let e: &dyn Any = &self.db;
         e.downcast_ref().expect("bad engine downcast")
-    }
-}
-
-impl TabletAccessor<RocksEngine> for RocksEngine {
-    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
-        f(0, 0, self);
-    }
-
-    fn is_single_engine(&self) -> bool {
-        true
     }
 }
 

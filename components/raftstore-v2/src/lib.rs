@@ -32,7 +32,6 @@ mod fsm;
 mod operation;
 mod raft;
 pub mod router;
-mod tablet;
 mod worker;
 
 pub(crate) use batch::StoreContext;

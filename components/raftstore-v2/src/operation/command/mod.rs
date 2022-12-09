@@ -59,7 +59,7 @@ mod admin;
 mod control;
 mod write;
 
-pub use admin::{AdminCmdResult, SplitInit, SplitResult};
+pub use admin::{AdminCmdResult, SplitInit, SplitResult, SPLIT_PREFIX};
 pub use control::ProposalControl;
 pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
@@ -129,8 +129,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.peer().clone(),
             region_state,
             mailbox,
-            tablet,
-            store_ctx.tablet_factory.clone(),
+            store_ctx.tablet_registry.clone(),
             read_scheduler,
             logger,
         );

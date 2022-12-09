@@ -22,41 +22,17 @@ use crate::{
     batch::StoreContext,
     raft::Peer,
     router::{StoreMsg, StoreTick},
-    tablet::CachedTablet,
 };
 
-pub struct StoreMeta<E>
-where
-    E: KvEngine,
-{
+#[derive(Default)]
+pub struct StoreMeta {
     pub store_id: Option<u64>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
-    /// region_id -> tablet cache
-    pub tablet_caches: HashMap<u64, CachedTablet<E>>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
 }
 
-impl<E> StoreMeta<E>
-where
-    E: KvEngine,
-{
-    pub fn new() -> StoreMeta<E> {
-        StoreMeta {
-            store_id: None,
-            readers: HashMap::default(),
-            tablet_caches: HashMap::default(),
-            region_read_progress: RegionReadProgressRegistry::new(),
-        }
-    }
-}
-
-impl<E: KvEngine> Default for StoreMeta<E> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 pub struct Store {
     id: u64,
     // Unix time when it's started.
