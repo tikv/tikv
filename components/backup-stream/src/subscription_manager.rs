@@ -523,6 +523,9 @@ where
             }
 
             Some(for_task) => {
+                // the extra failpoint is used to pause the thread.
+                // once it triggered "pause" it cannot trigger early return then.
+                fail::fail_point!("try_start_observe0");
                 fail::fail_point!("try_start_observe", |_| {
                     Err(Error::Other(box_err!("Nature is boring")))
                 });

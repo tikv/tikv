@@ -19,7 +19,7 @@ use backup_stream::{
     },
     observer::BackupStreamObserver,
     router::Router,
-    Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Service, Task,
+    utils, Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Service, Task,
 };
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
@@ -383,7 +383,7 @@ impl Suite {
         rx.into_iter()
             .map(|r| match r {
                 GetCheckpointResult::Ok { checkpoint, region } => {
-                    info!("getting checkpoint"; "checkpoint" => %checkpoint, "region" => ?region);
+                    info!("getting checkpoint"; "checkpoint" => %checkpoint, utils::slog_region(&region));
                     checkpoint.into_inner()
                 }
                 GetCheckpointResult::NotFound { .. }
@@ -1285,5 +1285,37 @@ mod test {
             suite.flushed_files.path(),
             round1.union(&round2).map(|x| x.as_slice()),
         ));
+    }
+
+    #[test]
+    fn failure_and_split() {
+        test_util::init_log_for_test();
+
+        let mut suite = super::SuiteBuilder::new_named("failure_and_split")
+            .nodes(1)
+            .build();
+        fail::cfg("try_start_observe0", "pause").unwrap();
+
+        // write data before the task starting, for testing incremental scanning.
+        let round1 = run_async_test(suite.write_records(0, 128, 1));
+        suite.must_register_task(1, "failure_and_split");
+        suite.sync();
+
+        suite.must_split(&make_split_key_at_record(1, 42));
+        suite.sync();
+        std::thread::sleep(Duration::from_millis(200));
+        fail::cfg("try_start_observe", "2*return").unwrap();
+        fail::cfg("try_start_observe0", "off").unwrap();
+
+        let round2 = run_async_test(suite.write_records(256, 128, 1));
+        suite.force_flush_files("failure_and_split");
+        suite.wait_for_flush();
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(Vec::as_slice),
+        ));
+        let cp = suite.global_checkpoint();
+        assert!(cp > 512, "it is {}", cp);
+        suite.cluster.shutdown();
     }
 }

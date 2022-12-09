@@ -15,6 +15,11 @@ use crate::{debug, metrics::TRACK_REGION, utils};
 #[derive(Clone, Default, Debug)]
 pub struct SubscriptionTracer(Arc<DashMap<u64, RegionSubscription>>);
 
+enum SubscribeState {
+    Pending(Region),
+    Running(RegionSubscription),
+}
+
 pub struct RegionSubscription {
     pub meta: Region,
     pub(crate) handle: ObserveHandle,
@@ -135,7 +140,7 @@ impl SubscriptionTracer {
         handle: ObserveHandle,
         start_ts: Option<TimeStamp>,
     ) {
-        info!("start listen stream from store"; "observer" => ?handle, "region_id" => %region.get_id());
+        info!("start listen stream from store"; "observer" => ?handle);
         TRACK_REGION.inc();
         if let Some(mut o) = self.0.insert(
             region.get_id(),
@@ -214,7 +219,7 @@ impl SubscriptionTracer {
             Some(sub) => sub,
             None => {
                 warn!("backup stream observer refreshing void subscription."; utils::slog_region(new_region));
-                return true;
+                return false;
             }
         };
 
