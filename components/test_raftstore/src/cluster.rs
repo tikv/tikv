@@ -1058,6 +1058,27 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer) {
+        let timer = Instant::now();
+        let mut state;
+        loop {
+            state = self.region_local_state(region_id, peer.get_store_id());
+            if state.get_state() == PeerState::Tombstone
+                && state.get_region().get_peers().contains(&peer)
+            {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "{:?} is still not gc in region {} {:?}",
+            peer, region_id, state
+        );
+    }
+
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
@@ -1189,6 +1210,15 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn add_recv_filter<F: FilterFactory>(&self, factory: F) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            for filter in factory.generate(node_id) {
+                sim.add_recv_filter(node_id, filter);
+            }
+        }
+    }
+
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
@@ -1237,6 +1267,13 @@ impl<T: Simulator> Cluster<T> {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
             sim.clear_send_filters(node_id);
+        }
+    }
+
+    pub fn clear_recv_filters(&mut self) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            sim.clear_recv_filters(node_id);
         }
     }
 
