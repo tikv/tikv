@@ -12,7 +12,10 @@ use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
-use crate::config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::{
+    config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    storage::config::EngineType,
+};
 
 struct FactoryInner {
     env: Arc<Env>,
@@ -119,11 +122,12 @@ impl KvEngineFactory {
         db_opts
     }
 
-    fn cf_opts(&self) -> Vec<(&str, RocksCfOptions)> {
+    fn cf_opts(&self, for_engine: EngineType) -> Vec<(&str, RocksCfOptions)> {
         self.inner.rocksdb_config.build_cf_opts(
             &self.inner.block_cache,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
+            for_engine,
         )
     }
 
@@ -132,7 +136,7 @@ impl KvEngineFactory {
     /// It will always create in path/DEFAULT_DB_SUB_DIR.
     pub fn create_shared_db(&self, path: &Path) -> Result<RocksEngine> {
         let mut db_opts = self.db_opts();
-        let cf_opts = self.cf_opts();
+        let cf_opts = self.cf_opts(EngineType::RaftKv);
         if let Some(listener) = &self.inner.flow_listener {
             db_opts.add_event_listener(listener.clone());
         }
@@ -149,7 +153,7 @@ impl KvEngineFactory {
 impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn open_tablet(&self, id: u64, suffix: Option<u64>, path: &Path) -> Result<RocksEngine> {
         let mut db_opts = self.db_opts();
-        let cf_opts = self.cf_opts();
+        let cf_opts = self.cf_opts(EngineType::RaftKv2);
         if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = suffix {
             db_opts.add_event_listener(listener.clone_with(id, suffix));
         }
@@ -167,7 +171,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         info!("destroy tablet"; "path" => %path.display(), "id" => id, "suffix" => ?suffix);
         // Create kv engine.
         let _db_opts = self.db_opts();
-        let _cf_opts = self.cf_opts();
+        let _cf_opts = self.cf_opts(EngineType::RaftKv2);
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
         // engine_rocks::util::destroy_engine(
         //   path.to_str().unwrap(),

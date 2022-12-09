@@ -376,7 +376,7 @@ mod tests {
         raft::RaftTestEngine,
     };
     use engine_traits::{
-        KvEngine, RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletRegistry, ALL_CFS,
+        KvEngine, RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletRegistry, DATA_CFS,
     };
     use kvproto::{
         metapb::{Peer, Region},
@@ -476,7 +476,7 @@ mod tests {
         raft_engine.consume(&mut wb, true).unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
         let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
         let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
@@ -523,7 +523,7 @@ mod tests {
         mgr.init().unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
         let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
         reg.load(region.get_id(), 10, true).unwrap();

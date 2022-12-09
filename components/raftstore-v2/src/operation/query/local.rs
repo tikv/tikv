@@ -438,7 +438,7 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, TestTabletFactory},
     };
-    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, DATA_CFS};
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use raftstore::store::{
@@ -546,7 +546,7 @@ mod tests {
 
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test-local-reader")
             .tempdir()
@@ -737,7 +737,7 @@ mod tests {
     fn test_read_delegate() {
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test-local-reader")
             .tempdir()

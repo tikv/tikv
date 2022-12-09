@@ -310,9 +310,12 @@ pub fn create_local_engine_service(
     // init rocksdb / kv db
     let mut db_opts = config.rocksdb.build_opt();
     db_opts.set_env(env.clone());
-    let cf_opts = config
-        .rocksdb
-        .build_cf_opts(&block_cache, None, config.storage.api_version());
+    let cf_opts = config.rocksdb.build_cf_opts(
+        &block_cache,
+        None,
+        config.storage.api_version(),
+        config.storage.engine,
+    );
     let db_path = config
         .infer_kv_engine_path(None)
         .map_err(|e| format!("infer kvdb path: {}", e))?;

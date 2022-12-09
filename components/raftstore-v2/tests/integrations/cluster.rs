@@ -20,7 +20,7 @@ use engine_test::{
     kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::{TabletRegistry, ALL_CFS};
+use engine_traits::{TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
     metapb::{self, RegionEpoch, Store},
@@ -46,6 +46,18 @@ use tikv_util::{
     store::new_peer,
 };
 use txn_types::WriteBatchFlags;
+
+pub fn check_skip_wal(path: &str) {
+    let mut found = false;
+    for f in std::fs::read_dir(path).unwrap() {
+        let e = f.unwrap();
+        if e.path().extension().map_or(false, |ext| ext == "log") {
+            found = true;
+            assert_eq!(e.metadata().unwrap().len(), 0, "{}", e.path().display());
+        }
+    }
+    assert!(found, "no WAL found in {}", path);
+}
 
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
@@ -209,7 +221,7 @@ impl RunningState {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
     ) -> (TestRouter, TabletSnapManager, Self) {
-        let cf_opts = ALL_CFS
+        let cf_opts = DATA_CFS
             .iter()
             .copied()
             .map(|cf| (cf, CfOptions::default()))

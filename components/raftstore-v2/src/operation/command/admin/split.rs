@@ -496,7 +496,7 @@ mod test {
         kv::TestTabletFactory,
         raft,
     };
-    use engine_traits::{CfOptionsExt, Peekable, TabletRegistry, WriteBatch, ALL_CFS};
+    use engine_traits::{CfOptionsExt, Peekable, TabletRegistry, WriteBatch, DATA_CFS};
     use futures::channel::mpsc::unbounded;
     use kvproto::{
         metapb::RegionEpoch,
@@ -631,7 +631,7 @@ mod test {
 
         let logger = slog_global::borrow_global().new(o!());
         let path = TempDir::new().unwrap();
-        let cf_opts = ALL_CFS
+        let cf_opts = DATA_CFS
             .iter()
             .copied()
             .map(|cf| (cf, CfOptions::default()))
