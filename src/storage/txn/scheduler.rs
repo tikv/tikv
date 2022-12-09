@@ -68,11 +68,8 @@ use crate::{
         },
         lock_manager::{
             self,
-            lock_wait_context::LockWaitContext,
-            lock_waiting_queue::{
-                CallbackWithSharedError, DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues,
-                PessimisticLockKeyCallback,
-            },
+            lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
+            lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
             DiagnosticContext, LockManager, LockWaitToken,
         },
         metrics::*,
@@ -208,7 +205,7 @@ impl TaskContext {
 
 pub enum SchedulerTaskCallback {
     NormalRequestCallback(StorageCallback),
-    LockKeyCallbacks(Vec<CallbackWithSharedError<PessimisticLockKeyResult>>),
+    LockKeyCallbacks(Vec<PessimisticLockKeyCallback>),
 }
 
 impl SchedulerTaskCallback {
@@ -220,13 +217,13 @@ impl SchedulerTaskCallback {
                 | ProcessResult::PessimisticLockRes { res: Err(err) } => {
                     let err = SharedError::from(err);
                     for cb in cbs {
-                        cb(Err(err.clone()));
+                        cb(Err(err.clone()), false);
                     }
                 }
                 ProcessResult::PessimisticLockRes { res: Ok(v) } => {
                     assert_eq!(v.0.len(), cbs.len());
                     for (res, cb) in v.0.into_iter().zip(cbs) {
-                        cb(Ok(res))
+                        cb(Ok(res), false)
                     }
                 }
                 _ => unreachable!(),
@@ -652,9 +649,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     fn schedule_awakened_pessimistic_locks(
         &self,
-        cid: u64,
+        specified_cid: Option<u64>,
+        prepared_latches: Option<Lock>,
         mut awakened_entries: SVec<Box<LockWaitEntry>>,
-        latches: Lock,
     ) {
         let key_callbacks: Vec<_> = awakened_entries
             .iter_mut()
@@ -665,10 +662,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         // TODO: Make flow control take effect on this thing.
         self.schedule_command(
-            Some(cid),
+            specified_cid,
             cmd.into(),
             SchedulerTaskCallback::LockKeyCallbacks(key_callbacks),
-            Some(latches),
+            prepared_latches,
         );
     }
 
@@ -861,9 +858,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
             next_latches.force_assume_acquired();
             self.schedule_awakened_pessimistic_locks(
-                next_cid,
+                Some(next_cid),
+                Some(next_latches),
                 woken_up_resumable_lock_requests,
-                next_latches,
             );
         } else {
             if !tctx.woken_up_resumable_lock_requests.is_empty() {
@@ -929,7 +926,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             wait_info,
             is_first_lock,
             wait_timeout,
-            Box::new(lock_req_ctx.get_callback_for_cancellation()),
+            lock_req_ctx.get_callback_for_cancellation(),
             diag_ctx,
         );
     }
@@ -1004,19 +1001,23 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
                         },
                     )));
-                    cb(Err(e.into()));
+                    cb(Err(e.into()), false);
                 }
 
                 for f in delayed_wake_up_futures {
+                    let self2 = self1.clone();
                     self1
                         .get_sched_pool(CommandPri::High)
                         .pool
                         .spawn(async move {
                             let res = f.await;
-                            // It returns only None currently.
-                            // TODO: Handle not-none case when supporting resumable pessimistic lock
-                            // requests.
-                            assert!(res.is_none());
+                            if let Some(resumable_lock_wait_entry) = res {
+                                self2.schedule_awakened_pessimistic_locks(
+                                    None,
+                                    None,
+                                    smallvec![resumable_lock_wait_entry],
+                                );
+                            }
                         })
                         .unwrap();
                 }
@@ -1593,12 +1594,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         task_ctx.cb = Some(SchedulerTaskCallback::NormalRequestCallback(first_batch_cb));
         drop(slot);
 
+        assert!(lock_info.req_states.is_none());
+
         let lock_wait_entry = Box::new(LockWaitEntry {
             key: lock_info.key,
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
             lock_wait_token,
+            req_states: ctx.get_shared_states().clone(),
             legacy_wake_up_index: None,
             key_cb: Some(ctx.get_callback_for_blocked_key().into()),
         });
@@ -1617,6 +1621,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
             lock_wait_token: lock_info.lock_wait_token,
+            // This must be called after an execution fo AcquirePessimisticLockResumed, in which
+            // case there must be a valid req_state.
+            req_states: lock_info.req_states.unwrap(),
             legacy_wake_up_index: None,
             key_cb: Some(cb.into()),
         })

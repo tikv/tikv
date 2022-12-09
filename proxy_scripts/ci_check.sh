@@ -18,7 +18,7 @@ elif [[ $M == "testold" ]]; then
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_compact_log
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_early_apply
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_encryption
-    cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_pd_client
+    # cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_pd_client
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_pending_peers
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_transaction
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_cmd_epoch_checker

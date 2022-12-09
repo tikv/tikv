@@ -22,9 +22,10 @@ use engine_traits::{
     IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
-use external_storage_export::{compression_reader_dispatcher, encrypt_wrap_reader, RestoreConfig};
+use external_storage_export::{
+    compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
+};
 use file_system::{get_io_rate_limiter, OpenOptions};
-use futures::executor::ThreadPool;
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     import_sstpb::*,
@@ -37,15 +38,30 @@ use tikv_util::{
     sys::SysQuota,
     time::{Instant, Limiter},
 };
+use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
+    caching::cache_map::CacheMap,
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    Config, Error, Result,
+    util, Config, Error, Result,
 };
+
+#[derive(Default, Debug, Clone)]
+pub struct DownloadExt<'a> {
+    cache_key: Option<&'a str>,
+}
+
+impl<'a> DownloadExt<'a> {
+    pub fn cache_key(self, key: &'a str) -> Self {
+        Self {
+            cache_key: Some(key),
+        }
+    }
+}
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum CacheKvFile {
@@ -81,6 +97,9 @@ pub struct SstImporter {
     // TODO: lift api_version as a type parameter.
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
+
+    cached_storage: CacheMap<StorageBackend>,
+    download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: AtomicU64,
     mem_limit: ReadableSize,
@@ -94,6 +113,11 @@ impl SstImporter {
         api_version: ApiVersion,
     ) -> Result<SstImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
+        let cached_storage = CacheMap::default();
+        let download_rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        download_rt.spawn(cached_storage.gc_loop());
 
         let memory_limit = (SysQuota::memory_limit_in_bytes() as f64) * cfg.memory_use_ratio;
         info!("sst importer memory limit when apply"; "size" => ?memory_limit);
@@ -105,6 +129,8 @@ impl SstImporter {
             api_version,
             compression_types: HashMap::with_capacity(2),
             file_locks: Arc::new(DashMap::default()),
+            cached_storage,
+            download_rt,
             mem_use: AtomicU64::new(0),
             mem_limit: ReadableSize(memory_limit as u64),
         })
@@ -122,7 +148,7 @@ impl SstImporter {
         }
     }
 
-    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
+    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &Handle, db: E) {
         self.switcher.start(executor, db);
     }
 
@@ -216,7 +242,7 @@ impl SstImporter {
     //
     // This method returns the *inclusive* key range (`[start, end]`) of SST
     // file created, or returns None if the SST is empty.
-    pub fn download<E: KvEngine>(
+    pub async fn download_ext<E: KvEngine>(
         &self,
         meta: &SstMeta,
         backend: &StorageBackend,
@@ -225,6 +251,7 @@ impl SstImporter {
         crypter: Option<CipherInfo>,
         speed_limiter: Limiter,
         engine: E,
+        ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
@@ -233,7 +260,7 @@ impl SstImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
-        match self.do_download::<E>(
+        let r = self.do_download_ext::<E>(
             meta,
             backend,
             name,
@@ -241,7 +268,9 @@ impl SstImporter {
             crypter,
             &speed_limiter,
             engine,
-        ) {
+            ext,
+        );
+        match r.await {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
                 Ok(r)
@@ -275,6 +304,49 @@ impl SstImporter {
         speed_limiter: &Limiter,
         restore_config: external_storage_export::RestoreConfig,
     ) -> Result<()> {
+        self.download_rt
+            .block_on(self.async_download_file_from_external_storage(
+                file_length,
+                src_file_name,
+                dst_file,
+                backend,
+                support_kms,
+                speed_limiter,
+                "",
+                restore_config,
+            ))
+    }
+
+    /// Create an external storage by the backend, and cache it with the key.
+    /// If the cache exists, return it directly.
+    pub fn external_storage_or_cache(
+        &self,
+        backend: &StorageBackend,
+        cache_id: &str,
+    ) -> Result<Arc<dyn ExternalStorage>> {
+        // prepare to download the file from the external_storage
+        // TODO: pass a config to support hdfs
+        let ext_storage = if cache_id.is_empty() {
+            EXT_STORAGE_CACHE_COUNT.with_label_values(&["skip"]).inc();
+            let s = external_storage_export::create_storage(backend, Default::default())?;
+            Arc::from(s)
+        } else {
+            self.cached_storage.cached_or_create(cache_id, backend)?
+        };
+        Ok(ext_storage)
+    }
+
+    async fn async_download_file_from_external_storage(
+        &self,
+        file_length: u64,
+        src_file_name: &str,
+        dst_file: std::path::PathBuf,
+        backend: &StorageBackend,
+        support_kms: bool,
+        speed_limiter: &Limiter,
+        cache_key: &str,
+        restore_config: external_storage_export::RestoreConfig,
+    ) -> Result<()> {
         let start_read = Instant::now();
         if let Some(p) = dst_file.parent() {
             file_system::create_dir_all(p).or_else(|e| {
@@ -285,34 +357,22 @@ impl SstImporter {
                 }
             })?;
         }
-        // prepare to download the file from the external_storage
-        // TODO: pass a config to support hdfs
-        let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
-        let url = ext_storage.url()?.to_string();
 
-        let ext_storage: Box<dyn external_storage_export::ExternalStorage> = if support_kms {
-            if let Some(key_manager) = &self.key_manager {
-                Box::new(external_storage_export::EncryptedExternalStorage {
-                    key_manager: (*key_manager).clone(),
-                    storage: ext_storage,
-                }) as _
-            } else {
-                ext_storage as _
-            }
-        } else {
-            ext_storage as _
-        };
+        let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
+        let ext_storage = self.wrap_kms(ext_storage, support_kms);
 
-        let result = ext_storage.restore(
-            src_file_name,
-            dst_file.clone(),
-            file_length,
-            speed_limiter,
-            restore_config,
-        );
+        let result = ext_storage
+            .restore(
+                src_file_name,
+                dst_file.clone(),
+                file_length,
+                speed_limiter,
+                restore_config,
+            )
+            .await;
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         result.map_err(|e| Error::CannotReadExternalStorage {
-            url: url.to_string(),
+            url: util::url_for(&ext_storage),
             name: src_file_name.to_owned(),
             local_path: dst_file.clone(),
             err: e,
@@ -329,7 +389,7 @@ impl SstImporter {
 
         debug!("downloaded file succeed";
             "name" => src_file_name,
-            "url"  => %url,
+            "url"  => %util::url_for(&ext_storage),
         );
         Ok(())
     }
@@ -476,26 +536,24 @@ impl SstImporter {
         Ok(lock.0.clone())
     }
 
-    pub fn create_external_storage(
+    pub fn wrap_kms(
         &self,
-        backend: &StorageBackend,
+        ext_storage: Arc<dyn ExternalStorage>,
         support_kms: bool,
-    ) -> Result<Box<dyn external_storage_export::ExternalStorage>> {
-        let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
+    ) -> Arc<dyn external_storage_export::ExternalStorage> {
         // kv-files needn't are decrypted with KMS when download currently because these
         // files are not encrypted when log-backup. It is different from
         // sst-files because sst-files is encrypted when saved with rocksdb env
         // with KMS. to do: support KMS when log-backup and restore point.
-        let ext_storage = match (support_kms, self.key_manager.clone()) {
+        match (support_kms, self.key_manager.clone()) {
             (true, Some(key_manager)) => {
-                Box::new(external_storage_export::EncryptedExternalStorage {
+                Arc::new(external_storage_export::EncryptedExternalStorage {
                     key_manager,
                     storage: ext_storage,
                 })
             }
             _ => ext_storage,
-        };
-        Ok(ext_storage)
+        }
     }
 
     fn read_kv_files_from_external_storage(
@@ -771,7 +829,31 @@ impl SstImporter {
         }
     }
 
-    fn do_download<E: KvEngine>(
+    // raw download, without ext, compatibility to old tests.
+    #[cfg(test)]
+    fn download<E: KvEngine>(
+        &self,
+        meta: &SstMeta,
+        backend: &StorageBackend,
+        name: &str,
+        rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
+        speed_limiter: Limiter,
+        engine: E,
+    ) -> Result<Option<Range>> {
+        self.download_rt.block_on(self.download_ext(
+            meta,
+            backend,
+            name,
+            rewrite_rule,
+            crypter,
+            speed_limiter,
+            engine,
+            DownloadExt::default(),
+        ))
+    }
+
+    async fn do_download_ext<E: KvEngine>(
         &self,
         meta: &SstMeta,
         backend: &StorageBackend,
@@ -780,6 +862,7 @@ impl SstImporter {
         crypter: Option<CipherInfo>,
         speed_limiter: &Limiter,
         engine: E,
+        ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
 
@@ -794,15 +877,17 @@ impl SstImporter {
             ..Default::default()
         };
 
-        self.download_file_from_external_storage(
+        self.async_download_file_from_external_storage(
             meta.length,
             name,
             path.temp.clone(),
             backend,
             true,
             speed_limiter,
+            ext.cache_key.unwrap_or(""),
             restore_config,
-        )?;
+        )
+        .await?;
 
         // now validate the SST file.
         let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
@@ -1628,8 +1713,11 @@ mod tests {
         )
         .unwrap();
         let ext_storage = {
-            let inner = importer.create_external_storage(&backend, false).unwrap();
-            Arc::new(inner)
+            let inner = importer.wrap_kms(
+                importer.external_storage_or_cache(&backend, "").unwrap(),
+                false,
+            );
+            inner
         };
 
         // test do_read_kv_file()
@@ -1681,7 +1769,10 @@ mod tests {
         )
         .unwrap();
         let ext_storage = {
-            let inner = importer.create_external_storage(&backend, false).unwrap();
+            let inner = importer.wrap_kms(
+                importer.external_storage_or_cache(&backend, "").unwrap(),
+                false,
+            );
             Arc::new(inner)
         };
 
@@ -1743,8 +1834,10 @@ mod tests {
             SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1).unwrap();
         let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let ext_storage = {
-            let inner = importer.create_external_storage(&backend, false).unwrap();
-            Arc::new(inner)
+            importer.wrap_kms(
+                importer.external_storage_or_cache(&backend, "").unwrap(),
+                false,
+            )
         };
         let path = importer
             .dir

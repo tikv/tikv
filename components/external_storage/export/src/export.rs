@@ -3,11 +3,7 @@
 //! To use External storage with protobufs as an application, import this
 //! module. external_storage contains the actual library code
 //! Cloud provider backends are under components/cloud
-use std::{
-    io::{self, Write},
-    path::Path,
-    sync::Arc,
-};
+use std::{io, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 #[cfg(feature = "cloud-aws")]
@@ -24,22 +20,19 @@ use external_storage::dylib_client;
 use external_storage::grpc_client;
 pub use external_storage::{
     compression_reader_dispatcher, encrypt_wrap_reader, read_external_storage_info_buff,
-    read_external_storage_into_file, record_storage_create, BackendConfig, ExternalStorage,
-    HdfsStorage, LocalStorage, NoopStorage, RestoreConfig, UnpinReader, MIN_READ_SPEED,
+    read_external_storage_into_file, record_storage_create, BackendConfig, ExternalData,
+    ExternalStorage, HdfsStorage, LocalStorage, NoopStorage, RestoreConfig, UnpinReader,
+    MIN_READ_SPEED,
 };
-use futures_io::AsyncRead;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GcsConfig, GcsStorage};
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
 use kvproto::brpb::{AzureBlobStorage, Gcs, S3};
 use kvproto::brpb::{CloudDynamic, Noop, StorageBackend};
+use tikv_util::time::{Instant, Limiter};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
-use tikv_util::{
-    stream::block_on_external_io,
-    time::{Instant, Limiter},
-};
 
 #[cfg(feature = "cloud-storage-dylib")]
 use crate::dylib;
@@ -307,13 +300,13 @@ impl<Blob: BlobStorage> std::ops::Deref for BlobStore<Blob> {
     }
 }
 
-pub struct EncryptedExternalStorage {
+pub struct EncryptedExternalStorage<S> {
     pub key_manager: Arc<DataKeyManager>,
-    pub storage: Box<dyn ExternalStorage>,
+    pub storage: S,
 }
 
 #[async_trait]
-impl ExternalStorage for EncryptedExternalStorage {
+impl<S: ExternalStorage> ExternalStorage for EncryptedExternalStorage<S> {
     fn name(&self) -> &'static str {
         self.storage.name()
     }
@@ -323,13 +316,13 @@ impl ExternalStorage for EncryptedExternalStorage {
     async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
         self.storage.write(name, reader, content_length).await
     }
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> ExternalData<'_> {
         self.storage.read(name)
     }
-    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
         self.storage.read_part(name, off, len)
     }
-    fn restore(
+    async fn restore(
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
@@ -353,19 +346,19 @@ impl ExternalStorage for EncryptedExternalStorage {
 
             compression_reader_dispatcher(compression_type, inner)?
         };
-        let file_writer: &mut dyn Write =
-            &mut self.key_manager.create_file_for_write(restore_name)?;
+        let file_writer = self.key_manager.create_file_for_write(&restore_name)?;
         let min_read_speed: usize = 8192;
         let mut input = encrypt_wrap_reader(file_crypter, reader)?;
 
-        block_on_external_io(read_external_storage_into_file(
+        read_external_storage_into_file(
             &mut input,
             file_writer,
             speed_limiter,
             expected_length,
             expected_sha256,
             min_read_speed,
-        ))
+        )
+        .await
     }
 }
 
@@ -383,11 +376,11 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
             .await
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> ExternalData<'_> {
         (**self).get(name)
     }
 
-    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
         (**self).get_part(name, off, len)
     }
 }

@@ -41,7 +41,7 @@ file_system = { workspace = true }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["compat"] }
 keys = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }

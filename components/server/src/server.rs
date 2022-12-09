@@ -990,7 +990,13 @@ where
                 ConnectionConfig {
                     keep_alive_interval: self.config.server.grpc_keepalive_time.0,
                     keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
-                    tls: self.security_mgr.tonic_tls_config(),
+                    tls: self
+                        .security_mgr
+                        .client_suite()
+                        .map_err(|err| {
+                            warn!("Failed to load client TLS suite, ignoring TLS config."; "err" => %err);
+                        })
+                        .ok(),
                 },
             );
             let backup_stream_endpoint = backup_stream::Endpoint::new(

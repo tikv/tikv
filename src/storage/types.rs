@@ -271,7 +271,6 @@ impl PessimisticLockKeyResult {
         assert!(matches!(self, Self::Waiting));
     }
 
-    #[cfg(test)]
     pub fn unwrap_err(&self) -> SharedError {
         match self {
             Self::Failed(e) => e.clone(),

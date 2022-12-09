@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 byteorder = "1.2"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 thiserror = "1.0"
 tikv_alloc = { workspace = true }

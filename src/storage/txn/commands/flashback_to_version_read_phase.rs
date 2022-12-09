@@ -6,6 +6,7 @@ use txn_types::{Key, Lock, TimeStamp};
 use crate::storage::{
     mvcc::MvccReader,
     txn::{
+        actions::flashback_to_version::get_first_user_key,
         commands::{
             Command, CommandExt, FlashbackToVersion, ProcessResult, ReadCommand, TypedCommand,
         },
@@ -122,19 +123,31 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
+        let mut start_key = self.start_key.clone();
         let next_state = match self.state {
             FlashbackToVersionState::RollbackLock { next_lock_key, .. } => {
-                let mut key_locks = flashback_to_version_read_lock(
-                    &mut reader,
-                    next_lock_key,
-                    &self.end_key,
-                    statistics,
-                )?;
+                let mut key_locks =
+                    flashback_to_version_read_lock(&mut reader, next_lock_key, &self.end_key)?;
                 if key_locks.is_empty() {
-                    // No more locks to rollback, continue to the prewrite phase.
-                    FlashbackToVersionState::Prewrite {
-                        key_to_lock: self.start_key.clone(),
-                    }
+                    // - No more locks to rollback, continue to the Prewrite Phase.
+                    // - The start key from the client is actually a range which is used to limit
+                    //   the upper bound of this flashback when scanning data, so it may not be a
+                    //   real key. In the Prewrite Phase, we make sure that the start key is a real
+                    //   key and take this key as a lock for the 2pc. So When overwriting the write,
+                    //   we skip the immediate write of this key and instead put it after the
+                    //   completion of the 2pc.
+                    // - To make sure the key locked in the latch is the same as the actual key
+                    //   written, we pass it to the key in `process_write' after getting it.
+                    let key_to_lock = if let Some(first_key) =
+                        get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
+                    {
+                        first_key
+                    } else {
+                        // If the key is None return directly
+                        statistics.add(&reader.statistics);
+                        return Ok(ProcessResult::Res);
+                    };
+                    FlashbackToVersionState::Prewrite { key_to_lock }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
                     FlashbackToVersionState::RollbackLock {
@@ -147,31 +160,53 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     }
                 }
             }
-            FlashbackToVersionState::FlashbackWrite { next_write_key, .. } => {
+            FlashbackToVersionState::FlashbackWrite {
+                mut next_write_key, ..
+            } => {
                 if self.commit_ts <= self.start_ts {
                     return Err(Error::from(ErrorInner::InvalidTxnTso {
                         start_ts: self.start_ts,
                         commit_ts: self.commit_ts,
                     }));
                 }
-                // If the key is not locked, it means that the key has been committed before and
-                // we are in a retry.
-                if next_write_key == self.start_key && reader.load_lock(&next_write_key)?.is_none()
-                {
-                    return Ok(ProcessResult::Res);
+                if next_write_key == self.start_key {
+                    // The start key from the client is actually a range which is used to limit the
+                    // upper bound of this flashback when scanning data, so it may not be a real
+                    // key. In the Prewrite Phase, we make sure that the start
+                    // key is a real key and take this key as a lock for the
+                    // 2pc. So When overwriting the write, we skip the immediate
+                    // write of this key and instead put it after the completion
+                    // of the 2pc.
+                    next_write_key = if let Some(first_key) =
+                        get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
+                    {
+                        first_key
+                    } else {
+                        // If the key is None return directly
+                        statistics.add(&reader.statistics);
+                        return Ok(ProcessResult::Res);
+                    };
+                    // Commit key needs to match the Prewrite key, which is set as the first user
+                    // key.
+                    start_key = next_write_key.clone();
+                    // If the key is not locked, it means that the key has been committed before and
+                    // we are in a retry.
+                    if reader.load_lock(&next_write_key)?.is_none() {
+                        statistics.add(&reader.statistics);
+                        return Ok(ProcessResult::Res);
+                    }
                 }
                 let mut keys = flashback_to_version_read_write(
                     &mut reader,
                     next_write_key,
-                    &self.start_key,
+                    &start_key,
                     &self.end_key,
                     self.version,
                     self.commit_ts,
-                    statistics,
                 )?;
                 if keys.is_empty() {
                     FlashbackToVersionState::Commit {
-                        key_to_commit: self.start_key.clone(),
+                        key_to_commit: start_key.clone(),
                     }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, keys.len() as f64);
@@ -189,6 +224,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             }
             _ => unreachable!(),
         };
+        statistics.add(&reader.statistics);
         Ok(ProcessResult::NextCommand {
             cmd: Command::FlashbackToVersion(FlashbackToVersion {
                 ctx: self.ctx,
@@ -196,7 +232,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 start_ts: self.start_ts,
                 commit_ts: self.commit_ts,
                 version: self.version,
-                start_key: self.start_key,
+                start_key,
                 end_key: self.end_key,
                 state: next_state,
             }),

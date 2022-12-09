@@ -24,6 +24,6 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 
 [dev-dependencies]
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 rand = "0.8"
 tempfile = "3.0"

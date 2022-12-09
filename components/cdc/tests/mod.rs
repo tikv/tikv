@@ -586,11 +586,13 @@ impl TestSuite {
         &mut self,
         region_id: u64,
         start_key: &[u8],
+        end_key: &[u8],
         start_ts: TimeStamp,
     ) {
         let mut prepare_flashback_req = PrepareFlashbackToVersionRequest::default();
         prepare_flashback_req.set_context(self.get_context(region_id));
         prepare_flashback_req.set_start_key(start_key.to_vec());
+        prepare_flashback_req.set_end_key(end_key.to_vec());
         prepare_flashback_req.set_start_ts(start_ts.into_inner());
         let prepare_flashback_resp = self
             .get_tikv_client(region_id)
