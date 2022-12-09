@@ -1,5 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(incomplete_features)]
+#![feature(specialization)]
+
 #[macro_use]
 extern crate tikv_util;
 

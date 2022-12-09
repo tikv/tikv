@@ -6,8 +6,7 @@ use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use raftstore::store::*;
 use rand::prelude::*;
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::time::Instant;
+use tikv_util::{config::*, time::Instant};
 
 // TODO add epoch not match test cases.
 

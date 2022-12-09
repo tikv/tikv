@@ -2,25 +2,26 @@
 
 //! Prometheus metrics for storage functionality.
 
+use std::{cell::RefCell, mem, sync::Arc};
+
+use collections::HashMap;
+use engine_traits::{PerfContext, PerfContextExt, PerfContextKind, PerfLevel};
+use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
+use pd_client::BucketMeta;
 use prometheus::*;
 use prometheus_static_metric::*;
+use raftstore::store::{util::build_key_range, ReadStats};
+use tikv_kv::{with_tls_engine, Engine};
+use tracker::get_tls_tracker_token;
 
-use std::cell::RefCell;
-use std::mem;
-
-use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
-use crate::storage::kv::{FlowStatsReporter, PerfStatisticsDelta, Statistics};
-use collections::HashMap;
-use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb;
-use kvproto::pdpb::QueryKind;
-use raftstore::store::util::build_key_range;
-use raftstore::store::ReadStats;
+use crate::{
+    server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail},
+    storage::kv::{FlowStatsReporter, Statistics},
+};
 
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,
     local_read_stats: ReadStats,
-    local_perf_stats: HashMap<CommandKind, PerfStatisticsDelta>,
 }
 
 thread_local! {
@@ -28,18 +29,8 @@ thread_local! {
         StorageLocalMetrics {
             local_scan_details: HashMap::default(),
             local_read_stats:ReadStats::default(),
-            local_perf_stats: HashMap::default(),
         }
     );
-}
-
-macro_rules! tls_flush_perf_stats {
-    ($tag:ident, $local_stats:ident, $stat:ident) => {
-        STORAGE_ROCKSDB_PERF_COUNTER_STATIC
-            .get($tag)
-            .$stat
-            .inc_by($local_stats.0.$stat as u64);
-    };
 }
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
@@ -64,57 +55,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
             mem::swap(&mut read_stats, &mut m.local_read_stats);
             reporter.report_read_stats(read_stats);
         }
-
-        for (req_tag, perf_stats) in m.local_perf_stats.drain() {
-            tls_flush_perf_stats!(req_tag, perf_stats, user_key_comparison_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, block_cache_hit_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, block_read_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, block_read_byte);
-            tls_flush_perf_stats!(req_tag, perf_stats, block_read_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, block_cache_index_hit_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, index_block_read_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, block_cache_filter_hit_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, filter_block_read_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, block_checksum_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, block_decompress_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, get_read_bytes);
-            tls_flush_perf_stats!(req_tag, perf_stats, iter_read_bytes);
-            tls_flush_perf_stats!(req_tag, perf_stats, internal_key_skipped_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, internal_delete_skipped_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, internal_recent_skipped_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, get_snapshot_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, get_from_memtable_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, get_from_memtable_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, get_post_process_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, get_from_output_files_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, seek_on_memtable_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, seek_on_memtable_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, next_on_memtable_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, prev_on_memtable_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, seek_child_seek_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, seek_child_seek_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, seek_min_heap_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, seek_max_heap_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, seek_internal_seek_time);
-            tls_flush_perf_stats!(req_tag, perf_stats, db_mutex_lock_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, db_condition_wait_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, read_index_block_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, read_filter_block_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, new_table_block_iter_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, new_table_iterator_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, block_seek_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, find_table_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, bloom_memtable_hit_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, bloom_memtable_miss_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, bloom_sst_hit_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, bloom_sst_miss_count);
-            tls_flush_perf_stats!(req_tag, perf_stats, get_cpu_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, iter_next_cpu_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, iter_prev_cpu_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, iter_seek_cpu_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, encrypt_data_nanos);
-            tls_flush_perf_stats!(req_tag, perf_stats, decrypt_data_nanos);
-        }
     });
 }
 
@@ -128,11 +68,20 @@ pub fn tls_collect_scan_details(cmd: CommandKind, stats: &Statistics) {
     });
 }
 
-pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
+pub fn tls_collect_read_flow(
+    region_id: u64,
+    start: Option<&[u8]>,
+    end: Option<&[u8]>,
+    statistics: &Statistics,
+    buckets: Option<&Arc<BucketMeta>>,
+) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         m.local_read_stats.add_flow(
             region_id,
+            buckets,
+            start,
+            end,
             &statistics.write.flow_stats,
             &statistics.data.flow_stats,
         );
@@ -168,15 +117,6 @@ pub fn tls_collect_query_batch(
     });
 }
 
-pub fn tls_collect_perf_stats(cmd: CommandKind, perf_stats: &PerfStatisticsDelta) {
-    TLS_STORAGE_METRICS.with(|m| {
-        *(m.borrow_mut()
-            .local_perf_stats
-            .entry(cmd)
-            .or_insert_with(Default::default)) += *perf_stats;
-    })
-}
-
 make_auto_flush_static_metric! {
     pub label_enum CommandKind {
         get,
@@ -186,6 +126,7 @@ make_auto_flush_static_metric! {
         batch_get_command,
         prewrite,
         acquire_pessimistic_lock,
+        acquire_pessimistic_lock_resumed,
         commit,
         cleanup,
         rollback,
@@ -200,6 +141,7 @@ make_auto_flush_static_metric! {
         pause,
         key_mvcc,
         start_ts_mvcc,
+        flashback_to_version,
         raw_get,
         raw_batch_get,
         raw_scan,
@@ -219,6 +161,8 @@ make_auto_flush_static_metric! {
         new,
         snapshot,
         async_snapshot_err,
+        precheck_write_ok,
+        precheck_write_err,
         snapshot_ok,
         snapshot_err,
         read_finish,
@@ -260,7 +204,7 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
-        ttl_tombstone,
+        raw_value_tombstone,
     }
 
     pub label_enum CheckMemLockResult {
@@ -268,55 +212,9 @@ make_auto_flush_static_metric! {
         unlocked,
     }
 
-    pub label_enum PerfMetric {
-        user_key_comparison_count,
-        block_cache_hit_count,
-        block_read_count,
-        block_read_byte,
-        block_read_time,
-        block_cache_index_hit_count,
-        index_block_read_count,
-        block_cache_filter_hit_count,
-        filter_block_read_count,
-        block_checksum_time,
-        block_decompress_time,
-        get_read_bytes,
-        iter_read_bytes,
-        internal_key_skipped_count,
-        internal_delete_skipped_count,
-        internal_recent_skipped_count,
-        get_snapshot_time,
-        get_from_memtable_time,
-        get_from_memtable_count,
-        get_post_process_time,
-        get_from_output_files_time,
-        seek_on_memtable_time,
-        seek_on_memtable_count,
-        next_on_memtable_count,
-        prev_on_memtable_count,
-        seek_child_seek_time,
-        seek_child_seek_count,
-        seek_min_heap_time,
-        seek_max_heap_time,
-        seek_internal_seek_time,
-        db_mutex_lock_nanos,
-        db_condition_wait_nanos,
-        read_index_block_nanos,
-        read_filter_block_nanos,
-        new_table_block_iter_nanos,
-        new_table_iterator_nanos,
-        block_seek_nanos,
-        find_table_nanos,
-        bloom_memtable_hit_count,
-        bloom_memtable_miss_count,
-        bloom_sst_hit_count,
-        bloom_sst_miss_count,
-        get_cpu_nanos,
-        iter_next_cpu_nanos,
-        iter_prev_cpu_nanos,
-        iter_seek_cpu_nanos,
-        encrypt_data_nanos,
-        decrypt_data_nanos,
+    pub label_enum InMemoryPessimisticLockingResult {
+        success,
+        full,
     }
 
     pub struct CommandScanDetails: LocalIntCounter {
@@ -367,9 +265,12 @@ make_auto_flush_static_metric! {
         "result" => CheckMemLockResult,
     }
 
-    pub struct PerfCounter: LocalIntCounter {
-        "req" => CommandKind,
-        "metric" => PerfMetric,
+    pub struct TxnCommandThrottleTimeCounterVec: LocalIntCounter {
+        "type" => CommandKind,
+    }
+
+    pub struct InMemoryPessimisticLockingCounter: LocalIntCounter {
+        "result" => InMemoryPessimisticLockingResult,
     }
 }
 
@@ -397,8 +298,76 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
             ServerGcKeysDetail::prev_tombstone => GcKeysDetail::prev_tombstone,
             ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
             ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
-            ServerGcKeysDetail::ttl_tombstone => GcKeysDetail::ttl_tombstone,
+            ServerGcKeysDetail::raw_value_tombstone => GcKeysDetail::raw_value_tombstone,
         }
+    }
+}
+
+// Safety: It should be only called when the thread-local engine exists.
+pub unsafe fn with_perf_context<E: Engine, Fn, T>(cmd: CommandKind, f: Fn) -> T
+where
+    Fn: FnOnce() -> T,
+{
+    thread_local! {
+        static GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static BATCH_GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static BATCH_GET_COMMAND: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static SCAN: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static PREWRITE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static ACQUIRE_PESSIMISTIC_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static COMMIT: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static CLEANUP: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static ROLLBACK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static PESSIMISTIC_ROLLBACK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static TXN_HEART_BEAT: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static CHECK_TXN_STATUS: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static CHECK_SECONDARY_LOCKS: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static SCAN_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static RESOLVE_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static RESOLVE_LOCK_LITE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+    }
+    let tls_cell = match cmd {
+        CommandKind::get => &GET,
+        CommandKind::batch_get => &BATCH_GET,
+        CommandKind::batch_get_command => &BATCH_GET_COMMAND,
+        CommandKind::scan => &SCAN,
+        CommandKind::prewrite => &PREWRITE,
+        CommandKind::acquire_pessimistic_lock => &ACQUIRE_PESSIMISTIC_LOCK,
+        CommandKind::commit => &COMMIT,
+        CommandKind::cleanup => &CLEANUP,
+        CommandKind::rollback => &ROLLBACK,
+        CommandKind::pessimistic_rollback => &PESSIMISTIC_ROLLBACK,
+        CommandKind::txn_heart_beat => &TXN_HEART_BEAT,
+        CommandKind::check_txn_status => &CHECK_TXN_STATUS,
+        CommandKind::check_secondary_locks => &CHECK_SECONDARY_LOCKS,
+        CommandKind::scan_lock => &SCAN_LOCK,
+        CommandKind::resolve_lock => &RESOLVE_LOCK,
+        CommandKind::resolve_lock_lite => &RESOLVE_LOCK_LITE,
+        _ => return f(),
+    };
+    tls_cell.with(|c| {
+        let mut c = c.borrow_mut();
+        let perf_context = c.get_or_insert_with(|| {
+            with_tls_engine(|engine: &mut E| {
+                Box::new(engine.kv_engine().unwrap().get_perf_context(
+                    PerfLevel::Uninitialized,
+                    PerfContextKind::Storage(cmd.get_str()),
+                ))
+            })
+        });
+        perf_context.start_observe();
+        let res = f();
+        perf_context.report_metrics(&[get_tls_tracker_token()]);
+        res
+    })
+}
+
+make_static_metric! {
+    pub struct LockWaitQueueEntriesGauge: IntGauge {
+        "type" => {
+            waiters,
+            keys,
+        },
     }
 }
 
@@ -505,13 +474,13 @@ lazy_static! {
         register_histogram!(
             "tikv_scheduler_throttle_duration_seconds",
             "Bucketed histogram of peer commits logs duration.",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_command_duration_seconds",
         "Bucketed histogram of command execution",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref SCHED_HISTOGRAM_VEC_STATIC: SchedDurationVec =
@@ -520,7 +489,7 @@ lazy_static! {
         "tikv_scheduler_latch_wait_duration_seconds",
         "Bucketed histogram of latch wait",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref SCHED_LATCH_HISTOGRAM_VEC: SchedLatchDurationVec =
@@ -529,7 +498,7 @@ lazy_static! {
         "tikv_scheduler_processing_read_duration_seconds",
         "Bucketed histogram of processing read duration",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref SCHED_PROCESSING_READ_HISTOGRAM_STATIC: ProcessingReadVec =
@@ -538,7 +507,7 @@ lazy_static! {
         "tikv_scheduler_processing_write_duration_seconds",
         "Bucketed histogram of processing write duration",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref SCHED_TOO_BUSY_COUNTER: IntCounterVec = register_int_counter_vec!(
@@ -598,13 +567,37 @@ lazy_static! {
     pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC: CheckMemLockHistogramVec =
         auto_flush_from!(CHECK_MEM_LOCK_DURATION_HISTOGRAM, CheckMemLockHistogramVec);
 
-    pub static ref STORAGE_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
-        "tikv_storage_rocksdb_perf",
-        "Total number of RocksDB internal operations from PerfContext",
-        &["req", "metric"]
+    pub static ref TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_txn_command_throttle_time_total",
+        "Total throttle time (microsecond) of txn commands.",
+        &["type"]
     )
     .unwrap();
 
-    pub static ref STORAGE_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
-        auto_flush_from!(STORAGE_ROCKSDB_PERF_COUNTER, PerfCounter);
+    pub static ref TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC: TxnCommandThrottleTimeCounterVec =
+        auto_flush_from!(TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC, TxnCommandThrottleTimeCounterVec);
+
+    pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_in_memory_pessimistic_locking",
+        "Count of different types of in-memory pessimistic locking",
+        &["result"]
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC: InMemoryPessimisticLockingCounter =
+        auto_flush_from!(IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER, InMemoryPessimisticLockingCounter);
+
+    pub static ref LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC: LockWaitQueueEntriesGauge = register_static_int_gauge_vec!(
+        LockWaitQueueEntriesGauge,
+        "tikv_lock_wait_queue_entries_gauge_vec",
+        "Statistics of the lock wait queue's state",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref LOCK_WAIT_QUEUE_LENGTH_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_lock_wait_queue_length",
+        "Statistics of length of queues counted when enqueueing",
+        exponential_buckets(1.0, 2.0, 16).unwrap()
+    )
+    .unwrap();
 }

@@ -4,9 +4,9 @@ use std::fmt;
 
 /// Function implementations' parameter data types.
 ///
-/// It is similar to the `EvalType` in TiDB, but doesn't provide type `Timestamp`, which is
-/// handled by the same type as `DateTime` here, instead of a new type. Also, `String` is
-/// called `Bytes` here to be less confusing.
+/// It is similar to the `EvalType` in TiDB, but doesn't provide type
+/// `Timestamp`, which is handled by the same type as `DateTime` here, instead
+/// of a new type. Also, `String` is called `Bytes` here to be less confusing.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum EvalType {
     Int,
@@ -23,8 +23,8 @@ pub enum EvalType {
 impl EvalType {
     /// Converts `EvalType` into one of the compatible `FieldTypeTp`s.
     ///
-    /// This function should be only useful in test scenarios that only cares about `EvalType` but
-    /// accepts a `FieldTypeTp`.
+    /// This function should be only useful in test scenarios that only cares
+    /// about `EvalType` but accepts a `FieldTypeTp`.
     pub fn into_certain_field_type_tp_for_test(self) -> crate::FieldTypeTp {
         match self {
             EvalType::Int => crate::FieldTypeTp::LongLong,
@@ -33,7 +33,7 @@ impl EvalType {
             EvalType::Bytes => crate::FieldTypeTp::String,
             EvalType::DateTime => crate::FieldTypeTp::DateTime,
             EvalType::Duration => crate::FieldTypeTp::Duration,
-            EvalType::Json => crate::FieldTypeTp::JSON,
+            EvalType::Json => crate::FieldTypeTp::Json,
             EvalType::Enum => crate::FieldTypeTp::Enum,
             EvalType::Set => crate::FieldTypeTp::Set,
         }
@@ -49,7 +49,8 @@ impl fmt::Display for EvalType {
 impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
     type Error = crate::DataTypeError;
 
-    // Succeeds for all field types supported as eval types, fails for unsupported types.
+    // Succeeds for all field types supported as eval types, fails for unsupported
+    // types.
     fn try_from(tp: crate::FieldTypeTp) -> Result<Self, crate::DataTypeError> {
         let eval_type = match tp {
             crate::FieldTypeTp::Tiny
@@ -57,6 +58,7 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::Int24
             | crate::FieldTypeTp::Long
             | crate::FieldTypeTp::LongLong
+            | crate::FieldTypeTp::Bit
             | crate::FieldTypeTp::Year => EvalType::Int,
             crate::FieldTypeTp::Float | crate::FieldTypeTp::Double => EvalType::Real,
             crate::FieldTypeTp::NewDecimal => EvalType::Decimal,
@@ -64,7 +66,7 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::Date
             | crate::FieldTypeTp::DateTime => EvalType::DateTime,
             crate::FieldTypeTp::Duration => EvalType::Duration,
-            crate::FieldTypeTp::JSON => EvalType::Json,
+            crate::FieldTypeTp::Json => EvalType::Json,
             crate::FieldTypeTp::VarChar
             | crate::FieldTypeTp::TinyBlob
             | crate::FieldTypeTp::MediumBlob
@@ -75,8 +77,8 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::Null => EvalType::Bytes,
             crate::FieldTypeTp::Enum => EvalType::Enum,
             _ => {
-                // In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
-                // TODO: we need to handle FieldTypeTp::{Enum, Set} after we implement encode and decode.
+                // TODO: we need to handle FieldTypeTp::{Enum, Set} after we implement encode
+                // and decode.
                 return Err(crate::DataTypeError::UnsupportedType {
                     name: tp.to_string(),
                 });
@@ -88,10 +90,10 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::FieldTypeAccessor;
-    use crate::FieldTypeTp::*;
     use std::convert::TryFrom;
+
+    use super::*;
+    use crate::{FieldTypeAccessor, FieldTypeTp::*};
 
     #[test]
     fn test_fieldtype_to_evaltype() {
@@ -112,8 +114,8 @@ mod tests {
             (Year, Some(EvalType::Int)),
             (NewDate, None),
             (VarChar, Some(EvalType::Bytes)),
-            (Bit, None),
-            (JSON, Some(EvalType::Json)),
+            (Bit, Some(EvalType::Int)),
+            (Json, Some(EvalType::Json)),
             (NewDecimal, Some(EvalType::Decimal)),
             (Enum, Some(EvalType::Enum)),
             (Set, None),
@@ -135,7 +137,7 @@ mod tests {
             if let Some(etype) = etype {
                 assert_eq!(ftt.unwrap(), etype);
             } else {
-                assert!(ftt.is_err());
+                ftt.unwrap_err();
             }
         }
     }

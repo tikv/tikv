@@ -16,13 +16,13 @@
 //! ## Arguments to macro
 //!
 //! If neither `varg` or `raw_varg` are supplied, then the generated arguments
-//! follow from the supplied function's arguments. Each argument must have a type
-//! `Option<&T>` for some `T`.
+//! follow from the supplied function's arguments. Each argument must have a
+//! type `Option<&T>` for some `T`.
 //!
 //! ### `varg`
 //!
-//! The RPN operator takes a variable number of arguments. The arguments are passed
-//! as a `&[Option<&T>]`. E.g.,
+//! The RPN operator takes a variable number of arguments. The arguments are
+//! passed as a `&[Option<&T>]`. E.g.,
 //!
 //! ```ignore
 //! #[rpn_fn(varg)]
@@ -33,8 +33,8 @@
 //!
 //! ### `raw_varg`
 //!
-//! The RPN operator takes a variable number of arguments. The arguments are passed
-//! as a `&[ScalarValueRef]`. E.g.,
+//! The RPN operator takes a variable number of arguments. The arguments are
+//! passed as a `&[ScalarValueRef]`. E.g.,
 //!
 //! ```ignore
 //! #[rpn_fn(raw_varg)]
@@ -43,8 +43,8 @@
 //! }
 //! ```
 //!
-//! Use `raw_varg` where the function takes a variable number of arguments and the types
-//! are not the same, for example, RPN function `case_when`.
+//! Use `raw_varg` where the function takes a variable number of arguments and
+//! the types are not the same, for example, RPN function `case_when`.
 //!
 //! ### `max_args`
 //!
@@ -61,34 +61,40 @@
 //! ### `extra_validator`
 //!
 //! A function name for custom validation code to be run when an operation is
-//! validated. The validator function should have the signature `&tipb::Expr -> Result<()>`.
-//! E.g., `#[rpn_fn(raw_varg, extra_validator = json_object_validator)]`
+//! validated. The validator function should have the signature `&tipb::Expr ->
+//! Result<()>`. E.g., `#[rpn_fn(raw_varg, extra_validator =
+//! json_object_validator)]`
 //!
 //! ### `metadata_type`
 //!
 //! The type of the metadata structure defined in tipb.
-//! If `metadata_mapper` is not specified, the protobuf metadata structure will be used as the metadata directly.
+//! If `metadata_mapper` is not specified, the protobuf metadata structure will
+//! be used as the metadata directly.
 //!
 //! ### `metadata_mapper`
 //!
-//! A function name to construct a new metadata or transform a protobuf metadata structure into a desired form.
-//! The function signatures varies according to the existence of `metadata_mapper` and `metadata_type` as follows.
+//! A function name to construct a new metadata or transform a protobuf metadata
+//! structure into a desired form. The function signatures varies according to
+//! the existence of `metadata_mapper` and `metadata_type` as follows.
 //!
-//! - `metadata_mapper ` exists, `metadata_type` missing: `fn(&mut tipb::Expr) -> T`
+//! - `metadata_mapper ` exists, `metadata_type` missing: `fn(&mut tipb::Expr)
+//!   -> T`
 //!
 //! Constructs a new metadata in type `T`.
 //!
-//! - `metadata_mapper ` exists, `metadata_type` exists: `fn(MetaDataType, &mut tipb::Expr) -> T`
+//! - `metadata_mapper ` exists, `metadata_type` exists: `fn(MetaDataType, &mut
+//!   tipb::Expr) -> T`
 //!
-//! Transforms a protobuf metadata type `MetaDataType` specified by `metadata_type` into a new type `T`.
+//! Transforms a protobuf metadata type `MetaDataType` specified by
+//! `metadata_type` into a new type `T`.
 //!
 //! ### `capture`
 //!
 //! An array of argument names which are passed from the caller to the expanded
-//! function. The argument names must be in scope in the generated `eval` or `run`
-//! methods. Currently, that includes the following arguments (the supplied
-//! function must accept these arguments with the corresponding types, in
-//! addition to any other arguments):
+//! function. The argument names must be in scope in the generated `eval` or
+//! `run` methods. Currently, that includes the following arguments (the
+//! supplied function must accept these arguments with the corresponding types,
+//! in addition to any other arguments):
 //!
 //! * `ctx: &mut expr::EvalContext`
 //! * `output_rows: usize`
@@ -111,35 +117,42 @@
 //! This includes `varg` and `raw_varg`.
 //!
 //! The supplied function is preserved and a constructor function is generated
-//! with a `_fn_meta` suffix, e.g., `#[rpn_fn] fn foo ...` will preserve `foo` and
-//! generate `foo_fn_meta`. The constructor function returns an `rpn_expr::RpnFnMeta`
-//! value.
+//! with a `_fn_meta` suffix, e.g., `#[rpn_fn] fn foo ...` will preserve `foo`
+//! and generate `foo_fn_meta`. The constructor function returns an
+//! `rpn_expr::RpnFnMeta` value.
 //!
-//! The constructor function will include code for validating the runtime arguments
-//! and running the function, pointers to these functions are stored in the result.
+//! The constructor function will include code for validating the runtime
+//! arguments and running the function, pointers to these functions are stored
+//! in the result.
 //!
 //! ### Non-vararg functions
 //!
-//! Generate the following (examples assume a supplied function called `foo_bar`:
+//! Generate the following (examples assume a supplied function called
+//! `foo_bar`:
 //!
-//! * A trait to represent the function (`FooBar_Fn`) with a single function `eval`.
+//! * A trait to represent the function (`FooBar_Fn`) with a single function
+//!   `eval`.
 //!   - An impl of that trait for all argument types which panics
-//!   - An impl of that trait for the supported argument type which calls the supplied function.
-//! * An evaluator struct (`FooBar_Evaluator`) which implements `rpn_expr::function::Evaluator`,
-//!   which includes an `eval` method which dispatches to `FooBar_Fn::eval`.
+//!   - An impl of that trait for the supported argument type which calls the
+//!     supplied function.
+//! * An evaluator struct (`FooBar_Evaluator`) which implements
+//!   `rpn_expr::function::Evaluator`, which includes an `eval` method which
+//!   dispatches to `FooBar_Fn::eval`.
 //! * A constructor function similar to the vararg case.
 //!
 //! The supplied function is preserved.
 //!
-//! The supported argument type is represented as a type-level list, for example, a
-//! a function which takes two unsigned ints has an argument representation
-//! something like `Arg<UInt, Arg<UInt, Null>>`. See documentation in
-//! `components/tidb_query_expr/src/types/function.rs` for more details.
+//! The supported argument type is represented as a type-level list, for
+//! example, a a function which takes two unsigned ints has an argument
+//! representation something like `Arg<UInt, Arg<UInt, Null>>`. See
+//! documentation in `components/tidb_query_expr/src/types/function.rs` for more
+//! details.
 //!
-//! The `_Fn` trait can be customised by implementing it manually.
-//! For example, you are going to implement an RPN function called `regex_match` taking two
-//! arguments, the regex and the string to match. You want to build the regex only once if the
-//! first argument is a scalar. The code may look like:
+//! The `_Fn` trait can be customized by implementing it manually.
+//! For example, you are going to implement an RPN function called `regex_match`
+//! taking two arguments, the regex and the string to match. You want to build
+//! the regex only once if the first argument is a scalar. The code may look
+//! like:
 //!
 //! ```ignore
 //! fn regex_match_impl(regex: &Regex, text: Option<&Bytes>) -> Result<Option<i32>> {
@@ -175,8 +188,9 @@
 //! }
 //! ```
 //!
-//! If the RPN function accepts variable number of arguments and all arguments have the same eval
-//! type, like RPN function `coalesce`, you can use `#[rpn_fn(varg)]` like:
+//! If the RPN function accepts variable number of arguments and all arguments
+//! have the same eval type, like RPN function `coalesce`, you can use
+//! `#[rpn_fn(varg)]` like:
 //!
 //! ```ignore
 //! #[rpn_fn(varg)]
@@ -187,8 +201,7 @@
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
-use syn::punctuated::Punctuated;
-use syn::*;
+use syn::{punctuated::Punctuated, *};
 
 /// Entry point for the `rpn_fn` attribute.
 pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream> {
@@ -221,10 +234,12 @@ mod kw {
 /// Parses an attribute like `#[rpn_fn(varg, capture = [ctx, output_rows])`.
 #[derive(Debug)]
 struct RpnFnAttr {
-    /// Whether or not the function is a varg function. Varg function accepts `&[&Option<T>]`.
+    /// Whether or not the function is a varg function. Varg function accepts
+    /// `&[&Option<T>]`.
     is_varg: bool,
 
-    /// Whether or not the function is a raw varg function. Raw varg function accepts `&[ScalarValueRef]`.
+    /// Whether or not the function is a raw varg function. Raw varg function
+    /// accepts `&[ScalarValueRef]`.
     is_raw_varg: bool,
 
     /// Whether or not the function needs extra logic on `None` value.
@@ -235,8 +250,9 @@ struct RpnFnAttr {
 
     /// The maximum accepted arguments, which will be checked by the validator.
     ///
-    /// Only varg or raw_varg function accepts a range of number of arguments. Other kind of
-    /// function strictly stipulates number of arguments according to the function definition.
+    /// Only varg or raw_varg function accepts a range of number of arguments.
+    /// Other kind of function strictly stipulates number of arguments
+    /// according to the function definition.
     max_args: Option<usize>,
 
     /// The minimal accepted arguments, which will be checked by the validator.
@@ -314,13 +330,13 @@ impl parse::Parse for RpnFnAttr {
                             max_args = Some(lit.base10_parse()?);
                         }
                         "extra_validator" => {
-                            extra_validator = Some((&**right).into_token_stream());
+                            extra_validator = Some(right.into_token_stream());
                         }
                         "metadata_type" => {
-                            metadata_type = Some((&**right).into_token_stream());
+                            metadata_type = Some(right.into_token_stream());
                         }
                         "metadata_mapper" => {
-                            metadata_mapper = Some((&**right).into_token_stream());
+                            metadata_mapper = Some(right.into_token_stream());
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -369,7 +385,7 @@ impl parse::Parse for RpnFnAttr {
             ));
         }
 
-        if !is_varg && !is_raw_varg && (min_args != None || max_args != None) {
+        if !is_varg && !is_raw_varg && (min_args.is_some() || max_args.is_some()) {
             return Err(Error::new_spanned(
                 config_items,
                 "`min_args` or `max_args` is only available when `varg` or `raw_varg` presents",
@@ -412,7 +428,8 @@ impl parse::Parse for RpnFnAttr {
     }
 }
 
-/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`.
+/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>`,
+/// `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`.
 struct RpnFnRefEvaluableTypeWithOption(RpnFnRefEvaluableType);
 
 impl parse::Parse for RpnFnRefEvaluableTypeWithOption {
@@ -505,8 +522,8 @@ impl parse::Parse for RpnFnRefEvaluableType {
 }
 
 /// Parses a function signature parameter like `val: &Option<T>` or `val: &T`.
-/// If input has &Option<T>, set has_option to true; otherwise, set has_option to false.
-/// Caller can use has_option to check if input is valid.
+/// If input has &Option<T>, set has_option to true; otherwise, set has_option
+/// to false. Caller can use has_option to check if input is valid.
 struct RpnFnSignatureParam {
     _pat: Pat,
     has_option: bool,
@@ -532,9 +549,9 @@ impl parse::Parse for RpnFnSignatureParam {
     }
 }
 
-/// Parses a function signature parameter like `val: &[&Option<T>]` or `val: &[&T]`.
-/// If input has &Option<T>, set has_option to true; otherwise, set has_option to false.
-/// Caller can use has_option to check if input is valid.
+/// Parses a function signature parameter like `val: &[&Option<T>]` or `val:
+/// &[&T]`. If input has &Option<T>, set has_option to true; otherwise, set
+/// has_option to false. Caller can use has_option to check if input is valid.
 struct VargsRpnFnSignatureParam {
     _pat: Pat,
     has_option: bool,
@@ -929,7 +946,7 @@ impl VargsRpnFn {
         let arg_type_anonymous = arg_type.eval_type.get_type_with_lifetime(quote! { '_ });
 
         let ret_type = if attr.writer {
-            parse2::<RpnFnSignatureReturnGuardType>((&item_fn.sig.output).into_token_stream())
+            parse2::<RpnFnSignatureReturnGuardType>(item_fn.sig.output.to_token_stream())
                 .map_err(|_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -938,7 +955,7 @@ impl VargsRpnFn {
                 })?
                 .into_return_type()?
         } else {
-            parse2::<RpnFnSignatureReturnType>((&item_fn.sig.output).into_token_stream()).map_err(
+            parse2::<RpnFnSignatureReturnType>(item_fn.sig.output.to_token_stream()).map_err(
                 |_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -1174,15 +1191,13 @@ impl RawVargsRpnFn {
             ));
         }
 
-        let ret_type = parse2::<RpnFnSignatureReturnType>(
-            (&item_fn.sig.output).into_token_stream(),
-        )
-        .map_err(|_| {
-            Error::new_spanned(
-                &item_fn.sig.output,
-                "Expect return type to be like `Result<Option<T>>`",
-            )
-        })?;
+        let ret_type = parse2::<RpnFnSignatureReturnType>(item_fn.sig.output.to_token_stream())
+            .map_err(|_| {
+                Error::new_spanned(
+                    &item_fn.sig.output,
+                    "Expect return type to be like `Result<Option<T>>`",
+                )
+            })?;
         Ok(Self {
             captures: attr.captures,
             max_args: attr.max_args,
@@ -1309,7 +1324,6 @@ struct NormalRpnFn {
     evaluator_ident: Ident,
     arg_types: Vec<TokenStream>,
     arg_types_anonymous: Vec<TokenStream>,
-    arg_types_no_ref: Vec<TokenStream>,
     ret_type: TypePath,
 }
 
@@ -1334,7 +1348,6 @@ impl NormalRpnFn {
     fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         let mut arg_types = Vec::new();
         let mut arg_types_anonymous = Vec::new();
-        let mut arg_types_no_ref = Vec::new();
         let take_cnt = item_fn.sig.inputs.len() - attr.captures.len() - attr.writer as usize;
         let fn_args = item_fn
             .sig
@@ -1346,10 +1359,9 @@ impl NormalRpnFn {
             let arg_type = Self::get_arg_type(&attr, fn_arg)?;
             arg_types.push(arg_type.eval_type.get_type_with_lifetime(quote! { 'arg_ }));
             arg_types_anonymous.push(arg_type.eval_type.get_type_with_lifetime(quote! { '_ }));
-            arg_types_no_ref.push(arg_type.eval_type.get_type_with_lifetime(quote! {}));
         }
         let ret_type = if attr.writer {
-            parse2::<RpnFnSignatureReturnGuardType>((&item_fn.sig.output).into_token_stream())
+            parse2::<RpnFnSignatureReturnGuardType>(item_fn.sig.output.to_token_stream())
                 .map_err(|_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -1358,7 +1370,7 @@ impl NormalRpnFn {
                 })?
                 .into_return_type()?
         } else {
-            parse2::<RpnFnSignatureReturnType>((&item_fn.sig.output).into_token_stream()).map_err(
+            parse2::<RpnFnSignatureReturnType>(item_fn.sig.output.to_token_stream()).map_err(
                 |_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -1382,7 +1394,6 @@ impl NormalRpnFn {
             evaluator_ident,
             arg_types,
             arg_types_anonymous,
-            arg_types_no_ref,
             ret_type: ret_type.eval_type,
         })
     }
@@ -1722,9 +1733,9 @@ impl NormalRpnFn {
 
 #[cfg(test)]
 mod tests_normal {
-    use super::*;
-
     use proc_macro2::TokenTree;
+
+    use super::*;
 
     /// Compare TokenStream with all white chars trimmed.
     fn assert_token_stream_equal(l: TokenStream, r: TokenStream) {

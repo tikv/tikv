@@ -5,14 +5,13 @@ use std::fmt::{self, Display, Formatter};
 use byteorder::{BigEndian, WriteBytesExt};
 use engine_traits::{KvEngine, Snapshot};
 use kvproto::metapb::Region;
-use tikv_util::worker::Runnable;
-use tikv_util::{error, info, warn};
-
-use crate::coprocessor::CoprocessorHost;
-use crate::store::metrics::*;
-use crate::store::{CasualMessage, CasualRouter};
+use tikv_util::{error, info, warn, worker::Runnable};
 
 use super::metrics::*;
+use crate::{
+    coprocessor::CoprocessorHost,
+    store::{metrics::*, CasualMessage, CasualRouter},
+};
 
 /// Consistency checking task.
 pub enum Task<S> {
@@ -125,29 +124,24 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc, time::Duration};
+
+    use byteorder::{BigEndian, WriteBytesExt};
+    use engine_test::kv::{new_engine, KvTestEngine};
+    use engine_traits::{KvEngine, SyncMutable, ALL_CFS};
+    use kvproto::metapb::*;
+    use tempfile::Builder;
+    use tikv_util::worker::Runnable;
+
     use super::*;
     use crate::coprocessor::{
         BoxConsistencyCheckObserver, ConsistencyCheckMethod, RawConsistencyCheckObserver,
     };
-    use byteorder::{BigEndian, WriteBytesExt};
-    use engine_test::kv::{new_engine, KvTestEngine};
-    use engine_traits::{KvEngine, SyncMutable, CF_DEFAULT, CF_RAFT};
-    use kvproto::metapb::*;
-    use std::sync::mpsc;
-    use std::time::Duration;
-    use tempfile::Builder;
-    use tikv_util::worker::Runnable;
 
     #[test]
     fn test_consistency_check() {
         let path = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-        let db = new_engine(
-            path.path().to_str().unwrap(),
-            None,
-            &[CF_DEFAULT, CF_RAFT],
-            None,
-        )
-        .unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());

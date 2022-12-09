@@ -6,12 +6,13 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 
 test-engine-kv-panic = []
 test-engine-kv-rocksdb = []
 test-engine-raft-panic = []
 test-engine-raft-rocksdb = []
+test-engine-raft-raft-engine = []
 
 test-engines-rocksdb = [
   "test-engine-kv-rocksdb",
@@ -22,12 +23,15 @@ test-engines-panic = [
   "test-engine-raft-panic",
 ]
 
-
 [dependencies]
-engine_panic = { path = "../engine_panic", default-features = false }
-engine_rocks = { path = "../engine_rocks", default-features = false }
-engine_traits = { path = "../engine_traits", default-features = false }
+collections = { workspace = true }
+encryption = { workspace = true }
+engine_panic = { workspace = true }
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
+file_system = { workspace = true }
+raft_log_engine = { workspace = true }
 tempfile = "3.0"
-tikv_alloc = { path = "../tikv_alloc" }
+tikv_alloc = { workspace = true }
 # FIXME: Remove this dep from the engine_traits interface
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv_util = { workspace = true }

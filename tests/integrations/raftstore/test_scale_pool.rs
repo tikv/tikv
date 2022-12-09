@@ -1,14 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{collections::HashMap, time::Duration};
+
 use engine_traits::CF_DEFAULT;
 use kvproto::raft_cmdpb::RaftCmdResponse;
-use libc::{getpid, pid_t};
-use procinfo::pid;
 use raftstore::Result;
-use std::collections::HashMap;
-use std::time::Duration;
 use test_raftstore::*;
-use tikv_util::{metrics::get_thread_ids, HandyRwLock};
+use tikv_util::{
+    sys::thread::{self, Pid},
+    HandyRwLock,
+};
 
 fn put_with_timeout<T: Simulator>(
     cluster: &mut Cluster<T>,
@@ -56,9 +57,22 @@ fn test_increase_pool() {
 
         // Update config, expand from 1 to 2
         cfg_controller.update(change).unwrap();
-        cluster.cfg.raft_store.store_batch_system.pool_size = 2;
-        cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
-        assert_eq!(cfg_controller.get_current(), cluster.cfg.tikv);
+        assert_eq!(
+            cfg_controller
+                .get_current()
+                .raft_store
+                .apply_batch_system
+                .pool_size,
+            2
+        );
+        assert_eq!(
+            cfg_controller
+                .get_current()
+                .raft_store
+                .store_batch_system
+                .pool_size,
+            2
+        );
     }
 
     // Request can be handled as usual
@@ -68,12 +82,13 @@ fn test_increase_pool() {
     fail::remove(fp1);
 }
 
-fn get_poller_thread_ids() -> Vec<pid_t> {
+fn get_poller_thread_ids() -> Vec<Pid> {
     let prefixs = ("raftstore", "apply-");
-    let pid: pid_t = unsafe { getpid() };
     let mut poller_tids = vec![];
-    for tid in get_thread_ids(pid).unwrap() {
-        if let Ok(stat) = pid::stat_task(pid, tid) {
+    let pid = thread::process_id();
+    let all_tids: Vec<_> = thread::thread_ids(pid).unwrap();
+    for tid in all_tids {
+        if let Ok(stat) = thread::full_thread_stat(pid, tid) {
             if stat.command.starts_with(prefixs.0) || stat.command.starts_with(prefixs.1) {
                 poller_tids.push(tid);
             }
@@ -110,9 +125,23 @@ fn test_decrease_pool() {
         // Update config, shrink from 2 to 1
         cfg_controller.update(change).unwrap();
         std::thread::sleep(std::time::Duration::from_secs(1));
-        cluster.cfg.raft_store.store_batch_system.pool_size = 1;
-        cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
-        assert_eq!(cfg_controller.get_current(), cluster.cfg.tikv);
+
+        assert_eq!(
+            cfg_controller
+                .get_current()
+                .raft_store
+                .apply_batch_system
+                .pool_size,
+            1
+        );
+        assert_eq!(
+            cfg_controller
+                .get_current()
+                .raft_store
+                .store_batch_system
+                .pool_size,
+            1
+        );
     }
 
     // Save current poller tids after scaling down

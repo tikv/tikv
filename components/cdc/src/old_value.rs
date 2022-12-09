@@ -1,10 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Deref;
+use std::ops::{Bound, Deref};
 
 use engine_traits::{ReadOptions, CF_DEFAULT, CF_WRITE};
-use tikv::storage::mvcc::near_load_data_by_write;
-use tikv::storage::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
+use getset::CopyGetters;
+use tikv::storage::{
+    mvcc::near_load_data_by_write, Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot,
+    Statistics,
+};
 use tikv_kv::Iterator;
 use tikv_util::{
     config::ReadableSize,
@@ -14,8 +17,7 @@ use tikv_util::{
 };
 use txn_types::{Key, MutationType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
-use crate::metrics::*;
-use crate::Result;
+use crate::{metrics::*, Result};
 
 pub(crate) type OldValueCallback = Box<
     dyn Fn(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Result<Option<Vec<u8>>> + Send,
@@ -44,11 +46,17 @@ impl SizePolicy<Key, (OldValue, Option<MutationType>)> for OldValueCacheSizePoli
     }
 }
 
+#[derive(CopyGetters)]
 pub struct OldValueCache {
-    pub cache: LruCache<Key, (OldValue, Option<MutationType>), OldValueCacheSizePolicy>,
-    pub access_count: usize,
-    pub miss_count: usize,
-    pub miss_none_count: usize,
+    cache: LruCache<Key, (OldValue, Option<MutationType>), OldValueCacheSizePolicy>,
+    #[getset(get_copy = "pub")]
+    access_count: usize,
+    #[getset(get_copy = "pub")]
+    miss_count: usize,
+    #[getset(get_copy = "pub")]
+    miss_none_count: usize,
+    #[getset(get_copy = "pub")]
+    update_count: usize,
 }
 
 impl OldValueCache {
@@ -63,12 +71,31 @@ impl OldValueCache {
             access_count: 0,
             miss_count: 0,
             miss_none_count: 0,
+            update_count: 0,
         }
     }
 
-    pub(crate) fn resize(&mut self, new_capacity: ReadableSize) {
+    pub fn insert(&mut self, key: Key, old_value: (OldValue, Option<MutationType>)) {
+        self.cache.insert(key, old_value);
+        self.update_count += 1;
+    }
+
+    pub fn resize(&mut self, new_capacity: ReadableSize) {
         CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(new_capacity.0 as i64);
         self.cache.resize(new_capacity.0 as usize);
+    }
+
+    pub fn flush_metrics(&mut self) {
+        fail::fail_point!("cdc_flush_old_value_metrics", |_| {});
+        CDC_OLD_VALUE_CACHE_BYTES.set(self.cache.size() as i64);
+        CDC_OLD_VALUE_CACHE_LEN.set(self.cache.len() as i64);
+        CDC_OLD_VALUE_CACHE_ACCESS.add(self.access_count as i64);
+        CDC_OLD_VALUE_CACHE_MISS.add(self.miss_count as i64);
+        CDC_OLD_VALUE_CACHE_MISS_NONE.add(self.miss_none_count as i64);
+        self.access_count = 0;
+        self.miss_count = 0;
+        self.miss_none_count = 0;
+        self.update_count = 0;
     }
 
     #[cfg(test)]
@@ -77,8 +104,8 @@ impl OldValueCache {
     }
 }
 
-/// Fetch old value for `key`. If it can't be found in `old_value_cache`, seek and retrieve it with
-/// `query_ts` from `snapshot`.
+/// Fetch old value for `key`. If it can't be found in `old_value_cache`, seek
+/// and retrieve it with `query_ts` from `snapshot`.
 pub fn get_old_value<S: EngineSnapshot>(
     snapshot: &S,
     key: Key,
@@ -144,9 +171,10 @@ pub fn new_old_value_cursor<S: EngineSnapshot>(snapshot: &S, cf: &'static str) -
 
 /// Gets the latest value to the key with an older or equal version.
 ///
-/// The key passed in should be a key with a timestamp. This function will returns
-/// the latest value of the entry if the user key is the same to the given key and
-/// the timestamp is older than or equal to the timestamp in the given key.
+/// The key passed in should be a key with a timestamp. This function will
+/// returns the latest value of the entry if the user key is the same to the
+/// given key and the timestamp is older than or equal to the timestamp in the
+/// given key.
 ///
 /// `load_from_cf_data` indicates how to get value from `CF_DEFAULT`.
 pub fn near_seek_old_value<S: EngineSnapshot>(
@@ -233,7 +261,7 @@ fn new_write_cursor_on_key<S: EngineSnapshot>(snapshot: &S, key: &Key) -> Cursor
         .range(Some(key.clone()), upper)
         // Use bloom filter to speed up seeking on a given prefix.
         .prefix_seek(true)
-        .hint_max_ts(Some(ts))
+        .hint_max_ts(Some(Bound::Included(ts)))
         .build()
         .unwrap()
 }
@@ -261,14 +289,17 @@ fn get_value_default<S: EngineSnapshot>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use engine_rocks::RocksEngine;
-    use engine_traits::{KvEngine, MiscExt};
     use std::sync::Arc;
-    use tikv::config::DbConfig;
-    use tikv::storage::kv::TestEngineBuilder;
-    use tikv::storage::txn::tests::*;
-    use tikv_kv::PerfStatisticsInstant;
+
+    use engine_rocks::{ReadPerfInstant, RocksEngine};
+    use engine_traits::{KvEngine, MiscExt};
+    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+    use tikv::{
+        config::DbConfig,
+        storage::{kv::TestEngineBuilder, txn::tests::*},
+    };
+
+    use super::*;
 
     fn must_get_eq(
         kv_engine: &RocksEngine,
@@ -310,8 +341,8 @@ mod tests {
             old_value_cache.cache.insert(key, value.clone());
         }
 
-        assert_eq!(old_value_cache.cache.size(), size * cases as usize);
-        assert_eq!(old_value_cache.cache.len(), cases as usize);
+        assert_eq!(old_value_cache.cache.size(), size * cases);
+        assert_eq!(old_value_cache.cache.len(), cases);
         assert_eq!(old_value_cache.capacity(), capacity as usize);
 
         // Reduces capacity.
@@ -329,7 +360,7 @@ mod tests {
 
         assert_eq!(old_value_cache.cache.size(), size * remaining_count);
         assert_eq!(old_value_cache.cache.len(), remaining_count);
-        assert_eq!(old_value_cache.capacity(), new_capacity as usize);
+        assert_eq!(old_value_cache.capacity(), new_capacity);
         for i in dropped_count..cases {
             let key = Key::from_raw(&i.to_be_bytes());
             assert_eq!(old_value_cache.cache.get(&key).is_some(), true);
@@ -350,120 +381,120 @@ mod tests {
 
     #[test]
     fn test_old_value_reader() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let kv_engine = engine.get_rocksdb();
         let k = b"k";
         let key = Key::from_raw(k);
 
-        must_prewrite_put(&engine, k, b"v1", k, 1);
+        must_prewrite_put(&mut engine, k, b"v1", k, 1);
         must_get_eq(&kv_engine, &key, 2, None);
         must_get_eq(&kv_engine, &key, 1, None);
-        must_commit(&engine, k, 1, 1);
+        must_commit(&mut engine, k, 1, 1);
         must_get_eq(&kv_engine, &key, 1, Some(b"v1".to_vec()));
 
-        must_prewrite_put(&engine, k, b"v2", k, 2);
+        must_prewrite_put(&mut engine, k, b"v2", k, 2);
         must_get_eq(&kv_engine, &key, 2, Some(b"v1".to_vec()));
-        must_rollback(&engine, k, 2, false);
+        must_rollback(&mut engine, k, 2, false);
 
-        must_prewrite_put(&engine, k, b"v3", k, 3);
+        must_prewrite_put(&mut engine, k, b"v3", k, 3);
         must_get_eq(&kv_engine, &key, 3, Some(b"v1".to_vec()));
-        must_commit(&engine, k, 3, 3);
+        must_commit(&mut engine, k, 3, 3);
 
-        must_prewrite_delete(&engine, k, k, 4);
+        must_prewrite_delete(&mut engine, k, k, 4);
         must_get_eq(&kv_engine, &key, 4, Some(b"v3".to_vec()));
-        must_commit(&engine, k, 4, 4);
+        must_commit(&mut engine, k, 4, 4);
 
-        must_prewrite_put(&engine, k, vec![b'v'; 5120].as_slice(), k, 5);
+        must_prewrite_put(&mut engine, k, vec![b'v'; 5120].as_slice(), k, 5);
         must_get_eq(&kv_engine, &key, 5, None);
-        must_commit(&engine, k, 5, 5);
+        must_commit(&mut engine, k, 5, 5);
 
-        must_prewrite_delete(&engine, k, k, 6);
+        must_prewrite_delete(&mut engine, k, k, 6);
         must_get_eq(&kv_engine, &key, 6, Some(vec![b'v'; 5120]));
-        must_rollback(&engine, k, 6, false);
+        must_rollback(&mut engine, k, 6, false);
 
-        must_prewrite_put(&engine, k, b"v4", k, 7);
-        must_commit(&engine, k, 7, 9);
+        must_prewrite_put(&mut engine, k, b"v4", k, 7);
+        must_commit(&mut engine, k, 7, 9);
 
-        must_acquire_pessimistic_lock(&engine, k, k, 8, 10);
-        must_pessimistic_prewrite_put(&engine, k, b"v5", k, 8, 10, true);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 8, 10);
+        must_pessimistic_prewrite_put(&mut engine, k, b"v5", k, 8, 10, DoPessimisticCheck);
         must_get_eq(&kv_engine, &key, 10, Some(b"v4".to_vec()));
-        must_commit(&engine, k, 8, 11);
+        must_commit(&mut engine, k, 8, 11);
     }
 
     #[test]
     fn test_old_value_reader_check_gc_fence() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let kv_engine = engine.get_rocksdb();
 
         // PUT,      Read
         //  `--------------^
-        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
-        must_commit(&engine, b"k1", 10, 20);
-        must_cleanup_with_gc_fence(&engine, b"k1", 20, 0, 50, true);
+        must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&mut engine, b"k1", 10, 20);
+        must_cleanup_with_gc_fence(&mut engine, b"k1", 20, 0, 50, true);
 
         // PUT,      Read
         //  `---------^
-        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
-        must_commit(&engine, b"k2", 11, 20);
-        must_cleanup_with_gc_fence(&engine, b"k2", 20, 0, 40, true);
+        must_prewrite_put(&mut engine, b"k2", b"v2", b"k2", 11);
+        must_commit(&mut engine, b"k2", 11, 20);
+        must_cleanup_with_gc_fence(&mut engine, b"k2", 20, 0, 40, true);
 
         // PUT,      Read
         //  `-----^
-        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
-        must_commit(&engine, b"k3", 12, 20);
-        must_cleanup_with_gc_fence(&engine, b"k3", 20, 0, 30, true);
+        must_prewrite_put(&mut engine, b"k3", b"v3", b"k3", 12);
+        must_commit(&mut engine, b"k3", 12, 20);
+        must_cleanup_with_gc_fence(&mut engine, b"k3", 20, 0, 30, true);
 
         // PUT,   PUT,       Read
         //  `-----^ `----^
-        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
-        must_commit(&engine, b"k4", 13, 14);
-        must_prewrite_put(&engine, b"k4", b"v4x", b"k4", 15);
-        must_commit(&engine, b"k4", 15, 20);
-        must_cleanup_with_gc_fence(&engine, b"k4", 14, 0, 20, false);
-        must_cleanup_with_gc_fence(&engine, b"k4", 20, 0, 30, true);
+        must_prewrite_put(&mut engine, b"k4", b"v4", b"k4", 13);
+        must_commit(&mut engine, b"k4", 13, 14);
+        must_prewrite_put(&mut engine, b"k4", b"v4x", b"k4", 15);
+        must_commit(&mut engine, b"k4", 15, 20);
+        must_cleanup_with_gc_fence(&mut engine, b"k4", 14, 0, 20, false);
+        must_cleanup_with_gc_fence(&mut engine, b"k4", 20, 0, 30, true);
 
         // PUT,   DEL,       Read
         //  `-----^ `----^
-        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 13);
-        must_commit(&engine, b"k5", 13, 14);
-        must_prewrite_delete(&engine, b"k5", b"v5", 15);
-        must_commit(&engine, b"k5", 15, 20);
-        must_cleanup_with_gc_fence(&engine, b"k5", 14, 0, 20, false);
-        must_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30, true);
+        must_prewrite_put(&mut engine, b"k5", b"v5", b"k5", 13);
+        must_commit(&mut engine, b"k5", 13, 14);
+        must_prewrite_delete(&mut engine, b"k5", b"v5", 15);
+        must_commit(&mut engine, b"k5", 15, 20);
+        must_cleanup_with_gc_fence(&mut engine, b"k5", 14, 0, 20, false);
+        must_cleanup_with_gc_fence(&mut engine, b"k5", 20, 0, 30, true);
 
         // PUT, LOCK, LOCK,   Read
         //  `------------------------^
-        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 16);
-        must_commit(&engine, b"k6", 16, 20);
-        must_prewrite_lock(&engine, b"k6", b"k6", 25);
-        must_commit(&engine, b"k6", 25, 26);
-        must_prewrite_lock(&engine, b"k6", b"k6", 28);
-        must_commit(&engine, b"k6", 28, 29);
-        must_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 50, true);
+        must_prewrite_put(&mut engine, b"k6", b"v6", b"k6", 16);
+        must_commit(&mut engine, b"k6", 16, 20);
+        must_prewrite_lock(&mut engine, b"k6", b"k6", 25);
+        must_commit(&mut engine, b"k6", 25, 26);
+        must_prewrite_lock(&mut engine, b"k6", b"k6", 28);
+        must_commit(&mut engine, b"k6", 28, 29);
+        must_cleanup_with_gc_fence(&mut engine, b"k6", 20, 0, 50, true);
 
         // PUT, LOCK,   LOCK,   Read
         //  `---------^
-        must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
-        must_commit(&engine, b"k7", 16, 20);
-        must_prewrite_lock(&engine, b"k7", b"k7", 25);
-        must_commit(&engine, b"k7", 25, 26);
-        must_cleanup_with_gc_fence(&engine, b"k7", 20, 0, 27, true);
-        must_prewrite_lock(&engine, b"k7", b"k7", 28);
-        must_commit(&engine, b"k7", 28, 29);
+        must_prewrite_put(&mut engine, b"k7", b"v7", b"k7", 16);
+        must_commit(&mut engine, b"k7", 16, 20);
+        must_prewrite_lock(&mut engine, b"k7", b"k7", 25);
+        must_commit(&mut engine, b"k7", 25, 26);
+        must_cleanup_with_gc_fence(&mut engine, b"k7", 20, 0, 27, true);
+        must_prewrite_lock(&mut engine, b"k7", b"k7", 28);
+        must_commit(&mut engine, b"k7", 28, 29);
 
         // PUT,  Read
         //  * (GC fence ts is 0)
-        must_prewrite_put(&engine, b"k8", b"v8", b"k8", 17);
-        must_commit(&engine, b"k8", 17, 30);
-        must_cleanup_with_gc_fence(&engine, b"k8", 30, 0, 0, true);
+        must_prewrite_put(&mut engine, b"k8", b"v8", b"k8", 17);
+        must_commit(&mut engine, b"k8", 17, 30);
+        must_cleanup_with_gc_fence(&mut engine, b"k8", 30, 0, 0, true);
 
         // PUT, LOCK,     Read
         // `-----------^
-        must_prewrite_put(&engine, b"k9", b"v9", b"k9", 18);
-        must_commit(&engine, b"k9", 18, 20);
-        must_prewrite_lock(&engine, b"k9", b"k9", 25);
-        must_commit(&engine, b"k9", 25, 26);
-        must_cleanup_with_gc_fence(&engine, b"k9", 20, 0, 27, true);
+        must_prewrite_put(&mut engine, b"k9", b"v9", b"k9", 18);
+        must_commit(&mut engine, b"k9", 18, 20);
+        must_prewrite_lock(&mut engine, b"k9", b"k9", 25);
+        must_commit(&mut engine, b"k9", 25, 26);
+        must_cleanup_with_gc_fence(&mut engine, b"k9", 20, 0, 27, true);
 
         let expected_results = vec![
             (b"k1", Some(b"v1")),
@@ -484,16 +515,16 @@ mod tests {
 
     #[test]
     fn test_old_value_reuse_cursor() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let kv_engine = engine.get_rocksdb();
         let value = || vec![b'v'; 1024];
 
         for i in 0..100 {
             let key = format!("key-{:0>3}", i).into_bytes();
-            must_prewrite_put(&engine, &key, &value(), &key, 100);
-            must_commit(&engine, &key, 100, 101);
-            must_prewrite_put(&engine, &key, &value(), &key, 200);
-            must_commit(&engine, &key, 200, 201);
+            must_prewrite_put(&mut engine, &key, &value(), &key, 100);
+            must_commit(&mut engine, &key, 100, 101);
+            must_prewrite_put(&mut engine, &key, &value(), &key, 200);
+            must_commit(&mut engine, &key, 200, 201);
         }
 
         let snapshot = Arc::new(kv_engine.snapshot());
@@ -555,20 +586,20 @@ mod tests {
         let mut cfg = DbConfig::default();
         cfg.writecf.disable_auto_compactions = true;
         cfg.writecf.pin_l0_filter_and_index_blocks = false;
-        let engine = TestEngineBuilder::new().build_with_cfg(&cfg).unwrap();
+        let mut engine = TestEngineBuilder::new().build_with_cfg(&cfg).unwrap();
         let kv_engine = engine.get_rocksdb();
 
         // Key must start with `z` to pass `TsFilter`'s check.
         for i in 0..4 {
             let key = format!("zkey-{:0>3}", i).into_bytes();
-            must_prewrite_put(&engine, &key, b"value", &key, 100);
-            must_commit(&engine, &key, 100, 101);
+            must_prewrite_put(&mut engine, &key, b"value", &key, 100);
+            must_commit(&mut engine, &key, 100, 101);
             kv_engine.flush_cf(CF_WRITE, true).unwrap();
         }
 
         let key = format!("zkey-{:0>3}", 0).into_bytes();
         let snapshot = Arc::new(kv_engine.snapshot());
-        let perf_instant = PerfStatisticsInstant::new();
+        let perf_instant = ReadPerfInstant::new();
         let value = get_old_value(
             &snapshot,
             Key::from_raw(&key).append_ts(100.into()),
@@ -582,6 +613,6 @@ mod tests {
         // block read count should be 1 instead of 4 because some of them
         // are filtered by `prefix_seek`.
         let perf_delta = perf_instant.delta();
-        assert_eq!(perf_delta.0.block_read_count, 1);
+        assert_eq!(perf_delta.block_read_count, 1);
     }
 }

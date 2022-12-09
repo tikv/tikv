@@ -6,9 +6,11 @@ use engine_traits::Error as EngineTraitsError;
 use kvproto::errorpb::Error as ErrorHeader;
 use raftstore::Error as RaftstoreError;
 use thiserror::Error;
-use tikv::storage::kv::{Error as KvError, ErrorInner as EngineErrorInner};
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use tikv::storage::{
+    kv::{Error as KvError, ErrorInner as EngineErrorInner},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+};
 use txn_types::Error as TxnTypesError;
 
 #[derive(Debug, Error)]

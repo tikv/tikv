@@ -13,6 +13,8 @@ pub enum ErrorInner {
 
     #[error("Data padding is incorrect")]
     BadPadding,
+    #[error("key not found")]
+    KeyNotFound,
 }
 
 impl ErrorInner {
@@ -27,8 +29,7 @@ impl ErrorInner {
     }
 }
 
-// ====== The code below is to box the error so that the it can be as small as possible ======
-
+// Box the error so that the it can be as small as possible
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(#[from] pub Box<ErrorInner>);
@@ -57,6 +58,7 @@ impl ErrorCodeExt for Error {
         match self.0.as_ref() {
             ErrorInner::Io(_) => error_code::codec::IO,
             ErrorInner::BadPadding => error_code::codec::BAD_PADDING,
+            ErrorInner::KeyNotFound => error_code::codec::KEY_NOT_FOUND,
         }
     }
 }

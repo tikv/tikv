@@ -1,14 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::errors::Result;
-use crate::options::WriteOptions;
+use crate::{errors::Result, options::WriteOptions};
 
 /// Engines that can create write batches
 pub trait WriteBatchExt: Sized {
-    type WriteBatch: WriteBatch<Self>;
-    /// `WriteBatchVec` is used for `multi_batch_write` of RocksEngine and other Engine could also
-    /// implement another kind of WriteBatch according to their needs.
-    type WriteBatchVec: WriteBatch<Self>;
+    type WriteBatch: WriteBatch;
 
     /// The number of puts/deletes made to a write batch before the batch should
     /// be committed with `write`. More entries than this will cause
@@ -18,12 +14,6 @@ pub trait WriteBatchExt: Sized {
     /// and does not result in an error. It isn't clear the consequence of
     /// exceeding this limit.
     const WRITE_BATCH_MAX_KEYS: usize;
-
-    /// Indicates whether the WriteBatchVec type can be created and works
-    /// as expected.
-    ///
-    /// If this returns false then creating a WriteBatchVec will panic.
-    fn support_write_batch_vec(&self) -> bool;
 
     fn write_batch(&self) -> Self::WriteBatch;
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
@@ -79,15 +69,12 @@ pub trait Mutable: Send {
 /// point can be recorded. Any number of save points can be recorded to a stack.
 /// Calling `rollback_to_save_point` reverts all commands issued since the last
 /// save point, and pops the save point from the stack.
-pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
-    /// Create a WriteBatch with a given command capacity
-    fn with_capacity(e: &E, cap: usize) -> Self;
-
+pub trait WriteBatch: Mutable {
     /// Commit the WriteBatch to disk with the given options
-    fn write_opt(&self, opts: &WriteOptions) -> Result<()>;
+    fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64>;
 
     /// Commit the WriteBatch to disk atomically
-    fn write(&self) -> Result<()> {
+    fn write(&mut self) -> Result<u64> {
         self.write_opt(&WriteOptions::default())
     }
 
@@ -128,5 +115,5 @@ pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
     fn rollback_to_save_point(&mut self) -> Result<()>;
 
     /// Merge another WriteBatch to itself
-    fn merge(&mut self, src: Self);
+    fn merge(&mut self, src: Self) -> Result<()>;
 }

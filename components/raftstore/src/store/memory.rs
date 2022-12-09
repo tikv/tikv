@@ -1,9 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::sync::Arc;
+
 use fail::fail_point;
 use lazy_static::lazy_static;
-use std::sync::Arc;
 use tikv_alloc::{
     mem_trace,
     trace::{Id, MemoryTrace},

@@ -10,8 +10,8 @@ pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
 /// Note that leaking the callback can cause it to be never called but it
 /// rarely happens.
 ///
-/// Also note that because `callback` and `arg_on_drop` may be called in the `drop`
-/// method, do not panic inside them or use `safe_panic` instead.
+/// Also note that because `callback` and `arg_on_drop` may be called in the
+/// `drop` method, do not panic inside them or use `safe_panic` instead.
 pub fn must_call<T: Send + 'static>(
     callback: impl FnOnce(T) + Send + 'static,
     arg_on_drop: impl FnOnce() -> T + Send + 'static,
@@ -54,9 +54,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicI32, Ordering::SeqCst},
+        Arc,
+    };
+
     use super::*;
-    use std::sync::atomic::{AtomicI32, Ordering::SeqCst};
-    use std::sync::Arc;
 
     fn create_plus_int_cb() -> (Callback<i32>, Arc<AtomicI32>) {
         let v = Arc::new(AtomicI32::new(0i32));

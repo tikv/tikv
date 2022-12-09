@@ -1,21 +1,20 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryInto;
-use std::io::Write;
-use std::sync::Arc;
-use std::{cmp, u8};
+use std::{cmp, convert::TryInto, io::Write, sync::Arc, u8};
 
-use crate::prelude::*;
-use crate::FieldTypeTp;
-use kvproto::coprocessor::KeyRange;
-use tipb::ColumnInfo;
-
-use super::mysql::{Duration, Time};
-use super::{datum, datum::DatumDecoder, Datum, Error, Result};
-use crate::expr::EvalContext;
 use codec::prelude::*;
 use collections::{HashMap, HashSet};
+use kvproto::coprocessor::KeyRange;
 use tikv_util::codec::BytesSlice;
+use tipb::ColumnInfo;
+
+use super::{
+    datum,
+    datum::DatumDecoder,
+    mysql::{Duration, Time},
+    Datum, Error, Result,
+};
+use crate::{expr::EvalContext, prelude::*, FieldTypeTp};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -41,6 +40,9 @@ pub const INDEX_VALUE_RESTORED_DATA_FLAG: u8 = crate::codec::row::v2::CODEC_VERS
 
 /// ID for partition column, see <https://github.com/pingcap/parser/pull/1010>
 pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
+
+/// ID for physical table id column, see <https://github.com/tikv/tikv/issues/11888>
+pub const EXTRA_PHYSICAL_TABLE_ID_COL_ID: i64 = -3;
 
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
@@ -98,8 +100,8 @@ pub fn check_index_key(key: &[u8]) -> Result<()> {
     check_key_type(key, INDEX_PREFIX_SEP)
 }
 
-/// `check_key_type` checks if the key is the type we want, `wanted_type` should be
-/// `table::RECORD_PREFIX_SEP` or `table::INDEX_PREFIX_SEP` .
+/// `check_key_type` checks if the key is the type we want, `wanted_type` should
+/// be `table::RECORD_PREFIX_SEP` or `table::INDEX_PREFIX_SEP` .
 #[inline]
 fn check_key_type(key: &[u8], wanted_type: &[u8]) -> Result<()> {
     let mut buf = key;
@@ -182,7 +184,8 @@ pub fn encode_common_handle_for_test(table_id: i64, handle: &[u8]) -> Vec<u8> {
     key
 }
 
-/// `encode_column_key` encodes the table id, row handle and column id into a byte array.
+/// `encode_column_key` encodes the table id, row handle and column id into a
+/// byte array.
 pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN + ID_LEN);
     key.append_table_record_prefix(table_id).unwrap();
@@ -281,7 +284,7 @@ fn unflatten(
                     FieldTypeTp::VarChar,
                     FieldTypeTp::String,
                     FieldTypeTp::NewDecimal,
-                    FieldTypeTp::JSON
+                    FieldTypeTp::Json,
                 ]
                 .contains(&t),
                 "unknown type {} {}",
@@ -389,7 +392,8 @@ impl RowColsDict {
         self.cols.insert(cid, RowColMeta::new(offset, length));
     }
 
-    /// Gets binary of cols, keeps the original order, and returns one slice and cols' end offsets.
+    /// Gets binary of cols, keeps the original order, and returns one slice and
+    /// cols' end offsets.
     pub fn get_column_values_and_end_offsets(&self) -> (&[u8], Vec<usize>) {
         let mut start = self.value.len();
         let mut length = 0;
@@ -450,8 +454,10 @@ fn cut_row_v1(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
 
 /// Cuts a non-empty row in row format v2 and encodes into v1 format.
 fn cut_row_v2(data: Vec<u8>, cols: Arc<[ColumnInfo]>) -> Result<RowColsDict> {
-    use crate::codec::datum_codec::{ColumnIdDatumEncoder, EvaluableDatumEncoder};
-    use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
+    use crate::codec::{
+        datum_codec::{ColumnIdDatumEncoder, EvaluableDatumEncoder},
+        row::v2::{RowSlice, V1CompatibleEncoder},
+    };
 
     let mut meta_map = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
     let mut result = Vec::with_capacity(data.len() + cols.len() * 8);
@@ -538,12 +544,11 @@ pub fn generate_index_data_for_test(
 mod tests {
     use std::{i64, iter::FromIterator};
 
+    use collections::{HashMap, HashSet};
     use tipb::ColumnInfo;
 
-    use crate::codec::datum::{self, Datum};
-    use collections::{HashMap, HashSet};
-
     use super::*;
+    use crate::codec::datum::{self, Datum};
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
@@ -626,7 +631,7 @@ mod tests {
             (1, FieldTypeTp::LongLong.into()),
             (2, FieldTypeTp::VarChar.into()),
             (3, FieldTypeTp::NewDecimal.into()),
-            (5, FieldTypeTp::JSON.into()),
+            (5, FieldTypeTp::Json.into()),
             (6, duration_col),
         ]);
 
@@ -642,7 +647,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
-        let col_values: Vec<_> = row.iter().map(|(_, v)| v.clone()).collect();
+        let col_values: Vec<_> = row.values().cloned().collect();
         let mut col_encoded: HashMap<_, _> = row
             .iter()
             .map(|(k, v)| {
@@ -658,8 +663,7 @@ mod tests {
         let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
-        let mut datums: HashMap<_, _>;
-        datums = cut_row_as_owned(&bs, &col_id_set);
+        let mut datums: HashMap<_, _> = cut_row_as_owned(&bs, &col_id_set);
         assert_eq!(col_encoded, datums);
 
         cols.insert(4, FieldTypeTp::Float.into());
@@ -786,18 +790,18 @@ mod tests {
         let mut range = KeyRange::default();
         range.set_start(small_key.clone());
         range.set_end(large_key.clone());
-        assert!(check_table_ranges(&[range]).is_ok());
-        //test range.start > range.end
+        check_table_ranges(&[range]).unwrap();
+        // test range.start > range.end
         let mut range = KeyRange::default();
         range.set_end(small_key.clone());
         range.set_start(large_key);
-        assert!(check_table_ranges(&[range]).is_err());
+        check_table_ranges(&[range]).unwrap_err();
 
         // test invalid end
         let mut range = KeyRange::default();
         range.set_start(small_key);
         range.set_end(b"xx".to_vec());
-        assert!(check_table_ranges(&[range]).is_err());
+        check_table_ranges(&[range]).unwrap_err();
     }
 
     #[test]
@@ -808,23 +812,23 @@ mod tests {
             assert_eq!(tid, decode_table_id(&k).unwrap());
             let k = encode_index_seek_key(tid, 1, &k);
             assert_eq!(tid, decode_table_id(&k).unwrap());
-            assert!(decode_table_id(b"xxx").is_err());
+            decode_table_id(b"xxx").unwrap_err();
         }
     }
 
     #[test]
     fn test_check_key_type() {
         let record_key = encode_row_key(TABLE_ID, 1);
-        assert!(check_key_type(record_key.as_slice(), RECORD_PREFIX_SEP).is_ok());
-        assert!(check_key_type(record_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+        check_key_type(record_key.as_slice(), RECORD_PREFIX_SEP).unwrap();
+        check_key_type(record_key.as_slice(), INDEX_PREFIX_SEP).unwrap_err();
 
         let (_, index_key) =
             generate_index_data_for_test(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
-        assert!(check_key_type(index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
-        assert!(check_key_type(index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
+        check_key_type(index_key.as_slice(), RECORD_PREFIX_SEP).unwrap_err();
+        check_key_type(index_key.as_slice(), INDEX_PREFIX_SEP).unwrap();
 
         let too_small_key = vec![0];
-        assert!(check_key_type(too_small_key.as_slice(), RECORD_PREFIX_SEP).is_err());
-        assert!(check_key_type(too_small_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+        check_key_type(too_small_key.as_slice(), RECORD_PREFIX_SEP).unwrap_err();
+        check_key_type(too_small_key.as_slice(), INDEX_PREFIX_SEP).unwrap_err();
     }
 }

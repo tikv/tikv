@@ -1,11 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    io::{BufRead, Write},
+    ptr,
+};
+
 use byteorder::ReadBytesExt;
-use std::io::{BufRead, Write};
 
 use super::{BytesSlice, Error, Result};
 use crate::codec::number::{self, NumberEncoder};
-use std::ptr;
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -52,8 +55,8 @@ pub trait BytesEncoder: NumberEncoder {
     }
 
     /// Joins bytes with its length into a byte slice. It is more
-    /// efficient in both space and time compared to `encode_bytes`. Note that the encoded
-    /// result is not memcomparable.
+    /// efficient in both space and time compared to `encode_bytes`. Note that
+    /// the encoded result is not memcomparable.
     fn encode_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
         self.encode_var_i64(data.len() as i64)?;
         self.write_all(data).map_err(From::from)
@@ -92,13 +95,14 @@ fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
 
 /// Gets the first encoded bytes' length in compactly encoded data.
 ///
-/// Compact-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
-/// This function gets the total bytes length of compact-encoded data, including the length prefix.
+/// Compact-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N
+/// bytes payload. This function gets the total bytes length of compact-encoded
+/// data, including the length prefix.
 ///
 /// Note:
 ///     - This function won't check whether the bytes are encoded correctly.
-///     - There can be multiple compact-encoded data, placed one by one. This function only returns
-///       the length of the first one.
+///     - There can be multiple compact-encoded data, placed one by one. This
+///       function only returns the length of the first one.
 pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
     let last_encoded = encoded.as_ptr() as usize;
     let total_len = encoded.len();
@@ -134,13 +138,14 @@ impl<T: BufRead> CompactBytesFromFileDecoder for T {}
 
 /// Gets the first encoded bytes' length in memcomparable-encoded data.
 ///
-/// Memcomparable-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
-/// This function gets the total bytes length of memcomparable-encoded data, including the length prefix.
+/// Memcomparable-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes)
+/// and N bytes payload. This function gets the total bytes length of
+/// memcomparable-encoded data, including the length prefix.
 ///
 /// Note:
 ///     - This function won't check whether the bytes are encoded correctly.
-///     - There can be multiple memcomparable-encoded data, placed one by one. This function only returns
-///       the length of the first one.
+///     - There can be multiple memcomparable-encoded data, placed one by one.
+///       This function only returns the length of the first one.
 pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
     let mut idx = ENC_GROUP_SIZE;
     loop {
@@ -218,8 +223,8 @@ pub fn decode_bytes(data: &mut BytesSlice<'_>, desc: bool) -> Result<Vec<u8>> {
     }
 }
 
-/// Decodes bytes which are encoded by `encode_bytes` before just in place without malloc.
-/// Please use this instead of `decode_bytes` if possible.
+/// Decodes bytes which are encoded by `encode_bytes` before just in place
+/// without malloc. Please use this instead of `decode_bytes` if possible.
 pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     let mut write_offset = 0;
     let mut read_offset = 0;
@@ -278,7 +283,8 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     }
 }
 
-/// Returns whether `encoded` bytes is encoded from `raw`. Returns `false` if `encoded` is invalid.
+/// Returns whether `encoded` bytes is encoded from `raw`. Returns `false` if
+/// `encoded` is invalid.
 pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
     let check_single_chunk = |encoded: &[u8], raw: &[u8]| {
         let len = raw.len();
@@ -307,8 +313,8 @@ pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
         return false;
     }
 
-    // Bytes are compared in reverse order because in real cases like TiDB, if two keys
-    // are different, the last a few bytes are more likely to be different.
+    // Bytes are compared in reverse order because in real cases like TiDB, if two
+    // keys are different, the last a few bytes are more likely to be different.
 
     let raw_chunks = raw.chunks_exact(ENC_GROUP_SIZE);
     // Check the last chunk first
@@ -317,8 +323,9 @@ pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
         _ => return false,
     }
 
-    // The count of the remaining chunks must be the same. Using `size_hint` here is both safe and
-    // efficient because chunk iterators implement trait `TrustedLen`.
+    // The count of the remaining chunks must be the same. Using `size_hint` here is
+    // both safe and efficient because chunk iterators implement trait
+    // `TrustedLen`.
     if rev_encoded_chunks.size_hint() != raw_chunks.size_hint() {
         return false;
     }
@@ -333,9 +340,10 @@ pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
     use super::*;
     use crate::codec::{bytes, number};
-    use std::cmp::Ordering;
 
     #[test]
     fn test_enc_dec_bytes() {
@@ -440,8 +448,8 @@ mod tests {
         ];
 
         for mut x in invalid_bytes {
-            assert!(decode_bytes(&mut x.as_slice(), false).is_err());
-            assert!(decode_bytes_in_place(&mut x, false).is_err());
+            decode_bytes(&mut x.as_slice(), false).unwrap_err();
+            decode_bytes_in_place(&mut x, false).unwrap_err();
         }
     }
 
@@ -505,7 +513,7 @@ mod tests {
                     desc
                 );
                 let mut longer_encoded = encoded.clone();
-                longer_encoded.extend(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
+                longer_encoded.extend([0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
                 assert!(
                     !is_encoded_from(&longer_encoded, &raw, desc),
                     "Encoded: {:?}, Raw: {:?}, desc: {}",

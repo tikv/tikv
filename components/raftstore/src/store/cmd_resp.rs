@@ -2,8 +2,9 @@
 
 use std::error;
 
-use crate::Error;
 use kvproto::raft_cmdpb::RaftCmdResponse;
+
+use crate::Error;
 
 pub fn bind_term(resp: &mut RaftCmdResponse, term: u64) {
     if term == 0 {

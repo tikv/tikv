@@ -1,18 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use async_trait::async_trait;
 use std::ops::Deref;
 
-use rusoto_core::request::DispatchSignedRequest;
-use rusoto_core::RusotoError;
+use async_trait::async_trait;
+use cloud::{
+    error::{Error, KmsError, Result},
+    kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
+};
+use rusoto_core::{request::DispatchSignedRequest, RusotoError};
 use rusoto_credential::ProvideAwsCredentials;
-use rusoto_kms::{DecryptError, GenerateDataKeyError};
-use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
+use rusoto_kms::{
+    DecryptError, DecryptRequest, GenerateDataKeyError, GenerateDataKeyRequest, Kms, KmsClient,
+};
 use tikv_util::stream::RetryError;
 
 use crate::util;
-use cloud::error::{Error, KmsError, Result};
-use cloud::kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey};
 
 const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
 pub const ENCRYPTION_VENDOR_NAME_AWS_KMS: &str = "AWS";
@@ -80,11 +82,11 @@ impl KmsProvider for AwsKms {
         ENCRYPTION_VENDOR_NAME_AWS_KMS
     }
 
-    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
-    // a wrong master key has been used, or other error otherwise.
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is
+    // possible that a wrong master key has been used, or other error otherwise.
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>> {
         let decrypt_request = DecryptRequest {
-            ciphertext_blob: bytes::Bytes::copy_from_slice(&*data_key),
+            ciphertext_blob: bytes::Bytes::copy_from_slice(data_key),
             // Use default algorithm SYMMETRIC_DEFAULT.
             encryption_algorithm: None,
             // Use key_id encoded in ciphertext.
@@ -123,8 +125,8 @@ impl KmsProvider for AwsKms {
     }
 }
 
-// Rusoto errors Display implementation just gives the cause message and discards the type.
-// This is really bad when the cause message is empty!
+// Rusoto errors Display implementation just gives the cause message and
+// discards the type. This is really bad when the cause message is empty!
 // Use Debug instead: this will show both
 pub struct FixRusotoErrorDisplay<E: std::fmt::Debug + std::error::Error + Send + Sync + 'static>(
     RusotoError<E>,
@@ -197,12 +199,13 @@ impl std::fmt::Debug for KmsClientDebug {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rusoto_credential::StaticProvider;
-    use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     // use rusoto_mock::MockRequestDispatcher;
     use cloud::kms::Location;
+    use rusoto_credential::StaticProvider;
+    use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     use rusoto_mock::MockRequestDispatcher;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_aws_kms() {

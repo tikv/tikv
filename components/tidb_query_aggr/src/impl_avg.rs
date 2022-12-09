@@ -2,15 +2,14 @@
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::builder::FieldTypeBuilder;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
+use tidb_query_datatype::{
+    builder::FieldTypeBuilder, codec::data_type::*, expr::EvalContext, EvalType, FieldTypeFlag,
+    FieldTypeTp,
+};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
-use super::summable::Summable;
-use super::*;
+use super::{summable::Summable, *};
 
 /// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;
@@ -32,6 +31,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         use std::convert::TryFrom;
+
         use tidb_query_datatype::FieldTypeAccessor;
 
         assert_eq!(root_expr.get_tp(), ExprType::Avg);
@@ -73,7 +73,8 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
 
 /// The AVG aggregate function.
 ///
-/// Note that there are `AVG(Decimal) -> (Int, Decimal)` and `AVG(Double) -> (Int, Double)`.
+/// Note that there are `AVG(Decimal) -> (Int, Decimal)` and `AVG(Double) ->
+/// (Int, Double)`.
 #[derive(Debug, AggrFunction)]
 #[aggr_function(state = AggrFnStateAvg::<T>::new())]
 pub struct AggrFnAvg<T>
@@ -312,15 +313,15 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::FieldTypeAccessor;
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        FieldTypeAccessor,
+    };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
+    use super::{super::AggrFunction, *};
     use crate::parser::AggrDefinitionParser;
-
-    use super::super::AggrFunction;
-    use super::*;
 
     #[test]
     fn test_update() {
@@ -352,7 +353,7 @@ mod tests {
 
         let x: ChunkedVecSized<Real> = vec![Real::new(0.0).ok(), Real::new(-4.5).ok(), None].into();
 
-        update_vector!(state, &mut ctx, &x, &[0, 1, 2]).unwrap();
+        update_vector!(state, &mut ctx, x, &[0, 1, 2]).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
@@ -475,7 +476,7 @@ mod tests {
         let exp_result = exp_result.vector_value().unwrap();
         let slice = exp_result.as_ref().to_decimal_vec();
         let slice: ChunkedVecSized<Decimal> = slice.into();
-        update_vector!(state, &mut ctx, &slice, exp_result.logical_rows()).unwrap();
+        update_vector!(state, &mut ctx, slice, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [
             VectorValue::with_capacity(0, EvalType::Int),

@@ -1,13 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::mvcc::{ErrorInner, Result as MvccResult, SnapshotReader};
-use crate::storage::Snapshot;
 use txn_types::{Key, TimeStamp, Write, WriteType};
+
+use crate::storage::{
+    mvcc::{ErrorInner, Result as MvccResult, SnapshotReader},
+    Snapshot,
+};
 
 /// Checks the existence of the key according to `should_not_exist`.
 /// If not, returns an `AlreadyExist` error.
-/// The caller must guarantee that the given `write` is the latest version of the key.
+/// The caller must guarantee that the given `write` is the latest version of
+/// the key.
 pub(crate) fn check_data_constraint<S: Snapshot>(
     reader: &mut SnapshotReader<S>,
     should_not_exist: bool,
@@ -15,8 +19,8 @@ pub(crate) fn check_data_constraint<S: Snapshot>(
     write_commit_ts: TimeStamp,
     key: &Key,
 ) -> MvccResult<()> {
-    // Here we assume `write` is the latest version of the key. So it should not contain a
-    // GC fence ts. Otherwise, it must be an already-deleted version.
+    // Here we assume `write` is the latest version of the key. So it should not
+    // contain a GC fence ts. Otherwise, it must be an already-deleted version.
     let write_is_invalid = matches!(write.gc_fence, Some(gc_fence_ts) if !gc_fence_ts.is_zero());
 
     if !should_not_exist || write.write_type == WriteType::Delete || write_is_invalid {
@@ -25,7 +29,8 @@ pub(crate) fn check_data_constraint<S: Snapshot>(
 
     // The current key exists under any of the following conditions:
     // 1.The current write type is `PUT`
-    // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
+    // 2.The current write type is `Rollback` or `Lock`, and the key have an older
+    // version.
     if write.write_type == WriteType::Put || reader.key_exist(key, write_commit_ts.prev())? {
         return Err(ErrorInner::AlreadyExist { key: key.to_raw()? }.into());
     }
@@ -34,16 +39,18 @@ pub(crate) fn check_data_constraint<S: Snapshot>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::mvcc::tests::write;
-    use crate::storage::mvcc::MvccTxn;
-    use crate::storage::{Engine, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
 
+    use super::*;
+    use crate::storage::{
+        mvcc::{tests::write, MvccTxn},
+        Engine, TestEngineBuilder,
+    };
+
     #[test]
     fn test_check_data_constraint() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(42.into());
         let mut txn = MvccTxn::new(TimeStamp::new(2), cm);
         txn.put_write(

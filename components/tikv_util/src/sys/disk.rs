@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+
 use fail::fail_point;
 pub use kvproto::disk_usage::DiskUsage;
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
 // DISK_RESERVED_SPACE means if left space is less than this, tikv will
 // turn to maintenance mode. There are another 2 value derived from this,
@@ -9,6 +10,7 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 // Percent is not configurable, But if you want to change, please make sure
 // the percent in both the init fs and store monitor are keep the same.
 static DISK_RESERVED_SPACE: AtomicU64 = AtomicU64::new(0);
+static RAFT_DISK_RESERVED_SPACE: AtomicU64 = AtomicU64::new(0);
 static DISK_STATUS: AtomicI32 = AtomicI32::new(0);
 
 pub fn set_disk_reserved_space(v: u64) {
@@ -17,6 +19,14 @@ pub fn set_disk_reserved_space(v: u64) {
 
 pub fn get_disk_reserved_space() -> u64 {
     DISK_RESERVED_SPACE.load(Ordering::Acquire)
+}
+
+pub fn set_raft_disk_reserved_space(v: u64) {
+    RAFT_DISK_RESERVED_SPACE.store(v, Ordering::Release)
+}
+
+pub fn get_raft_disk_reserved_space() -> u64 {
+    RAFT_DISK_RESERVED_SPACE.load(Ordering::Acquire)
 }
 
 pub fn set_disk_status(status: DiskUsage) {

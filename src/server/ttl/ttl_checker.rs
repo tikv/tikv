@@ -1,15 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Display, Formatter};
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 
-use crate::server::metrics::*;
 use engine_traits::{KvEngine, CF_DEFAULT};
 use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::time::{Instant, UnixSecs};
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::{
+    time::{Instant, UnixSecs},
+    worker::{Runnable, RunnableWithTimer},
+};
+
+use crate::server::metrics::*;
 
 const COMPACT_FILES_SLEEP_TIME: u64 = 2; // 2s
 const WAIT_METRICS_PULLED_TIME: u64 = 40; // 40s
@@ -29,16 +34,16 @@ impl Display for Task {
     }
 }
 
-pub struct TTLChecker<E: KvEngine, R: RegionInfoProvider> {
+pub struct TtlChecker<E: KvEngine, R: RegionInfoProvider> {
     engine: E,
     region_info_provider: R,
     poll_interval: Duration,
 }
 
-impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
+impl<E: KvEngine, R: RegionInfoProvider> TtlChecker<E, R> {
     pub fn new(engine: E, region_info_provider: R, poll_interval: Duration) -> Self {
         TTL_CHECKER_POLL_INTERVAL_GAUGE.set(poll_interval.as_millis() as i64);
-        TTLChecker::<E, R> {
+        TtlChecker::<E, R> {
             engine,
             region_info_provider,
             poll_interval,
@@ -46,7 +51,7 @@ impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
     }
 }
 
-impl<E: KvEngine, R: RegionInfoProvider> Runnable for TTLChecker<E, R>
+impl<E: KvEngine, R: RegionInfoProvider> Runnable for TtlChecker<E, R>
 where
     E: KvEngine,
 {
@@ -66,7 +71,7 @@ where
     }
 }
 
-impl<E: KvEngine, R: RegionInfoProvider> RunnableWithTimer for TTLChecker<E, R> {
+impl<E: KvEngine, R: RegionInfoProvider> RunnableWithTimer for TtlChecker<E, R> {
     fn on_timeout(&mut self) {
         let mut key = vec![];
         loop {

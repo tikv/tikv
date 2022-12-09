@@ -1,8 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{Debug, Display};
-use std::io::{Error as IoError, ErrorKind};
-use std::{error, result};
+use std::{
+    error,
+    fmt::{Debug, Display},
+    io::{Error as IoError, ErrorKind},
+    result,
+};
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use openssl::error::ErrorStack as CrypterError;

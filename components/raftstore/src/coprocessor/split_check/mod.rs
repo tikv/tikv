@@ -5,18 +5,16 @@ mod keys;
 mod size;
 mod table;
 
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
+use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::box_try;
 
-use super::config::Config;
-use super::error::Result;
-use super::{KeyEntry, ObserverContext, SplitChecker};
-
-pub use self::half::{get_region_approximate_middle, HalfCheckObserver};
-pub use self::keys::{get_region_approximate_keys, KeysCheckObserver};
-pub use self::size::{get_region_approximate_size, SizeCheckObserver};
-pub use self::table::TableCheckObserver;
+pub use self::{
+    half::{get_region_approximate_middle, HalfCheckObserver},
+    keys::{get_region_approximate_keys, KeysCheckObserver},
+    size::{get_region_approximate_size, SizeCheckObserver},
+    table::TableCheckObserver,
+};
+use super::{config::Config, error::Result, Bucket, KeyEntry, ObserverContext, SplitChecker};
 
 pub struct Host<'a, E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,
@@ -85,8 +83,74 @@ impl<'a, E> Host<'a, E> {
         Ok(vec![])
     }
 
+    pub fn approximate_bucket_keys<Kv: engine_traits::KvEngine>(
+        &mut self,
+        region: &Region,
+        engine: &Kv,
+    ) -> Result<Bucket> {
+        let region_size = get_region_approximate_size(engine, region, 0)?;
+        const MIN_BUCKET_COUNT_PER_REGION: u64 = 2;
+        if region_size >= self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION {
+            let mut bucket_checker = size::Checker::new(
+                self.cfg.region_bucket_size.0, // not used
+                self.cfg.region_bucket_size.0, // not used
+                region_size / self.cfg.region_bucket_size.0,
+                CheckPolicy::Approximate,
+            );
+            return bucket_checker
+                .approximate_split_keys(region, engine)
+                .map(|keys| Bucket {
+                    keys: keys
+                        .into_iter()
+                        .map(|k| ::keys::origin_key(&k).to_vec())
+                        .collect(),
+                    size: region_size,
+                });
+        }
+        Ok(Bucket {
+            keys: vec![],
+            size: region_size,
+        })
+    }
+
     #[inline]
     pub fn add_checker(&mut self, checker: Box<dyn SplitChecker<E>>) {
         self.checkers.push(checker);
     }
+
+    #[inline]
+    pub fn enable_region_bucket(&self) -> bool {
+        self.cfg.enable_region_bucket
+    }
+
+    #[inline]
+    pub fn region_bucket_size(&self) -> u64 {
+        self.cfg.region_bucket_size.0
+    }
+}
+
+#[inline]
+pub fn calc_split_keys_count(
+    count_per_region: u64,
+    split_threshold: u64,
+    max_count_per_region: u64,
+    batch_split_limit: u64,
+) -> u64 {
+    if count_per_region < max_count_per_region {
+        return 0;
+    }
+
+    // split keys count is split count - 1
+    // e.g. when split_threshold is 60 & max_count_per_region is 90
+    //      if count_per_region is 60, return 0
+    //      if count_per_region is 90, return 1
+    //      if count_per_region is 121, return 1
+    //      if count_per_region is 183, return 2
+    std::cmp::min(
+        std::cmp::max(
+            ((count_per_region as f64 / split_threshold as f64).round() as u64).saturating_sub(1),
+            count_per_region / max_count_per_region,
+        ),
+        batch_split_limit,
+    )
 }

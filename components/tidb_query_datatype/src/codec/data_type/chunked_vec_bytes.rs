@@ -1,8 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
-use super::{Bytes, BytesRef};
-use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
+use super::{bit_vec::BitVec, Bytes, BytesRef, ChunkRef, ChunkedVec, UnsafeRefInto};
 use crate::impl_chunked_vec_common;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -15,11 +13,11 @@ pub struct ChunkedVecBytes {
 
 /// A vector storing `Option<Bytes>` with a compact layout.
 ///
-/// Inside `ChunkedVecBytes`, `bitmap` indicates if an element at given index is null,
-/// and `data` stores actual data. Bytes data are stored adjacent to each other in
-/// `data`. If element at a given index is null, then it takes no space in `data`.
-/// Otherwise, contents of the `Bytes` are stored, and `var_offset` indicates the starting
-/// position of each element.
+/// Inside `ChunkedVecBytes`, `bitmap` indicates if an element at given index is
+/// null, and `data` stores actual data. Bytes data are stored adjacent to each
+/// other in `data`. If element at a given index is null, then it takes no space
+/// in `data`. Otherwise, contents of the `Bytes` are stored, and `var_offset`
+/// indicates the starting position of each element.
 impl ChunkedVecBytes {
     #[inline]
     pub fn push_data_ref(&mut self, value: BytesRef<'_>) {
@@ -179,7 +177,7 @@ impl BytesWriter {
     }
 }
 
-impl<'a> PartialBytesWriter {
+impl PartialBytesWriter {
     pub fn partial_write(&mut self, data: BytesRef<'_>) {
         self.chunked_vec.data.extend_from_slice(data);
     }
@@ -238,10 +236,7 @@ mod tests {
             None,
         ];
         assert_eq!(ChunkedVecBytes::from_slice(test_bytes).to_vec(), test_bytes);
-        assert_eq!(
-            ChunkedVecBytes::from_slice(&test_bytes.to_vec()).to_vec(),
-            test_bytes
-        );
+        assert_eq!(ChunkedVecBytes::from_slice(test_bytes).to_vec(), test_bytes);
     }
 
     #[test]

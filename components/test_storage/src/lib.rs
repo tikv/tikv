@@ -9,6 +9,4 @@ mod assert_storage;
 mod sync_storage;
 mod util;
 
-pub use crate::assert_storage::*;
-pub use crate::sync_storage::*;
-pub use crate::util::*;
+pub use crate::{assert_storage::*, sync_storage::*, util::*};

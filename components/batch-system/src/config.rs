@@ -2,24 +2,18 @@
 
 use online_config::OnlineConfig;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tikv_util::config::ReadableDuration;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[online_config(skip)]
     pub max_batch_size: Option<usize>,
     pub pool_size: usize,
     #[online_config(skip)]
     pub reschedule_duration: ReadableDuration,
     #[online_config(skip)]
     pub low_priority_pool_size: usize,
-    #[doc(hidden)]
-    #[serde(skip)]
-    #[online_config(skip)]
-    pub before_pause_wait: Option<Duration>,
 }
 
 impl Config {
@@ -36,7 +30,6 @@ impl Default for Config {
             pool_size: 2,
             reschedule_duration: ReadableDuration::secs(5),
             low_priority_pool_size: 1,
-            before_pause_wait: None,
         }
     }
 }

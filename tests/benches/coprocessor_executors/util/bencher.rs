@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::black_box;
-use criterion::measurement::Measurement;
+use criterion::{black_box, measurement::Measurement};
 use futures::executor::block_on;
 use tidb_query_executors::interface::*;
 use tikv::coprocessor::RequestHandler;
@@ -33,7 +32,7 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNext1024Bencher<E, F> {
             |executor| {
                 profiler::start("./BatchNext1024Bencher.profile");
                 let iter_times = black_box(1024);
-                let r = black_box(executor.next_batch(iter_times));
+                let r = black_box(block_on(executor.next_batch(iter_times)));
                 r.is_drained.unwrap();
                 profiler::stop();
             },
@@ -63,7 +62,7 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNextAllBencher<E, F> {
             |executor| {
                 profiler::start("./BatchNextAllBencher.profile");
                 loop {
-                    let r = executor.next_batch(1024);
+                    let r = block_on(executor.next_batch(1024));
                     black_box(&r);
                     if r.is_drained.unwrap() {
                         break;
@@ -77,17 +76,17 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNextAllBencher<E, F> {
 }
 
 /// Invoke handle request for a DAG handler.
-pub struct DAGHandleBencher<F: FnMut() -> Box<dyn RequestHandler>> {
+pub struct DagHandleBencher<F: FnMut() -> Box<dyn RequestHandler>> {
     handler_builder: F,
 }
 
-impl<F: FnMut() -> Box<dyn RequestHandler>> DAGHandleBencher<F> {
+impl<F: FnMut() -> Box<dyn RequestHandler>> DagHandleBencher<F> {
     pub fn new(handler_builder: F) -> Self {
         Self { handler_builder }
     }
 }
 
-impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DAGHandleBencher<F> {
+impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DagHandleBencher<F> {
     fn bench<M>(&mut self, b: &mut criterion::Bencher<'_, M>)
     where
         M: Measurement,
@@ -95,7 +94,7 @@ impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DAGHandleBencher<F> {
         b.iter_batched_ref(
             &mut self.handler_builder,
             |handler| {
-                profiler::start("./DAGHandleBencher.profile");
+                profiler::start("./DagHandleBencher.profile");
                 black_box(block_on(handler.handle_request()).unwrap());
                 profiler::stop();
             },

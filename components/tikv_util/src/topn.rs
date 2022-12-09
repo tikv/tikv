@@ -1,8 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Reverse;
-use std::collections::{binary_heap, BinaryHeap};
-use std::iter;
+use std::{
+    cmp::Reverse,
+    collections::{binary_heap, BinaryHeap},
+    iter,
+};
 
 // todo: Make it TopN<T, const N: usize> when we update our Rust version
 /// TopN is used to collect the largest `cap` items pushed in
@@ -56,7 +58,8 @@ impl<T> IntoIterator for TopN<T> {
     #[allow(clippy::type_complexity)]
     type IntoIter = iter::Map<binary_heap::IntoIter<Reverse<T>>, fn(Reverse<T>) -> T>;
 
-    // note: IntoIterator doesn't require the result in order, there is an `IntoIterSorted`, implement that if necessary
+    // note: IntoIterator doesn't require the result in order, there is an
+    // `IntoIterSorted`, implement that if necessary
     fn into_iter(self) -> Self::IntoIter {
         self.heap.into_iter().map(|Reverse(x)| x)
     }

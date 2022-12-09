@@ -2,12 +2,11 @@
 
 use std::cell::RefCell;
 
-use prometheus::local::*;
-use prometheus::*;
+use prometheus::{local::*, *};
 use prometheus_static_metric::*;
 
 make_static_metric! {
-    pub label_enum IOType {
+    pub label_enum IoType {
         other,
         foreground_read,
         foreground_write,
@@ -21,43 +20,42 @@ make_static_metric! {
         export,
     }
 
-    pub label_enum IOOp {
+    pub label_enum IoOp {
         read,
         write,
     }
 
-    pub label_enum IOPriority {
+    pub label_enum IoPriority {
         low,
         medium,
         high,
     }
 
-    pub struct IOLatencyVec : Histogram {
-        "type" => IOType,
-        "op" => IOOp,
+    pub struct IoLatencyVec : Histogram {
+        "type" => IoType,
+        "op" => IoOp,
     }
 
-    pub struct IOBytesVec : IntCounter {
-        "type" => IOType,
-        "op" => IOOp,
+    pub struct IoBytesVec : IntCounter {
+        "type" => IoType,
+        "op" => IoOp,
     }
 
-    pub struct IOPriorityIntGaugeVec : IntGauge {
-        "type" => IOPriority,
+    pub struct IoPriorityIntGaugeVec : IntGauge {
+        "type" => IoPriority,
     }
 }
 
 lazy_static! {
-    pub static ref IO_BYTES_VEC: IOBytesVec = register_static_int_counter_vec!(
-        IOBytesVec,
+    pub static ref IO_BYTES_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_io_bytes",
         "Bytes of disk tikv io",
         &["type", "op"]
     ).unwrap();
 
-    pub static ref IO_LATENCY_MICROS_VEC: IOLatencyVec =
+    pub static ref IO_LATENCY_MICROS_VEC: IoLatencyVec =
         register_static_histogram_vec!(
-            IOLatencyVec,
+            IoLatencyVec,
             "tikv_io_latency_micros",
             "Duration of disk tikv io.",
             &["type", "op"],
@@ -72,8 +70,8 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref RATE_LIMITER_MAX_BYTES_PER_SEC: IOPriorityIntGaugeVec = register_static_int_gauge_vec!(
-        IOPriorityIntGaugeVec,
+    pub static ref RATE_LIMITER_MAX_BYTES_PER_SEC: IoPriorityIntGaugeVec = register_static_int_gauge_vec!(
+        IoPriorityIntGaugeVec,
         "tikv_rate_limiter_max_bytes_per_sec",
         "Maximum IO bytes per second",
         &["type"]

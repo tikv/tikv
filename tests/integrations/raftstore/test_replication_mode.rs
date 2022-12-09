@@ -1,16 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{mpsc, Arc},
+    thread,
+    time::Duration,
+};
 
 use kvproto::replication_modepb::*;
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
-use std::sync::mpsc;
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::*, HandyRwLock};
 
 fn prepare_cluster() -> Cluster<ServerCluster> {
     let mut cluster = new_server_cluster(0, 3);
@@ -27,7 +27,7 @@ fn prepare_cluster() -> Cluster<ServerCluster> {
 fn configure_for_snapshot(cluster: &mut Cluster<ServerCluster>) {
     // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
@@ -38,8 +38,8 @@ fn run_cluster(cluster: &mut Cluster<ServerCluster>) {
     cluster.must_put(b"k1", b"v0");
 }
 
-/// When using DrAutoSync replication mode, data should be replicated to different labels
-/// before committed.
+/// When using DrAutoSync replication mode, data should be replicated to
+/// different labels before committed.
 #[test]
 fn test_dr_auto_sync() {
     let mut cluster = prepare_cluster();
@@ -123,7 +123,7 @@ fn test_sync_recover_after_apply_snapshot() {
     // swith to async
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::Async);
+        .switch_replication_mode(DrAutoSyncState::Async, vec![]);
     rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     thread::sleep(Duration::from_millis(100));
@@ -140,7 +140,7 @@ fn test_sync_recover_after_apply_snapshot() {
 
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::SyncRecover);
+        .switch_replication_mode(DrAutoSyncState::SyncRecover, vec![]);
     thread::sleep(Duration::from_millis(100));
     // Add node 3 back, snapshot will apply
     cluster.clear_send_filters();
@@ -189,7 +189,7 @@ fn test_check_conf_change() {
         res.get_header()
             .get_error()
             .get_message()
-            .contains("unsafe to perform conf change"),
+            .contains("promoted commit index"),
         "{:?}",
         res
     );
@@ -212,22 +212,22 @@ fn test_update_group_id() {
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k0").unwrap();
     let right = pd_client.get_region(b"k2").unwrap();
-    // When a node is started, all store information are loaded at once, so we need an extra node
-    // to verify resolve will assign group id.
+    // When a node is started, all store information are loaded at once, so we need
+    // an extra node to verify resolve will assign group id.
     cluster.add_label(3, "zone", "WS");
     cluster.add_new_engine();
     pd_client.must_add_peer(left.id, new_peer(2, 2));
     pd_client.must_add_peer(left.id, new_learner_peer(3, 3));
     pd_client.must_add_peer(left.id, new_peer(3, 3));
-    // If node 3's group id is not assigned, leader will make commit index as the smallest last
-    // index of all followers.
+    // If node 3's group id is not assigned, leader will make commit index as the
+    // smallest last index of all followers.
     cluster.add_send_filter(IsolationFilterFactory::new(2));
     cluster.must_put(b"k11", b"v11");
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
     must_get_equal(&cluster.get_engine(1), b"k11", b"v11");
 
-    // So both node 1 and node 3 have fully resolved all stores. Further updates to group ID have
-    // to be done when applying conf change and snapshot.
+    // So both node 1 and node 3 have fully resolved all stores. Further updates to
+    // group ID have to be done when applying conf change and snapshot.
     cluster.clear_send_filters();
     pd_client.must_add_peer(right.id, new_peer(2, 4));
     pd_client.must_add_peer(right.id, new_learner_peer(3, 5));
@@ -269,7 +269,7 @@ fn test_switching_replication_mode() {
 
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::Async);
+        .switch_replication_mode(DrAutoSyncState::Async, vec![]);
     rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     thread::sleep(Duration::from_millis(100));
@@ -279,7 +279,7 @@ fn test_switching_replication_mode() {
 
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::SyncRecover);
+        .switch_replication_mode(DrAutoSyncState::SyncRecover, vec![]);
     thread::sleep(Duration::from_millis(100));
     let mut request = new_request(
         region.get_id(),
@@ -311,7 +311,45 @@ fn test_switching_replication_mode() {
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 }
 
-/// Ensures hibernate region still works properly when switching replication mode.
+#[test]
+fn test_replication_mode_allowlist() {
+    let mut cluster = prepare_cluster();
+    run_cluster(&mut cluster);
+    cluster
+        .pd_client
+        .switch_replication_mode(DrAutoSyncState::Async, vec![1]);
+    thread::sleep(Duration::from_millis(100));
+
+    // 2,3 are paused, so it should not be able to write.
+    let region = cluster.get_region(b"k1");
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cf_cmd("default", b"k2", b"v2")],
+        false,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, request, cb)
+        .unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(100)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+
+    // clear allowlist.
+    cluster
+        .pd_client
+        .switch_replication_mode(DrAutoSyncState::Async, vec![]);
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+}
+
+/// Ensures hibernate region still works properly when switching replication
+/// mode.
 #[test]
 fn test_switching_replication_mode_hibernate() {
     let mut cluster = new_server_cluster(0, 3);
@@ -449,7 +487,7 @@ fn test_assign_commit_groups_with_migrate_region() {
 
     // Split 1 region into 2 regions.
     let region = cluster.get_region(b"");
-    cluster.must_split(&region, &b"k".to_vec());
+    cluster.must_split(&region, b"k");
     // Put a key value pair.
     cluster.must_put(b"a1", b"v0");
     cluster.must_put(b"k1", b"v0");

@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
+
 use crate::storage::{
     mvcc::{
         metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite, ErrorInner, LockType,
@@ -8,10 +10,10 @@ use crate::storage::{
     },
     Snapshot, TxnStatus,
 };
-use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
 
-// Check whether there's an overlapped write record, and then perform rollback. The actual behavior
-// to do the rollback differs according to whether there's an overlapped write record.
+// Check whether there's an overlapped write record, and then perform rollback.
+// The actual behavior to do the rollback differs according to whether there's
+// an overlapped write record.
 pub fn check_txn_status_lock_exists(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
@@ -22,8 +24,9 @@ pub fn check_txn_status_lock_exists(
     force_sync_commit: bool,
     resolving_pessimistic_lock: bool,
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
-    // Never rollback or push forward min_commit_ts in check_txn_status if it's using async commit.
-    // Rollback of async-commit locks are done during ResolveLock.
+    // Never rollback or push forward min_commit_ts in check_txn_status if it's
+    // using async commit. Rollback of async-commit locks are done during
+    // ResolveLock.
     if lock.use_async_commit {
         if force_sync_commit {
             info!(
@@ -39,10 +42,10 @@ pub fn check_txn_status_lock_exists(
     let is_pessimistic_txn = !lock.for_update_ts.is_zero();
     if lock.ts.physical() + lock.ttl < current_ts.physical() {
         // If the lock is expired, clean it up.
-        // If the resolving and primary key lock are both pessimistic locks, just unlock the
-        // primary pessimistic lock and do not write rollback records.
+        // If the resolving and primary key lock are both pessimistic locks, just unlock
+        // the primary pessimistic lock and do not write rollback records.
         return if resolving_pessimistic_lock && lock.lock_type == LockType::Pessimistic {
-            let released = txn.unlock_key(primary_key, is_pessimistic_txn);
+            let released = txn.unlock_key(primary_key, is_pessimistic_txn, TimeStamp::zero());
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
             Ok((TxnStatus::PessimisticRollBack, released))
         } else {
@@ -53,9 +56,9 @@ pub fn check_txn_status_lock_exists(
         };
     }
 
-    // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
-    // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
-    // during rolling update.
+    // If lock.min_commit_ts is 0, it's not a large transaction and we can't push
+    // forward its min_commit_ts otherwise the transaction can't be committed by
+    // old version TiDB during rolling update.
     if !lock.min_commit_ts.is_zero()
         && !caller_start_ts.is_max()
         // Push forward the min_commit_ts so that reading won't be blocked by locks.
@@ -71,8 +74,9 @@ pub fn check_txn_status_lock_exists(
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
     }
 
-    // As long as the primary lock's min_commit_ts > caller_start_ts, locks belong to the same transaction
-    // can't block reading. Return MinCommitTsPushed result to the client to let it bypass locks.
+    // As long as the primary lock's min_commit_ts > caller_start_ts, locks belong
+    // to the same transaction can't block reading. Return MinCommitTsPushed
+    // result to the client to let it bypass locks.
     let min_commit_ts_pushed = (!caller_start_ts.is_zero() && lock.min_commit_ts > caller_start_ts)
         // If the caller_start_ts is max, it's a point get in the autocommit transaction.
         // We don't push forward lock's min_commit_ts and the point get can ignore the lock
@@ -153,10 +157,11 @@ pub fn rollback_lock(
         TxnCommitRecord::SingleRecord { write, .. } if write.write_type != WriteType::Rollback => {
             panic!("txn record found but not expected: {:?}", txn)
         }
-        _ => return Ok(txn.unlock_key(key, is_pessimistic_txn)),
+        _ => return Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero())),
     };
 
-    // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
+    // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete
+    // value.
     if lock.short_value.is_none() && lock.lock_type == LockType::Put {
         txn.delete_value(key.clone(), lock.ts);
     }
@@ -171,7 +176,7 @@ pub fn rollback_lock(
         collapse_prev_rollback(txn, reader, &key)?;
     }
 
-    Ok(txn.unlock_key(key, is_pessimistic_txn))
+    Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero()))
 }
 
 pub fn collapse_prev_rollback(
@@ -187,8 +192,8 @@ pub fn collapse_prev_rollback(
     Ok(())
 }
 
-/// Generate the Write record that should be written that means to perform a specified rollback
-/// operation.
+/// Generate the Write record that should be written that means to perform a
+/// specified rollback operation.
 pub fn make_rollback(
     start_ts: TimeStamp,
     protected: bool,
@@ -208,7 +213,7 @@ pub fn make_rollback(
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum MissingLockAction {
     Rollback,
     ProtectedRollback,

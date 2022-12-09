@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::store::metrics::*;
-
 use kvproto::metapb::Region;
 use pd_client::{Feature, FeatureGate};
 use serde_derive::{Deserialize, Serialize};
+
+use crate::store::metrics::*;
 
 /// Because negotiation protocol can't be recognized by old version of binaries,
 /// so enabling it directly can cause a lot of connection reset.
@@ -42,7 +42,7 @@ pub struct HibernateState {
 macro_rules! update_metric {
     ($state:expr, $op:ident) => {
         let gauge = match $state {
-            GroupState::Idle => &HIBERNATED_PEER_STATE_GAUGE.hibernated,
+            GroupState::Idle | GroupState::PreChaos => &HIBERNATED_PEER_STATE_GAUGE.hibernated,
             _ => &HIBERNATED_PEER_STATE_GAUGE.awaken,
         };
         gauge.$op();

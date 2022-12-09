@@ -1,12 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{io, marker::Unpin, pin::Pin, task::Poll};
+
 use async_trait::async_trait;
 use futures_io::AsyncRead;
 pub use kvproto::brpb::CloudDynamic;
-use std::io;
-use std::marker::Unpin;
-use std::pin::Pin;
-use std::task::Poll;
 
 pub trait BlobConfig: 'static + Send + Sync {
     fn name(&self) -> &'static str;
@@ -17,8 +15,11 @@ pub trait BlobConfig: 'static + Send + Sync {
 /// It is identity to [external_storage::UnpinReader],
 /// only for decoupling external_storage and cloud package.
 ///
-/// See the documentation of [external_storage::UnpinReader] for why those wrappers exists.
+/// See the documentation of [external_storage::UnpinReader] for why those
+/// wrappers exists.
 pub struct PutResource(pub Box<dyn AsyncRead + Send + Unpin>);
+
+pub type BlobStream<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
 impl AsyncRead for PutResource {
     fn poll_read(
@@ -46,7 +47,10 @@ pub trait BlobStorage: 'static + Send + Sync {
     async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()>;
 
     /// Read all contents of the given path.
-    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
+    fn get(&self, name: &str) -> BlobStream<'_>;
+
+    /// Read part of contents of the given path.
+    fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_>;
 }
 
 impl BlobConfig for dyn BlobStorage {
@@ -70,8 +74,12 @@ impl BlobStorage for Box<dyn BlobStorage> {
         fut.await
     }
 
-    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get(&self, name: &str) -> BlobStream<'_> {
         (**self).get(name)
+    }
+
+    fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_> {
+        (**self).get_part(name, off, len)
     }
 }
 

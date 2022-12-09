@@ -2,15 +2,13 @@
 
 use std::convert::TryFrom;
 
-use tidb_query_datatype::builder::FieldTypeBuilder;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+use tidb_query_common::Result;
+use tidb_query_datatype::{builder::FieldTypeBuilder, EvalType, FieldTypeAccessor, FieldTypeTp};
+use tidb_query_expr::{impl_cast::get_cast_fn_rpn_node, RpnExpression, RpnExpressionBuilder};
 use tipb::{Expr, FieldType};
 
-use tidb_query_common::Result;
-use tidb_query_expr::impl_cast::get_cast_fn_rpn_node;
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
-
-/// Checks whether or not there is only one child and the child expression is supported.
+/// Checks whether or not there is only one child and the child expression is
+/// supported.
 pub fn check_aggr_exp_supported_one_child(aggr_def: &Expr) -> Result<()> {
     if aggr_def.get_children().len() != 1 {
         return Err(other_err!(
@@ -26,7 +24,8 @@ pub fn check_aggr_exp_supported_one_child(aggr_def: &Expr) -> Result<()> {
     Ok(())
 }
 
-/// Rewrites the expression to insert necessary cast functions for SUM and AVG aggregate functions.
+/// Rewrites the expression to insert necessary cast functions for SUM and AVG
+/// aggregate functions.
 ///
 /// See `typeInfer4Sum` and `typeInfer4Avg` in TiDB.
 ///
@@ -39,10 +38,22 @@ pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) ->
             // No need to cast. Return directly without changing anything.
             return Ok(());
         }
-        EvalType::Int => FieldTypeBuilder::new()
-            .tp(FieldTypeTp::NewDecimal)
-            .flen(tidb_query_datatype::MAX_DECIMAL_WIDTH)
-            .build(),
+        EvalType::Int => {
+            // For type MysqlBit, the aggregation return type should be Double
+            // which is also defined in in TiDB typeInfer4Sum() and typeInfer4Avg()
+            if ret_field_type.tp() == FieldTypeTp::Bit {
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::Double)
+                    .flen(tidb_query_datatype::MAX_REAL_WIDTH)
+                    .decimal(tidb_query_datatype::UNSPECIFIED_LENGTH)
+                    .build()
+            } else {
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::NewDecimal)
+                    .flen(tidb_query_datatype::MAX_DECIMAL_WIDTH)
+                    .build()
+            }
+        }
         _ => FieldTypeBuilder::new()
             .tp(FieldTypeTp::Double)
             .flen(tidb_query_datatype::MAX_REAL_WIDTH)
@@ -54,7 +65,8 @@ pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) ->
     Ok(())
 }
 
-/// Rewrites the expression to insert necessary cast functions for Bit operation family functions.
+/// Rewrites the expression to insert necessary cast functions for Bit operation
+/// family functions.
 pub fn rewrite_exp_for_bit_op(schema: &[FieldType], exp: &mut RpnExpression) -> Result<()> {
     let ret_field_type = exp.ret_field_type(schema);
     let ret_eval_type = box_try!(EvalType::try_from(ret_field_type.as_accessor().tp()));

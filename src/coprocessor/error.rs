@@ -1,12 +1,16 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage;
-use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use thiserror::Error;
+
+use crate::{
+    storage,
+    storage::{
+        kv::{Error as KvError, ErrorInner as KvErrorInner},
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+    },
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -69,6 +73,7 @@ impl From<KvError> for Error {
     fn from(err: KvError) -> Self {
         match err {
             KvError(box KvErrorInner::Request(e)) => Error::Region(e),
+            KvError(box KvErrorInner::KeyIsLocked(lock_info)) => Error::Locked(lock_info),
             e => Error::Other(e.to_string()),
         }
     }

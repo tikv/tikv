@@ -1,40 +1,42 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{mpsc::channel, Arc},
+    thread,
+    time::Duration,
+};
 
+use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
 use error_code::{raftstore::STALE_COMMAND, ErrorCodeExt};
 use kvproto::kvrpcpb::Context;
-use std::sync::mpsc::channel;
-use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
-use tikv::server::gc_worker::{AutoGcConfig, GcConfig};
-use tikv::storage::kv::{Engine, Error as KvError, ErrorInner as KvErrorInner};
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
+use tikv::{
+    server::gc_worker::{AutoGcConfig, GcConfig},
+    storage::{
+        kv::{Engine, Error as KvError, ErrorInner as KvErrorInner},
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+        Error as StorageError, ErrorInner as StorageErrorInner,
+    },
+};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
 
 fn new_raft_storage() -> (
     Cluster<ServerCluster>,
-    SyncTestStorage<SimulateEngine>,
+    SyncTestStorageApiV1<SimulateEngine>,
     Context,
 ) {
-    new_raft_storage_with_store_count(1, "")
+    new_raft_storage_with_store_count::<ApiV1>(1, "")
 }
 
 #[test]
 fn test_raft_storage() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
-    let raw_key = b"key".to_vec();
-    let key = Key::from_raw(&raw_key);
-    assert_eq!(
-        storage.get(ctx.clone(), raw_key.clone(), 5).unwrap().0,
-        None
-    );
+    let key = Key::from_raw(b"key");
+    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap().0, None);
     storage
         .prewrite(
             ctx.clone(),
@@ -47,29 +49,21 @@ fn test_raft_storage() {
         .commit(ctx.clone(), vec![key.clone()], 10, 15)
         .unwrap();
     assert_eq!(
-        storage
-            .get(ctx.clone(), raw_key.clone(), 20)
-            .unwrap()
-            .0
-            .unwrap(),
+        storage.get(ctx.clone(), &key, 20).unwrap().0.unwrap(),
         b"value".to_vec()
     );
 
     // Test wrong region id.
     let region_id = ctx.get_region_id();
     ctx.set_region_id(region_id + 1);
-    assert!(storage.get(ctx.clone(), raw_key.clone(), 20).is_err());
-    assert!(
-        storage
-            .batch_get(ctx.clone(), &[raw_key.clone()], 20)
-            .is_err()
-    );
-    assert!(
-        storage
-            .scan(ctx.clone(), raw_key, None, 1, false, 20)
-            .is_err()
-    );
-    assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
+    storage.get(ctx.clone(), &key, 20).unwrap_err();
+    storage
+        .batch_get(ctx.clone(), &[key.clone()], 20)
+        .unwrap_err();
+    storage
+        .scan(ctx.clone(), key, None, 1, false, 20)
+        .unwrap_err();
+    storage.scan_locks(ctx, 20, None, None, 100).unwrap_err();
 }
 
 #[test]
@@ -108,8 +102,9 @@ fn test_raft_storage_get_after_lease() {
 #[test]
 fn test_raft_storage_rollback_before_prewrite() {
     let (_cluster, storage, ctx) = new_raft_storage();
-    let ret = storage.rollback(ctx.clone(), vec![Key::from_raw(b"key")], 10);
-    assert!(ret.is_ok());
+    storage
+        .rollback(ctx.clone(), vec![Key::from_raw(b"key")], 10)
+        .unwrap();
     let ret = storage.prewrite(
         ctx,
         vec![Mutation::make_put(Key::from_raw(b"key"), b"value".to_vec())],
@@ -132,12 +127,8 @@ fn test_raft_storage_rollback_before_prewrite() {
 fn test_raft_storage_store_not_match() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
 
-    let raw_key = b"key".to_vec();
-    let key = Key::from_raw(&raw_key);
-    assert_eq!(
-        storage.get(ctx.clone(), raw_key.clone(), 5).unwrap().0,
-        None
-    );
+    let key = Key::from_raw(b"key");
+    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap().0, None);
     storage
         .prewrite(
             ctx.clone(),
@@ -150,11 +141,7 @@ fn test_raft_storage_store_not_match() {
         .commit(ctx.clone(), vec![key.clone()], 10, 15)
         .unwrap();
     assert_eq!(
-        storage
-            .get(ctx.clone(), raw_key.clone(), 20)
-            .unwrap()
-            .0
-            .unwrap(),
+        storage.get(ctx.clone(), &key, 20).unwrap().0.unwrap(),
         b"value".to_vec()
     );
 
@@ -164,8 +151,8 @@ fn test_raft_storage_store_not_match() {
 
     peer.set_store_id(store_id + 1);
     ctx.set_peer(peer);
-    assert!(storage.get(ctx.clone(), raw_key.clone(), 20).is_err());
-    let res = storage.get(ctx.clone(), raw_key.clone(), 20);
+    storage.get(ctx.clone(), &key, 20).unwrap_err();
+    let res = storage.get(ctx.clone(), &key, 20);
     if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
         box KvErrorInner::Request(ref e),
     ))))) = *res.as_ref().err().unwrap()
@@ -174,17 +161,13 @@ fn test_raft_storage_store_not_match() {
     } else {
         panic!("expect store_not_match, but got {:?}", res);
     }
-    assert!(
-        storage
-            .batch_get(ctx.clone(), &[raw_key.clone()], 20)
-            .is_err()
-    );
-    assert!(
-        storage
-            .scan(ctx.clone(), raw_key, None, 1, false, 20)
-            .is_err()
-    );
-    assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
+    storage
+        .batch_get(ctx.clone(), &[key.clone()], 20)
+        .unwrap_err();
+    storage
+        .scan(ctx.clone(), key, None, 1, false, 20)
+        .unwrap_err();
+    storage.scan_locks(ctx, 20, None, None, 100).unwrap_err();
 }
 
 #[test]
@@ -224,8 +207,8 @@ fn test_engine_leader_change_twice() {
     }
 }
 
-fn write_test_data<E: Engine>(
-    storage: &SyncTestStorage<E>,
+fn write_test_data<E: Engine, F: KvFormat>(
+    storage: &SyncTestStorage<E, F>,
     ctx: &Context,
     data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,
@@ -250,9 +233,9 @@ fn write_test_data<E: Engine>(
     }
 }
 
-fn check_data<E: Engine>(
+fn check_data<E: Engine, F: KvFormat>(
     cluster: &mut Cluster<ServerCluster>,
-    storages: &HashMap<u64, SyncTestStorage<E>>,
+    storages: &HashMap<u64, SyncTestStorage<E, F>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,
     expect_success: bool,
@@ -269,7 +252,7 @@ fn check_data<E: Engine>(
             ctx.set_region_epoch(region.take_region_epoch());
             ctx.set_peer(leader);
 
-            match storages[&leader_id].get(ctx, k.to_owned(), ts) {
+            match storages[&leader_id].get(ctx, &Key::from_raw(k), ts) {
                 Ok(v) => break v.0,
                 // Retry if meeting `StaleCommand` error.
                 Err(e) if e.error_code() == STALE_COMMAND => {}
@@ -292,7 +275,8 @@ fn check_data<E: Engine>(
 #[test]
 fn test_auto_gc() {
     let count = 3;
-    let (mut cluster, first_leader_storage, ctx) = new_raft_storage_with_store_count(count, "");
+    let (mut cluster, first_leader_storage, ctx) =
+        new_raft_storage_with_store_count::<ApiV1>(count, "");
     let pd_client = Arc::clone(&cluster.pd_client);
 
     // Used to wait for all storage's GC to finish
@@ -308,9 +292,9 @@ fn test_auto_gc() {
             let mut config = GcConfig::default();
             // Do not skip GC
             config.ratio_threshold = 0.9;
-            let storage = SyncTestStorageBuilder::from_engine(engine.clone())
+            let storage = SyncTestStorageBuilderApiV1::from_engine(engine.clone())
                 .gc_config(config)
-                .build()
+                .build(*id)
                 .unwrap();
 
             (*id, storage)
@@ -328,6 +312,7 @@ fn test_auto_gc() {
             *id,
         );
         cfg.post_a_round_of_gc = Some(Box::new(move || tx.send(()).unwrap()));
+
         storage.start_auto_gc(cfg);
     }
 
@@ -374,8 +359,8 @@ fn test_auto_gc() {
     let split_keys: &[&[u8]] = &[b"k2", b"k4", b"k6", b"k8"];
 
     for k in split_keys {
-        let region = cluster.get_region(*k);
-        cluster.must_split(&region, *k);
+        let region = cluster.get_region(k);
+        cluster.must_split(&region, k);
     }
 
     check_data(&mut cluster, &storages, &test_data, 50, true);

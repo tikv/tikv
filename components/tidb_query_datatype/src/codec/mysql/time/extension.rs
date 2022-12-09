@@ -2,8 +2,7 @@
 
 use chrono::Weekday;
 
-use super::weekmode::WeekMode;
-use super::Time;
+use super::{weekmode::WeekMode, Time};
 
 pub trait WeekdayExtension {
     fn name(&self) -> &'static str;
@@ -60,18 +59,18 @@ impl DateTimeExtension for Time {
     }
 
     /// returns the week of year and year. should not be called directly.
-    /// when monday_first == true, Monday is considered as the first day in the week,
-    ///         otherwise Sunday.
-    /// when week_year == true, week is from 1 to 53, otherwise from 0 to 53.
-    /// when first_weekday == true, the week that contains the first 'first-day-of-week' is week 1,
-    ///         otherwise weeks are numbered according to ISO 8601:1988.
+    /// - when monday_first == true, Monday is considered as the first day in
+    ///   the week, otherwise Sunday.
+    /// - when week_year == true, week is from 1 to 53, otherwise from 0 to 53.
+    /// - when first_weekday == true, the week that contains the first
+    ///   'first-day-of-week' is week 1, otherwise weeks are numbered according
+    ///   to ISO 8601:1988.
     fn calc_year_week(
         &self,
         monday_first: bool,
         mut week_year: bool,
         first_weekday: bool,
     ) -> (i32, i32) {
-        let week: i32;
         let mut year = self.year() as i32;
         let daynr = calc_day_number(year, self.month() as i32, self.day() as i32);
         let mut first_daynr = calc_day_number(year, 1, 1);
@@ -96,18 +95,18 @@ impl DateTimeExtension for Time {
         }
 
         if week_year && days >= 52 * 7 {
-            weekday = (weekday + calc_days_in_year(year as i32)) % 7;
+            weekday = (weekday + calc_days_in_year(year)) % 7;
             if (!first_weekday && weekday < 4) || (first_weekday && weekday == 0) {
                 year += 1;
                 return (year, 1);
             }
         }
-        week = days / 7 + 1;
+        let week: i32 = days / 7 + 1;
         (year, week)
     }
 
-    /// returns the week of year according to week mode. should not be called directly.
-    /// implements TiDB calcWeek()
+    /// returns the week of year according to week mode. should not be called
+    /// directly. implements TiDB calcWeek()
     fn calc_year_week_by_week_mode(&self, week_mode: WeekMode) -> (i32, i32) {
         let mode = week_mode.to_normalized();
         let monday_first = mode.contains(WeekMode::BEHAVIOR_MONDAY_FIRST);

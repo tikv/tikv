@@ -2,18 +2,13 @@
 
 use std::sync::Arc;
 
-use criterion::black_box;
-use criterion::measurement::Measurement;
-
+use criterion::{black_box, measurement::Measurement};
+use tidb_query_datatype::expr::EvalConfig;
+use tidb_query_executors::{interface::BatchExecutor, BatchStreamAggregationExecutor};
+use tikv::storage::Statistics;
 use tipb::Expr;
 
-use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_executors::interface::BatchExecutor;
-use tidb_query_executors::BatchStreamAggregationExecutor;
-use tikv::storage::Statistics;
-
-use crate::util::bencher::Bencher;
-use crate::util::FixtureBuilder;
+use crate::util::{bencher::Bencher, FixtureBuilder};
 
 pub trait StreamAggrBencher<M>
 where
@@ -42,8 +37,8 @@ where
     }
 }
 
-/// A bencher that will use batch stream aggregation executor to bench the giving aggregate
-/// expression.
+/// A bencher that will use batch stream aggregation executor to bench the
+/// giving aggregate expression.
 pub struct BatchBencher;
 
 impl<M> StreamAggrBencher<M> for BatchBencher

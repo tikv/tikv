@@ -1,0 +1,22 @@
+[package]
+name = "test_pd_client"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+collections = { workspace = true }
+fail = "0.5"
+futures = "0.3"
+grpcio = { workspace = true }
+keys = { workspace = true }
+kvproto = { workspace = true }
+log_wrappers = { workspace = true }
+pd_client = { workspace = true }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tikv_util = { workspace = true }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
+tokio-timer = { workspace = true }
+txn_types = { workspace = true }

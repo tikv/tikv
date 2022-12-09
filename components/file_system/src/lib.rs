@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(duration_consts_2)]
+#![feature(duration_consts_float)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -13,47 +13,50 @@ extern crate test;
 extern crate tikv_alloc;
 
 mod file;
-mod iosnoop;
+mod io_stats;
 mod metrics;
 mod metrics_manager;
 mod rate_limiter;
-#[allow(unused)]
-mod thread_io;
+
+pub use std::{
+    convert::TryFrom,
+    fs::{
+        canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link,
+        remove_dir, remove_dir_all, remove_file, rename, set_permissions, symlink_metadata,
+        DirBuilder, DirEntry, FileType, Metadata, Permissions, ReadDir,
+    },
+};
+use std::{
+    io::{self, ErrorKind, Read, Write},
+    path::Path,
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 
 pub use file::{File, OpenOptions};
-pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
+pub use io_stats::{get_io_type, init as init_io_stats_collector, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
-pub use rate_limiter::{
-    get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,
-    IORateLimiterStatistics,
-};
-
-pub use std::fs::{
-    canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
-    remove_dir_all, remove_file, rename, set_permissions, symlink_metadata, DirBuilder, DirEntry,
-    FileType, Metadata, Permissions, ReadDir,
-};
-
-use std::io::{self, ErrorKind, Read, Write};
-use std::path::Path;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-
 use online_config::ConfigValue;
-use openssl::error::ErrorStack;
-use openssl::hash::{self, Hasher, MessageDigest};
+use openssl::{
+    error::ErrorStack,
+    hash::{self, Hasher, MessageDigest},
+};
+pub use rate_limiter::{
+    get_io_rate_limiter, set_io_rate_limiter, IoBudgetAdjustor, IoRateLimitMode, IoRateLimiter,
+    IoRateLimiterStatistics,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IOOp {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum IoOp {
     Read,
     Write,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount, EnumIter)]
-pub enum IOType {
+#[derive(Clone, Copy, Debug, PartialEq, Hash, EnumCount, EnumIter)]
+pub enum IoType {
     Other = 0,
     // Including coprocessor and storage read.
     ForegroundRead = 1,
@@ -71,56 +74,50 @@ pub enum IOType {
     Export = 10,
 }
 
-impl IOType {
+impl IoType {
     pub fn as_str(&self) -> &str {
         match *self {
-            IOType::Other => "other",
-            IOType::ForegroundRead => "foreground_read",
-            IOType::ForegroundWrite => "foreground_write",
-            IOType::Flush => "flush",
-            IOType::LevelZeroCompaction => "level_zero_compaction",
-            IOType::Compaction => "compaction",
-            IOType::Replication => "replication",
-            IOType::LoadBalance => "load_balance",
-            IOType::Gc => "gc",
-            IOType::Import => "import",
-            IOType::Export => "export",
+            IoType::Other => "other",
+            IoType::ForegroundRead => "foreground_read",
+            IoType::ForegroundWrite => "foreground_write",
+            IoType::Flush => "flush",
+            IoType::LevelZeroCompaction => "level_zero_compaction",
+            IoType::Compaction => "compaction",
+            IoType::Replication => "replication",
+            IoType::LoadBalance => "load_balance",
+            IoType::Gc => "gc",
+            IoType::Import => "import",
+            IoType::Export => "export",
         }
     }
 }
 
-pub struct WithIOType {
-    previous_io_type: IOType,
+pub struct WithIoType {
+    previous_io_type: IoType,
 }
 
-impl WithIOType {
-    pub fn new(new_io_type: IOType) -> WithIOType {
+impl WithIoType {
+    pub fn new(new_io_type: IoType) -> WithIoType {
         let previous_io_type = get_io_type();
         set_io_type(new_io_type);
-        WithIOType { previous_io_type }
+        WithIoType { previous_io_type }
     }
 }
 
-impl Drop for WithIOType {
+impl Drop for WithIoType {
     fn drop(&mut self) {
         set_io_type(self.previous_io_type);
     }
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct IOBytes {
+#[derive(Debug, Copy, Clone, Default)]
+pub struct IoBytes {
     read: u64,
     write: u64,
 }
 
-impl Default for IOBytes {
-    fn default() -> Self {
-        IOBytes { read: 0, write: 0 }
-    }
-}
-
-impl std::ops::Sub for IOBytes {
+impl std::ops::Sub for IoBytes {
     type Output = Self;
 
     fn sub(self, other: Self) -> Self::Output {
@@ -132,19 +129,19 @@ impl std::ops::Sub for IOBytes {
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone, PartialEq, Eq, Copy, EnumCount)]
-pub enum IOPriority {
+#[derive(Debug, Clone, PartialEq, Copy, EnumCount)]
+pub enum IoPriority {
     Low = 0,
     Medium = 1,
     High = 2,
 }
 
-impl IOPriority {
+impl IoPriority {
     pub fn as_str(&self) -> &str {
         match *self {
-            IOPriority::Low => "low",
-            IOPriority::Medium => "medium",
-            IOPriority::High => "high",
+            IoPriority::Low => "low",
+            IoPriority::Medium => "medium",
+            IoPriority::High => "high",
         }
     }
 
@@ -153,19 +150,19 @@ impl IOPriority {
     }
 }
 
-impl std::str::FromStr for IOPriority {
+impl std::str::FromStr for IoPriority {
     type Err = String;
-    fn from_str(s: &str) -> Result<IOPriority, String> {
+    fn from_str(s: &str) -> Result<IoPriority, String> {
         match s {
-            "low" => Ok(IOPriority::Low),
-            "medium" => Ok(IOPriority::Medium),
-            "high" => Ok(IOPriority::High),
+            "low" => Ok(IoPriority::Low),
+            "medium" => Ok(IoPriority::Medium),
+            "high" => Ok(IoPriority::High),
             s => Err(format!("expect: low, medium or high, got: {:?}", s)),
         }
     }
 }
 
-impl Serialize for IOPriority {
+impl Serialize for IoPriority {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -174,7 +171,7 @@ impl Serialize for IOPriority {
     }
 }
 
-impl<'de> Deserialize<'de> for IOPriority {
+impl<'de> Deserialize<'de> for IoPriority {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -182,21 +179,21 @@ impl<'de> Deserialize<'de> for IOPriority {
         use serde::de::{Error, Unexpected, Visitor};
         struct StrVistor;
         impl<'de> Visitor<'de> for StrVistor {
-            type Value = IOPriority;
+            type Value = IoPriority;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(formatter, "a IO priority")
             }
 
-            fn visit_str<E>(self, value: &str) -> Result<IOPriority, E>
+            fn visit_str<E>(self, value: &str) -> Result<IoPriority, E>
             where
                 E: Error,
             {
-                let p = match IOPriority::from_str(&*value.trim().to_lowercase()) {
+                let p = match IoPriority::from_str(&value.trim().to_lowercase()) {
                     Ok(p) => p,
                     _ => {
                         return Err(E::invalid_value(
-                            Unexpected::Other(&"invalid IO priority".to_string()),
+                            Unexpected::Other("invalid IO priority"),
                             &self,
                         ));
                     }
@@ -209,21 +206,19 @@ impl<'de> Deserialize<'de> for IOPriority {
     }
 }
 
-impl From<IOPriority> for ConfigValue {
-    fn from(mode: IOPriority) -> ConfigValue {
-        ConfigValue::IOPriority(mode.as_str().to_owned())
+impl From<IoPriority> for ConfigValue {
+    fn from(mode: IoPriority) -> ConfigValue {
+        ConfigValue::String(mode.as_str().to_owned())
     }
 }
 
-impl From<ConfigValue> for IOPriority {
-    fn from(c: ConfigValue) -> IOPriority {
-        if let ConfigValue::IOPriority(s) = c {
-            match IOPriority::from_str(s.as_str()) {
-                Ok(p) => p,
-                _ => panic!("expect: low, medium, high, got: {:?}", s),
-            }
+impl TryFrom<ConfigValue> for IoPriority {
+    type Error = String;
+    fn try_from(c: ConfigValue) -> Result<IoPriority, Self::Error> {
+        if let ConfigValue::String(s) = c {
+            Self::from_str(s.as_str())
         } else {
-            panic!("expect: ConfigValue::IOPriority, got: {:?}", c);
+            panic!("expect: ConfigValue::String, got: {:?}", c);
         }
     }
 }
@@ -286,7 +281,8 @@ pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
     copy_imp(from.as_ref(), to.as_ref(), false /* sync */)
 }
 
-/// Copies the contents and permission bits of one file to another, then synchronizes.
+/// Copies the contents and permission bits of one file to another, then
+/// synchronizes.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
     copy_imp(from.as_ref(), to.as_ref(), true /* sync */)
 }
@@ -301,8 +297,8 @@ pub fn file_exists<P: AsRef<Path>>(file: P) -> bool {
     path.exists() && path.is_file()
 }
 
-/// Deletes given path from file system. Returns `true` on success, `false` if the file doesn't exist.
-/// Otherwise the raw error will be returned.
+/// Deletes given path from file system. Returns `true` on success, `false` if
+/// the file doesn't exist. Otherwise the raw error will be returned.
 pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     match remove_file(&file) {
         Ok(_) => Ok(true),
@@ -311,8 +307,8 @@ pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     }
 }
 
-/// Deletes given path from file system. Returns `true` on success, `false` if the directory doesn't
-/// exist. Otherwise the raw error will be returned.
+/// Deletes given path from file system. Returns `true` on success, `false` if
+/// the directory doesn't exist. Otherwise the raw error will be returned.
 pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match remove_dir_all(&dir) {
         Ok(_) => Ok(true),
@@ -321,8 +317,9 @@ pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
-/// Creates a new, empty directory at the provided path. Returns `true` on success,
-/// `false` if the directory already exists. Otherwise the raw error will be returned.
+/// Creates a new, empty directory at the provided path. Returns `true` on
+/// success, `false` if the directory already exists. Otherwise the raw error
+/// will be returned.
 pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match create_dir(&dir) {
         Ok(_) => Ok(true),
@@ -428,21 +425,28 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
         }
         delete_file_if_exist(&path)?;
     }
-    if file_size > 0 {
-        let f = File::create(&path)?;
+    fn do_reserve(dir: &Path, path: &Path, file_size: u64) -> io::Result<()> {
+        let f = File::create(path)?;
         f.allocate(file_size)?;
         f.sync_all()?;
-        sync_dir(data_dir)?;
+        sync_dir(dir)
     }
-    Ok(())
+    if file_size > 0 {
+        let res = do_reserve(data_dir.as_ref(), &path, file_size);
+        if res.is_err() {
+            let _ = delete_file_if_exist(&path);
+        }
+        res
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use rand::distributions::Alphanumeric;
-    use rand::{thread_rng, Rng};
-    use std::io::Write;
-    use std::iter;
+    use std::{io::Write, iter};
+
+    use rand::{distributions::Alphanumeric, thread_rng, Rng};
     use tempfile::{Builder, TempDir};
 
     use super::*;
@@ -479,7 +483,7 @@ mod tests {
 
         // Ensure it works for non-existent file.
         let non_existent_file = dir_path.join("non_existent_file");
-        assert!(get_file_size(&non_existent_file).is_err());
+        get_file_size(non_existent_file).unwrap_err();
     }
 
     #[test]
@@ -500,7 +504,7 @@ mod tests {
         assert_eq!(file_exists(&existent_file), true);
 
         let non_existent_file = dir_path.join("non_existent_file");
-        assert_eq!(file_exists(&non_existent_file), false);
+        assert_eq!(file_exists(non_existent_file), false);
     }
 
     #[test]
@@ -521,7 +525,7 @@ mod tests {
         assert_eq!(file_exists(&existent_file), false);
 
         let non_existent_file = dir_path.join("non_existent_file");
-        delete_file_if_exist(&non_existent_file).unwrap();
+        delete_file_if_exist(non_existent_file).unwrap();
     }
 
     fn gen_rand_file<P: AsRef<Path>>(path: P, size: usize) -> u32 {

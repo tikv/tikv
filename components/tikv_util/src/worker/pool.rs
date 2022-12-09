@@ -1,27 +1,35 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::{
+    error::Error,
+    fmt::{self, Debug, Display, Formatter},
+    future::Future,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
+
+use futures::{
+    channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+    compat::{Future01CompatExt, Stream01CompatExt},
+    executor::block_on,
+    future::{self, FutureExt},
+    stream::StreamExt,
+};
 use prometheus::IntGauge;
-use std::error::Error;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::{Arc, Mutex};
-
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::compat::Future01CompatExt;
-use futures::compat::Stream01CompatExt;
-use futures::future::{self, FutureExt};
-use futures::stream::StreamExt;
-
-use super::metrics::*;
-use crate::future::poll_future_notify;
-use crate::timer::GLOBAL_TIMER_HANDLE;
-use crate::yatp_pool::{DefaultTicker, YatpPoolBuilder};
-use futures::executor::block_on;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
 use yatp::{Remote, ThreadPool};
 
-#[derive(Eq, PartialEq)]
+use super::metrics::*;
+use crate::{
+    future::poll_future_notify,
+    timer::GLOBAL_TIMER_HANDLE,
+    yatp_pool::{DefaultTicker, YatpPoolBuilder},
+};
+
+#[derive(PartialEq)]
 pub enum ScheduleError<T> {
     Stopped(T),
     Full(T),
@@ -109,12 +117,21 @@ impl<T: Display + Send> Scheduler<T> {
 
     /// Schedules a task to run.
     ///
-    /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.
+    /// If the worker is stopped or number pending tasks exceeds capacity, an
+    /// error will return.
     pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         debug!("scheduling task {}", task);
         if self.counter.load(Ordering::Acquire) >= self.pending_capacity {
             return Err(ScheduleError::Full(task));
         }
+        self.schedule_force(task)
+    }
+
+    /// Schedules a task to run.
+    ///
+    /// Different from the `schedule` function, the task will still be scheduled
+    /// if pending task number exceeds capacity.
+    pub fn schedule_force(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.counter.fetch_add(1, Ordering::SeqCst);
         self.metrics_pending_task_count.inc();
         if let Err(e) = self.sender.unbounded_send(Msg::Task(task)) {
@@ -134,6 +151,10 @@ impl<T: Display + Send> Scheduler<T> {
 
     pub fn stop(&self) {
         self.sender.close_channel();
+    }
+
+    pub fn pending_tasks(&self) -> usize {
+        self.counter.load(Ordering::Acquire)
     }
 }
 
@@ -270,11 +291,13 @@ impl<S: Into<String>> Builder<S> {
     }
 
     /// Pending tasks won't exceed `pending_capacity`.
+    #[must_use]
     pub fn pending_capacity(mut self, pending_capacity: usize) -> Self {
         self.pending_capacity = pending_capacity;
         self
     }
 
+    #[must_use]
     pub fn thread_count(mut self, thread_count: usize) -> Self {
         self.thread_count = thread_count;
         self
@@ -283,7 +306,7 @@ impl<S: Into<String>> Builder<S> {
     pub fn create(self) -> Worker {
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(self.name)
-            .thread_count(self.thread_count, self.thread_count)
+            .thread_count(self.thread_count, self.thread_count, self.thread_count)
             .build_single_level_pool();
         let remote = pool.remote().clone();
         let pool = Arc::new(Mutex::new(Some(pool)));
@@ -360,6 +383,22 @@ impl Worker {
         });
     }
 
+    pub fn spawn_interval_async_task<F, Fut>(&self, interval: Duration, mut func: F)
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+        F: FnMut() -> Fut + Send + 'static,
+    {
+        let mut interval = GLOBAL_TIMER_HANDLE
+            .interval(std::time::Instant::now(), interval)
+            .compat();
+        self.remote.spawn(async move {
+            while let Some(Ok(_)) = interval.next().await {
+                let fut = func();
+                fut.await;
+            }
+        });
+    }
+
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
         let now = Instant::now();
         let f = GLOBAL_TIMER_HANDLE
@@ -402,6 +441,10 @@ impl Worker {
     pub fn is_busy(&self) -> bool {
         self.stop.load(Ordering::Acquire)
             || self.counter.load(Ordering::Acquire) >= self.thread_count
+    }
+
+    pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
+        self.remote.clone()
     }
 
     fn start_impl<R: Runnable + 'static>(
@@ -455,5 +498,83 @@ impl Worker {
                 }
             }
         });
+    }
+}
+
+mod tests {
+
+    use std::{
+        sync::{
+            atomic::{self, AtomicU64},
+            Arc, Mutex,
+        },
+        time::Duration,
+    };
+
+    use super::*;
+
+    struct StepRunner {
+        count: Arc<AtomicU64>,
+        timeout_duration: Duration,
+        tasks: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl Runnable for StepRunner {
+        type Task = u64;
+
+        fn run(&mut self, step: u64) {
+            let mut tasks = self.tasks.lock().unwrap();
+            tasks.push(step);
+        }
+
+        fn shutdown(&mut self) {
+            self.count.fetch_add(1, atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl RunnableWithTimer for StepRunner {
+        fn on_timeout(&mut self) {
+            let tasks = self.tasks.lock().unwrap();
+            for t in tasks.iter() {
+                self.count.fetch_add(*t, atomic::Ordering::SeqCst);
+            }
+        }
+
+        fn get_interval(&self) -> Duration {
+            self.timeout_duration
+        }
+    }
+
+    #[test]
+    fn test_lazy_worker_with_timer() {
+        let mut worker = LazyWorker::new("test_lazy_worker_with_timer");
+        let scheduler = worker.scheduler();
+        let count = Arc::new(AtomicU64::new(0));
+        let tasks = Arc::new(Mutex::new(vec![]));
+        worker.start_with_timer(StepRunner {
+            count: count.clone(),
+            timeout_duration: Duration::from_millis(200),
+            tasks: tasks.clone(),
+        });
+
+        scheduler.schedule(1).unwrap();
+        scheduler.schedule(2).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+        assert_eq!(2, tasks.lock().unwrap().len());
+        assert_eq!(0, count.load(atomic::Ordering::SeqCst));
+        std::thread::sleep(Duration::from_millis(200));
+        // The worker already trigger `on_timeout`.
+        assert_eq!(3, count.load(atomic::Ordering::SeqCst));
+        scheduler.schedule(5).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+        assert_eq!(3, tasks.lock().unwrap().len());
+        assert_eq!(3, count.load(atomic::Ordering::SeqCst));
+        std::thread::sleep(Duration::from_millis(200));
+        // The worker already trigger `on_timeout`.
+        assert_eq!(11, count.load(atomic::Ordering::SeqCst));
+        worker.stop();
+        // The worker need some time to trigger shutdown.
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(12, count.load(atomic::Ordering::SeqCst));
     }
 }

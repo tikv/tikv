@@ -1,16 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Error as IoError;
-use std::{error, result};
+use std::{error, io::Error as IoError, result};
 
 use engine_traits::Error as EngineTraitError;
-use kvproto::brpb::Error as ErrorPb;
-use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use kvproto::kvrpcpb::KeyError;
+use kvproto::{
+    brpb::Error as ErrorPb,
+    errorpb::{Error as RegionError, ServerIsBusy},
+    kvrpcpb::KeyError,
+};
 use thiserror::Error;
-use tikv::storage::kv::{Error as KvError, ErrorInner as EngineErrorInner};
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use tikv::storage::{
+    kv::{Error as KvError, ErrorInner as EngineErrorInner},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+};
+use tikv_util::codec::Error as CodecError;
 use tokio::sync::AcquireError;
 
 use crate::metrics::*;
@@ -20,7 +24,7 @@ impl From<Error> for ErrorPb {
     fn from(e: Error) -> ErrorPb {
         let mut err = ErrorPb::default();
         match e {
-            Error::ClusterID { current, request } => {
+            Error::ClusterId { current, request } => {
                 BACKUP_RANGE_ERROR_VEC
                     .with_label_values(&["cluster_mismatch"])
                     .inc();
@@ -110,12 +114,16 @@ pub enum Error {
     EngineTrait(#[from] EngineTraitError),
     #[error("Transaction error {0}")]
     Txn(#[from] TxnError),
-    #[error("ClusterID error current {current}, request {request}")]
-    ClusterID { current: u64, request: u64 },
+    #[error("ClusterId error current {current}, request {request}")]
+    ClusterId { current: u64, request: u64 },
     #[error("Invalid cf {cf}")]
     InvalidCf { cf: String },
     #[error("Failed to acquire the semaphore {0}")]
     Semaphore(#[from] AcquireError),
+    #[error("Channel is closed")]
+    ChannelClosed,
+    #[error("Codec error {0}")]
+    Codec(#[from] CodecError),
 }
 
 macro_rules! impl_from {
@@ -132,6 +140,12 @@ macro_rules! impl_from {
 
 impl_from! {
     String => Rocks,
+}
+
+impl<T> From<async_channel::SendError<T>> for Error {
+    fn from(_: async_channel::SendError<T>) -> Self {
+        Self::ChannelClosed
+    }
 }
 
 pub type Result<T> = result::Result<T, Error>;

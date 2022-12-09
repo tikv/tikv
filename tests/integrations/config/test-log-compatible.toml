@@ -1,0 +1,46 @@
+log-level = "critical"
+log-file = "foo"
+log-format = "json"
+log-rotation-size = "1024MB"
+
+[log]
+
+[log.file]
+
+[readpool.coprocessor]
+
+[readpool.storage]
+
+[server]
+
+[storage]
+
+[storage.block-cache]
+
+[pd]
+
+[metric]
+
+[raftstore]
+
+[coprocessor]
+
+[rocksdb]
+
+[rocksdb.titan]
+
+[rocksdb.defaultcf]
+
+[rocksdb.defaultcf.titan]
+
+[rocksdb.writecf]
+
+[rocksdb.lockcf]
+
+[raftdb]
+
+[raftdb.defaultcf]
+
+[security]
+
+[import]

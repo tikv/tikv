@@ -1,13 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use codec::prelude::NumberDecoder;
 use std::mem::size_of;
+
+use codec::prelude::NumberDecoder;
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
-use crate::lock::LockType;
-use crate::timestamp::TimeStamp;
-use crate::types::{Value, SHORT_VALUE_PREFIX};
-use crate::{Error, ErrorInner, Result};
+use crate::{
+    lock::LockType,
+    timestamp::TimeStamp,
+    types::{Value, SHORT_VALUE_PREFIX},
+    Error, ErrorInner, Result,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -25,8 +28,12 @@ const FLAG_ROLLBACK: u8 = b'R';
 const FLAG_OVERLAPPED_ROLLBACK: u8 = b'R';
 
 const GC_FENCE_PREFIX: u8 = b'F';
+const LAST_CHANGE_PREFIX: u8 = b'l';
 
-/// The short value for rollback records which are protected from being collapsed.
+const TXN_SOURCE_PREFIX: u8 = b'S';
+
+/// The short value for rollback records which are protected from being
+/// collapsed.
 const PROTECTED_ROLLBACK_SHORT_VALUE: &[u8] = b"p";
 
 impl WriteType {
@@ -65,20 +72,22 @@ pub struct Write {
     pub start_ts: TimeStamp,
     pub short_value: Option<Value>,
 
-    /// The `commit_ts` of transactions can be non-globally-unique. But since we store Rollback
-    /// records in the same CF where Commit records is, and Rollback records are saved with
-    /// `user_key{start_ts}` as the internal key, the collision between Commit and Rollback
-    /// records can't be avoided. In this case, we keep the Commit record, and set the
-    /// `has_overlapped_rollback` flag to indicate that there's also a Rollback record.
-    /// Also note that `has_overlapped_rollback` field is only necessary when the Rollback record
-    /// should be protected.
+    /// The `commit_ts` of transactions can be non-globally-unique. But since we
+    /// store Rollback records in the same CF where Commit records is, and
+    /// Rollback records are saved with `user_key{start_ts}` as the internal
+    /// key, the collision between Commit and Rollback records can't be avoided.
+    /// In this case, we keep the Commit record, and set the
+    /// `has_overlapped_rollback` flag to indicate that there's also a Rollback
+    /// record. Also note that `has_overlapped_rollback` field is only necessary
+    /// when the Rollback record should be protected.
     pub has_overlapped_rollback: bool,
 
-    /// Records the next version after this version when overlapping rollback happens on an already
-    /// existed commit record.
+    /// Records the next version after this version when overlapping rollback
+    /// happens on an already existed commit record.
     ///
-    /// When a rollback flag is written on an already-written commit record, it causes rewriting
-    /// the commit record. It may cause problems with the GC compaction filter. Consider this case:
+    /// When a rollback flag is written on an already-written commit record, it
+    /// causes rewriting the commit record. It may cause problems with the
+    /// GC compaction filter. Consider this case:
     ///
     /// ```text
     /// Key_100_put, Key_120_del
@@ -90,52 +99,68 @@ pub struct Write {
     /// Key_100_put_R, Key_120_del
     /// ```
     ///
-    /// Then GC with safepoint = 130 may happen. However a follower may not have finished applying
-    /// the change. So on the follower, it's possible that:
+    /// Then GC with safepoint = 130 may happen. However a follower may not have
+    /// finished applying the change. So on the follower, it's possible
+    /// that:
     ///
     /// 1. `Key_100_put`, `Key_120_del` applied
-    /// 2. GC with safepoint = 130 started and `Key_100_put`, `Key_120_del` are deleted
-    /// 3. Finished applying `Key_100_put_R`, which means to rewrite `Key_100_put`
-    /// 4. Read at `140` should get nothing (since it's MVCC-deleted at 120) but finds `Key_100_put`
+    /// 2. GC with safepoint = 130 started and `Key_100_put`, `Key_120_del` are
+    /// deleted 3. Finished applying `Key_100_put_R`, which means to rewrite
+    /// `Key_100_put` 4. Read at `140` should get nothing (since it's
+    /// MVCC-deleted at 120) but finds `Key_100_put`
     ///
-    /// To solve the problem, when marking `has_overlapped_rollback` on an already-existed commit
-    /// record, add a special field `gc_fence` on it. If there is a newer version after the record
-    /// being rewritten, the next version's `commit_ts` will be recorded. When MVCC reading finds
-    /// a commit record with a GC fence timestamp but the corresponding version that matches that ts
-    /// doesn't exist, the current version will be believed to be already GC-ed and ignored.
+    /// To solve the problem, when marking `has_overlapped_rollback` on an
+    /// already-existed commit record, add a special field `gc_fence` on it. If
+    /// there is a newer version after the record being rewritten, the next
+    /// version's `commit_ts` will be recorded. When MVCC reading finds a commit
+    /// record with a GC fence timestamp but the corresponding version
+    /// that matches that ts doesn't exist, the current version will be
+    /// believed to be already GC-ed and ignored.
     ///
-    /// Therefore, for the example above, in the 3rd step it will record the version `120` to the
-    /// `gc_fence` field:
+    /// Therefore, for the example above, in the 3rd step it will record the
+    /// version `120` to the `gc_fence` field:
     ///
     /// ```text
     /// Key_100_put_R_120, Key_120_del
     /// ```
     ///
-    /// And when the reading in the 4th step finds the `PUT` record but the version at 120 doesn't
-    /// exist, it will be regarded as already GC-ed and ignored.
+    /// And when the reading in the 4th step finds the `PUT` record but the
+    /// version at 120 doesn't exist, it will be regarded as already GC-ed
+    /// and ignored.
     ///
-    /// For CDC and TiFlash, when they receives a commit record with `gc_fence` field set, it can
-    /// determine that it must be caused by an overlapped rollback instead of an actual commit.
+    /// For CDC and TiFlash, when they receives a commit record with `gc_fence`
+    /// field set, it can determine that it must be caused by an overlapped
+    /// rollback instead of an actual commit.
     ///
-    /// Note: GC fence will only be written on `PUT` and `DELETE` versions, and may only point to
-    /// a `PUT` or `DELETE` version. If there are other `Lock` and `Rollback` records after the
-    /// record that's being rewritten, they will be skipped. For example, in this case:
+    /// Note: GC fence will only be written on `PUT` and `DELETE` versions, and
+    /// may only point to a `PUT` or `DELETE` version. If there are other `Lock`
+    /// and `Rollback` records after the record that's being rewritten, they
+    /// will be skipped. For example, in this case:
     ///
     /// ```text
     /// Key_100_put, Key_105_lock, Key_110_rollback, Key_120_del
     /// ```
     ///
-    /// If overlapped rollback happens at 100, the `Key_100_put` will be rewritten as
-    /// `Key_100_put_R_120`. It points to version 120 instead of the nearest 105.
+    /// If overlapped rollback happens at 100, the `Key_100_put` will be
+    /// rewritten as `Key_100_put_R_120`. It points to version 120 instead
+    /// of the nearest 105.
     ///
     ///
     /// The meaning of the field:
     /// * `None`: A record that haven't been rewritten
-    /// * `Some(0)`: A commit record that has been rewritten due to overlapping rollback, but it
-    ///   doesn't have an newer version.
-    /// * `Some(ts)`: A commit record that has been rewritten due to overlapping rollback,
-    ///   and it's next version's `commit_ts` is `ts`
+    /// * `Some(0)`: A commit record that has been rewritten due to overlapping
+    ///   rollback, but it doesn't have an newer version.
+    /// * `Some(ts)`: A commit record that has been rewritten due to overlapping
+    ///   rollback, and it's next version's `commit_ts` is `ts`
     pub gc_fence: Option<TimeStamp>,
+
+    /// The commit TS of the latest PUT/DELETE record
+    pub last_change_ts: TimeStamp,
+    /// The number of versions that need skipping from this record
+    /// to find the latest PUT/DELETE record
+    pub versions_to_last_change: u64,
+    /// The source of this txn.
+    pub txn_source: u64,
 }
 
 impl std::fmt::Debug for Write {
@@ -155,6 +180,9 @@ impl std::fmt::Debug for Write {
             )
             .field("has_overlapped_rollback", &self.has_overlapped_rollback)
             .field("gc_fence", &self.gc_fence)
+            .field("last_change_ts", &self.last_change_ts)
+            .field("versions_to_last_change", &self.versions_to_last_change)
+            .field("txn_source", &self.txn_source)
             .finish()
     }
 }
@@ -169,6 +197,9 @@ impl Write {
             short_value,
             has_overlapped_rollback: false,
             gc_fence: None,
+            last_change_ts: TimeStamp::zero(),
+            versions_to_last_change: 0,
+            txn_source: 0,
         }
     }
 
@@ -186,10 +217,14 @@ impl Write {
             short_value,
             has_overlapped_rollback: false,
             gc_fence: None,
+            last_change_ts: TimeStamp::zero(),
+            versions_to_last_change: 0,
+            txn_source: 0,
         }
     }
 
     #[inline]
+    #[must_use]
     pub fn set_overlapped_rollback(
         mut self,
         has_overlapped_rollback: bool,
@@ -197,6 +232,24 @@ impl Write {
     ) -> Self {
         self.has_overlapped_rollback = has_overlapped_rollback;
         self.gc_fence = gc_fence;
+        self
+    }
+
+    #[must_use]
+    pub fn set_last_change(
+        mut self,
+        last_change_ts: TimeStamp,
+        versions_to_last_change: u64,
+    ) -> Self {
+        self.last_change_ts = last_change_ts;
+        self.versions_to_last_change = versions_to_last_change;
+        self
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn set_txn_source(mut self, source: u64) -> Self {
+        self.txn_source = source;
         self
     }
 
@@ -216,6 +269,28 @@ impl Write {
             short_value: self.short_value.as_deref(),
             has_overlapped_rollback: self.has_overlapped_rollback,
             gc_fence: self.gc_fence,
+            last_change_ts: self.last_change_ts,
+            versions_to_last_change: self.versions_to_last_change,
+            txn_source: self.txn_source,
+        }
+    }
+
+    /// Returns the new `last_change_ts` and `versions_to_last_change` according
+    /// to this write record.
+    pub fn next_last_change_info(&self, commit_ts: TimeStamp) -> (TimeStamp, u64) {
+        match self.write_type {
+            WriteType::Put | WriteType::Delete => (commit_ts, 1),
+            WriteType::Lock | WriteType::Rollback => {
+                // If neither `last_change_ts` nor `versions_to_last_change` exists, do not
+                // set `last_change_ts` to indicate we don't know where is the last change.
+                // This should not happen if data is written in new version TiKV. If we hope to
+                // support data from old TiKV, consider iterating to the last change to find it.
+                if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
+                    (self.last_change_ts, self.versions_to_last_change + 1)
+                } else {
+                    (TimeStamp::zero(), 0)
+                }
+            }
         }
     }
 }
@@ -225,20 +300,32 @@ pub struct WriteRef<'a> {
     pub write_type: WriteType,
     pub start_ts: TimeStamp,
     pub short_value: Option<&'a [u8]>,
-    /// The `commit_ts` of transactions can be non-globally-unique. But since we store Rollback
-    /// records in the same CF where Commit records is, and Rollback records are saved with
-    /// `user_key{start_ts}` as the internal key, the collision between Commit and Rollback
-    /// records can't be avoided. In this case, we keep the Commit record, and set the
-    /// `has_overlapped_rollback` flag to indicate that there's also a Rollback record.
-    /// Also note that `has_overlapped_rollback` field is only necessary when the Rollback record
-    /// should be protected.
+    /// The `commit_ts` of transactions can be non-globally-unique. But since we
+    /// store Rollback records in the same CF where Commit records is, and
+    /// Rollback records are saved with `user_key{start_ts}` as the internal
+    /// key, the collision between Commit and Rollback records can't be avoided.
+    /// In this case, we keep the Commit record, and set the
+    /// `has_overlapped_rollback` flag to indicate that there's also a Rollback
+    /// record. Also note that `has_overlapped_rollback` field is only necessary
+    /// when the Rollback record should be protected.
     pub has_overlapped_rollback: bool,
 
-    /// Records the next version after this version when overlapping rollback happens on an already
-    /// existed commit record.
+    /// Records the next version after this version when overlapping rollback
+    /// happens on an already existed commit record.
     ///
     /// See [`Write::gc_fence`] for more detail.
     pub gc_fence: Option<TimeStamp>,
+
+    /// The commit TS of the last PUT/DELETE record before this write record.
+    /// It only exists if this is a LOCK/ROLLBACK record.
+    pub last_change_ts: TimeStamp,
+    /// The number of versions that need skipping from this record
+    /// to find the latest PUT/DELETE record.
+    /// If versions_to_last_change > 0 but last_change_ts == 0, the key does not
+    /// have a PUT/DELETE record before this write record.
+    pub versions_to_last_change: u64,
+    /// The source of this txn.
+    pub txn_source: u64,
 }
 
 impl WriteRef<'_> {
@@ -256,6 +343,9 @@ impl WriteRef<'_> {
         let mut short_value = None;
         let mut has_overlapped_rollback = false;
         let mut gc_fence = None;
+        let mut last_change_ts = TimeStamp::zero();
+        let mut versions_to_last_change = 0;
+        let mut txn_source = 0;
 
         while !b.is_empty() {
             match b
@@ -280,6 +370,13 @@ impl WriteRef<'_> {
                     has_overlapped_rollback = true;
                 }
                 GC_FENCE_PREFIX => gc_fence = Some(number::decode_u64(&mut b)?.into()),
+                LAST_CHANGE_PREFIX => {
+                    last_change_ts = number::decode_u64(&mut b)?.into();
+                    versions_to_last_change = number::decode_var_u64(&mut b)?;
+                }
+                TXN_SOURCE_PREFIX => {
+                    txn_source = number::decode_var_u64(&mut b)?;
+                }
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
                     // and stop parsing if meets an unknown byte.
@@ -294,6 +391,9 @@ impl WriteRef<'_> {
             short_value,
             has_overlapped_rollback,
             gc_fence,
+            last_change_ts,
+            versions_to_last_change,
+            txn_source,
         })
     }
 
@@ -313,6 +413,15 @@ impl WriteRef<'_> {
             b.push(GC_FENCE_PREFIX);
             b.encode_u64(ts.into_inner()).unwrap();
         }
+        if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
+            b.push(LAST_CHANGE_PREFIX);
+            b.encode_u64(self.last_change_ts.into_inner()).unwrap();
+            b.encode_var_u64(self.versions_to_last_change).unwrap();
+        }
+        if self.txn_source != 0 {
+            b.push(TXN_SOURCE_PREFIX);
+            b.encode_var_u64(self.txn_source).unwrap();
+        }
         b
     }
 
@@ -325,25 +434,33 @@ impl WriteRef<'_> {
         if self.gc_fence.is_some() {
             size += 1 + size_of::<u64>();
         }
+        if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
+            size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
+        }
+        if self.txn_source != 0 {
+            size += 1 + MAX_VAR_U64_LEN;
+        }
         size
     }
 
     /// Prev Conditions:
-    ///   * The `Write` record `self` is referring to is the latest version found by reading at `read_ts`
-    ///   * The `read_ts` is safe, which means, it's not earlier than the current GC safepoint.
+    ///   * The `Write` record `self` is referring to is the latest version
+    ///     found by reading at `read_ts`
+    ///   * The `read_ts` is safe, which means, it's not earlier than the
+    ///     current GC safepoint.
     /// Return:
-    ///   Whether the `Write` record is valid, ie. there's no GC fence or GC fence doesn't points to any other
-    ///   version.
+    ///   Whether the `Write` record is valid, ie. there's no GC fence or GC
+    /// fence doesn't points to any other version.
     pub fn check_gc_fence_as_latest_version(&self, read_ts: TimeStamp) -> bool {
-        // It's a valid write record if there's no GC fence or GC fence doesn't points to any other
-        // version.
+        // It's a valid write record if there's no GC fence or GC fence doesn't points
+        // to any other version.
         // If there is a GC fence that's points to another version, there are two cases:
         // * If `gc_fence_ts > read_ts`, then since `read_ts` didn't expire the GC
-        //   safepoint, so the current version must be a not-expired version or the latest version
-        //   before safepoint, so it must be a valid version
-        // * If `gc_fence_ts <= read_ts`, since the current version is the latest version found by
-        //   reading at `read_ts`, the version at `gc_fence_ts` must be missing, so the current
-        //   version must be invalid.
+        //   safepoint, so the current version must be a not-expired version or the
+        //   latest version before safepoint, so it must be a valid version
+        // * If `gc_fence_ts <= read_ts`, since the current version is the latest
+        //   version found by reading at `read_ts`, the version at `gc_fence_ts` must be
+        //   missing, so the current version must be invalid.
         if let Some(gc_fence_ts) = self.gc_fence {
             if !gc_fence_ts.is_zero() && gc_fence_ts <= read_ts {
                 return false;
@@ -371,6 +488,8 @@ impl WriteRef<'_> {
             self.short_value.map(|v| v.to_owned()),
         )
         .set_overlapped_rollback(self.has_overlapped_rollback, self.gc_fence)
+        .set_last_change(self.last_change_ts, self.versions_to_last_change)
+        .set_txn_source(self.txn_source)
     }
 }
 
@@ -429,6 +548,9 @@ mod tests {
                 .set_overlapped_rollback(true, Some(2345678.into())),
             Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
                 .set_overlapped_rollback(true, Some(421397468076048385.into())),
+            Write::new(WriteType::Lock, 456.into(), None).set_last_change(345.into(), 11),
+            Write::new(WriteType::Lock, 456.into(), None).set_last_change(0.into(), 11),
+            Write::new(WriteType::Lock, 456.into(), None).set_txn_source(1),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.as_ref().to_bytes();

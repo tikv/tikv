@@ -1,18 +1,23 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::hash::Hash;
-use std::marker::{PhantomData, Send, Sized};
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    marker::{PhantomData, Send, Sized},
+};
 
 use codec::prelude::NumberDecoder;
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
-use tipb::{Expr, ExprType, FieldType};
-
 use tidb_query_common::{Error, Result};
-use tidb_query_datatype::codec::collation::*;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::{Decimal, EnumDecoder, MAX_FSP};
+use tidb_query_datatype::{
+    codec::{
+        collation::*,
+        data_type::*,
+        mysql::{Decimal, EnumDecoder, MAX_FSP},
+    },
+    EvalType, FieldTypeAccessor, FieldTypeFlag,
+};
+use tipb::{Expr, ExprType, FieldType};
 
 pub trait InByHash {
     type Key: EvaluableRet + Extract + Eq;
@@ -60,11 +65,11 @@ pub trait Extract: Sized {
 
 #[inline]
 fn type_error(eval_type: EvalType, expr_type: ExprType) -> Error {
-    return other_err!(
+    other_err!(
         "Unexpected ExprType {:?} and EvalType {:?}",
         expr_type,
         eval_type
-    );
+    )
 }
 
 impl Extract for Int {
@@ -156,8 +161,8 @@ impl InByCompare for Int {}
 impl InByCompare for Real {}
 impl InByCompare for Decimal {}
 impl InByCompare for Duration {}
-// DateTime requires TZInfo in context, and we cannot acquire it during metadata_mapper.
-// TODO: implement InByHash for DateTime.
+// DateTime requires TZInfo in context, and we cannot acquire it during
+// metadata_mapper. TODO: implement InByHash for DateTime.
 impl InByCompare for DateTime {}
 
 #[derive(Debug)]
@@ -230,7 +235,7 @@ pub fn compare_in_int_type_by_hash(
                 }
             }
             let mut default_ret = if metadata.has_null { None } else { Some(0) };
-            for (i, arg) in (&args[1..]).iter().enumerate() {
+            for (i, arg) in args[1..].iter().enumerate() {
                 let argi_unsigned = metadata.unsigned_flags[i + 1];
                 match arg {
                     None => {
@@ -394,19 +399,18 @@ pub fn compare_in_by_compare_json(args: &[Option<JsonRef>]) -> Result<Option<Int
 
 #[cfg(test)]
 mod tests {
-    use super::super::map_expr_node_to_rpn_func;
-    use super::*;
-
     use test::{black_box, Bencher};
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeTp};
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        expr::EvalContext,
+        Collation, FieldTypeTp,
+    };
     use tipb::{FieldType, ScalarFuncSig};
     use tipb_helper::ExprDefBuilder;
 
-    use crate::types::RpnFnMeta;
-    use crate::{RpnExpressionBuilder, RpnExpressionNode};
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::expr::EvalContext;
+    use super::{super::map_expr_node_to_rpn_func, *};
+    use crate::{types::RpnFnMeta, RpnExpressionBuilder, RpnExpressionNode};
 
     #[test]
     fn test_in_constant() {
@@ -817,14 +821,15 @@ mod tests {
         let logical_rows: &[usize] = &(0..1024).collect::<Vec<usize>>();
         profiler::start("./bench_compare_in.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(logical_rows),
-                black_box(1024),
-            );
-            assert!(result.is_ok());
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(logical_rows),
+                    black_box(1024),
+                )
+                .unwrap();
         });
         profiler::stop();
     }

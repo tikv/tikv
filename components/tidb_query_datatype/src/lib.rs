@@ -27,8 +27,7 @@ pub mod prelude {
     pub use super::def::FieldTypeAccessor;
 }
 
-pub use self::def::*;
-pub use self::error::*;
+pub use self::{def::*, error::*};
 
 #[cfg(test)]
 extern crate test;

@@ -1,26 +1,36 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
-use std::convert::TryFrom;
-use std::convert::TryInto;
-use std::num::IntErrorKind;
+use std::{
+    borrow::Cow,
+    convert::{TryFrom, TryInto},
+    num::IntErrorKind,
+};
 
+use byteorder::{BigEndian, ByteOrder};
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::*;
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    codec::{
+        collation::Encoding,
+        convert::*,
+        data_type::*,
+        error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE},
+        mysql::{
+            binary_literal,
+            time::{MAX_YEAR, MIN_YEAR},
+            Time,
+        },
+        Error,
+    },
+    expr::EvalContext,
+    *,
+};
 use tipb::{Expr, FieldType};
 
-use crate::types::RpnExpressionBuilder;
-use crate::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::Encoding;
-use tidb_query_datatype::codec::convert::*;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
-use tidb_query_datatype::codec::mysql::time::{MAX_YEAR, MIN_YEAR};
-use tidb_query_datatype::codec::mysql::{binary_literal, Time};
-use tidb_query_datatype::codec::Error;
-use tidb_query_datatype::expr::EvalContext;
+use crate::{
+    types::RpnExpressionBuilder, RpnExpressionNode, RpnFnCallExtra, RpnFnMeta, RpnStackNode,
+};
 
 fn get_cast_fn_rpn_meta(
     is_from_constant: bool,
@@ -114,6 +124,8 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Int, EvalType::Bytes) => {
             if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Year {
                 cast_year_as_string_fn_meta()
+            } else if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Bit {
+                cast_bit_as_string_fn_meta()
             } else if from_field_type.is_unsigned() {
                 cast_uint_as_string_fn_meta()
             } else {
@@ -187,6 +199,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::DateTime) => cast_time_as_time_fn_meta(),
         (EvalType::Duration, EvalType::DateTime) => cast_duration_as_time_fn_meta(),
         (EvalType::Enum, EvalType::DateTime) => cast_enum_as_time_fn_meta(),
+        (EvalType::Json, EvalType::DateTime) => cast_json_as_time_fn_meta(),
 
         // any as json
         (EvalType::Int, EvalType::Json) => {
@@ -213,8 +226,8 @@ fn get_cast_fn_rpn_meta(
 
 /// Gets the cast function between specified data types.
 ///
-/// TODO: This function supports some internal casts performed by TiKV. However it would be better
-/// to be done in TiDB.
+/// TODO: This function supports some internal casts performed by TiKV. However
+/// it would be better to be done in TiDB.
 pub fn get_cast_fn_rpn_node(
     is_from_constant: bool,
     from_field_type: &FieldType,
@@ -229,7 +242,7 @@ pub fn get_cast_fn_rpn_node(
         func_meta,
         args_len: 1,
         field_type: to_field_type,
-        metadata: Box::new(tipb::InUnionMetadata::default()),
+        metadata: Box::<tipb::InUnionMetadata>::default(),
     })
 }
 
@@ -323,8 +336,9 @@ fn cast_string_as_int(
     match val {
         None => Ok(None),
         Some(val) => {
-            // TODO: in TiDB, if `b.args[0].GetType().Hybrid()` || `IsBinaryLiteral(b.args[0])`,
-            //  then it will return res from EvalInt() directly.
+            // TODO: in TiDB, if `b.args[0].GetType().Hybrid()` ||
+            // `IsBinaryLiteral(b.args[0])`,  then it will return res from
+            // EvalInt() directly.
             let is_unsigned = extra.ret_field_type.is_unsigned();
             let val = get_valid_utf8_prefix(ctx, val)?;
             let val = val.trim();
@@ -334,7 +348,7 @@ fn cast_string_as_int(
             } else {
                 // FIXME: if the err get_valid_int_prefix returned is overflow err,
                 //  it should be ERR_TRUNCATE_WRONG_VALUE but not others.
-                let valid_int_prefix = get_valid_int_prefix(ctx, val)?;
+                let valid_int_prefix = get_valid_int_prefix_helper(ctx, val, true)?;
                 let parse_res = if !is_str_neg {
                     valid_int_prefix.parse::<u64>().map(|x| x as i64)
                 } else {
@@ -359,7 +373,7 @@ fn cast_string_as_int(
                             ctx.warnings
                                 .append_warning(Error::cast_neg_int_as_unsigned());
                         }
-                        Ok(Some(x as i64))
+                        Ok(Some(x))
                     }
                     Err(err) => match *err.kind() {
                         IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
@@ -470,8 +484,8 @@ fn cast_signed_int_as_unsigned_real(
     }
 }
 
-// because we needn't to consider if uint overflow upper boundary of signed real,
-// so we can merge uint to signed/unsigned real in one function
+// because we needn't to consider if uint overflow upper boundary of signed
+// real, so we can merge uint to signed/unsigned real in one function
 #[rpn_fn(nullable)]
 #[inline]
 fn cast_unsigned_int_as_signed_or_unsigned_real(val: Option<&Int>) -> Result<Option<Real>> {
@@ -516,12 +530,11 @@ fn cast_string_as_signed_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            let r: f64;
-            if val.is_empty() {
-                r = 0.0;
+            let r = if val.is_empty() {
+                0.0
             } else {
-                r = val.convert(ctx)?;
-            }
+                val.convert(ctx)?
+            };
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
             Ok(Real::new(r).ok())
         }
@@ -645,6 +658,31 @@ fn cast_year_as_string(
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
+fn cast_bit_as_string(
+    _ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<&Int>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let mut buf = [0; 8];
+            BigEndian::write_u64(&mut buf, *val as u64);
+            let flen = extra.ret_field_type.as_accessor().flen();
+            if flen > 0 && flen <= 8 {
+                let start_idx: usize = (8 - flen) as usize;
+                let buf = &buf[start_idx..8];
+                Ok(Some(buf.to_vec()))
+            } else {
+                // The length of casting bit to string should between 0 and 8.
+                Err(other_err!("Unsupported ret_field_type.Flen {:?}", flen))
+            }
+        }
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
 fn cast_uint_as_string(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -676,9 +714,10 @@ fn cast_float_real_as_string(
     }
 }
 
-// FIXME: We cannot use specialization in current Rust version, so impl ConvertTo<Bytes> for Bytes cannot
-//  pass compile because of we have impl Convert<Bytes> for T where T: ToString + Evaluable
-//  Refactor this part after https://github.com/rust-lang/rust/issues/31844 closed
+// FIXME: We cannot use specialization in current Rust version, so impl
+// ConvertTo<Bytes> for Bytes cannot  pass compile because of we have impl
+// Convert<Bytes> for T where T: ToString + Evaluable
+// Refactor this part after https://github.com/rust-lang/rust/issues/31844 closed
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_string_as_string(
@@ -807,7 +846,8 @@ fn cast_string_as_unsigned_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
-            // FIXME: in TiDB, if the param IsBinaryLiteral, then return the result of `evalDecimal` directly
+            // FIXME: in TiDB, if the param IsBinaryLiteral, then return the result of
+            // `evalDecimal` directly
             let d: Decimal = val.convert(ctx)?;
             let d = if metadata.get_in_union() && d.is_negative() {
                 Decimal::zero()
@@ -1021,6 +1061,36 @@ fn cast_bytes_like_as_duration(
     }
 }
 
+#[inline]
+fn cast_bytes_like_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &[u8],
+) -> Result<Option<Time>> {
+    let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
+    let result = Time::parse(
+        ctx,
+        val,
+        extra.ret_field_type.as_accessor().tp().try_into()?,
+        extra.ret_field_type.get_decimal() as i8,
+        true,
+    );
+    match result {
+        Ok(time) => Ok(Some(time)),
+        Err(e) => match e.code() {
+            ERR_DATA_OUT_OF_RANGE => {
+                ctx.handle_overflow_err(e)?;
+                Ok(None)
+            }
+            ERR_TRUNCATE_WRONG_VALUE => {
+                ctx.handle_truncate_err(e)?;
+                Ok(None)
+            }
+            _ => Err(e.into()),
+        },
+    }
+}
+
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 pub fn cast_real_as_duration(
@@ -1061,8 +1131,21 @@ pub fn cast_json_as_duration(
     extra: &RpnFnCallExtra,
     val: Option<JsonRef>,
 ) -> Result<Option<Duration>> {
-    let v = skip_none!(val).unquote()?;
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), false)
+    let v = skip_none!(val);
+    match v.get_type() {
+        JsonType::Date | JsonType::Datetime | JsonType::Timestamp => {
+            let time = v.get_time()?;
+            let dur: Duration = time.convert(ctx)?;
+
+            Ok(Some(dur.round_frac(extra.ret_field_type.decimal() as i8)?))
+        }
+        JsonType::Time => Ok(Some(v.get_duration()?)),
+        JsonType::String => cast_bytes_like_as_duration(ctx, extra, v.unquote()?.as_bytes(), false),
+        _ => {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("TIME", v.to_string()))?;
+            Ok(None)
+        }
+    }
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1125,9 +1208,9 @@ fn cast_real_as_time(
             )
         } else {
             // Convert `val` to a string first and then parse it as a float string.
-            Time::parse(
+            Time::parse_from_real(
                 ctx,
-                &val.to_string(),
+                val,
                 extra.ret_field_type.as_accessor().tp().try_into()?,
                 extra.ret_field_type.get_decimal() as i8,
                 // Enable round
@@ -1152,7 +1235,7 @@ fn cast_string_as_time(
         let val = String::from_utf8_lossy(val);
         Time::parse(
             ctx,
-            &*val,
+            &val,
             extra.ret_field_type.as_accessor().tp().try_into()?,
             extra.ret_field_type.get_decimal() as i8,
             // Enable round
@@ -1225,6 +1308,40 @@ fn cast_duration_as_time(
     }
 }
 
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+pub fn cast_json_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<JsonRef>,
+) -> Result<Option<Time>> {
+    let v = skip_none!(val);
+    match v.get_type() {
+        JsonType::Date | JsonType::Datetime | JsonType::Timestamp => {
+            let mut time = v.get_time()?;
+
+            time.set_time_type(extra.ret_field_type.as_accessor().tp().try_into()?)?;
+            Ok(Some(time))
+        }
+        JsonType::Time => {
+            let duration = v.get_duration()?;
+            let time = Time::from_duration(
+                ctx,
+                duration,
+                extra.ret_field_type.as_accessor().tp().try_into()?,
+            )?;
+            Ok(Some(
+                time.round_frac(ctx, extra.ret_field_type.decimal() as i8)?,
+            ))
+        }
+        JsonType::String => cast_bytes_like_as_time(ctx, extra, v.unquote()?.as_bytes()),
+        _ => {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("DURATION", v.to_string()))?;
+            Ok(None)
+        }
+    }
+}
+
 // cast any as json, some cast functions reuse `cast_any_as_any`
 //
 // - cast_int_as_json -> cast_any_as_any<Int, Json>
@@ -1251,13 +1368,30 @@ fn cast_uint_as_json(val: Option<&Int>) -> Result<Option<Json>> {
     }
 }
 
-#[rpn_fn(nullable, capture = [extra])]
+#[rpn_fn(nullable, capture = [args, extra])]
 #[inline]
-fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<BytesRef>) -> Result<Option<Json>> {
+fn cast_string_as_json(
+    args: &[RpnStackNode<'_>],
+    extra: &RpnFnCallExtra<'_>,
+    val: Option<BytesRef>,
+) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            if extra
+            let typ = args[0].field_type();
+            if typ.is_binary_string_like() {
+                let mut buf = val;
+
+                let mut vec;
+                if typ.tp() == FieldTypeTp::String {
+                    vec = (*val).to_owned();
+                    // the `flen` of string is always greater than zero
+                    vec.resize(typ.flen().try_into().unwrap(), 0);
+                    buf = &vec;
+                }
+
+                Ok(Some(Json::from_opaque(typ.tp(), buf)?))
+            } else if extra
                 .ret_field_type
                 .as_accessor()
                 .flag()
@@ -1268,7 +1402,8 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<BytesRef>) -> Res
                 let val: Json = s.parse()?;
                 Ok(Some(val))
             } else {
-                // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8 string
+                // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8
+                // string
                 let val = unsafe { String::from_utf8_unchecked(val.to_owned()) };
                 Ok(Some(Json::from_string(val)?))
             }
@@ -1429,12 +1564,16 @@ fn cast_enum_as_time(
     }
 }
 
-#[rpn_fn(nullable, capture = [extra])]
+#[rpn_fn(nullable, capture = [args, extra])]
 #[inline]
-fn cast_enum_as_json(extra: &RpnFnCallExtra, val: Option<EnumRef>) -> Result<Option<Json>> {
+fn cast_enum_as_json(
+    args: &[RpnStackNode<'_>],
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
-        Some(val) => cast_string_as_json(extra, Some(val.name())),
+        Some(val) => cast_string_as_json(args, extra, Some(val.name())),
     }
 }
 
@@ -1452,31 +1591,38 @@ fn from_binary<E: Encoding>(val: BytesRef) -> Result<Option<Bytes>> {
 
 #[cfg(test)]
 mod tests {
-    use super::Result;
-    use crate::impl_cast::*;
-    use crate::types::test_util::RpnFnScalarEvaluator;
-    use crate::RpnFnCallExtra;
-    use std::collections::BTreeMap;
-    use std::fmt::{Debug, Display};
-    use std::sync::Arc;
-    use std::{f32, f64, i64, u64};
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::codec::convert::produce_dec_with_specified_tp;
-    use tidb_query_datatype::codec::data_type::{Bytes, Int, Real};
-    use tidb_query_datatype::codec::error::{
-        ERR_DATA_OUT_OF_RANGE, ERR_DATA_TOO_LONG, ERR_TRUNCATE_WRONG_VALUE, ERR_UNKNOWN,
-        WARN_DATA_TRUNCATED,
+    use std::{
+        collections::BTreeMap,
+        f32, f64,
+        fmt::{Debug, Display},
+        i64,
+        sync::Arc,
+        u64,
     };
-    use tidb_query_datatype::codec::mysql::charset::*;
-    use tidb_query_datatype::codec::mysql::decimal::{max_decimal, max_or_min_dec};
-    use tidb_query_datatype::codec::mysql::{
-        Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
+
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::{
+            convert::produce_dec_with_specified_tp,
+            data_type::{Bytes, Int, Real},
+            error::{
+                ERR_DATA_OUT_OF_RANGE, ERR_DATA_TOO_LONG, ERR_TRUNCATE_WRONG_VALUE, ERR_UNKNOWN,
+                WARN_DATA_TRUNCATED,
+            },
+            mysql::{
+                charset::*,
+                decimal::{max_decimal, max_or_min_dec},
+                Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
+            },
+        },
+        expr::{EvalConfig, EvalContext, Flag},
+        Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH,
     };
-    use tidb_query_datatype::expr::Flag;
-    use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
     use tikv_util::buffer_vec::BufferVec;
     use tipb::ScalarFuncSig;
+
+    use super::Result;
+    use crate::{impl_cast::*, types::test_util::RpnFnScalarEvaluator, RpnFnCallExtra};
 
     fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
     where
@@ -1509,6 +1655,24 @@ mod tests {
             ret_field_type: &ret_field_type,
         };
         let r = func(&extra, None).unwrap();
+        assert!(r.is_none());
+    }
+
+    fn test_none_with_args_and_extra<F, Input, Ret>(func: F)
+    where
+        F: Fn(&[RpnStackNode<'_>], &RpnFnCallExtra, Option<Input>) -> Result<Option<Ret>>,
+    {
+        let value = ScalarValue::Bytes(None);
+        let field_type = FieldType::default();
+        let args: [RpnStackNode<'_>; 1] = [RpnStackNode::Scalar {
+            value: &value,
+            field_type: &field_type,
+        }];
+        let ret_field_type: FieldType = FieldType::default();
+        let extra = RpnFnCallExtra {
+            ret_field_type: &ret_field_type,
+        };
+        let r = func(&args, &extra, None).unwrap();
         assert!(r.is_none());
     }
 
@@ -1558,24 +1722,13 @@ mod tests {
         assert!(r.is_none());
     }
 
+    #[derive(Default)]
     struct CtxConfig {
         overflow_as_warning: bool,
         truncate_as_warning: bool,
         should_clip_to_zero: bool,
         in_insert_stmt: bool,
         in_update_or_delete_stmt: bool,
-    }
-
-    impl Default for CtxConfig {
-        fn default() -> Self {
-            CtxConfig {
-                overflow_as_warning: false,
-                truncate_as_warning: false,
-                should_clip_to_zero: false,
-                in_insert_stmt: false,
-                in_update_or_delete_stmt: false,
-            }
-        }
     }
 
     impl From<CtxConfig> for EvalContext {
@@ -1803,10 +1956,13 @@ mod tests {
 
         let cs = vec![
             // (input, expect)
-            (EnumRef::new("enum".as_bytes(), &0), Real::from(0.)),
-            (EnumRef::new("int".as_bytes(), &1), Real::from(1.)),
-            (EnumRef::new("real".as_bytes(), &2), Real::from(2.)),
-            (EnumRef::new("string".as_bytes(), &3), Real::from(3.)),
+            (EnumRef::new("enum".as_bytes(), &0), Real::new(0.).unwrap()),
+            (EnumRef::new("int".as_bytes(), &1), Real::new(1.).unwrap()),
+            (EnumRef::new("real".as_bytes(), &2), Real::new(2.).unwrap()),
+            (
+                EnumRef::new("string".as_bytes(), &3),
+                Real::new(3.).unwrap(),
+            ),
         ];
 
         for (input, expect) in cs {
@@ -1991,7 +2147,7 @@ mod tests {
 
     #[test]
     fn test_enum_as_json() {
-        test_none_with_extra(cast_enum_as_json);
+        test_none_with_args_and_extra(cast_enum_as_json);
 
         let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
         jo1.insert(
@@ -2070,13 +2226,20 @@ mod tests {
             ),
         ];
         for (input, expect, parse_to_json) in cs {
+            let arg_type = FieldType::default();
+            let arg_value = ScalarValue::Enum(Some(input.to_owned()));
+            let args = [RpnStackNode::Scalar {
+                value: &arg_value,
+                field_type: &arg_type,
+            }];
+
             let mut rft = FieldType::default();
             if parse_to_json {
                 let fta = rft.as_mut_accessor();
                 fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
             }
             let extra = make_extra(&rft);
-            let result = cast_enum_as_json(&extra, Some(input));
+            let result = cast_enum_as_json(&args, &extra, Some(input));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
                 "input: {}, parse_to_json: {}, expect: {:?}, result: {:?}",
@@ -2275,9 +2438,10 @@ mod tests {
             //  and `show warnings` will show
             //  `| Warning | 1292 | Truncated incorrect INTEGER value: '18446744073709551616'`
             //  fix this cast_string_as_int after fix TiDB's
-            // ("18446744073709551616", 18446744073709551615 as i64, Some(ERR_TRUNCATE_WRONG_VALUE) , Cond::Unsigned)
-            // FIXME: our cast_string_as_int's err handle is not exactly same as TiDB's
-            // ("18446744073709551616", 18446744073709551615u64 as i64, Some(ERR_TRUNCATE_WRONG_VALUE), Cond::InSelectStmt),
+            // ("18446744073709551616", 18446744073709551615 as i64, Some(ERR_TRUNCATE_WRONG_VALUE)
+            // , Cond::Unsigned) FIXME: our cast_string_as_int's err handle is not
+            // exactly same as TiDB's ("18446744073709551616", 18446744073709551615u64
+            // as i64, Some(ERR_TRUNCATE_WRONG_VALUE), Cond::InSelectStmt),
 
             // has prefix `-` and in_union and unsigned
             ("-10", 0, vec![], Cond::InUnionAndUnsigned),
@@ -2310,6 +2474,7 @@ mod tests {
                 vec![ERR_TRUNCATE_WRONG_VALUE],
                 Cond::Unsigned,
             ),
+            ("0.5", 0_i64, vec![ERR_TRUNCATE_WRONG_VALUE], Cond::None),
         ];
 
         for (input, expected, mut err_code, cond) in cs {
@@ -2386,7 +2551,7 @@ mod tests {
                 assert!(output.is_ok(), "input: {:?}", input);
                 assert_eq!(output.unwrap().unwrap(), exp, "input={:?}", input);
             } else {
-                assert!(output.is_err());
+                output.unwrap_err();
             }
         }
     }
@@ -2525,7 +2690,8 @@ mod tests {
     fn test_time_as_int_and_uint() {
         let mut ctx = EvalContext::default();
         // TODO: add more test case
-        // TODO: add test that make cast_any_as_any::<Time, Int> returning truncated error
+        // TODO: add test that make cast_any_as_any::<Time, Int> returning truncated
+        // error
         let cs: Vec<(Time, i64)> = vec![
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
@@ -2536,8 +2702,12 @@ mod tests {
                 20000101121315,
             ),
             // FiXME
-            //  Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap().round_frac(DEFAULT_FSP)
-            //  will get 2000-01-01T12:13:14, this is a bug
+            // ```
+            // Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4)
+            //     .unwrap()
+            //     .round_frac(DEFAULT_FSP)
+            // ```
+            // will get 2000-01-01T12:13:14, this is a bug
             // (
             //     Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap(),
             //     20000101121315,
@@ -2741,7 +2911,7 @@ mod tests {
         for (input, expected, fsp) in cases {
             let mut ctx = EvalContext::default();
             let time =
-                Time::parse_timestamp(&mut ctx, input, MAX_FSP, /* Enable round*/ true).unwrap();
+                Time::parse_timestamp(&mut ctx, input, MAX_FSP, /* Enable round */ true).unwrap();
 
             let actual: Time = RpnFnScalarEvaluator::new()
                 .push_param(time)
@@ -2948,7 +3118,7 @@ mod tests {
             (Json::from_bool(false).unwrap(), 0, false, false),
             (Json::none().unwrap(), 0, false, false),
             (
-                Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
+                Json::from_f64(((1u64 << 63) + (1u64 << 62)) as f64).unwrap(),
                 i64::MAX,
                 true,
                 false,
@@ -3494,9 +3664,11 @@ mod tests {
                 vec![ERR_TRUNCATE_WRONG_VALUE, ERR_DATA_OUT_OF_RANGE],
             ),
             // the case below has 3 warning
-            // 1. from getValidFloatPrefix, because of `-1234abc`'s `abc`, (ERR_TRUNCATE_WRONG_VALUE)
-            // 2. from ProduceFloatWithSpecifiedTp, because of TruncateFloat (ERR_DATA_OUT_OF_RANGE)
-            // 3. from ProduceFloatWithSpecifiedTp, because of unsigned but negative (ERR_DATA_OUT_OF_RANGE)
+            // - from getValidFloatPrefix, because of `-1234abc`'s `abc`,
+            //   (ERR_TRUNCATE_WRONG_VALUE)
+            // - from ProduceFloatWithSpecifiedTp, because of TruncateFloat (ERR_DATA_OUT_OF_RANGE)
+            // - from ProduceFloatWithSpecifiedTp, because of unsigned but negative
+            //   (ERR_DATA_OUT_OF_RANGE)
             (
                 String::from("-1234abc"),
                 0.0,
@@ -3615,7 +3787,7 @@ mod tests {
                     input
                 );
             } else {
-                assert!(output.is_err());
+                output.unwrap_err();
             }
         }
     }
@@ -3831,8 +4003,8 @@ mod tests {
     }
 
     /// base_cs:
-    /// vector of (T, T to bytes(without any other handle do by cast_as_string_helper),
-    /// T to string for debug output),
+    /// vector of (T, T to bytes(without any other handle do by
+    /// cast_as_string_helper), T to string for debug output),
     /// the object should not be zero len.
     #[allow(clippy::type_complexity)]
     fn test_as_string_helper<T: Clone, FnCast>(
@@ -4169,7 +4341,7 @@ mod tests {
         test_as_string_helper(
             ref_cs,
             |ctx, extra, val| {
-                let val = val.map(|x| *x as i64);
+                let val = val.copied();
                 cast_year_as_string(ctx, extra, &val.unwrap())
             },
             "cast_year_as_string",
@@ -4593,8 +4765,8 @@ mod tests {
             // (
             // origin, origin_flen, origin_decimal, res_flen, res_decimal, is_unsigned,
             // expect, warning_err_code,
-            // (InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning, truncate_as_warning
-            // )
+            // (InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning,
+            // truncate_as_warning )
             //
             // The origin_flen, origin_decimal here is
             // to let the programmer clearly know what the flen and decimal of the decimal is.
@@ -4854,10 +5026,8 @@ mod tests {
                 let expect = match res_type {
                     ResType::Zero => Decimal::zero(),
                     ResType::Same => base_res,
-                    ResType::TruncateToMax => max_decimal(res_flen as u8, res_decimal as u8),
-                    ResType::TruncateToMin => {
-                        max_or_min_dec(true, res_flen as u8, res_decimal as u8)
-                    }
+                    ResType::TruncateToMax => max_decimal(res_flen, res_decimal),
+                    ResType::TruncateToMin => max_or_min_dec(true, res_flen, res_decimal),
                     ResType::Round => {
                         let r = base_res
                             .round(res_decimal as i8, RoundMode::HalfEven)
@@ -4936,7 +5106,7 @@ mod tests {
                         overflow_as_warning,
                         truncate_as_warning,
                         warning_err_code,
-                        expect.to_string(),
+                        expect,
                         pd_res_log,
                         cast_func_res_log
                     );
@@ -4949,8 +5119,9 @@ mod tests {
     }
 
     // These test depend on the correctness of
-    // Decimal::from(u64), Decimal::from(i64), Decimal::from_f64(), Decimal::from_bytes()
-    // Decimal::zero(), Decimal::round, max_or_min_dec, max_decimal
+    // Decimal::from(u64), Decimal::from(i64), Decimal::from_f64(),
+    // Decimal::from_bytes() Decimal::zero(), Decimal::round, max_or_min_dec,
+    // max_decimal
     #[test]
     fn test_unsigned_int_as_signed_or_unsigned_decimal() {
         test_none_with_ctx_and_extra(cast_unsigned_int_as_signed_or_unsigned_decimal);
@@ -6053,8 +6224,9 @@ mod tests {
     {
         // cast_real_as_duration call `Duration::parse`, directly,
         // and `Duration::parse`, is test in duration.rs.
-        // Our test here is to make sure that the result is same as calling `Duration::parse`,
-        // no matter whether call_real_as_duration call `Duration::parse`, directly.
+        // Our test here is to make sure that the result is same as calling
+        // `Duration::parse`, no matter whether call_real_as_duration call
+        // `Duration::parse`, directly.
         for val in base_cs {
             for fsp in MIN_FSP..=MAX_FSP {
                 let mut ctx = CtxConfig {
@@ -6168,12 +6340,11 @@ mod tests {
                     Ok(v) => match v {
                         Some(dur) => {
                             if expect_max {
-                                let max_val_str: &str;
-                                if dur.is_neg() {
-                                    max_val_str = "-838:59:59";
+                                let max_val_str = if dur.is_neg() {
+                                    "-838:59:59"
                                 } else {
-                                    max_val_str = "838:59:59";
-                                }
+                                    "838:59:59"
+                                };
                                 let max_expect = Duration::parse(&mut ctx, max_val_str, fsp);
                                 let log = format!(
                                     "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
@@ -6471,28 +6642,10 @@ mod tests {
 
         // the case that Json::unquote failed had be tested by test_json_unquote
 
+        let mut ctx = EvalContext::default();
         let cs = vec![
             Json::from_object(BTreeMap::default()).unwrap(),
             Json::from_array(vec![]).unwrap(),
-            Json::from_i64(10).unwrap(),
-            Json::from_i64(i64::MAX).unwrap(),
-            Json::from_i64(i64::MIN).unwrap(),
-            Json::from_u64(0).unwrap(),
-            Json::from_u64(u64::MAX).unwrap(),
-            Json::from_f64(10.5).unwrap(),
-            Json::from_f64(10.4).unwrap(),
-            Json::from_f64(-10.4).unwrap(),
-            Json::from_f64(-10.5).unwrap(),
-            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
-            Json::from_f64(i64::MAX as u64 as f64).unwrap(),
-            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
-            Json::from_f64(i64::MIN as f64).unwrap(),
-            Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
-            Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
-            Json::from_f64(f64::from(f32::MIN)).unwrap(),
-            Json::from_f64(f64::from(f32::MAX)).unwrap(),
-            Json::from_f64(f64::MAX).unwrap(),
-            Json::from_f64(f64::MAX).unwrap(),
             Json::from_string(String::from("10.0")).unwrap(),
             Json::from_string(String::from(
                 "999999999999999999999999999999999999999999999999",
@@ -6513,6 +6666,7 @@ mod tests {
             Json::from_bool(true).unwrap(),
             Json::from_bool(false).unwrap(),
             Json::none().unwrap(),
+            Json::from_duration(Duration::parse(&mut ctx, "12:13:14", 0).unwrap()).unwrap(),
         ];
 
         let cs_ref: Vec<JsonRef> = cs.iter().map(|x| x.as_ref()).collect();
@@ -6523,6 +6677,145 @@ mod tests {
             cast_json_as_duration,
             "cast_json_as_duration",
         );
+    }
+
+    #[test]
+    fn test_json_as_duration_truncate_wrong_value() {
+        let cs = vec![
+            Json::from_i64(10).unwrap(),
+            Json::from_i64(i64::MAX).unwrap(),
+            Json::from_i64(i64::MIN).unwrap(),
+            Json::from_u64(0).unwrap(),
+            Json::from_u64(u64::MAX).unwrap(),
+            Json::from_f64(10.5).unwrap(),
+            Json::from_f64(10.4).unwrap(),
+            Json::from_f64(-10.4).unwrap(),
+            Json::from_f64(-10.5).unwrap(),
+            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+            Json::from_f64(i64::MAX as u64 as f64).unwrap(),
+            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+            Json::from_f64(i64::MIN as f64).unwrap(),
+            Json::from_f64(((1u64 << 63) + (1u64 << 62)) as f64).unwrap(),
+            Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
+            Json::from_f64(f64::from(f32::MIN)).unwrap(),
+            Json::from_f64(f64::from(f32::MAX)).unwrap(),
+            Json::from_f64(f64::MAX).unwrap(),
+            Json::from_f64(f64::MAX).unwrap(),
+        ];
+
+        for val in cs {
+            for fsp in MIN_FSP..MAX_FSP {
+                let mut ctx = CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                }
+                .into();
+                let rft = FieldTypeConfig {
+                    decimal: fsp as isize,
+                    ..FieldTypeConfig::default()
+                }
+                .into();
+                let extra = make_extra(&rft);
+                let _result = cast_json_as_duration(&mut ctx, &extra, Some(val.as_ref()));
+
+                let log = format!("input: {:?} should truncate wrong value", val,);
+                check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str());
+            }
+        }
+    }
+
+    #[test]
+    fn test_json_as_time() {
+        test_none_with_ctx_and_extra(cast_enum_as_time);
+        let mut ctx = EvalContext::default();
+        let cs = vec![
+            // (input, expect, tp, fsp)
+            (
+                Json::from_time(
+                    Time::parse(
+                        &mut ctx,
+                        "2019-09-16 10:11:12",
+                        TimeType::DateTime,
+                        0,
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12",
+                    TimeType::DateTime,
+                    0,
+                    false,
+                )
+                .unwrap(),
+                FieldTypeTp::DateTime,
+                0,
+            ),
+            (
+                Json::from_time(
+                    Time::parse(
+                        &mut ctx,
+                        "2019-09-16 10:11:12.111",
+                        TimeType::Timestamp,
+                        3,
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12.111",
+                    TimeType::Timestamp,
+                    3,
+                    false,
+                )
+                .unwrap(),
+                FieldTypeTp::Timestamp,
+                3,
+            ),
+            (
+                Json::from_str_val("2019-09-16 10:11:12").unwrap(),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12",
+                    TimeType::DateTime,
+                    0,
+                    false,
+                )
+                .unwrap(),
+                FieldTypeTp::DateTime,
+                0,
+            ),
+            (
+                Json::from_str_val("2019-09-16 10:11:12.1111").unwrap(),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12.1111",
+                    TimeType::DateTime,
+                    4,
+                    false,
+                )
+                .unwrap(),
+                FieldTypeTp::DateTime,
+                4,
+            ),
+        ];
+        for (input, expect, tp, fsp) in cs {
+            let rft = FieldTypeConfig {
+                tp: Some(tp),
+                decimal: fsp,
+                ..FieldTypeConfig::default()
+            }
+            .into();
+            let extra = make_extra(&rft);
+            let r = cast_json_as_time(&mut ctx, &extra, Some(input.as_ref()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
     }
 
     #[test]
@@ -6600,7 +6893,7 @@ mod tests {
 
     #[test]
     fn test_string_as_json() {
-        test_none_with_extra(cast_string_as_json);
+        test_none_with_args_and_extra(cast_string_as_json);
 
         let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
         jo1.insert(
@@ -6610,16 +6903,19 @@ mod tests {
         // HasParseToJSONFlag
         let cs = vec![
             (
+                FieldType::default(),
                 "{\"a\": \"b\"}".to_string(),
                 Json::from_object(jo1).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "{}".to_string(),
                 Json::from_object(BTreeMap::new()).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "[1, 2, 3]".to_string(),
                 Json::from_array(vec![
                     Json::from_i64(1).unwrap(),
@@ -6630,49 +6926,109 @@ mod tests {
                 true,
             ),
             (
+                FieldType::default(),
                 "[]".to_string(),
                 Json::from_array(Vec::new()).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "9223372036854775807".to_string(),
                 Json::from_i64(9223372036854775807).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "-9223372036854775808".to_string(),
                 Json::from_i64(-9223372036854775808).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "18446744073709551615".to_string(),
                 Json::from_f64(18446744073709552000.0).unwrap(),
                 true,
             ),
             // FIXME: f64::MAX.to_string() to json should success
             // (f64::MAX.to_string(), Json::from_f64(f64::MAX), true),
-            ("0.0".to_string(), Json::from_f64(0.0).unwrap(), true),
             (
+                FieldType::default(),
+                "0.0".to_string(),
+                Json::from_f64(0.0).unwrap(),
+                true,
+            ),
+            (
+                FieldType::default(),
                 "\"abcde\"".to_string(),
                 Json::from_string("abcde".to_string()).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "\"\"".to_string(),
                 Json::from_string("".to_string()).unwrap(),
                 true,
             ),
-            ("true".to_string(), Json::from_bool(true).unwrap(), true),
-            ("false".to_string(), Json::from_bool(false).unwrap(), true),
+            (
+                FieldType::default(),
+                "true".to_string(),
+                Json::from_bool(true).unwrap(),
+                true,
+            ),
+            (
+                FieldType::default(),
+                "false".to_string(),
+                Json::from_bool(false).unwrap(),
+                true,
+            ),
+            (
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .flen(4)
+                    .charset(CHARSET_BIN)
+                    .collation(Collation::Binary)
+                    .build(),
+                "a".to_string(),
+                Json::from_opaque(FieldTypeTp::String, &[97, 0, 0, 0]).unwrap(),
+                true,
+            ),
+            (
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .flen(256)
+                    .charset(CHARSET_BIN)
+                    .collation(Collation::Binary)
+                    .build(),
+                "".to_string(),
+                Json::from_opaque(FieldTypeTp::String, &[0; 256]).unwrap(),
+                true,
+            ),
+            (
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .flen(256)
+                    .charset(CHARSET_BIN)
+                    .collation(Collation::Binary)
+                    .build(),
+                "a".to_string(),
+                Json::from_opaque(FieldTypeTp::String, &[97]).unwrap(),
+                true,
+            ),
         ];
-        for (input, expect, parse_to_json) in cs {
+        for (arg_type, input, expect, parse_to_json) in cs {
+            let arg_value = ScalarValue::Bytes(Some(input.clone().into_bytes()));
+            let args = [RpnStackNode::Scalar {
+                value: &arg_value,
+                field_type: &arg_type,
+            }];
+
             let mut rft = FieldType::default();
             if parse_to_json {
                 let fta = rft.as_mut_accessor();
                 fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
             }
             let extra = make_extra(&rft);
-            let result = cast_string_as_json(&extra, Some(&input.clone().into_bytes()));
+            let result = cast_string_as_json(&args, &extra, Some(&input.clone().into_bytes()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
                 "input: {}, parse_to_json: {}, expect: {:?}, result: {:?}",
@@ -6723,36 +7079,51 @@ mod tests {
 
         // TODO: add more case for other TimeType
         let cs = vec![
-            // Add time_type filed here is to make maintainer know clearly that what is the type of the time.
+            // Add time_type filed here is to make maintainer know clearly that what is the type of
+            // the time.
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:14.000000".to_string()).unwrap(),
+                Json::from_time(
+                    Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
+                )
+                .unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:15.000000".to_string()).unwrap(),
+                Json::from_time(
+                    Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
+                )
+                .unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:14.000000".to_string()).unwrap(),
+                Json::from_time(
+                    Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 6, true).unwrap(),
+                )
+                .unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:14.666600".to_string()).unwrap(),
+                Json::from_time(
+                    Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 6, true).unwrap(),
+                )
+                .unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2019-09-01", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2019-09-01 00:00:00.000000".to_string()).unwrap(),
+                Json::from_time(Time::parse_datetime(&mut ctx, "2019-09-01", 0, true).unwrap())
+                    .unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2019-09-01", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2019-09-01 00:00:00.000000".to_string()).unwrap(),
+                Json::from_time(Time::parse_datetime(&mut ctx, "2019-09-01", 6, true).unwrap())
+                    .unwrap(),
             ),
         ];
         for (input, time_type, expect) in cs {
@@ -6780,11 +7151,14 @@ mod tests {
         let cs = vec![
             (
                 Duration::zero(),
-                Json::from_string("00:00:00.000000".to_string()).unwrap(),
+                Json::from_duration(Duration::zero()).unwrap(),
             ),
             (
                 Duration::parse(&mut EvalContext::default(), "10:10:10", 0).unwrap(),
-                Json::from_string("10:10:10.000000".to_string()).unwrap(),
+                Json::from_duration(
+                    Duration::parse(&mut EvalContext::default(), "10:10:10", 0).unwrap(),
+                )
+                .unwrap(),
             ),
         ];
 

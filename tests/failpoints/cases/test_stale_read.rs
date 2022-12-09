@@ -1,18 +1,17 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::*;
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{atomic::*, mpsc, Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 use kvproto::metapb::{Peer, Region};
-use raft::eraftpb::MessageType;
-
 use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::*, HandyRwLock};
 
 fn stale_read_during_splitting(right_derive: bool) {
     let count = 3;
@@ -339,8 +338,9 @@ fn test_read_index_when_transfer_leader_2() {
     must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
-    // Put and test again to ensure that peer 3 get the latest writes by message append
-    // instead of snapshot, so that transfer leader to peer 3 can 100% success.
+    // Put and test again to ensure that peer 3 get the latest writes by message
+    // append instead of snapshot, so that transfer leader to peer 3 can 100%
+    // success.
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
@@ -362,7 +362,7 @@ fn test_read_index_when_transfer_leader_2() {
             sim.async_command_on_node(
                 old_leader.get_id(),
                 read_request,
-                Callback::Read(Box::new(move |resp| tx.send(resp.response).unwrap())),
+                Callback::read(Box::new(move |resp| tx.send(resp.response).unwrap())),
             )
             .unwrap();
             rx
@@ -404,8 +404,8 @@ fn test_read_index_when_transfer_leader_2() {
         }
     }
 
-    // Resume reserved messages in one batch to make sure the old leader can get read and role
-    // change in one `Ready`.
+    // Resume reserved messages in one batch to make sure the old leader can get
+    // read and role change in one `Ready`.
     fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
     for raft_msg in reserved_msgs {
         router.send_raft_message(raft_msg).unwrap();
@@ -473,8 +473,9 @@ fn test_read_after_peer_destroyed() {
     );
 }
 
-/// In previous implementation, we suspect the leader lease at the position of `leader_commit_prepare_merge`
-/// failpoint when `PrepareMerge` log is committed, which is too late to prevent stale read.
+/// In previous implementation, we suspect the leader lease at the position of
+/// `leader_commit_prepare_merge` failpoint when `PrepareMerge` log is
+/// committed, which is too late to prevent stale read.
 #[test]
 fn test_stale_read_during_merging_2() {
     let mut cluster = new_node_cluster(0, 3);

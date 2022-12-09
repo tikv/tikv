@@ -2,8 +2,10 @@
 
 use collections::HashMap;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::errorpb;
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
+use kvproto::{
+    errorpb,
+    raft_cmdpb::{AdminCmdType, CmdType, Request},
+};
 use raftstore::coprocessor::{Cmd, CmdBatch, ObserveLevel};
 use txn_types::{
     Key, Lock, LockType, TimeStamp, Value, Write, WriteBatchFlags, WriteRef, WriteType,
@@ -31,8 +33,10 @@ pub enum ChangeRow {
         commit_ts: TimeStamp,
         value: Option<Value>,
     },
+    IngestSsT,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ChangeLog {
     Error(errorpb::Error),
     Rows { index: u64, rows: Vec<ChangeRow> },
@@ -46,6 +50,7 @@ impl ChangeLog {
             .map(|cmd| {
                 let Cmd {
                     index,
+                    term: _,
                     mut request,
                     mut response,
                 } = cmd;
@@ -54,8 +59,11 @@ impl ChangeLog {
                         let flags =
                             WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
                         let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
-                        let changes = group_row_changes(request.requests.into());
-                        let rows = Self::encode_rows(changes, is_one_pc);
+                        let (changes, has_ingest_sst) = group_row_changes(request.requests.into());
+                        let mut rows = Self::encode_rows(changes, is_one_pc);
+                        if has_ingest_sst {
+                            rows.push(ChangeRow::IngestSsT);
+                        }
                         ChangeLog::Rows { index, rows }
                     } else {
                         ChangeLog::Admin(request.take_admin_request().get_cmd_type())
@@ -71,7 +79,7 @@ impl ChangeLog {
     fn encode_rows(changes: HashMap<Key, RowChange>, is_one_pc: bool) -> Vec<ChangeRow> {
         changes
             .into_iter()
-            .map(|(key, row)| match (row.write, row.lock, row.default) {
+            .filter_map(|(key, row)| match (row.write, row.lock, row.default) {
                 (Some(KeyOp::Put(mut commit_ts, write)), _, default) => {
                     decode_write(key.as_encoded(), &write, true).map(|write| {
                         let Write {
@@ -125,14 +133,14 @@ impl ChangeLog {
                 }),
                 other => panic!("unexpected row pattern {:?}", other),
             })
-            .flatten()
             .collect()
     }
 }
 
 pub(crate) fn decode_write(key: &[u8], value: &[u8], is_apply: bool) -> Option<Write> {
     let write = WriteRef::parse(value).ok()?.to_owned();
-    // Drop the record it self but keep only the overlapped rollback information if gc_fence exists.
+    // Drop the record it self but keep only the overlapped rollback information if
+    // gc_fence exists.
     if is_apply && write.gc_fence.is_some() {
         // `gc_fence` is set means the write record has been rewritten.
         // Currently the only case is writing overlapped_rollback. And in this case
@@ -186,12 +194,17 @@ struct RowChange {
     default: Option<KeyOp>,
 }
 
-fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
+fn group_row_changes(requests: Vec<Request>) -> (HashMap<Key, RowChange>, bool) {
     let mut changes: HashMap<Key, RowChange> = HashMap::default();
-    // The changes about default cf was recorded here and need to be matched with a `write` or a `lock`.
+    // The changes about default cf was recorded here and need to be matched with a
+    // `write` or a `lock`.
     let mut unmatched_default = HashMap::default();
+    let mut has_ingest_sst = false;
     for mut req in requests {
         match req.get_cmd_type() {
+            CmdType::IngestSst => {
+                has_ingest_sst = true;
+            }
             CmdType::Put => {
                 let mut put = req.take_put();
                 let key = Key::from_encoded(put.take_key());
@@ -248,11 +261,11 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
             row.default = Some(default);
         }
     }
-    changes
+    (changes, has_ingest_sst)
 }
 
-/// Filter non-lock related data (i.e `default_cf` data), the implement is subject to
-/// how `group_row_changes` and `encode_rows` encode `ChangeRow`
+/// Filter non-lock related data (i.e `default_cf` data), the implement is
+/// subject to how `group_row_changes` and `encode_rows` encode `ChangeRow`
 pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
     if cmd_batch.is_empty() {
         return None;
@@ -269,7 +282,7 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
                         CmdType::Delete => req.get_delete().cf.as_str(),
                         _ => "",
                     };
-                    cf == CF_LOCK || cf == CF_WRITE
+                    cf == CF_LOCK || cf == CF_WRITE || req.get_cmd_type() == CmdType::IngestSst
                 });
                 cmd.request.set_requests(requests.into());
             }
@@ -281,15 +294,19 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
 #[cfg(test)]
 mod tests {
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::AssertionLevel;
-    use tikv::server::raftkv::modifies_to_requests;
-    use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
-    use tikv::storage::lock_manager::DummyLockManager;
-    use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader};
-    use tikv::storage::txn::commands::one_pc_commit_ts;
-    use tikv::storage::txn::tests::*;
-    use tikv::storage::txn::{prewrite, CommitKind, TransactionKind, TransactionProperties};
-    use tikv::storage::Engine;
+    use kvproto::{
+        kvrpcpb::{AssertionLevel, PrewriteRequestPessimisticAction::*},
+        raft_cmdpb::{CmdType, Request},
+    };
+    use tikv::storage::{
+        kv::{MockEngineBuilder, TestEngineBuilder},
+        mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader},
+        txn::{
+            commands::one_pc_commit, prewrite, tests::*, CommitKind, TransactionKind,
+            TransactionProperties,
+        },
+        Engine,
+    };
     use tikv_kv::Modify;
     use txn_types::{Key, LockType, WriteType};
 
@@ -298,34 +315,37 @@ mod tests {
     #[test]
     fn test_cmd_encode() {
         let rocks_engine = TestEngineBuilder::new().build().unwrap();
-        let engine = MockEngineBuilder::from_rocks_engine(rocks_engine).build();
+        let mut engine = MockEngineBuilder::from_rocks_engine(rocks_engine).build();
 
-        let reqs = modifies_to_requests(vec![Modify::Put(
-            "default",
-            Key::from_raw(b"k1"),
-            b"v1".to_vec(),
-        )]);
-        assert!(ChangeLog::encode_rows(group_row_changes(reqs), false).is_empty());
+        let mut reqs = vec![Modify::Put("default", Key::from_raw(b"k1"), b"v1".to_vec()).into()];
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::IngestSst);
+        reqs.push(req);
+        let (changes, has_ingest_sst) = group_row_changes(reqs);
+        assert_eq!(has_ingest_sst, true);
+        assert!(ChangeLog::encode_rows(changes, false).is_empty());
 
-        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 1);
-        must_commit(&engine, b"k1", 1, 2);
+        must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 1);
+        must_commit(&mut engine, b"k1", 1, 2);
 
-        must_prewrite_put(&engine, b"k1", b"v2", b"k1", 3);
-        must_rollback(&engine, b"k1", 3, false);
+        must_prewrite_put(&mut engine, b"k1", b"v2", b"k1", 3);
+        must_rollback(&mut engine, b"k1", 3, false);
 
-        must_prewrite_put(&engine, b"k1", &[b'v'; 512], b"k1", 4);
-        must_commit(&engine, b"k1", 4, 5);
+        must_prewrite_put(&mut engine, b"k1", &[b'v'; 512], b"k1", 4);
+        must_commit(&mut engine, b"k1", 4, 5);
 
-        must_prewrite_put(&engine, b"k1", b"v3", b"k1", 5);
-        must_rollback(&engine, b"k1", 5, false);
+        must_prewrite_put(&mut engine, b"k1", b"v3", b"k1", 5);
+        must_rollback(&mut engine, b"k1", 5, false);
 
         let k1 = Key::from_raw(b"k1");
         let rows: Vec<_> = engine
             .take_last_modifies()
             .into_iter()
             .flat_map(|m| {
-                let reqs = modifies_to_requests(m);
-                ChangeLog::encode_rows(group_row_changes(reqs), false)
+                let reqs: Vec<Request> = m.into_iter().map(Into::into).collect();
+                let (changes, has_ingest_sst) = group_row_changes(reqs);
+                assert_eq!(has_ingest_sst, false);
+                ChangeLog::encode_rows(changes, false)
             })
             .collect();
 
@@ -399,20 +419,23 @@ mod tests {
                 need_old_value: false,
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
+                txn_source: 0,
             },
             Mutation::make_put(k1.clone(), b"v4".to_vec()),
             &None,
-            false,
+            SkipPessimisticCheck,
         )
         .unwrap();
-        one_pc_commit_ts(true, &mut txn, 10.into(), &DummyLockManager);
+        one_pc_commit(true, &mut txn, 10.into());
         write(&engine, &Default::default(), txn.into_modifies());
         let one_pc_row = engine
             .take_last_modifies()
             .into_iter()
             .flat_map(|m| {
-                let reqs = modifies_to_requests(m);
-                ChangeLog::encode_rows(group_row_changes(reqs), true)
+                let reqs = m.into_iter().map(Into::into).collect();
+                let (changes, has_ingest_sst) = group_row_changes(reqs);
+                assert_eq!(has_ingest_sst, false);
+                ChangeLog::encode_rows(changes, true)
             })
             .last()
             .unwrap();

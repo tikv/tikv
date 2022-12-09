@@ -1,23 +1,29 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error;
-use std::fmt::{self, Write};
-use std::fs;
-use std::net::{SocketAddrV4, SocketAddrV6};
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
-use std::path::{Path, PathBuf};
-use std::str::{self, FromStr};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
-use std::time::Duration;
+use std::{
+    error::Error,
+    fmt::{self, Write},
+    fs,
+    net::{SocketAddrV4, SocketAddrV6},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+    path::{Path, PathBuf},
+    str::{self, FromStr},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, RwLock, RwLockReadGuard,
+    },
+    time::Duration,
+};
 
-use serde::de::{self, Unexpected, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use online_config::ConfigValue;
+use serde::{
+    de::{self, Unexpected, Visitor},
+    Deserialize, Deserializer, Serialize, Serializer,
+};
 use thiserror::Error;
 
 use super::time::Instant;
 use crate::slow_log;
-use online_config::ConfigValue;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -53,14 +59,14 @@ const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
 const DAY: u64 = HOUR * TIME_MAGNITUDE_3;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum LogFormat {
     Text,
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {
@@ -75,42 +81,6 @@ impl From<ConfigValue> for ReadableSize {
             ReadableSize(s)
         } else {
             panic!("expect: ConfigValue::Size, got: {:?}", c);
-        }
-    }
-}
-
-/// This trivial type is needed, because we can't define the `From<Option<ReadableSize>>`
-/// and `Into<Option<ReadableSize>>` trait for `ConfigValue` which is needed to derive
-/// `OnlineConfig` trait for `BlockCacheConfig`
-#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
-#[serde(from = "Option<ReadableSize>")]
-#[serde(into = "Option<ReadableSize>")]
-pub struct OptionReadableSize(pub Option<ReadableSize>);
-
-impl From<Option<ReadableSize>> for OptionReadableSize {
-    fn from(s: Option<ReadableSize>) -> OptionReadableSize {
-        OptionReadableSize(s)
-    }
-}
-
-impl From<OptionReadableSize> for Option<ReadableSize> {
-    fn from(s: OptionReadableSize) -> Option<ReadableSize> {
-        s.0
-    }
-}
-
-impl From<OptionReadableSize> for ConfigValue {
-    fn from(size: OptionReadableSize) -> ConfigValue {
-        ConfigValue::OptionSize(size.0.map(|v| v.0))
-    }
-}
-
-impl From<ConfigValue> for OptionReadableSize {
-    fn from(s: ConfigValue) -> OptionReadableSize {
-        if let ConfigValue::OptionSize(s) = s {
-            OptionReadableSize(s.map(ReadableSize))
-        } else {
-            panic!("expect: ConfigValue::OptionSize, got: {:?}", s);
         }
     }
 }
@@ -130,6 +100,10 @@ impl ReadableSize {
 
     pub const fn as_mb(self) -> u64 {
         self.0 / MIB
+    }
+
+    pub fn as_mb_f64(self) -> f64 {
+        self.0 as f64 / MIB as f64
     }
 }
 
@@ -170,14 +144,14 @@ impl Serialize for ReadableSize {
             write!(buffer, "{}PiB", size / PIB).unwrap();
         } else if size % TIB == 0 {
             write!(buffer, "{}TiB", size / TIB).unwrap();
-        } else if size % GIB as u64 == 0 {
+        } else if size % GIB == 0 {
             write!(buffer, "{}GiB", size / GIB).unwrap();
-        } else if size % MIB as u64 == 0 {
+        } else if size % MIB == 0 {
             write!(buffer, "{}MiB", size / MIB).unwrap();
-        } else if size % KIB as u64 == 0 {
+        } else if size % KIB == 0 {
             write!(buffer, "{}KiB", size / KIB).unwrap();
         } else {
-            return serializer.serialize_u64(size);
+            write!(buffer, "{}B", size).unwrap();
         }
         serializer.serialize_str(&buffer)
     }
@@ -213,7 +187,15 @@ impl FromStr for ReadableSize {
             "G" | "GB" | "GiB" => GIB,
             "T" | "TB" | "TiB" => TIB,
             "P" | "PB" | "PiB" => PIB,
-            "B" | "" => UNIT,
+            "B" | "" => {
+                if size.chars().all(|c| char::is_ascii_digit(&c)) {
+                    return size
+                        .parse::<u64>()
+                        .map(|n| ReadableSize(n))
+                        .map_err(|_| format!("invalid size string: {:?}", s));
+                }
+                UNIT
+            }
             _ => {
                 return Err(format!(
                     "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
@@ -402,13 +384,15 @@ impl FromStr for ReadableDuration {
         if dur.is_sign_negative() {
             return Err("duration should be positive.".to_owned());
         }
-        let secs = dur as u64 / SECOND as u64;
-        let micros = (dur as u64 % SECOND as u64) as u32 * 1_000;
+        let secs = dur as u64 / SECOND;
+        let micros = (dur as u64 % SECOND) as u32 * 1_000;
         Ok(ReadableDuration(Duration::new(secs, micros)))
     }
 }
 
 impl ReadableDuration {
+    pub const ZERO: ReadableDuration = ReadableDuration(Duration::ZERO);
+
     pub const fn micros(micros: u64) -> ReadableDuration {
         ReadableDuration(Duration::from_micros(micros))
     }
@@ -557,7 +541,8 @@ pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
     ret
 }
 
-/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+/// Normalizes the path and canonicalizes its longest physically existing
+/// sub-path.
 fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
         use std::path::Component;
@@ -609,7 +594,8 @@ fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<Pa
     try_canonicalize_normalized_path(&normalize_path(path))
 }
 
-/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+/// Normalizes the path and canonicalizes its longest physically existing
+/// sub-path.
 fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     match path.as_ref().canonicalize() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_non_existing_path(path),
@@ -732,7 +718,8 @@ mod check_kernel {
         Ok(())
     }
 
-    /// `check_kernel_params` checks kernel parameters, following are checked so far:
+    /// `check_kernel_params` checks kernel parameters, following are checked so
+    /// far:
     ///   - `net.core.somaxconn` should be greater or equal to 32768.
     ///   - `net.ipv4.tcp_syncookies` should be 0
     ///   - `vm.swappiness` shoud be 0
@@ -781,10 +768,12 @@ pub fn check_kernel() -> Vec<ConfigError> {
 
 #[cfg(target_os = "linux")]
 mod check_data_dir {
-    use std::ffi::{CStr, CString};
-    use std::fs;
-    use std::path::Path;
-    use std::sync::Mutex;
+    use std::{
+        ffi::{CStr, CString},
+        fs,
+        path::Path,
+        sync::Mutex,
+    };
 
     use lazy_static::lazy_static;
 
@@ -825,7 +814,7 @@ mod check_data_dir {
                 }
                 let ent = &*ent;
                 let cur_dir = CStr::from_ptr(ent.mnt_dir).to_str().unwrap();
-                if path.starts_with(&cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
+                if path.starts_with(cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
                     fs.tp = CStr::from_ptr(ent.mnt_type).to_str().unwrap().to_owned();
                     fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
                     fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
@@ -855,7 +844,7 @@ mod check_data_dir {
         let block_dir = "/sys/block";
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {
-            let dir = fs::read_dir(&block_dir).map_err(|e| {
+            let dir = fs::read_dir(block_dir).map_err(|e| {
                 ConfigError::FileSystem(format!(
                     "{}: read block dir {:?} failed: {:?}",
                     op, block_dir, e
@@ -922,9 +911,8 @@ mod check_data_dir {
 
     #[cfg(test)]
     mod tests {
-        use std::fs::File;
-        use std::io::Write;
-        use std::os::unix::fs::symlink;
+        use std::{fs::File, io::Write, os::unix::fs::symlink};
+
         use tempfile::Builder;
 
         use super::*;
@@ -951,21 +939,20 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
 
             // not found
             let f2 = get_fs_info("/tmp", &mnt_file);
-            assert!(f2.is_err());
+            f2.unwrap_err();
         }
 
         #[test]
         fn test_get_rotational_info() {
             // test device not exist
             let ret = get_rotational_info("/dev/invalid");
-            assert!(ret.is_err());
+            ret.unwrap_err();
         }
 
         #[test]
         fn test_check_data_dir() {
             // test invalid data_path
-            let ret = check_data_dir("/sys/invalid", "/proc/mounts");
-            assert!(ret.is_err());
+            check_data_dir("/sys/invalid", "/proc/mounts").unwrap_err();
             // get real path's fs_info
             let tmp_dir = Builder::new()
                 .prefix("test-check-data-dir")
@@ -976,13 +963,15 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
             // data_path may not mounted on a normal device on container
-            if !fs_info.fsname.starts_with("/dev") {
+            // /proc/mounts may contain host's device, which is not accessible in container.
+            if Path::new("/.dockerenv").exists()
+                && (!fs_info.fsname.starts_with("/dev") || !Path::new(&fs_info.fsname).exists())
+            {
                 return;
             }
 
             // test with real path
-            let ret = check_data_dir(&data_path, "/proc/mounts");
-            assert!(ret.is_ok());
+            check_data_dir(&data_path, "/proc/mounts").unwrap();
 
             // test with device mapper
             // get real_path's rotational info
@@ -1002,8 +991,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let mnt_file = format!("{}/mnt.txt", tmp_dir.path().display());
             create_file(&mnt_file, mninfo.as_bytes());
             // check info
-            let res = check_data_dir(&data_path, &mnt_file);
-            assert!(res.is_ok());
+            check_data_dir(&data_path, &mnt_file).unwrap();
             // check rotational info
             let get = get_rotational_info(&tmp_device).unwrap();
             assert_eq!(expect, get);
@@ -1051,7 +1039,8 @@ fn get_file_count(data_path: &str, extension: &str) -> Result<usize, ConfigError
     Ok(file_count)
 }
 
-// check dir is empty of file with certain extension, empty string for any extension.
+// check dir is empty of file with certain extension, empty string for any
+// extension.
 pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
     let op = "data-dir.empty.check";
     let dir = Path::new(data_path);
@@ -1069,7 +1058,8 @@ pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), Conf
 }
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
-/// More details about **Host** and **Port** can be found in WHATWG URL Standard.
+/// More details about **Host** and **Port** can be found in WHATWG URL
+/// Standard.
 ///
 /// Return whether the address is unspecified, i.e. `0.0.0.0` or `::0`
 pub fn check_addr(addr: &str) -> Result<bool, ConfigError> {
@@ -1125,13 +1115,15 @@ impl<T> VersionTrack<T> {
         }
     }
 
-    /// Update the value
-    pub fn update<F>(&self, f: F)
+    pub fn update<F, O, E>(&self, f: F) -> Result<O, E>
     where
-        F: FnOnce(&mut T),
+        F: FnOnce(&mut T) -> Result<O, E>,
     {
-        f(&mut self.value.write().unwrap());
-        self.version.fetch_add(1, Ordering::Release);
+        let res = f(&mut self.value.write().unwrap());
+        if res.is_ok() {
+            self.version.fetch_add(1, Ordering::Release);
+        }
+        res
     }
 
     pub fn value(&self) -> RwLockReadGuard<'_, T> {
@@ -1188,7 +1180,7 @@ enum TomlLine {
     // the `Keys` from "[`Keys`]"
     Table(String),
     // the `Keys` from "`Keys` = value"
-    KVPair(String),
+    KvPair(String),
     // Comment, empty line, etc.
     Unknown,
 }
@@ -1204,13 +1196,13 @@ impl TomlLine {
         if v.is_empty() || v.len() > 2 || TomlLine::parse_key(v[v.len() - 1].as_str()).is_none() {
             return TomlLine::Unknown;
         }
-        TomlLine::KVPair(v.pop().unwrap())
+        TomlLine::KvPair(v.pop().unwrap())
     }
 
     fn parse(s: &str) -> TomlLine {
         let s = s.trim();
         // try to parse table from format of "[`Keys`]"
-        if let Some(k) = s.strip_prefix('[').map(|s| s.strip_suffix(']')).flatten() {
+        if let Some(k) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             return match TomlLine::parse_key(k) {
                 Some(k) => TomlLine::Table(k),
                 None => TomlLine::Unknown,
@@ -1253,9 +1245,9 @@ impl TomlLine {
     }
 }
 
-/// TomlWriter use to update the config file and only cover the most commom toml
-/// format that used by tikv config file, toml format like: quoted keys, multi-line
-/// value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
+/// TomlWriter use to update the config file and only cover the most common toml
+/// format that used by tikv config file, toml format like: quoted keys,
+/// multi-line value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
 /// for more detail.
 pub struct TomlWriter {
     dst: Vec<u8>,
@@ -1284,7 +1276,7 @@ impl TomlWriter {
                     self.write(line.as_bytes());
                     self.current_table = keys;
                 }
-                TomlLine::KVPair(keys) => {
+                TomlLine::KvPair(keys) => {
                     match change.remove(&TomlLine::concat_key(&self.current_table, &keys)) {
                         None => self.write(line.as_bytes()),
                         Some(chg) => self.write(TomlLine::encode_kv(&keys, &chg).as_bytes()),
@@ -1416,14 +1408,184 @@ macro_rules! numeric_enum_serializing_mod {
     }
 }
 
+/// Helper for migrating Raft data safely. Such migration is defined as
+/// multiple states that can be uniquely distinguished. And the transitions
+/// between these states are atomic.
+///
+/// States:
+///   1. Init - Only source directory contains Raft data.
+///   2. Migrating - A marker file contains the path of source directory. The
+/// source      directory contains a complete copy of Raft data. Target
+/// directory may exist.   3. Completed - Only target directory contains Raft
+/// data. Marker file may exist.
+pub struct RaftDataStateMachine {
+    root: PathBuf,
+    in_progress_marker: PathBuf,
+    source: PathBuf,
+    target: PathBuf,
+}
+
+impl RaftDataStateMachine {
+    pub fn new(root: &str, source: &str, target: &str) -> Self {
+        let root = PathBuf::from(root);
+        let in_progress_marker = root.join("MIGRATING-RAFT");
+        let source = PathBuf::from(source);
+        let target = PathBuf::from(target);
+        Self {
+            root,
+            in_progress_marker,
+            source,
+            target,
+        }
+    }
+
+    /// Checks if the current condition is a valid state.
+    pub fn validate(&self, should_exist: bool) -> std::result::Result<(), String> {
+        if Self::data_exists(&self.source)
+            && Self::data_exists(&self.target)
+            && !self.in_progress_marker.exists()
+        {
+            return Err(format!(
+                "Found multiple raft data sets: {}, {}",
+                self.source.display(),
+                self.target.display()
+            ));
+        }
+        let exists = Self::data_exists(&self.source) || Self::data_exists(&self.target);
+        if exists != should_exist {
+            if should_exist {
+                return Err("Cannot find raft data set.".to_owned());
+            } else {
+                return Err("Found raft data set when it should not exist.".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns whether a migration is needed. When it's needed, enters the
+    /// `Migrating` state. Otherwise prepares the target directory for
+    /// opening.
+    pub fn before_open_target(&mut self) -> bool {
+        // Clean up trash directory if there is any.
+        for p in [&self.source, &self.target] {
+            let trash = p.with_extension("REMOVE");
+            if trash.exists() {
+                fs::remove_dir_all(&trash).unwrap();
+            }
+        }
+        if !Self::data_exists(&self.source) {
+            // Recover from Completed state.
+            if self.in_progress_marker.exists() {
+                Self::must_remove(&self.in_progress_marker);
+            }
+            return false;
+        } else if self.in_progress_marker.exists() {
+            if let Some(real_source) = self.read_marker() {
+                // Recover from Migrating state.
+                if real_source == self.target {
+                    if Self::data_exists(&self.target) {
+                        Self::must_remove(&self.source);
+                        return false;
+                    }
+                    // It's actually in Completed state, just in the reverse
+                    // direction. Equivalent to Init state.
+                } else {
+                    assert!(real_source == self.source);
+                    Self::must_remove(&self.target);
+                    return true;
+                }
+            } else {
+                // Halfway between Init and Migrating.
+                assert!(!Self::data_exists(&self.target));
+            }
+        }
+        // Init -> Migrating.
+        self.write_marker();
+        true
+    }
+
+    /// Exits the `Migrating` state and enters the `Completed` state.
+    pub fn after_dump_data(&mut self) {
+        assert!(Self::data_exists(&self.source));
+        assert!(Self::data_exists(&self.target));
+        Self::must_remove(&self.source); // Enters the `Completed` state.
+        Self::must_remove(&self.in_progress_marker);
+    }
+
+    // `after_dump_data` involves two atomic operations, insert a check point
+    // between them to test crash safety.
+    #[cfg(test)]
+    fn after_dump_data_with_check<F: Fn()>(&mut self, check: &F) {
+        assert!(Self::data_exists(&self.source));
+        assert!(Self::data_exists(&self.target));
+        Self::must_remove(&self.source); // Enters the `Completed` state.
+        check();
+        Self::must_remove(&self.in_progress_marker);
+    }
+
+    fn write_marker(&self) {
+        use std::io::Write;
+        let mut f = fs::File::create(&self.in_progress_marker).unwrap();
+        f.write_all(self.source.to_str().unwrap().as_bytes())
+            .unwrap();
+        f.sync_all().unwrap();
+        f.write_all(b"//").unwrap();
+        f.sync_all().unwrap();
+        Self::sync_dir(&self.root);
+    }
+
+    // Assumes there is a marker file. Returns None when the content of marker file
+    // is incomplete.
+    fn read_marker(&self) -> Option<PathBuf> {
+        let marker = fs::read_to_string(&self.in_progress_marker).unwrap();
+        if marker.ends_with("//") {
+            Some(PathBuf::from(&marker[..marker.len() - 2]))
+        } else {
+            None
+        }
+    }
+
+    fn must_remove(path: &Path) {
+        if path.exists() {
+            if path.is_dir() {
+                info!("Removing directory"; "path" => %path.display());
+                let trash = path.with_extension("REMOVE");
+                Self::must_rename_dir(path, &trash);
+                fs::remove_dir_all(&trash).unwrap();
+            } else {
+                info!("Removing file"; "path" => %path.display());
+                fs::remove_file(path).unwrap();
+                Self::sync_dir(path.parent().unwrap());
+            }
+        }
+    }
+
+    fn must_rename_dir(from: &Path, to: &Path) {
+        fs::rename(from, to).unwrap();
+        let mut dir = to.to_path_buf();
+        assert!(dir.pop());
+        Self::sync_dir(&dir);
+    }
+
+    fn data_exists(path: &Path) -> bool {
+        if !path.exists() || !path.is_dir() {
+            return false;
+        }
+        fs::read_dir(path).unwrap().next().is_some()
+    }
+
+    fn sync_dir(dir: &Path) {
+        fs::File::open(dir).and_then(|d| d.sync_all()).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::io::Write;
-    use std::path::Path;
+    use std::{fs::File, io::Write, path::Path};
+
+    use tempfile::Builder;
 
     use super::*;
-    use tempfile::Builder;
 
     #[test]
     fn test_readable_size() {
@@ -1469,10 +1631,10 @@ mod tests {
         }
 
         let c = SizeHolder {
-            s: ReadableSize(512),
+            s: ReadableSize((isize::MAX) as u64),
         };
         let res_str = toml::to_string(&c).unwrap();
-        assert_eq!(res_str, "s = 512\n");
+        assert_eq!(res_str, "s = \"9223372036854775807B\"\n");
         let res_size: SizeHolder = toml::from_str(&res_str).unwrap();
         assert_eq!(res_size.s.0, c.s.0);
 
@@ -1627,8 +1789,8 @@ mod tests {
         ensure_dir_exist(&format!("{}", tmp_dir.to_path_buf().join("dir").display())).unwrap();
         let nodes: &[&str] = if cfg!(target_os = "linux") {
             std::os::unix::fs::symlink(
-                &tmp_dir.to_path_buf().join("dir"),
-                &tmp_dir.to_path_buf().join("symlink"),
+                tmp_dir.to_path_buf().join("dir"),
+                tmp_dir.to_path_buf().join("symlink"),
             )
             .unwrap();
             &["non_existing", "dir", "symlink"]
@@ -1663,7 +1825,7 @@ mod tests {
         {
             File::create(&path2).unwrap();
         }
-        assert!(canonicalize_path(&path2).is_err());
+        canonicalize_path(&path2).unwrap_err();
         assert!(Path::new(&path2).exists());
     }
 
@@ -1773,31 +1935,27 @@ mod tests {
     #[test]
     fn test_check_data_dir_empty() {
         // test invalid data_path
-        let ret = check_data_dir_empty("/sys/invalid", "txt");
-        assert!(ret.is_ok());
+        check_data_dir_empty("/sys/invalid", "txt").unwrap();
         // test empty data_path
         let tmp_path = Builder::new()
             .prefix("test-get-file-count")
             .tempdir()
             .unwrap()
             .into_path();
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_ok());
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "txt").unwrap();
         // test non-empty data_path
         let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
         create_file(&tmp_file, b"");
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
-        assert!(ret.is_err());
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_err());
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
-        assert!(ret.is_ok());
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "").unwrap_err();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "txt").unwrap_err();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "xt").unwrap();
     }
 
     #[test]
     fn test_multi_tracker() {
-        use super::*;
         use std::sync::Arc;
+
+        use super::*;
 
         #[derive(Debug, Default, PartialEq)]
         struct Value {
@@ -1814,9 +1972,10 @@ mod tests {
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
 
-        vc.update(|v| {
+        let _ = vc.update(|v| -> Result<(), ()> {
             v.v1 = 1000;
             v.v2 = true;
+            Ok(())
         });
         for tr in trackers.iter_mut() {
             let incoming = tr.any_new();
@@ -1930,5 +2089,81 @@ yyy = 100
             toml_value["readpool"]["storage"]["normal-concurrency"].as_integer(),
             Some(2)
         );
+    }
+
+    #[test]
+    fn test_raft_data_migration() {
+        fn run_migration<F: Fn()>(root: &Path, source: &Path, target: &Path, check: F) {
+            let mut state = RaftDataStateMachine::new(
+                root.to_str().unwrap(),
+                source.to_str().unwrap(),
+                target.to_str().unwrap(),
+            );
+            state.validate(true).unwrap();
+            check();
+            // Dump to target.
+            if state.before_open_target() {
+                check();
+                // Simulate partial writes.
+                let marker = root.join("MIGRATING-RAFT");
+                if marker.exists() {
+                    let backup_marker = fs::read_to_string(&marker).unwrap();
+                    fs::write(&marker, "").unwrap();
+                    check();
+                    fs::write(&marker, backup_marker).unwrap();
+                }
+
+                let source_file = source.join("file");
+                let target_file = target.join("file");
+                if !target.exists() {
+                    fs::create_dir_all(target).unwrap();
+                    check();
+                }
+                fs::copy(source_file, target_file).unwrap();
+                check();
+                state.after_dump_data_with_check(&check);
+            }
+            check();
+        }
+
+        fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+            if dst.exists() {
+                fs::remove_dir_all(dst)?;
+            }
+            fs::create_dir_all(dst)?;
+            for entry in fs::read_dir(src)? {
+                let entry = entry?;
+                let ty = entry.file_type()?;
+                if ty.is_dir() {
+                    copy_dir(&entry.path(), &dst.join(entry.file_name()))?;
+                } else {
+                    fs::copy(entry.path(), dst.join(entry.file_name()))?;
+                }
+            }
+            Ok(())
+        }
+
+        let dir = tempfile::Builder::new().tempdir().unwrap();
+        let root = dir.path().join("root");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        // Write some data into source.
+        let source_file = source.join("file");
+        File::create(source_file).unwrap();
+
+        let backup = dir.path().join("backup");
+
+        run_migration(&root, &source, &target, || {
+            copy_dir(&root, &backup).unwrap();
+
+            // Simulate restart and migrate in halfway.
+            run_migration(&root, &source, &target, || {});
+            copy_dir(&backup, &root).unwrap();
+            //
+            run_migration(&root, &target, &source, || {});
+            copy_dir(&backup, &root).unwrap();
+        });
     }
 }

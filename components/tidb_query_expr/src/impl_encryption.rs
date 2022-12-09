@@ -1,16 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{ByteOrder, LittleEndian};
-use flate2::read::{ZlibDecoder, ZlibEncoder};
-use flate2::Compression;
-use openssl::hash::{self, MessageDigest};
 use std::io::Read;
+
+use byteorder::{ByteOrder, LittleEndian};
+use flate2::{
+    read::{ZlibDecoder, ZlibEncoder},
+    Compression,
+};
+use openssl::hash::{self, MessageDigest};
 use tidb_query_codegen::rpn_fn;
-
-use tidb_query_datatype::expr::{Error, EvalContext};
-
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::{
+    codec::data_type::*,
+    expr::{Error, EvalContext},
+};
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;
@@ -74,8 +77,9 @@ pub fn compress(input: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
         return Ok(writer.write_ref(Some(b"")));
     }
     let mut e = ZlibEncoder::new(input, Compression::default());
-    // preferred capacity is input length plus four bytes length header and one extra end "."
-    // max capacity is isize::max_value(), or will panic with "capacity overflow"
+    // preferred capacity is input length plus four bytes length header and one
+    // extra end "." max capacity is isize::max_value(), or will panic with
+    // "capacity overflow"
     let mut vec = Vec::with_capacity((input.len() + 5).min(isize::max_value() as usize));
     vec.resize(4, 0);
     LittleEndian::write_u32(&mut vec, input.len() as u32);
@@ -113,10 +117,11 @@ pub fn uncompress(
     let mut d = ZlibDecoder::new(&input[4..]);
     let mut vec = Vec::with_capacity(len);
 
-    // if the length of uncompressed string is greater than the length we read from the first
-    //     four bytes, return null and generate a length corrupted warning.
-    // if the length of uncompressed string is zero or uncompress fail, return null and generate
-    //     a data corrupted warning
+    // - if the length of uncompressed string is greater than the length we read
+    //   from the first four bytes, return null and generate a length corrupted
+    //   warning.
+    // - if the length of uncompressed string is zero or uncompress fail, return
+    //   null and generate a data corrupted warning match d.read_to_end(&mut vec) {
     match d.read_to_end(&mut vec) {
         Ok(decoded_len) if len >= decoded_len && decoded_len != 0 => {
             Ok(writer.write_ref(Some(vec.as_ref())))
@@ -304,7 +309,7 @@ mod tests {
         ];
 
         for (s, exp) in cases {
-            let s = s.map(|inner| hex::decode(inner.as_bytes().to_vec()).unwrap());
+            let s = s.map(|inner| hex::decode(inner.as_bytes()).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(s)
                 .evaluate(ScalarFuncSig::UncompressedLength)
@@ -383,7 +388,7 @@ mod tests {
             ),
         ];
         for (arg, expect) in test_cases {
-            let expect = Some(hex::decode(expect.as_bytes().to_vec()).unwrap());
+            let expect = Some(hex::decode(expect.as_bytes()).unwrap());
 
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
@@ -447,15 +452,13 @@ mod tests {
         ];
 
         for len in overflow_tests {
-            assert!(
-                RpnFnScalarEvaluator::new()
-                    .push_param(len)
-                    .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
-                    .is_err(),
-            );
+            RpnFnScalarEvaluator::new()
+                .push_param(len)
+                .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+                .unwrap_err();
         }
 
-        //test NULL case
+        // test NULL case
         assert!(
             RpnFnScalarEvaluator::new()
                 .push_param(ScalarValue::Int(None))

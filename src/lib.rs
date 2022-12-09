@@ -23,11 +23,10 @@
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(shrink_to)]
 #![feature(drain_filter)]
-#![feature(negative_impls)]
 #![feature(deadline_api)]
-#![feature(generic_associated_types)]
+#![feature(let_chains)]
+#![feature(type_alias_impl_trait)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -63,7 +62,7 @@ pub fn tikv_version_info(build_time: Option<&str>) -> String {
          \nRust Version:      {}\
          \nEnable Features:   {}\
          \nProfile:           {}",
-        env!("CARGO_PKG_VERSION"),
+        tikv_build_version(),
         option_env!("TIKV_EDITION").unwrap_or("Community"),
         option_env!("TIKV_BUILD_GIT_HASH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_GIT_BRANCH").unwrap_or(fallback),
@@ -74,6 +73,11 @@ pub fn tikv_version_info(build_time: Option<&str>) -> String {
             .trim(),
         option_env!("TIKV_PROFILE").unwrap_or(fallback),
     )
+}
+
+/// return the build version of tikv-server
+pub fn tikv_build_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
 }
 
 /// Prints the tikv version information to the standard output.

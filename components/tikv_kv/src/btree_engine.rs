@@ -1,29 +1,35 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::BTreeMap;
-use std::collections::Bound::{self, Excluded, Included, Unbounded};
-use std::default::Default;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::ops::RangeBounds;
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::{
+        BTreeMap,
+        Bound::{self, Excluded, Included, Unbounded},
+    },
+    default::Default,
+    fmt::{self, Debug, Display, Formatter},
+    ops::RangeBounds,
+    sync::{Arc, RwLock},
+};
 
+use collections::HashMap;
 use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use futures::{future, stream, Future, Stream};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
-use crate::{
-    Callback as EngineCallback, DummySnapshotExt, Engine, Error as EngineError,
-    ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, Snapshot, WriteData,
-};
-
 use super::SnapContext;
+use crate::{
+    DummySnapshotExt, Engine, Error as EngineError, ErrorInner as EngineErrorInner, Iterator,
+    Modify, OnAppliedCb, Result as EngineResult, Snapshot, WriteData, WriteEvent,
+};
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
-/// The BTreeEngine(based on `BTreeMap`) is in memory and only used in tests and benchmarks.
-/// Note: The `snapshot()` and `async_snapshot()` methods are fake, the returned snapshot is not isolated,
-/// they will be affected by the later modifies.
+/// The BTreeEngine(based on `BTreeMap`) is in memory and only used in tests and
+/// benchmarks. Note: The `snapshot()` and `async_snapshot()` methods are fake,
+/// the returned snapshot is not isolated, they will be affected by the later
+/// modifies.
 #[derive(Clone)]
 pub struct BTreeEngine {
     cf_names: Vec<CfName>,
@@ -73,40 +79,36 @@ impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
     type Local = PanicEngine;
 
-    fn kv_engine(&self) -> PanicEngine {
+    fn kv_engine(&self) -> Option<PanicEngine> {
         unimplemented!();
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> EngineResult<Self::Snap> {
+    fn modify_on_kv_engine(&self, _: HashMap<u64, Vec<Modify>>) -> EngineResult<()> {
         unimplemented!();
     }
 
-    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
-        unimplemented!();
-    }
-
+    type WriteRes = impl Stream<Item = WriteEvent> + Send;
     fn async_write(
         &self,
         _ctx: &Context,
         batch: WriteData,
-        cb: EngineCallback<()>,
-    ) -> EngineResult<()> {
-        if batch.modifies.is_empty() {
-            return Err(EngineError::from(EngineErrorInner::EmptyRequest));
-        }
-        cb(write_modifies(self, batch.modifies));
+        _subscribed: u8,
+        _on_applied: Option<OnAppliedCb>,
+    ) -> Self::WriteRes {
+        let res = if batch.modifies.is_empty() {
+            Err(EngineError::from(EngineErrorInner::EmptyRequest))
+        } else {
+            write_modifies(self, batch.modifies)
+        };
 
-        Ok(())
+        stream::once(future::ready(WriteEvent::Finished(res)))
     }
 
-    /// warning: It returns a fake snapshot whose content will be affected by the later modifies!
-    fn async_snapshot(
-        &self,
-        _ctx: SnapContext<'_>,
-        cb: EngineCallback<Self::Snap>,
-    ) -> EngineResult<()> {
-        cb(Ok(BTreeEngineSnapshot::new(self)));
-        Ok(())
+    type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+    /// warning: It returns a fake snapshot whose content will be affected by
+    /// the later modifies!
+    fn async_snapshot(&mut self, _ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        futures::future::ready(Ok(BTreeEngineSnapshot::new(self)))
     }
 }
 
@@ -152,9 +154,10 @@ impl BTreeEngineIterator {
         }
     }
 
-    /// In general, there are 2 endpoints in a range, the left one and the right one.
-    /// This method will seek to the left one if left is `true`, else seek to the right one.
-    /// Returns true when the endpoint is valid, which means the endpoint exist and in `self.bounds`.
+    /// In general, there are 2 endpoints in a range, the left one and the right
+    /// one. This method will seek to the left one if left is `true`, else seek
+    /// to the right one. Returns true when the endpoint is valid, which means
+    /// the endpoint exist and in `self.bounds`.
     fn seek_to_range_endpoint(&mut self, range: (Bound<Key>, Bound<Key>), left: bool) -> bool {
         let tree = self.tree.read().unwrap();
         let mut range = tree.range(range);
@@ -231,6 +234,7 @@ impl Snapshot for BTreeEngineSnapshot {
     fn get(&self, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(CF_DEFAULT, key)
     }
+
     fn get_cf(&self, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         let tree_cf = self.inner_engine.get_cf(cf);
         let tree = tree_cf.read().unwrap();
@@ -240,17 +244,17 @@ impl Snapshot for BTreeEngineSnapshot {
             Some(v) => Ok(Some(v.clone())),
         }
     }
+
     fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(cf, key)
     }
-    fn iter(&self, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
-        self.iter_cf(CF_DEFAULT, iter_opt)
-    }
+
     #[inline]
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
+    fn iter(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
         let tree = self.inner_engine.get_cf(cf);
         Ok(BTreeEngineIterator::new(tree, iter_opt))
     }
+
     fn ext(&self) -> DummySnapshotExt {
         DummySnapshotExt
     }
@@ -293,33 +297,35 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
 
 #[cfg(test)]
 pub mod tests {
-    use super::super::tests::*;
-    use super::super::CfStatistics;
-    use super::*;
-    use crate::{Cursor, ScanMode};
     use engine_traits::IterOptions;
+
+    use super::{
+        super::{tests::*, CfStatistics, TEST_ENGINE_CFS},
+        *,
+    };
+    use crate::{Cursor, ScanMode};
 
     #[test]
     fn test_btree_engine() {
-        let engine = BTreeEngine::new(TEST_ENGINE_CFS);
-        test_base_curd_options(&engine)
+        let mut engine = BTreeEngine::new(TEST_ENGINE_CFS);
+        test_base_curd_options(&mut engine)
     }
 
     #[test]
     fn test_linear_of_btree_engine() {
-        let engine = BTreeEngine::default();
-        test_linear(&engine);
+        let mut engine = BTreeEngine::default();
+        test_linear(&mut engine);
     }
 
     #[test]
     fn test_statistic_of_btree_engine() {
-        let engine = BTreeEngine::default();
-        test_cfs_statistics(&engine);
+        let mut engine = BTreeEngine::default();
+        test_cfs_statistics(&mut engine);
     }
 
     #[test]
     fn test_bounds_of_btree_engine() {
-        let engine = BTreeEngine::default();
+        let mut engine = BTreeEngine::default();
         let test_data = vec![
             (b"a1".to_vec(), b"v1".to_vec()),
             (b"a3".to_vec(), b"v3".to_vec()),
@@ -336,13 +342,21 @@ pub mod tests {
         let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a7", 0);
         iter_op.set_upper_bound(b"a3", 0);
-        let mut cursor = Cursor::new(snap.iter(iter_op).unwrap(), ScanMode::Forward, false);
+        let mut cursor = Cursor::new(
+            snap.iter(CF_DEFAULT, iter_op).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
         let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a3", 0);
         iter_op.set_upper_bound(b"a7", 0);
-        let mut cursor = Cursor::new(snap.iter(iter_op).unwrap(), ScanMode::Forward, false);
+        let mut cursor = Cursor::new(
+            snap.iter(CF_DEFAULT, iter_op).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
 
         assert!(cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
         assert!(!cursor.seek(&Key::from_raw(b"a8"), &mut statistics).unwrap());
@@ -415,6 +429,6 @@ pub mod tests {
     #[test]
     fn test_get_not_exist_cf() {
         let engine = BTreeEngine::new(&[]);
-        assert!(::panic_hook::recover_safe(|| engine.get_cf("not_exist_cf")).is_err());
+        ::panic_hook::recover_safe(|| engine.get_cf("not_exist_cf")).unwrap_err();
     }
 }

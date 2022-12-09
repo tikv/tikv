@@ -1,18 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::executor::block_on;
-use futures::stream::StreamExt;
+use futures::{executor::block_on, stream::StreamExt};
+use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
+use pd_client::PdClient;
 use tempfile::Builder;
-
-use kvproto::import_sstpb::*;
-use kvproto::kvrpcpb::Context;
-use kvproto::tikvpb::*;
+use test_sst_importer::*;
+use tikv::config::TikvConfig;
 
 use super::util::*;
-use pd_client::PdClient;
-
-use test_sst_importer::*;
-use tikv::config::TiKvConfig;
 
 macro_rules! assert_to_string_contains {
     ($e:expr, $substr:expr) => {{
@@ -89,7 +84,7 @@ fn test_write_and_ingest_with_tde() {
 
 #[test]
 fn test_ingest_sst() {
-    let mut cfg = TiKvConfig::default();
+    let mut cfg = TikvConfig::default();
     cfg.server.grpc_concurrency = 1;
     let (_cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client(Some(cfg));
 
@@ -366,17 +361,15 @@ fn test_duplicate_and_close() {
     }
 
     let mut duplicate = DuplicateDetectRequest::default();
-    duplicate.set_context(ctx.clone());
-    duplicate.set_start_key((0 as u64).to_string().as_bytes().to_vec());
+    duplicate.set_context(ctx);
+    duplicate.set_start_key((0_u64).to_string().as_bytes().to_vec());
     let mut stream = import.duplicate_detect(&duplicate).unwrap();
     let ret = block_on(async move {
         let mut ret: Vec<KvPair> = vec![];
         while let Some(resp) = stream.next().await {
             match resp {
                 Ok(mut resp) => {
-                    if resp.has_key_error() {
-                        break;
-                    } else if resp.has_region_error() {
+                    if resp.has_key_error() || resp.has_region_error() {
                         break;
                     }
                     let pairs = resp.take_pairs();

@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use batch_system::test_runner::*;
-use batch_system::*;
-use criterion::*;
 use std::sync::Arc;
+
+use batch_system::{test_runner::*, *};
+use criterion::*;
 
 fn bench_send(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);

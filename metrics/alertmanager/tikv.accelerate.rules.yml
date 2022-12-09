@@ -43,8 +43,8 @@ groups:
       expr: sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~".*", type!="kv_gc"}[1m])) by (instance,type)
     - record: tikv_raftstore_snapshot_duration_seconds:p99:1m
       expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_snapshot_duration_seconds_bucket{instance=~".*", type="apply"}[1m])) by (le))
-    - record: tikv_worker_pending_task:1m
-      expr: sum(rate(tikv_worker_pending_task_total{instance=~".*"}[1m])) by (name)
+    - record: tikv_worker_pending_task:sum
+      expr: sum(tikv_worker_pending_task_total{instance=~".*"}) by (name)
     - record: tikv_coprocessor_request_duration_seconds:1m
       expr: sum(rate(tikv_coprocessor_request_duration_seconds_bucket{instance=~".*"}[1m])) by (le)
     - record: tikv_futurepool_pending_task:1m

@@ -2,16 +2,23 @@
 
 mod future_pool;
 mod metrics;
-pub use future_pool::{Full, FuturePool};
 
-use crate::thread_group::GroupProperties;
-use crate::time::{Duration, Instant};
-use fail::fail_point;
 use std::sync::Arc;
-use yatp::pool::{CloneRunnerBuilder, Local, Runner};
-use yatp::queue::{multilevel, QueueType};
-use yatp::task::future::{Runner as FutureRunner, TaskCell};
-use yatp::ThreadPool;
+
+use fail::fail_point;
+pub use future_pool::{Full, FuturePool};
+use prometheus::{local::LocalHistogram, Histogram};
+use yatp::{
+    pool::{CloneRunnerBuilder, Local, Runner},
+    queue::{multilevel, QueueType, TaskCell as _},
+    task::future::{Runner as FutureRunner, TaskCell},
+    ThreadPool,
+};
+
+use crate::{
+    thread_group::GroupProperties,
+    time::{Duration, Instant},
+};
 
 pub(crate) const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -38,13 +45,15 @@ impl<T: PoolTicker> TickerWrapper<T> {
         }
     }
 
-    pub fn try_tick(&mut self) {
+    // Returns whether tick has been triggered.
+    pub fn try_tick(&mut self) -> bool {
         let now = Instant::now_coarse();
         if now.saturating_duration_since(self.last_tick_time) < tick_interval() {
-            return;
+            return false;
         }
         self.last_tick_time = now;
         self.ticker.on_tick();
+        true
     }
 
     pub fn on_tick(&mut self) {
@@ -84,12 +93,16 @@ pub struct YatpPoolRunner<T: PoolTicker> {
     after_start: Option<Arc<dyn Fn() + Send + Sync>>,
     before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+
+    // Statistics about the schedule wait duration.
+    schedule_wait_duration: LocalHistogram,
 }
 
 impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
     type TaskCell = TaskCell;
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
+        crate::sys::thread::add_thread_name_to_map();
         if let Some(props) = self.props.take() {
             crate::thread_group::set_properties(Some(props));
         }
@@ -100,9 +113,16 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
         tikv_alloc::add_thread_memory_accessor()
     }
 
-    fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
+    fn handle(&mut self, local: &mut Local<Self::TaskCell>, mut task_cell: Self::TaskCell) -> bool {
+        let extras = task_cell.mut_extras();
+        if let Some(schedule_time) = extras.schedule_time() {
+            self.schedule_wait_duration
+                .observe(schedule_time.elapsed().as_secs_f64());
+        }
         let finished = self.inner.handle(local, task_cell);
-        self.ticker.try_tick();
+        if self.ticker.try_tick() {
+            self.schedule_wait_duration.flush();
+        }
         finished
     }
 
@@ -123,7 +143,8 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
         }
         self.ticker.on_tick();
         self.inner.end(local);
-        tikv_alloc::remove_thread_memory_accessor()
+        tikv_alloc::remove_thread_memory_accessor();
+        crate::sys::thread::remove_thread_name_from_map()
     }
 }
 
@@ -134,6 +155,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
         after_start: Option<Arc<dyn Fn() + Send + Sync>>,
         before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
         before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+        schedule_wait_duration: Histogram,
     ) -> Self {
         YatpPoolRunner {
             inner,
@@ -142,6 +164,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
             after_start,
             before_stop,
             before_pause,
+            schedule_wait_duration: schedule_wait_duration.local(),
         }
     }
 }
@@ -153,6 +176,7 @@ pub struct YatpPoolBuilder<T: PoolTicker> {
     before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
     min_thread_count: usize,
+    core_thread_count: usize,
     max_thread_count: usize,
     stack_size: usize,
     max_tasks: usize,
@@ -167,6 +191,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             before_stop: None,
             before_pause: None,
             min_thread_count: 1,
+            core_thread_count: 1,
             max_thread_count: 1,
             stack_size: 0,
             max_tasks: std::usize::MAX,
@@ -174,7 +199,8 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     }
 
     pub fn config(&mut self, config: Config) -> &mut Self {
-        self.thread_count(config.workers, config.workers)
+        // TODO: maybe we should use (1, num_cpu) for min and max thread count.
+        self.thread_count(config.workers, config.workers, config.workers)
             .stack_size(config.stack_size)
             .max_tasks(config.workers.saturating_mul(config.max_tasks_per_worker))
     }
@@ -190,8 +216,14 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn thread_count(&mut self, min_thread_count: usize, max_thread_count: usize) -> &mut Self {
+    pub fn thread_count(
+        &mut self,
+        min_thread_count: usize,
+        core_thread_count: usize,
+        max_thread_count: usize,
+    ) -> &mut Self {
         self.min_thread_count = min_thread_count;
+        self.core_thread_count = core_thread_count;
         self.max_thread_count = max_thread_count;
         self
     }
@@ -228,7 +260,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     pub fn build_future_pool(&mut self) -> FuturePool {
         let pool = self.build_single_level_pool();
         let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
-        FuturePool::from_pool(pool, name, self.max_thread_count, self.max_tasks)
+        FuturePool::from_pool(pool, name, self.core_thread_count, self.max_tasks)
     }
 
     pub fn build_single_level_pool(&mut self) -> ThreadPool<TaskCell> {
@@ -251,23 +283,64 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     }
 
     fn create_builder(&mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
-        let mut builder =
-            yatp::Builder::new(self.name_prefix.clone().unwrap_or_else(|| "".to_string()));
+        let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
+        let mut builder = yatp::Builder::new(thd_name!(name));
         builder
             .stack_size(self.stack_size)
             .min_thread_count(self.min_thread_count)
+            .core_thread_count(self.core_thread_count)
             .max_thread_count(self.max_thread_count);
 
         let after_start = self.after_start.take();
         let before_stop = self.before_stop.take();
         let before_pause = self.before_pause.take();
+        let schedule_wait_duration =
+            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name]);
         let read_pool_runner = YatpPoolRunner::new(
             Default::default(),
             self.ticker.clone(),
             after_start,
             before_stop,
             before_pause,
+            schedule_wait_duration,
         );
         (builder, read_pool_runner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use futures::compat::Future01CompatExt;
+
+    use super::*;
+    use crate::timer::GLOBAL_TIMER_HANDLE;
+
+    #[test]
+    fn test_record_schedule_wait_duration() {
+        let name = "test_record_schedule_wait_duration";
+        let pool = YatpPoolBuilder::new(DefaultTicker::default())
+            .name_prefix(name)
+            .build_single_level_pool();
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..3 {
+            let tx = tx.clone();
+            pool.spawn(async move {
+                GLOBAL_TIMER_HANDLE
+                    .delay(std::time::Instant::now() + Duration::from_millis(100))
+                    .compat()
+                    .await
+                    .unwrap();
+                tx.send(()).unwrap();
+            });
+        }
+        for _ in 0..3 {
+            rx.recv().unwrap();
+        }
+        // Drop the pool so the local metrics are flushed.
+        drop(pool);
+        let histogram = metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name]);
+        assert_eq!(histogram.get_sample_count() as u32, 6, "{:?}", histogram);
     }
 }

@@ -2,11 +2,11 @@
 
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
-
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::{self, div_i64, div_i64_with_u64, div_u64_with_i64, Error};
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{
+    codec::{self, data_type::*, div_i64, div_i64_with_u64, div_u64_with_i64, Error},
+    expr::EvalContext,
+};
 
 #[rpn_fn]
 #[inline]
@@ -44,7 +44,7 @@ impl ArithmeticOp for IntIntPlus {
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         lhs.checked_add(*rhs)
-            .ok_or_else(|| Error::overflow("BIGINT", &format!("({} + {})", lhs, rhs)).into())
+            .ok_or_else(|| Error::overflow("BIGINT", format!("({} + {})", lhs, rhs)).into())
             .map(Some)
     }
 }
@@ -61,10 +61,8 @@ impl ArithmeticOp for IntUintPlus {
         } else {
             (*rhs as u64).checked_sub(lhs.overflowing_neg().0 as u64)
         };
-        res.ok_or_else(|| {
-            Error::overflow("BIGINT UNSIGNED", &format!("({} + {})", lhs, rhs)).into()
-        })
-        .map(|v| Some(v as i64))
+        res.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", format!("({} + {})", lhs, rhs)).into())
+            .map(|v| Some(v as i64))
     }
 }
 
@@ -89,7 +87,7 @@ impl ArithmeticOp for UintUintPlus {
         (*lhs as u64)
             .checked_add(*rhs as u64)
             .ok_or_else(|| {
-                Error::overflow("BIGINT UNSIGNED", &format!("({} + {})", lhs, rhs)).into()
+                Error::overflow("BIGINT UNSIGNED", format!("({} + {})", lhs, rhs)).into()
             })
             .map(|v| Some(v as i64))
     }
@@ -104,7 +102,7 @@ impl ArithmeticOp for RealPlus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs + *rhs;
         if !res.is_finite() {
-            return Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)).into());
+            return Err(Error::overflow("DOUBLE", format!("({} + {})", lhs, rhs)).into());
         }
         Ok(Some(res))
     }
@@ -130,7 +128,7 @@ impl ArithmeticOp for IntIntMinus {
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         lhs.checked_sub(*rhs)
-            .ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+            .ok_or_else(|| Error::overflow("BIGINT", format!("({} - {})", lhs, rhs)).into())
             .map(Some)
     }
 }
@@ -145,10 +143,10 @@ impl ArithmeticOp for IntUintMinus {
         if *lhs >= 0 {
             (*lhs as u64)
                 .checked_sub(*rhs as u64)
-                .ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+                .ok_or_else(|| Error::overflow("BIGINT", format!("({} - {})", lhs, rhs)).into())
                 .map(|v| Some(v as i64))
         } else {
-            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+            Err(Error::overflow("BIGINT", format!("({} - {})", lhs, rhs)).into())
         }
     }
 }
@@ -165,7 +163,7 @@ impl ArithmeticOp for UintIntMinus {
         } else {
             (*lhs as u64).checked_add(rhs.overflowing_neg().0 as u64)
         };
-        res.ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+        res.ok_or_else(|| Error::overflow("BIGINT", format!("({} - {})", lhs, rhs)).into())
             .map(|v| Some(v as i64))
     }
 }
@@ -180,7 +178,7 @@ impl ArithmeticOp for UintUintMinus {
         (*lhs as u64)
             .checked_sub(*rhs as u64)
             .ok_or_else(|| {
-                Error::overflow("BIGINT UNSIGNED", &format!("({} - {})", lhs, rhs)).into()
+                Error::overflow("BIGINT UNSIGNED", format!("({} - {})", lhs, rhs)).into()
             })
             .map(|v| Some(v as i64))
     }
@@ -195,7 +193,7 @@ impl ArithmeticOp for RealMinus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs - *rhs;
         if !res.is_finite() {
-            return Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)).into());
+            return Err(Error::overflow("DOUBLE", format!("({} - {})", lhs, rhs)).into());
         }
         Ok(Some(res))
     }
@@ -237,9 +235,15 @@ impl ArithmeticOp for IntUintMod {
         if *rhs == 0i64 {
             return Ok(None);
         }
-        Ok(Some(
-            ((lhs.overflowing_abs().0 as u64) % (*rhs as u64)) as i64,
-        ))
+
+        if *lhs > 0 {
+            Ok(Some(((*lhs as u64) % (*rhs as u64)) as i64))
+        } else {
+            Ok(Some(
+                0i64.overflowing_sub(((lhs.overflowing_abs().0 as u64) % (*rhs as u64)) as i64)
+                    .0,
+            ))
+        }
     }
 }
 
@@ -326,7 +330,7 @@ impl ArithmeticOp for RealMultiply {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs * *rhs;
         if res.is_infinite() {
-            Err(Error::overflow("REAL", &format!("({} * {})", lhs, rhs)).into())
+            Err(Error::overflow("REAL", format!("({} * {})", lhs, rhs)).into())
         } else {
             Ok(Some(res))
         }
@@ -340,7 +344,7 @@ impl ArithmeticOp for IntIntMultiply {
     type T = Int;
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         lhs.checked_mul(*rhs)
-            .ok_or_else(|| Error::overflow("BIGINT", &format!("({} * {})", lhs, rhs)).into())
+            .ok_or_else(|| Error::overflow("BIGINT", format!("({} * {})", lhs, rhs)).into())
             .map(Some)
     }
 }
@@ -356,7 +360,7 @@ impl ArithmeticOp for IntUintMultiply {
         } else {
             None
         }
-        .ok_or_else(|| Error::overflow("BIGINT UNSIGNED", &format!("({} * {})", lhs, rhs)).into())
+        .ok_or_else(|| Error::overflow("BIGINT UNSIGNED", format!("({} * {})", lhs, rhs)).into())
         .map(Some)
     }
 }
@@ -380,7 +384,7 @@ impl ArithmeticOp for UintUintMultiply {
         (*lhs as u64)
             .checked_mul(*rhs as u64)
             .ok_or_else(|| {
-                Error::overflow("BIGINT UNSIGNED", &format!("({} * {})", lhs, rhs)).into()
+                Error::overflow("BIGINT UNSIGNED", format!("({} * {})", lhs, rhs)).into()
             })
             .map(|v| Some(v as i64))
     }
@@ -494,7 +498,7 @@ impl ArithmeticOpWithCtx for RealDivide {
         } else {
             let result = *lhs / *rhs;
             if result.is_infinite() {
-                ctx.handle_overflow_err(Error::overflow("DOUBLE", &format!("{} / {}", lhs, rhs)))
+                ctx.handle_overflow_err(Error::overflow("DOUBLE", format!("{} / {}", lhs, rhs)))
                     .map(|_| None)?
             } else {
                 Some(result)
@@ -505,17 +509,18 @@ impl ArithmeticOpWithCtx for RealDivide {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::str::FromStr;
 
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::error::ERR_DIVISION_BY_ZERO,
+        expr::{EvalConfig, Flag, SqlMode},
+        FieldTypeFlag, FieldTypeTp,
+    };
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::test_util::RpnFnScalarEvaluator;
-    use tidb_query_datatype::codec::error::ERR_DIVISION_BY_ZERO;
-    use tidb_query_datatype::expr::{EvalConfig, Flag, SqlMode};
 
     #[test]
     fn test_plus_int() {
@@ -1193,13 +1198,11 @@ mod tests {
 
         let overflow = vec![(f64::MAX, 0.0001)];
         for (lhs, rhs) in overflow {
-            assert!(
-                RpnFnScalarEvaluator::new()
-                    .push_param(lhs)
-                    .push_param(rhs)
-                    .evaluate::<Real>(ScalarFuncSig::DivideReal)
-                    .is_err()
-            )
+            RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::DivideReal)
+                .unwrap_err();
         }
     }
 
@@ -1268,7 +1271,7 @@ mod tests {
                 if is_ok {
                     assert!(result.unwrap().is_none());
                 } else {
-                    assert!(result.is_err());
+                    result.unwrap_err();
                 }
 
                 if has_warning {

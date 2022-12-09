@@ -1,18 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
-};
-use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-    WriteResult,
-};
-use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot, TxnStatus};
 use txn_types::{Key, TimeStamp};
+
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
+    txn::{
+        commands::{
+            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+            WriteCommand, WriteContext, WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Snapshot, TxnStatus,
+};
 
 command! {
     /// Heart beat of a transaction. It enlarges the primary lock's TTL.
@@ -37,18 +40,19 @@ command! {
 impl CommandExt for TxnHeartBeat {
     ctx!();
     tag!(txn_heart_beat);
+    request_type!(KvTxnHeartBeat);
     ts!(start_ts);
     write_bytes!(primary_key);
     gen_lock!(primary_key);
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
-    fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         // TxnHeartBeat never remove locks. No need to wake up waiters.
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
-            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache()),
-            &mut context.statistics,
+            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
+            context.statistics,
         );
         fail_point!("txn_heart_beat", |err| Err(
             crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
@@ -86,7 +90,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             to_be_write: write_data,
             rows: 1,
             pr,
-            lock_info: None,
+            lock_info: vec![],
+            released_locks: ReleasedLocks::new(),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })
@@ -95,20 +100,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::TestEngineBuilder;
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::commands::WriteCommand;
-    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
-    use crate::storage::txn::tests::*;
-    use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use tikv_util::deadline::Deadline;
 
+    use super::*;
+    use crate::storage::{
+        kv::TestEngineBuilder,
+        lock_manager::MockLockManager,
+        mvcc::tests::*,
+        txn::{commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
+        Engine,
+    };
+
     pub fn must_success<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         primary_key: &[u8],
         start_ts: impl Into<TimeStamp>,
         advise_ttl: u64,
@@ -129,11 +135,12 @@ pub mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
-                    lock_mgr: &DummyLockManager,
+                    lock_mgr: &MockLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
+                    raw_ext: None,
                 },
             )
             .unwrap();
@@ -149,7 +156,7 @@ pub mod tests {
     }
 
     pub fn must_err<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         primary_key: &[u8],
         start_ts: impl Into<TimeStamp>,
         advise_ttl: u64,
@@ -170,11 +177,12 @@ pub mod tests {
                 .process_write(
                     snapshot,
                     WriteContext {
-                        lock_mgr: &DummyLockManager,
+                        lock_mgr: &MockLockManager::new(),
                         concurrency_manager: cm,
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
+                        raw_ext: None,
                     },
                 )
                 .is_err()
@@ -183,49 +191,50 @@ pub mod tests {
 
     #[test]
     fn test_txn_heart_beat() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k1", b"v1");
 
-        let test = |ts| {
+        fn test(ts: u64, k: &[u8], engine: &mut impl Engine) {
             // Do nothing if advise_ttl is less smaller than current TTL.
-            must_success(&engine, k, ts, 90, 100);
+            must_success(engine, k, ts, 90, 100);
             // Return the new TTL if the TTL when the TTL is updated.
-            must_success(&engine, k, ts, 110, 110);
+            must_success(engine, k, ts, 110, 110);
             // The lock's TTL is updated and persisted into the db.
-            must_success(&engine, k, ts, 90, 110);
+            must_success(engine, k, ts, 90, 110);
             // Heart beat another transaction's lock will lead to an error.
-            must_err(&engine, k, ts - 1, 150);
-            must_err(&engine, k, ts + 1, 150);
+            must_err(engine, k, ts - 1, 150);
+            must_err(engine, k, ts + 1, 150);
             // The existing lock is not changed.
-            must_success(&engine, k, ts, 90, 110);
-        };
+            must_success(engine, k, ts, 90, 110);
+        }
 
         // No lock.
-        must_err(&engine, k, 5, 100);
+        must_err(&mut engine, k, 5, 100);
 
         // Create a lock with TTL=100.
-        // The initial TTL will be set to 0 after calling must_prewrite_put. Update it first.
-        must_prewrite_put(&engine, k, v, k, 5);
-        must_locked(&engine, k, 5);
-        must_success(&engine, k, 5, 100, 100);
+        // The initial TTL will be set to 0 after calling must_prewrite_put. Update it
+        // first.
+        must_prewrite_put(&mut engine, k, v, k, 5);
+        must_locked(&mut engine, k, 5);
+        must_success(&mut engine, k, 5, 100, 100);
 
-        test(5);
+        test(5, k, &mut engine);
 
-        must_locked(&engine, k, 5);
-        must_commit(&engine, k, 5, 10);
-        must_unlocked(&engine, k);
+        must_locked(&mut engine, k, 5);
+        must_commit(&mut engine, k, 5, 10);
+        must_unlocked(&mut engine, k);
 
         // No lock.
-        must_err(&engine, k, 5, 100);
-        must_err(&engine, k, 10, 100);
+        must_err(&mut engine, k, 5, 100);
+        must_err(&mut engine, k, 10, 100);
 
-        must_acquire_pessimistic_lock(&engine, k, k, 8, 15);
-        must_pessimistic_locked(&engine, k, 8, 15);
-        must_success(&engine, k, 8, 100, 100);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 8, 15);
+        must_pessimistic_locked(&mut engine, k, 8, 15);
+        must_success(&mut engine, k, 8, 100, 100);
 
-        test(8);
+        test(8, k, &mut engine);
 
-        must_pessimistic_locked(&engine, k, 8, 15);
+        must_pessimistic_locked(&mut engine, k, 8, 15);
     }
 }

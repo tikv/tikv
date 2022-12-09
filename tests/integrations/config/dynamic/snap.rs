@@ -1,26 +1,31 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc::channel;
-use std::sync::Arc;
-use std::time::Duration;
-
-use grpcio::EnvBuilder;
-
-use raftstore::store::fsm::*;
-use raftstore::store::SnapManager;
-use tikv::server::config::{Config as ServerConfig, ServerConfigManager};
-use tikv::server::snap::{Runner as SnapHandler, Task as SnapTask};
-
-use tikv::config::{ConfigController, TiKvConfig};
+use std::{
+    sync::{mpsc::channel, Arc},
+    time::Duration,
+};
 
 use engine_rocks::RocksEngine;
+use grpcio::{EnvBuilder, ResourceQuota};
+use raft_log_engine::RaftLogEngine;
+use raftstore::store::{fsm::create_raft_batch_system, SnapManager};
 use security::SecurityManager;
 use tempfile::TempDir;
-use tikv_util::config::{ReadableSize, VersionTrack};
-use tikv_util::worker::{LazyWorker, Scheduler, Worker};
+use tikv::{
+    config::{ConfigController, TikvConfig},
+    server::{
+        config::{Config as ServerConfig, ServerConfigManager},
+        raftkv::RaftRouterWrap,
+        snap::{Runner as SnapHandler, Task as SnapTask},
+    },
+};
+use tikv_util::{
+    config::{ReadableSize, VersionTrack},
+    worker::{LazyWorker, Scheduler, Worker},
+};
 
 fn start_server(
-    cfg: TiKvConfig,
+    cfg: TikvConfig,
     dir: &TempDir,
 ) -> (ConfigController, LazyWorker<SnapTask>, SnapManager) {
     let snap_mgr = {
@@ -40,7 +45,7 @@ fn start_server(
             .name_prefix(thd_name!("test-server"))
             .build(),
     );
-    let (raft_router, _) = create_raft_batch_system::<RocksEngine, RocksEngine>(&cfg.raft_store);
+    let (raft_router, _) = create_raft_batch_system::<RocksEngine, RaftLogEngine>(&cfg.raft_store);
     let mut snap_worker = Worker::new("snap-handler").lazy_build("snap-handler");
     let snap_worker_scheduler = snap_worker.scheduler();
     let server_config = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -50,12 +55,13 @@ fn start_server(
         Box::new(ServerConfigManager::new(
             snap_worker_scheduler,
             server_config.clone(),
+            ResourceQuota::new(None),
         )),
     );
     let snap_runner = SnapHandler::new(
         Arc::clone(&env),
         snap_mgr.clone(),
-        raft_router.clone(),
+        RaftRouterWrap::new(raft_router),
         security_mgr,
         Arc::clone(&server_config),
     );
@@ -80,7 +86,7 @@ where
 
 #[test]
 fn test_update_server_config() {
-    let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut config, _dir) = TikvConfig::with_tmp().unwrap();
     config.validate().unwrap();
     let (cfg_controller, snap_worker, snap_mgr) = start_server(config.clone(), &_dir);
     let mut svr_cfg = config.server.clone();
@@ -102,7 +108,7 @@ fn test_update_server_config() {
     svr_cfg.snap_max_write_bytes_per_sec = ReadableSize::mb(512);
     svr_cfg.concurrent_send_snap_limit = 100;
     // config should be updated
-    assert_eq!(snap_mgr.get_speed_limit(), 536870912 as f64);
+    assert_eq!(snap_mgr.get_speed_limit() as u64, 536870912);
     validate(&snap_worker.scheduler(), move |cfg: &ServerConfig| {
         assert_eq!(cfg, &svr_cfg);
     });

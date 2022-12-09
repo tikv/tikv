@@ -1,10 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
-use crate::write_batch::PanicWriteBatch;
-use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
-use kvproto::raft_serverpb::RaftLocalState;
+use engine_traits::{Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result};
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
+};
 use raft::eraftpb::Entry;
+
+use crate::{engine::PanicEngine, write_batch::PanicWriteBatch};
 
 impl RaftEngineReadOnly for PanicEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -23,6 +28,47 @@ impl RaftEngineReadOnly for PanicEngine {
         max_size: Option<usize>,
         buf: &mut Vec<Entry>,
     ) -> Result<usize> {
+        panic!()
+    }
+
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
+        panic!()
+    }
+
+    fn is_empty(&self) -> Result<bool> {
+        panic!()
+    }
+
+    fn get_store_ident(&self) -> Result<Option<StoreIdent>> {
+        panic!()
+    }
+
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
+        panic!()
+    }
+
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+        panic!()
+    }
+
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+        panic!()
+    }
+
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        panic!()
+    }
+}
+
+impl RaftEngineDebug for PanicEngine {
+    fn scan_entries<F>(&self, _: u64, _: F) -> Result<()>
+    where
+        F: FnMut(&Entry) -> Result<bool>,
+    {
+        panic!()
+    }
+
+    fn dump_all_data(&self, _: u64) -> <Self as RaftEngine>::LogBatch {
         panic!()
     }
 }
@@ -55,17 +101,10 @@ impl RaftEngine for PanicEngine {
     fn clean(
         &self,
         raft_group_id: u64,
+        first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()> {
-        panic!()
-    }
-
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
-        panic!()
-    }
-
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         panic!()
     }
 
@@ -73,11 +112,11 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn purge_expired_files(&self) -> Result<Vec<u64>> {
+    fn need_manual_purge(&self) -> bool {
         panic!()
     }
 
-    fn has_builtin_entry_cache(&self) -> bool {
+    fn manual_purge(&self) -> Result<Vec<u64>> {
         panic!()
     }
 
@@ -94,6 +133,18 @@ impl RaftEngine for PanicEngine {
     }
 
     fn get_engine_size(&self) -> Result<u64> {
+        panic!()
+    }
+
+    fn get_engine_path(&self) -> &str {
+        panic!()
+    }
+
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<Error>,
+    {
         panic!()
     }
 }
@@ -119,7 +170,31 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn merge(&mut self, _: Self) {
+    fn merge(&mut self, _: Self) -> Result<()> {
+        panic!()
+    }
+
+    fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()> {
+        panic!()
+    }
+
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
+        panic!()
+    }
+
+    fn remove_prepare_bootstrap_region(&mut self) -> Result<()> {
+        panic!()
+    }
+
+    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+        panic!()
+    }
+
+    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+        panic!()
+    }
+
+    fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {
         panic!()
     }
 }

@@ -1,18 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Mutex;
-use std::time::Duration;
+use std::{sync::Mutex, time::Duration};
 
 use async_trait::async_trait;
 use derive_more::Deref;
 use kvproto::encryptionpb::EncryptedContent;
+use tikv_util::{
+    box_err, error,
+    stream::{retry, with_timeout},
+    sys::thread::ThreadBuildWrapper,
+};
 use tokio::runtime::{Builder, Runtime};
 
 use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
-use crate::crypter::{Iv, PlainKey};
-use crate::{Error, Result};
-use tikv_util::stream::{retry, with_timeout};
-use tikv_util::{box_err, error};
+use crate::{
+    crypter::{Iv, PlainKey},
+    Error, Result,
+};
 
 #[async_trait]
 pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
@@ -78,6 +82,8 @@ impl KmsBackend {
             Builder::new_current_thread()
                 .thread_name("kms-runtime")
                 .enable_all()
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()?,
         );
 
@@ -118,17 +124,17 @@ impl KmsBackend {
         Ok(content)
     }
 
-    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
-    // a wrong master key has been used, or other error otherwise.
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is
+    // possible that a wrong master key has been used, or other error otherwise.
     fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
         let vendor_name = self.kms_provider.name();
         match content.metadata.get(MetadataKey::KmsVendor.as_str()) {
             Some(val) if val.as_slice() == vendor_name.as_bytes() => (),
             None => {
                 return Err(
-                    // If vender is missing in metadata, it could be the encrypted content is invalid
-                    // or corrupted, but it is also possible that the content is encrypted using the
-                    // FileBackend. Return WrongMasterKey anyway.
+                    // If vender is missing in metadata, it could be the encrypted content is
+                    // invalid or corrupted, but it is also possible that the content is encrypted
+                    // using the FileBackend. Return WrongMasterKey anyway.
                     Error::WrongMasterKey(box_err!("missing KMS vendor")),
                 );
             }
@@ -229,10 +235,10 @@ mod fake {
 
 #[cfg(test)]
 mod tests {
-    use super::fake::FakeKms;
-    use super::*;
     use hex::FromHex;
     use matches::assert_matches;
+
+    use super::{fake::FakeKms, *};
 
     #[test]
     fn test_state() {

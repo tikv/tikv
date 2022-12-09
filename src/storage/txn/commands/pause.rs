@@ -1,16 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::txn::commands::{
-    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
-};
-use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot};
-use std::thread;
-use std::time::Duration;
+use std::{thread, time::Duration};
+
 use txn_types::Key;
+
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    txn::{
+        commands::{
+            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
+            WriteContext, WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Snapshot,
+};
 
 command! {
     /// **Testing functionality:** Latch the given keys for given duration.
@@ -42,7 +48,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Pause {
             to_be_write: WriteData::default(),
             rows: 0,
             pr: ProcessResult::Res,
-            lock_info: None,
+            lock_info: vec![],
+            released_locks: ReleasedLocks::new(),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

@@ -1,15 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::fmt::{Display, Formatter};
+use std::{
+    cmp::Ordering,
+    fmt::{Display, Formatter},
+};
 
+use codec::prelude::*;
 use tipb::FieldType;
 
-use crate::codec::convert::ToInt;
-use crate::codec::Result;
-use crate::expr::EvalContext;
-use crate::FieldTypeTp;
-use codec::prelude::*;
+use crate::{
+    codec::{convert::ToInt, Result},
+    expr::EvalContext,
+    FieldTypeTp,
+};
 
 #[derive(Clone, Debug)]
 pub struct Enum {
@@ -81,7 +84,7 @@ impl PartialOrd for Enum {
     }
 }
 
-impl crate::codec::data_type::AsMySQLBool for Enum {
+impl crate::codec::data_type::AsMySqlBool for Enum {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(self.value != 0)
@@ -464,7 +467,7 @@ mod tests {
             1, 0, 0, 0, 0, 0, 0, 0, 99, // 3rd
         ];
         for data in &src {
-            dest.write_enum_to_chunk_by_datum_payload_compact_bytes(*data, &field_type)
+            dest.write_enum_to_chunk_by_datum_payload_compact_bytes(data, &field_type)
                 .expect("write_enum_to_chunk_by_payload_compact_bytes");
         }
         assert_eq!(&dest, res);
@@ -487,7 +490,7 @@ mod tests {
             1, 0, 0, 0, 0, 0, 0, 0, 99, // 3rd
         ];
         for data in &src {
-            dest.write_enum_to_chunk_by_datum_payload_uint(*data, &field_type)
+            dest.write_enum_to_chunk_by_datum_payload_uint(data, &field_type)
                 .expect("write_enum_to_chunk_by_payload_uint");
         }
         assert_eq!(&dest, res);
@@ -510,7 +513,7 @@ mod tests {
             1, 0, 0, 0, 0, 0, 0, 0, 99, // 3rd
         ];
         for data in &src {
-            dest.write_enum_to_chunk_by_datum_payload_var_uint(*data, &field_type)
+            dest.write_enum_to_chunk_by_datum_payload_var_uint(data, &field_type)
                 .expect("write_enum_to_chunk_by_payload_var_uint");
         }
         assert_eq!(&dest, res);

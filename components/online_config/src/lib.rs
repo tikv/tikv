@@ -1,7 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt::{self, Debug, Display, Formatter};
+use std::{
+    collections::HashMap,
+    fmt::{self, Debug, Display, Formatter},
+};
 
 pub use online_config_derive::*;
 
@@ -18,11 +20,9 @@ pub enum ConfigValue {
     Usize(usize),
     Bool(bool),
     String(String),
-    BlobRunMode(String),
-    IOPriority(String),
-    OptionSize(Option<u64>),
     Module(ConfigChange),
     Skip,
+    None,
 }
 
 impl Display for ConfigValue {
@@ -30,8 +30,6 @@ impl Display for ConfigValue {
         match self {
             ConfigValue::Duration(v) => write!(f, "{}ms", v),
             ConfigValue::Size(v) => write!(f, "{}b", v),
-            ConfigValue::OptionSize(Some(v)) => write!(f, "{}b", v),
-            ConfigValue::OptionSize(None) => write!(f, ""),
             ConfigValue::U64(v) => write!(f, "{}", v),
             ConfigValue::F64(v) => write!(f, "{}", v),
             ConfigValue::I32(v) => write!(f, "{}", v),
@@ -39,10 +37,9 @@ impl Display for ConfigValue {
             ConfigValue::Usize(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
-            ConfigValue::BlobRunMode(v) => write!(f, "{}", v),
-            ConfigValue::IOPriority(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
             ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
+            ConfigValue::None => write!(f, ""),
         }
     }
 }
@@ -54,7 +51,7 @@ impl Debug for ConfigValue {
 }
 
 macro_rules! impl_from {
-    ($from: ty, $to: tt) => {
+    ($from:ty, $to:tt) => {
         impl From<$from> for ConfigValue {
             fn from(r: $from) -> ConfigValue {
                 ConfigValue::$to(r)
@@ -72,7 +69,7 @@ impl_from!(String, String);
 impl_from!(ConfigChange, Module);
 
 macro_rules! impl_into {
-    ($into: ty, $from: tt) => {
+    ($into:ty, $from:tt) => {
         impl From<ConfigValue> for $into {
             fn from(c: ConfigValue) -> $into {
                 if let ConfigValue::$from(v) = c {
@@ -114,13 +111,13 @@ impl_into!(ConfigChange, Module);
 /// 3. `#[online_config(submodule)]` field, these fields represent the
 /// submodule, and should also derive `OnlineConfig`
 /// 4. normal fields, the type of these fields should be implment
-/// `Into` and `From` for `ConfigValue`
+/// `Into` and `From`/`TryFrom` for `ConfigValue`
 pub trait OnlineConfig<'a> {
     type Encoder: serde::Serialize;
     /// Compare to other config, return the difference
     fn diff(&self, _: &Self) -> ConfigChange;
     /// Update config with difference returned by `diff`
-    fn update(&mut self, _: ConfigChange);
+    fn update(&mut self, _: ConfigChange) -> Result<()>;
     /// Get encoder that can be serialize with `serde::Serializer`
     /// with the disappear of `#[online_config(hidden)]` field
     fn get_encoder(&'a self) -> Self::Encoder;
@@ -136,6 +133,10 @@ pub trait ConfigManager: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::TryFrom;
+
+    use serde::Serialize;
+
     use super::*;
     use crate as online_config;
 
@@ -143,6 +144,8 @@ mod tests {
     pub struct TestConfig {
         field1: usize,
         field2: String,
+        optional_field1: Option<usize>,
+        optional_field2: Option<String>,
         #[online_config(skip)]
         skip_field: u64,
         #[online_config(submodule)]
@@ -159,21 +162,30 @@ mod tests {
 
     #[test]
     fn test_update_fields() {
-        let mut cfg = TestConfig::default();
+        let mut cfg = TestConfig {
+            optional_field1: Some(1),
+            ..Default::default()
+        };
         let mut updated_cfg = cfg.clone();
         {
-            // update fields
             updated_cfg.field1 = 100;
             updated_cfg.field2 = "1".to_owned();
+            updated_cfg.optional_field1 = None;
+            updated_cfg.optional_field2 = Some("1".to_owned());
             updated_cfg.submodule_field.field1 = 1000;
             updated_cfg.submodule_field.field2 = true;
         }
         let diff = cfg.diff(&updated_cfg);
         {
             let mut diff = diff.clone();
-            assert_eq!(diff.len(), 3);
+            assert_eq!(diff.len(), 5);
             assert_eq!(diff.remove("field1").map(Into::into), Some(100usize));
             assert_eq!(diff.remove("field2").map(Into::into), Some("1".to_owned()));
+            assert_eq!(diff.remove("optional_field1"), Some(ConfigValue::None));
+            assert_eq!(
+                diff.remove("optional_field2").map(Into::into),
+                Some("1".to_owned())
+            );
             // submodule should also be updated
             let sub_m = diff.remove("submodule_field").map(Into::into);
             assert!(sub_m.is_some());
@@ -182,7 +194,7 @@ mod tests {
             assert_eq!(sub_diff.remove("field1").map(Into::into), Some(1000u64));
             assert_eq!(sub_diff.remove("field2").map(Into::into), Some(true));
         }
-        cfg.update(diff);
+        cfg.update(diff).unwrap();
         assert_eq!(cfg, updated_cfg, "cfg should be updated");
     }
 
@@ -192,7 +204,7 @@ mod tests {
         let diff = cfg.diff(&cfg.clone());
         assert!(diff.is_empty(), "diff should be empty");
 
-        cfg.update(diff);
+        cfg.update(diff).unwrap();
         assert_eq!(cfg, TestConfig::default(), "cfg should not be updated");
     }
 
@@ -206,7 +218,7 @@ mod tests {
 
         let mut diff = HashMap::new();
         diff.insert("skip_field".to_owned(), ConfigValue::U64(123));
-        cfg.update(diff);
+        cfg.update(diff).unwrap();
         assert_eq!(cfg, TestConfig::default(), "cfg should not be updated");
     }
 
@@ -229,7 +241,7 @@ mod tests {
             assert_eq!(sub_diff.remove("field2").map(Into::into), Some(true));
         }
 
-        cfg.update(diff);
+        cfg.update(diff).unwrap();
         assert_eq!(
             cfg.submodule_field, updated_cfg.submodule_field,
             "submodule should be updated"
@@ -282,5 +294,76 @@ mod tests {
             toml::to_string(&cfg.get_encoder()).unwrap(),
             "skip-field = \"\"\n\n[submodule-field]\nrename_field = false\n"
         );
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+    pub enum TestEnum {
+        First,
+        Second,
+    }
+
+    impl std::fmt::Display for TestEnum {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::First => f.write_str("first"),
+                Self::Second => f.write_str("second"),
+            }
+        }
+    }
+
+    impl From<TestEnum> for ConfigValue {
+        fn from(v: TestEnum) -> ConfigValue {
+            ConfigValue::String(format!("{}", v))
+        }
+    }
+
+    impl TryFrom<ConfigValue> for TestEnum {
+        type Error = String;
+        fn try_from(v: ConfigValue) -> std::result::Result<Self, Self::Error> {
+            if let ConfigValue::String(s) = v {
+                match s.as_str() {
+                    "first" => Ok(Self::First),
+                    "second" => Ok(Self::Second),
+                    s => Err(format!("invalid config value: {}", s)),
+                }
+            } else {
+                panic!("expect ConfigValue::String, got: {:?}", v);
+            }
+        }
+    }
+
+    #[derive(Clone, OnlineConfig, Debug, PartialEq)]
+    pub struct TestEnumConfig {
+        f1: u64,
+        e: TestEnum,
+    }
+
+    impl Default for TestEnumConfig {
+        fn default() -> Self {
+            Self {
+                f1: 0,
+                e: TestEnum::First,
+            }
+        }
+    }
+
+    #[test]
+    fn test_update_enum_config() {
+        let mut config = TestEnumConfig::default();
+
+        let mut diff = HashMap::new();
+        diff.insert("f1".to_owned(), ConfigValue::U64(1));
+        diff.insert("e".to_owned(), ConfigValue::String("second".into()));
+        config.update(diff).unwrap();
+
+        let updated = TestEnumConfig {
+            f1: 1,
+            e: TestEnum::Second,
+        };
+        assert_eq!(config, updated);
+
+        let mut diff = HashMap::new();
+        diff.insert("e".to_owned(), ConfigValue::String("invalid".into()));
+        config.update(diff).unwrap_err();
     }
 }

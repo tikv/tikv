@@ -1,40 +1,44 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
-use std::mem;
-use std::sync::{Arc, Mutex};
-use tikv_util::time::Duration;
+use std::{
+    cell::RefCell,
+    mem,
+    sync::{Arc, Mutex},
+};
 
 use collections::HashMap;
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use kvproto::pdpb::QueryKind;
+use pd_client::{Feature, FeatureGate};
 use prometheus::local::*;
 use raftstore::store::WriteStats;
-use tikv_util::yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder};
-
-use crate::storage::kv::{
-    destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics,
+use tikv_util::{
+    sys::SysQuota,
+    yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder},
 };
-use crate::storage::metrics::*;
+
+use crate::storage::{
+    kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics},
+    metrics::*,
+    test_util::latest_feature_gate,
+};
 
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
-    processing_read_duration: LocalHistogramVec,
-    processing_write_duration: LocalHistogramVec,
     command_keyread_histogram_vec: LocalHistogramVec,
     local_write_stats: WriteStats,
 }
 
 thread_local! {
-     static TLS_SCHED_METRICS: RefCell<SchedLocalMetrics> = RefCell::new(
+    static TLS_SCHED_METRICS: RefCell<SchedLocalMetrics> = RefCell::new(
         SchedLocalMetrics {
             local_scan_details: HashMap::default(),
-            processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
-            processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
             command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_write_stats:WriteStats::default(),
         }
     );
+
+    static TLS_FEATURE_GATE: RefCell<FeatureGate> = RefCell::new(latest_feature_gate());
 }
 
 #[derive(Clone)]
@@ -58,17 +62,25 @@ impl SchedPool {
         engine: E,
         pool_size: usize,
         reporter: R,
+        feature_gate: FeatureGate,
         name_prefix: &str,
     ) -> Self {
         let engine = Arc::new(Mutex::new(engine));
+        // for low cpu quota env, set the max-thread-count as 4 to allow potential cases
+        // that we need more thread than cpu num.
+        let max_pool_size = std::cmp::max(
+            pool_size,
+            std::cmp::max(4, SysQuota::cpu_cores_quota() as usize),
+        );
         let pool = YatpPoolBuilder::new(SchedTicker {reporter:reporter.clone()})
-            .thread_count(pool_size, pool_size)
+            .thread_count(1, pool_size, max_pool_size)
             .name_prefix(name_prefix)
             // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
             // the tls_engine invariants.
             .after_start(move || {
                 set_tls_engine(engine.lock().unwrap().clone());
-                set_io_type(IOType::ForegroundWrite);
+                set_io_type(IoType::ForegroundWrite);
+                TLS_FEATURE_GATE.with(|c| *c.borrow_mut() = feature_gate.clone());
             })
             .before_stop(move || unsafe {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
@@ -102,8 +114,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                 }
             }
         }
-        m.processing_read_duration.flush();
-        m.processing_write_duration.flush();
         m.command_keyread_histogram_vec.flush();
 
         // Report PD metrics
@@ -122,15 +132,6 @@ pub fn tls_collect_query(region_id: u64, kind: QueryKind) {
     });
 }
 
-pub fn tls_collect_read_duration(cmd: &str, duration: Duration) {
-    TLS_SCHED_METRICS.with(|m| {
-        m.borrow_mut()
-            .processing_read_duration
-            .with_label_values(&[cmd])
-            .observe(tikv_util::time::duration_to_sec(duration))
-    });
-}
-
 pub fn tls_collect_keyread_histogram_vec(cmd: &str, count: f64) {
     TLS_SCHED_METRICS.with(|m| {
         m.borrow_mut()
@@ -138,4 +139,13 @@ pub fn tls_collect_keyread_histogram_vec(cmd: &str, count: f64) {
             .with_label_values(&[cmd])
             .observe(count);
     });
+}
+
+pub fn tls_can_enable(feature: Feature) -> bool {
+    TLS_FEATURE_GATE.with(|feature_gate| feature_gate.borrow().can_enable(feature))
+}
+
+#[cfg(test)]
+pub fn set_tls_feature_gate(feature_gate: FeatureGate) {
+    TLS_FEATURE_GATE.with(|f| *f.borrow_mut() = feature_gate);
 }

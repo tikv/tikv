@@ -1,13 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Distinct thread pools to handle read commands having different priority levels.
+//! Distinct thread pools to handle read commands having different priority
+//! levels.
 
-use crate::config::StorageReadPoolConfig;
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
-use crate::storage::metrics;
-use file_system::{set_io_type, IOType};
 use std::sync::{Arc, Mutex};
+
+use file_system::{set_io_type, IoType};
 use tikv_util::yatp_pool::{Config, DefaultTicker, FuturePool, PoolTicker, YatpPoolBuilder};
+
+use crate::{
+    config::StorageReadPoolConfig,
+    storage::{
+        kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter},
+        metrics,
+    },
+};
 
 #[derive(Clone)]
 struct FuturePoolTicker<R: FlowStatsReporter> {
@@ -20,7 +27,8 @@ impl<R: FlowStatsReporter> PoolTicker for FuturePoolTicker<R> {
     }
 }
 
-/// Build respective thread pools to handle read commands of different priority levels.
+/// Build respective thread pools to handle read commands of different priority
+/// levels.
 pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &StorageReadPoolConfig,
     reporter: R,
@@ -41,7 +49,7 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
                 .config(config)
                 .after_start(move || {
                     set_tls_engine(engine.lock().unwrap().clone());
-                    set_io_type(IOType::ForegroundRead);
+                    set_io_type(IoType::ForegroundRead);
                 })
                 .before_stop(move || unsafe {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
@@ -71,7 +79,7 @@ pub fn build_read_pool_for_test<E: Engine>(
                 .name_prefix(name)
                 .after_start(move || {
                     set_tls_engine(engine.lock().unwrap().clone());
-                    set_io_type(IOType::ForegroundRead);
+                    set_io_type(IoType::ForegroundRead);
                 })
                 // Safety: we call `set_` and `destroy_` with the same engine type.
                 .before_stop(|| unsafe { destroy_tls_engine::<E>() })

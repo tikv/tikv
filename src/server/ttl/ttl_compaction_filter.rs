@@ -1,22 +1,26 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ffi::CString;
+use std::{ffi::CString, marker::PhantomData};
+
+use api_version::{KeyMode, KvFormat, RawValue};
+use engine_rocks::{
+    raw::{
+        new_compaction_filter_raw, CompactionFilter, CompactionFilterContext,
+        CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
+        DBCompactionFilter,
+    },
+    RocksTtlProperties,
+};
+use engine_traits::raw_ttl::ttl_current_ts;
 
 use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
-use engine_rocks::raw::{
-    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
-};
-use engine_rocks::RocksTtlProperties;
-use engine_traits::key_prefix::{self};
-use engine_traits::raw_value::{ttl_current_ts, RawValue};
-use kvproto::kvrpcpb::ApiVersion;
 
-pub struct TTLCompactionFilterFactory {
-    pub api_version: ApiVersion,
+#[derive(Default)]
+pub struct TtlCompactionFilterFactory<F: KvFormat> {
+    _phantom: PhantomData<F>,
 }
 
-impl CompactionFilterFactory for TTLCompactionFilterFactory {
+impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
@@ -38,20 +42,20 @@ impl CompactionFilterFactory for TTLCompactionFilterFactory {
         }
 
         let name = CString::new("ttl_compaction_filter").unwrap();
-        let filter = Box::new(TTLCompactionFilter {
+        let filter = TtlCompactionFilter::<F> {
             ts: current,
-            api_version: self.api_version,
-        });
+            _phantom: PhantomData,
+        };
         unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
 
-struct TTLCompactionFilter {
+struct TtlCompactionFilter<F: KvFormat> {
     ts: u64,
-    api_version: ApiVersion,
+    _phantom: PhantomData<F>,
 }
 
-impl CompactionFilter for TTLCompactionFilter {
+impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
     fn featured_filter(
         &mut self,
         _level: usize,
@@ -68,20 +72,11 @@ impl CompactionFilter for TTLCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
         // Only consider raw keys.
-        match self.api_version {
-            // TTL is not enabled in V1.
-            ApiVersion::V1 => unreachable!(),
-            // In V1TTL, txnkv is disabled, so all data keys are raw keys.
-            ApiVersion::V1ttl => (),
-            ApiVersion::V2 => {
-                let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
-                if !key_prefix::is_raw_key(origin_key) {
-                    return CompactionFilterDecision::Keep;
-                }
-            }
+        if F::parse_key_mode(&key[keys::DATA_PREFIX_KEY.len()..]) != KeyMode::Raw {
+            return CompactionFilterDecision::Keep;
         }
 
-        match RawValue::from_bytes(value, self.api_version) {
+        match F::decode_raw_value(value) {
             Ok(RawValue {
                 expire_ts: Some(expire_ts),
                 ..

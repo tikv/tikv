@@ -3,23 +3,37 @@
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
+#![feature(vec_into_raw_parts)]
 
 #[cfg(test)]
 extern crate test;
 
-use std::collections::hash_map::Entry;
-use std::collections::vec_deque::{Iter, VecDeque};
-use std::fs::File;
-use std::ops::{Deref, DerefMut};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::Duration;
-use std::{env, thread};
+use std::{
+    cmp,
+    collections::{
+        hash_map::Entry,
+        vec_deque::{Iter, VecDeque},
+    },
+    convert::AsRef,
+    env,
+    fs::File,
+    ops::{Deref, DerefMut},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    },
+    thread,
+    time::Duration,
+};
 
-use nix::sys::wait::{wait, WaitStatus};
-use nix::unistd::{fork, ForkResult};
+use nix::{
+    sys::wait::{wait, WaitStatus},
+    unistd::{fork, ForkResult},
+};
 use rand::rngs::ThreadRng;
+
+use crate::sys::thread::StdThreadBuildWrapper;
 
 #[macro_use]
 pub mod log;
@@ -38,6 +52,8 @@ pub mod math;
 pub mod memory;
 pub mod metrics;
 pub mod mpsc;
+pub mod quota_limiter;
+pub mod store;
 pub mod stream;
 pub mod sys;
 pub mod thread_group;
@@ -75,7 +91,7 @@ pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
 
 pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
     let file = panic_mark_file_path(data_dir);
-    File::create(&file).unwrap();
+    File::create(file).unwrap();
 }
 
 // Copied from file_system to avoid cyclic dependency
@@ -329,6 +345,20 @@ impl<L, R> Either<L, R> {
     }
 }
 
+impl<L, R, T> AsRef<T> for Either<L, R>
+where
+    T: ?Sized,
+    L: AsRef<T>,
+    R: AsRef<T>,
+{
+    fn as_ref(&self) -> &T {
+        match self {
+            Self::Left(l) => l.as_ref(),
+            Self::Right(r) => r.as_ref(),
+        }
+    }
+}
+
 /// A simple ring queue with fixed capacity.
 pub struct RingQueue<T> {
     buf: VecDeque<T>,
@@ -395,6 +425,7 @@ impl<T> MustConsumeVec<T> {
         }
     }
 
+    #[must_use]
     pub fn take(&mut self) -> Self {
         MustConsumeVec {
             tag: self.tag,
@@ -427,8 +458,7 @@ impl<T> Drop for MustConsumeVec<T> {
 
 /// Exit the whole process when panic.
 pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
-    use std::panic;
-    use std::process;
+    use std::{panic, process};
 
     // HACK! New a backtrace ahead for caching necessary elf sections of this
     // tikv-server, in case it can not open more files during panicking
@@ -442,7 +472,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     // Caching is slow, spawn it in another thread to speed up.
     thread::Builder::new()
         .name(thd_name!("backtrace-loader"))
-        .spawn(::backtrace::Backtrace::new)
+        .spawn_wrapper(::backtrace::Backtrace::new)
         .unwrap();
 
     let data_dir = data_dir.to_string();
@@ -469,12 +499,13 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         );
 
         // There might be remaining logs in the async logger.
-        // To collect remaining logs and also collect future logs, replace the old one with a
-        // terminal logger.
-        // When the old global async logger is replaced, the old async guard will be taken and dropped.
-        // In the drop() the async guard, it waits for the finish of the remaining logs in the async logger.
+        // To collect remaining logs and also collect future logs, replace the old one
+        // with a terminal logger.
+        // When the old global async logger is replaced, the old async guard will be
+        // taken and dropped. In the drop() the async guard, it waits for the
+        // finish of the remaining logs in the async logger.
         if let Some(level) = ::log::max_level().to_level() {
-            let drainer = logger::text_format(logger::term_writer());
+            let drainer = logger::text_format(logger::term_writer(), true);
             let _ = logger::init_log(
                 drainer,
                 logger::convert_log_level_to_slog_level(level),
@@ -556,16 +587,28 @@ pub fn build_on_master_branch() -> bool {
     option_env!("TIKV_BUILD_GIT_BRANCH").map_or(false, |b| "master" == b)
 }
 
+/// Set the capacity of a vector to the given capacity.
+#[inline]
+pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
+    match cap.cmp(&v.capacity()) {
+        cmp::Ordering::Less => v.shrink_to(cap),
+        cmp::Ordering::Greater => v.reserve_exact(cap - v.len()),
+        cmp::Ordering::Equal => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::io::Read;
-    use std::rc::Rc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::*;
+    use std::{
+        io::Read,
+        rc::Rc,
+        sync::atomic::{AtomicBool, Ordering},
+        *,
+    };
 
     use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_panic_hook() {
@@ -595,7 +638,7 @@ mod tests {
         let mut stderr = BufferRedirect::stderr().unwrap();
         let status = run_and_wait_child_process(|| {
             set_panic_hook(false, "./");
-            let drainer = logger::text_format(logger::term_writer());
+            let drainer = logger::text_format(logger::term_writer(), true);
             crate::logger::init_log(
                 DelayDrain(drainer),
                 logger::get_level_by_string("debug").unwrap(),
@@ -686,7 +729,7 @@ mod tests {
             match foo(&mu.rl()) {
                 Some(_) | None => {
                     let res = mu.try_write();
-                    assert!(res.is_err());
+                    res.unwrap_err();
                 }
             }
         }

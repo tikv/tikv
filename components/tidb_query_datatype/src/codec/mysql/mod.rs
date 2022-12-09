@@ -31,12 +31,14 @@ pub mod json;
 pub mod set;
 pub mod time;
 
-pub use self::decimal::{dec_encoded_len, Decimal, DecimalDecoder, DecimalEncoder, Res, RoundMode};
-pub use self::duration::{Duration, DurationDecoder, DurationEncoder};
-pub use self::enums::{Enum, EnumDecoder, EnumEncoder, EnumRef};
-pub use self::json::{
-    parse_json_path_expr, Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonType,
-    ModifyType, PathExpression,
+pub use self::{
+    decimal::{dec_encoded_len, Decimal, DecimalDecoder, DecimalEncoder, Res, RoundMode},
+    duration::{Duration, DurationDecoder, DurationEncoder},
+    enums::{Enum, EnumDecoder, EnumEncoder, EnumRef},
+    json::{
+        parse_json_path_expr, Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder,
+        JsonType, ModifyType, PathExpression,
+    },
+    set::{Set, SetRef},
+    time::{Time, TimeDecoder, TimeEncoder, TimeType, Tz},
 };
-pub use self::set::{Set, SetRef};
-pub use self::time::{Time, TimeDecoder, TimeEncoder, TimeType, Tz};

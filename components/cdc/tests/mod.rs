@@ -1,27 +1,34 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::*;
-use std::time::Duration;
+use std::{
+    sync::*,
+    time::{Duration, Instant},
+};
 
+use causal_ts::CausalTsProvider;
+use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, MemoryQuota, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use grpcio::{ChannelBuilder, Environment};
-use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
-use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::TikvClient;
+use futures::executor::block_on;
+use grpcio::{
+    ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver, Environment,
+};
+use kvproto::{
+    cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
+    tikvpb::TikvClient,
+};
 use online_config::OnlineConfig;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
-use tikv::config::CdcConfig;
-use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv_util::config::ReadableDuration;
-use tikv_util::worker::{LazyWorker, Runnable};
-use tikv_util::HandyRwLock;
+use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID};
+use tikv_util::{
+    config::ReadableDuration,
+    worker::{LazyWorker, Runnable},
+    HandyRwLock,
+};
 use txn_types::TimeStamp;
-
-use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -104,17 +111,26 @@ impl TestSuiteBuilder {
         }
     }
 
+    #[must_use]
     pub fn cluster(mut self, cluster: Cluster<ServerCluster>) -> TestSuiteBuilder {
         self.cluster = Some(cluster);
         self
     }
 
+    #[must_use]
     pub fn memory_quota(mut self, memory_quota: usize) -> TestSuiteBuilder {
         self.memory_quota = Some(memory_quota);
         self
     }
 
     pub fn build(self) -> TestSuite {
+        self.build_with_cluster_runner(|cluster| cluster.run())
+    }
+
+    pub fn build_with_cluster_runner<F>(self, mut runner: F) -> TestSuite
+    where
+        F: FnMut(&mut Cluster<ServerCluster>),
+    {
         init();
         let memory_quota = self.memory_quota.unwrap_or(usize::MAX);
         let mut cluster = self.cluster.unwrap();
@@ -155,7 +171,7 @@ impl TestSuiteBuilder {
             endpoints.insert(id, worker);
         }
 
-        cluster.run();
+        runner(&mut cluster);
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);
@@ -166,6 +182,7 @@ impl TestSuiteBuilder {
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
                 &cfg,
+                cluster.cfg.storage.api_version(),
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
@@ -176,6 +193,7 @@ impl TestSuiteBuilder {
                 env,
                 sim.security_mgr.clone(),
                 MemoryQuota::new(usize::MAX),
+                sim.get_causal_ts_provider(*id),
             );
             let mut updated_cfg = cfg.clone();
             updated_cfg.min_ts_interval = ReadableDuration::millis(100);
@@ -215,10 +233,12 @@ impl Default for TestSuiteBuilder {
 }
 
 impl TestSuite {
-    pub fn new(count: usize) -> TestSuite {
-        let mut cluster = new_server_cluster(1, count);
+    pub fn new(count: usize, api_version: ApiVersion) -> TestSuite {
+        let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
         configure_for_lease_read(&mut cluster, Some(100), None);
+        // Disable background renew to make timestamp predictable.
+        configure_for_causal_ts(&mut cluster, "0s", 1);
 
         let builder = TestSuiteBuilder::new();
         builder.cluster(cluster).build()
@@ -250,8 +270,21 @@ impl TestSuite {
         pk: Vec<u8>,
         ts: TimeStamp,
     ) {
+        self.must_kv_prewrite_with_source(region_id, muts, pk, ts, 0);
+    }
+
+    pub fn must_kv_prewrite_with_source(
+        &mut self,
+        region_id: u64,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        txn_source: u64,
+    ) {
         let mut prewrite_req = PrewriteRequest::default();
-        prewrite_req.set_context(self.get_context(region_id));
+        let mut context = self.get_context(region_id);
+        context.set_txn_source(txn_source);
+        prewrite_req.set_context(context);
         prewrite_req.set_mutations(muts.into_iter().collect());
         prewrite_req.primary_lock = pk;
         prewrite_req.start_version = ts.into_inner();
@@ -272,6 +305,22 @@ impl TestSuite {
         );
     }
 
+    pub fn must_kv_put(&mut self, region_id: u64, key: Vec<u8>, value: Vec<u8>) {
+        let mut rawkv_req = RawPutRequest::default();
+        rawkv_req.set_context(self.get_context(region_id));
+        rawkv_req.set_key(key);
+        rawkv_req.set_value(value);
+        rawkv_req.set_ttl(u64::MAX);
+
+        let rawkv_resp = self.get_tikv_client(region_id).raw_put(&rawkv_req).unwrap();
+        assert!(
+            !rawkv_resp.has_region_error(),
+            "{:?}",
+            rawkv_resp.get_region_error()
+        );
+        assert!(rawkv_resp.error.is_empty(), "{:?}", rawkv_resp.get_error());
+    }
+
     pub fn must_kv_commit(
         &mut self,
         region_id: u64,
@@ -279,8 +328,21 @@ impl TestSuite {
         start_ts: TimeStamp,
         commit_ts: TimeStamp,
     ) {
+        self.must_kv_commit_with_source(region_id, keys, start_ts, commit_ts, 0);
+    }
+
+    pub fn must_kv_commit_with_source(
+        &mut self,
+        region_id: u64,
+        keys: Vec<Vec<u8>>,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        txn_source: u64,
+    ) {
         let mut commit_req = CommitRequest::default();
-        commit_req.set_context(self.get_context(region_id));
+        let mut context = self.get_context(region_id);
+        context.set_txn_source(txn_source);
+        commit_req.set_context(context);
         commit_req.start_version = start_ts.into_inner();
         commit_req.set_keys(keys.into_iter().collect());
         commit_req.commit_version = commit_ts.into_inner();
@@ -387,7 +449,9 @@ impl TestSuite {
         prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
         prewrite_req.for_update_ts = for_update_ts.into_inner();
-        prewrite_req.mut_is_pessimistic_lock().push(true);
+        prewrite_req
+            .mut_pessimistic_actions()
+            .push(DoPessimisticCheck);
         let prewrite_resp = self
             .get_tikv_client(region_id)
             .kv_prewrite(&prewrite_req)
@@ -424,10 +488,12 @@ impl TestSuite {
     pub fn get_context(&mut self, region_id: u64) -> Context {
         let epoch = self.cluster.get_region_epoch(region_id);
         let leader = self.cluster.leader_of_region(region_id).unwrap();
+        let api_version = self.cluster.cfg.storage.api_version();
         let mut context = Context::default();
         context.set_region_id(region_id);
         context.set_peer(leader);
         context.set_region_epoch(epoch);
+        context.set_api_version(api_version);
         context
     }
 
@@ -472,5 +538,97 @@ impl TestSuite {
 
     pub fn set_tso(&self, ts: impl Into<TimeStamp>) {
         self.cluster.pd_client.set_tso(ts.into());
+    }
+
+    pub fn flush_causal_timestamp_for_region(&mut self, region_id: u64) {
+        let leader = self.cluster.leader_of_region(region_id).unwrap();
+        block_on(
+            self.cluster
+                .sim
+                .rl()
+                .get_causal_ts_provider(leader.get_store_id())
+                .unwrap()
+                .async_flush(),
+        )
+        .unwrap();
+    }
+
+    pub fn must_wait_delegate_condition(
+        &self,
+        region_id: u64,
+        cond: Arc<dyn Fn(Option<&Delegate>) -> bool + Sync + Send>,
+    ) {
+        let scheduler = self.endpoints[&region_id].scheduler();
+        let start = Instant::now();
+        loop {
+            sleep_ms(100);
+            let (tx, rx) = mpsc::sync_channel(1);
+            let c = cond.clone();
+            let checker = move |d: Option<&Delegate>| {
+                tx.send(c(d)).unwrap();
+            };
+            scheduler
+                .schedule(Task::Validate(Validate::Region(
+                    region_id,
+                    Box::new(checker),
+                )))
+                .unwrap();
+            if rx.recv().unwrap() {
+                return;
+            }
+            if start.elapsed() > Duration::from_secs(5) {
+                panic!("wait delegate timeout");
+            }
+        }
+    }
+
+    pub fn must_kv_prepare_flashback(
+        &mut self,
+        region_id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        start_ts: TimeStamp,
+    ) {
+        let mut prepare_flashback_req = PrepareFlashbackToVersionRequest::default();
+        prepare_flashback_req.set_context(self.get_context(region_id));
+        prepare_flashback_req.set_start_key(start_key.to_vec());
+        prepare_flashback_req.set_end_key(end_key.to_vec());
+        prepare_flashback_req.set_start_ts(start_ts.into_inner());
+        let prepare_flashback_resp = self
+            .get_tikv_client(region_id)
+            .kv_prepare_flashback_to_version(&prepare_flashback_req)
+            .unwrap();
+        assert!(
+            !prepare_flashback_resp.has_region_error(),
+            "{:?}",
+            prepare_flashback_resp.get_region_error()
+        );
+    }
+
+    pub fn must_kv_flashback(
+        &mut self,
+        region_id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        version: TimeStamp,
+    ) {
+        let mut flashback_req = FlashbackToVersionRequest::default();
+        flashback_req.set_context(self.get_context(region_id));
+        flashback_req.set_start_key(start_key.to_vec());
+        flashback_req.set_end_key(end_key.to_vec());
+        flashback_req.set_start_ts(start_ts.into_inner());
+        flashback_req.set_commit_ts(commit_ts.into_inner());
+        flashback_req.set_version(version.into_inner());
+        let flashback_resp = self
+            .get_tikv_client(region_id)
+            .kv_flashback_to_version(&flashback_req)
+            .unwrap();
+        assert!(
+            !flashback_resp.has_region_error(),
+            "{:?}",
+            flashback_resp.get_region_error()
+        );
     }
 }

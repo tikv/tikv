@@ -1,18 +1,29 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::fsm::{Fsm, FsmScheduler, FsmState};
-use crate::mailbox::{BasicMailbox, Mailbox};
-use crate::metrics::CHANNEL_FULL_COUNTER_VEC;
+use std::{
+    cell::Cell,
+    mem,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
+
 use collections::HashMap;
 use crossbeam::channel::{SendError, TrySendError};
-use std::cell::Cell;
-use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use tikv_util::lru::LruCache;
-use tikv_util::Either;
-use tikv_util::{debug, info};
+use tikv_util::{
+    debug, info,
+    lru::LruCache,
+    time::{duration_to_sec, Instant},
+    Either,
+};
+
+use crate::{
+    fsm::{Fsm, FsmScheduler, FsmState},
+    mailbox::{BasicMailbox, Mailbox},
+    metrics::*,
+};
 
 /// A struct that traces the approximate memory usage of router.
 #[derive(Default)]
@@ -33,17 +44,20 @@ enum CheckDoResult<T> {
     Valid(T),
 }
 
-/// Router route messages to its target mailbox.
-///
-/// Every fsm has a mailbox, hence it's necessary to have an address book
-/// that can deliver messages to specified fsm, which is exact router.
+/// Router routes messages to its target FSM's mailbox.
 ///
 /// In our abstract model, every batch system has two different kind of
-/// fsms. First is normal fsm, which does the common work like peers in a
-/// raftstore model or apply delegate in apply model. Second is control fsm,
+/// FSMs. First is normal FSM, which does the common work like peers in a
+/// raftstore model or apply delegate in apply model. Second is control FSM,
 /// which does some work that requires a global view of resources or creates
-/// missing fsm for specified address. Normal fsm and control fsm can have
-/// different scheduler, but this is not required.
+/// missing FSM for specified address.
+///
+/// There are one control FSM and multiple normal FSMs in a system. Each FSM
+/// has its own mailbox. We maintain an address book to deliver messages to the
+/// specified normal FSM.
+///
+/// Normal FSM and control FSM can have different scheduler, but this is not
+/// required.
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<NormalMailMap<N>>>,
     caches: Cell<LruCache<u64, BasicMailbox<N>>>,
@@ -54,8 +68,9 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     pub(crate) normal_scheduler: Ns,
     pub(crate) control_scheduler: Cs,
 
-    // Count of Mailboxes that is not destroyed.
-    // Added when a Mailbox created, and subtracted it when a Mailbox destroyed.
+    // Number of active mailboxes.
+    // Added when a mailbox is created, and subtracted it when a mailbox is
+    // destroyed.
     state_cnt: Arc<AtomicUsize>,
     // Indicates the router is shutdown down or not.
     shutdown: Arc<AtomicBool>,
@@ -164,6 +179,22 @@ where
             .store(normals.map.len(), Ordering::Relaxed);
     }
 
+    /// Same as send a message and then register the mailbox.
+    ///
+    /// The mailbox will not be registered if the message can't be sent.
+    pub fn send_and_register(
+        &self,
+        addr: u64,
+        mailbox: BasicMailbox<N>,
+        msg: N::Message,
+    ) -> Result<(), (BasicMailbox<N>, N::Message)> {
+        if let Err(SendError(m)) = mailbox.force_send(msg, &self.normal_scheduler) {
+            return Err((mailbox, m));
+        }
+        self.register(addr, mailbox);
+        Ok(())
+    }
+
     pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<N>)>) {
         let mut normals = self.normals.lock().unwrap();
         normals.map.reserve(mailboxes.len());
@@ -192,7 +223,7 @@ where
         }
     }
 
-    /// Get the mailbox of control fsm.
+    /// Get the mailbox of control FSM.
     pub fn control_mailbox(&self) -> Mailbox<C, Cs> {
         Mailbox::new(self.control_box.clone(), self.control_scheduler.clone())
     }
@@ -263,7 +294,7 @@ where
         }
     }
 
-    /// Force sending message to control fsm.
+    /// Sending message to control FSM.
     #[inline]
     pub fn send_control(&self, msg: C::Message) -> Result<(), TrySendError<C::Message>> {
         match self.control_box.try_send(msg, &self.control_scheduler) {
@@ -278,15 +309,23 @@ where
         }
     }
 
-    /// Try to notify all normal fsm a message.
+    /// Force sending message to control FSM.
+    #[inline]
+    pub fn force_send_control(&self, msg: C::Message) -> Result<(), SendError<C::Message>> {
+        self.control_box.force_send(msg, &self.control_scheduler)
+    }
+
+    /// Try to notify all normal FSMs a message.
     pub fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> N::Message) {
+        let timer = Instant::now_coarse();
         let mailboxes = self.normals.lock().unwrap();
         for mailbox in mailboxes.map.values() {
             let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
         }
+        BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()));
     }
 
-    /// Try to notify all fsm that the cluster is being shutdown.
+    /// Try to notify all FSMs that the cluster is being shutdown.
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");
         self.shutdown.store(true, Ordering::SeqCst);
@@ -340,8 +379,8 @@ where
         let state_unit = mem::size_of::<FsmState<N>>();
         // Every message in crossbeam sender needs 8 bytes to store state.
         let message_unit = mem::size_of::<N::Message>() + 8;
-        // crossbeam unbounded channel sender has a list of blocks. Every block has 31 unit
-        // and every sender has at least one sender.
+        // crossbeam unbounded channel sender has a list of blocks. Every block has 31
+        // unit and every sender has at least one sender.
         let sender_block_unit = 31;
         RouterTrace {
             alive: (mailbox_unit * 8 / 7 // hashmap uses 7/8 of allocated memory.

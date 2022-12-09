@@ -11,18 +11,47 @@ mod retry;
 mod service;
 mod split;
 
-pub use self::bootstrap::AlreadyBootstrapped;
-pub use self::incompatible::Incompatible;
-pub use self::leader_change::LeaderChange;
-pub use self::retry::{NotRetry, Retry};
-pub use self::service::Service;
-pub use self::split::Split;
+pub use self::{
+    bootstrap::AlreadyBootstrapped,
+    incompatible::Incompatible,
+    leader_change::LeaderChange,
+    retry::{NotRetry, Retry},
+    service::Service,
+    split::Split,
+};
 
 pub const DEFAULT_CLUSTER_ID: u64 = 42;
 
 pub type Result<T> = result::Result<T, String>;
 
 pub trait PdMocker {
+    fn load_global_config(
+        &self,
+        req: &LoadGlobalConfigRequest,
+    ) -> Option<Result<LoadGlobalConfigResponse>> {
+        let mut send = vec![];
+        for r in req.get_names() {
+            let mut i = GlobalConfigItem::default();
+            i.set_name(format!("/global/config/{}", r.clone()));
+            i.set_value(r.clone());
+            send.push(i);
+        }
+        let mut res = LoadGlobalConfigResponse::default();
+        res.set_items(send.into());
+        Some(Ok(res))
+    }
+
+    fn store_global_config(
+        &self,
+        _: &StoreGlobalConfigRequest,
+    ) -> Option<Result<StoreGlobalConfigResponse>> {
+        unimplemented!()
+    }
+
+    fn watch_global_config(&self) -> Option<Result<WatchGlobalConfigResponse>> {
+        panic!("could not mock this function due to it should return a stream")
+    }
+
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         None
     }

@@ -1,14 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::rocks_metrics_defs::*;
 use engine_traits::CF_DEFAULT;
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
-
 use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
 };
+
+use crate::rocks_metrics_defs::*;
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {
@@ -931,22 +931,15 @@ pub fn flush_engine_iostall_properties(engine: &DB, name: &str) {
     }
 }
 
-pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool) {
+pub fn flush_engine_properties(engine: &DB, name: &str) {
     for cf in engine.cf_names() {
         let handle = crate::util::get_cf_handle(engine, cf).unwrap();
-        // It is important to monitor each cf's size, especially the "raft" and "lock" column
-        // families.
+        // It is important to monitor each cf's size, especially the "raft" and "lock"
+        // column families.
         let cf_used_size = crate::util::get_engine_cf_used_size(engine, handle);
         STORE_ENGINE_SIZE_GAUGE_VEC
             .with_label_values(&[name, cf])
             .set(cf_used_size as i64);
-
-        if !shared_block_cache {
-            let block_cache_usage = engine.get_block_cache_usage_cf(handle);
-            STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
-                .with_label_values(&[name, cf])
-                .set(block_cache_usage as i64);
-        }
 
         let blob_cache_usage = engine.get_blob_cache_usage_cf(handle);
         STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
@@ -1110,15 +1103,13 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
             .set(d as i64);
     }
 
-    if shared_block_cache {
-        // Since block cache is shared, getting cache size from any CF is fine. Here we get from
-        // default CF.
-        let handle = crate::util::get_cf_handle(engine, CF_DEFAULT).unwrap();
-        let block_cache_usage = engine.get_block_cache_usage_cf(handle);
-        STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
-            .with_label_values(&[name, "all"])
-            .set(block_cache_usage as i64);
-    }
+    // Since block cache is shared, getting cache size from any CF is fine. Here we
+    // get from default CF.
+    let handle = crate::util::get_cf_handle(engine, CF_DEFAULT).unwrap();
+    let block_cache_usage = engine.get_block_cache_usage_cf(handle);
+    STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+        .with_label_values(&[name, "all"])
+        .set(block_cache_usage as i64);
 }
 
 // For property metrics
@@ -1609,18 +1600,16 @@ lazy_static! {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tempfile::Builder;
-
     use engine_traits::ALL_CFS;
     use rocksdb::HistogramData;
+    use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_flush() {
         let dir = Builder::new().prefix("test-flush").tempdir().unwrap();
-        let engine =
-            crate::util::new_engine(dir.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let engine = crate::util::new_engine(dir.path().to_str().unwrap(), ALL_CFS).unwrap();
         for tp in ENGINE_TICKER_TYPES {
             flush_engine_ticker_metrics(*tp, 2, "kv");
         }
@@ -1629,8 +1618,7 @@ mod tests {
             flush_engine_histogram_metrics(*tp, HistogramData::default(), "kv");
         }
 
-        let shared_block_cache = false;
-        flush_engine_properties(engine.as_inner(), "kv", shared_block_cache);
+        flush_engine_properties(engine.as_inner(), "kv");
         let handle = engine.as_inner().cf_handle("default").unwrap();
         let info = engine
             .as_inner()

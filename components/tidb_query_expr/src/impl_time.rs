@@ -1,21 +1,27 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::rpn_fn;
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    codec::{
+        data_type::*,
+        mysql::{
+            duration::{
+                MAX_HOUR_PART, MAX_MINUTE_PART, MAX_NANOS, MAX_NANOS_PART, MAX_SECOND_PART,
+                NANOS_PER_SEC,
+            },
+            time::{
+                extension::DateTimeExtension, weekmode::WeekMode, WeekdayExtension, MONTH_NAMES,
+            },
+            Duration, TimeType, MAX_FSP,
+        },
+        Error,
+    },
+    expr::{EvalContext, SqlMode},
+    FieldTypeAccessor,
+};
 
 use crate::RpnFnCallExtra;
-use tidb_query_common::Result;
-
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::duration::{
-    MAX_HOUR_PART, MAX_MINUTE_PART, MAX_NANOS, MAX_NANOS_PART, MAX_SECOND_PART, NANOS_PER_SEC,
-};
-use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
-use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
-use tidb_query_datatype::codec::mysql::time::{WeekdayExtension, MONTH_NAMES};
-use tidb_query_datatype::codec::mysql::{Duration, TimeType, MAX_FSP};
-use tidb_query_datatype::codec::Error;
-use tidb_query_datatype::expr::{EvalContext, SqlMode};
-use tidb_query_datatype::FieldTypeAccessor;
 
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
@@ -56,6 +62,22 @@ pub fn date(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<DateTime>> {
     let mut res = *t;
     res.set_time_type(TimeType::Date)?;
     Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn sysdate_with_fsp(ctx: &mut EvalContext, fsp: &Int) -> Result<Option<DateTime>> {
+    DateTime::from_local_time(ctx, TimeType::DateTime, *fsp as i8)
+        .map(Some)
+        .or_else(|e| ctx.handle_invalid_time_error(e).map(|_| Ok(None))?)
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn sysdate_without_fsp(ctx: &mut EvalContext) -> Result<Option<DateTime>> {
+    DateTime::from_local_time(ctx, TimeType::DateTime, 0)
+        .map(Some)
+        .or_else(|e| ctx.handle_invalid_time_error(e).map(|_| Ok(None))?)
 }
 
 #[rpn_fn(nullable, capture = [ctx])]
@@ -157,7 +179,8 @@ pub fn week_of_year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Optio
 // year_week_with_mode implements `YEARWEEK` in MySQL.
 // See also: https://dev.mysql.com/doc/refman/5.7/en/date-and-time-functions.html#function_yearweek
 //
-// e.g.: SELECT YEARWEEK('1987-01-01');  -- -> 198652, here the first 4 digits represents year, and the last 2 digits represents week.
+// e.g.: SELECT YEARWEEK('1987-01-01');  -- -> 198652, here the first 4 digits
+// represents year, and the last 2 digits represents week.
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn year_week_with_mode(ctx: &mut EvalContext, t: &DateTime, mode: &Int) -> Result<Option<Int>> {
@@ -233,7 +256,7 @@ pub fn add_string_and_duration(
         return match arg0.checked_add(*arg1) {
             Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
             None => ctx
-                .handle_overflow_err(Error::overflow("DURATION", &format!("{} + {}", arg0, arg1)))
+                .handle_overflow_err(Error::overflow("DURATION", format!("{} + {}", arg0, arg1)))
                 .map(|_| Ok(writer.write(None)))?,
         };
     };
@@ -241,7 +264,7 @@ pub fn add_string_and_duration(
         return match arg0.checked_add(ctx, *arg1) {
             Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
             None => ctx
-                .handle_overflow_err(Error::overflow("DATETIME", &format!("{} + {}", arg0, arg1)))
+                .handle_overflow_err(Error::overflow("DATETIME", format!("{} + {}", arg0, arg1)))
                 .map(|_| Ok(writer.write(None)))?,
         };
     };
@@ -263,7 +286,7 @@ pub fn sub_string_and_duration(
         return match arg0.checked_sub(*arg1) {
             Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
             None => ctx
-                .handle_overflow_err(Error::overflow("DURATION", &format!("{} - {}", arg0, arg1)))
+                .handle_overflow_err(Error::overflow("DURATION", format!("{} - {}", arg0, arg1)))
                 .map(|_| Ok(writer.write(None)))?,
         };
     };
@@ -271,7 +294,7 @@ pub fn sub_string_and_duration(
         return match arg0.checked_sub(ctx, *arg1) {
             Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
             None => ctx
-                .handle_overflow_err(Error::overflow("DATETIME", &format!("{} - {}", arg0, arg1)))
+                .handle_overflow_err(Error::overflow("DATETIME", format!("{} - {}", arg0, arg1)))
                 .map(|_| Ok(writer.write(None)))?,
         };
     };
@@ -500,7 +523,7 @@ pub fn from_days(ctx: &mut EvalContext, arg: &Int) -> Result<Option<DateTime>> {
 pub fn make_date(ctx: &mut EvalContext, year: &Int, day: &Int) -> Result<Option<DateTime>> {
     let mut year = *year;
     let mut day = *day;
-    if day <= 0 || year < 0 || year > 9999 || day > 366 * 9999 {
+    if !(1..=366 * 9999).contains(&day) || !(0..=9999).contains(&year) {
         return Ok(None);
     }
     if year < 70 {
@@ -788,8 +811,8 @@ pub fn duration_duration_time_diff(
 ) -> Result<Option<Duration>> {
     let res = match arg1.checked_sub(*arg2) {
         Some(res) => res,
-        // `check_sub` returns `None` if the sub operation overflow/underflow i64 bound or mysql_time_value bound.
-        // and we need to treat these two case separately.
+        // `check_sub` returns `None` if the sub operation overflow/underflow i64 bound or
+        // mysql_time_value bound. and we need to treat these two case separately.
         // if `arg1 - arg2` is in (`MAX_NANOS`, `i64::MAX`], return max value of mysql `TIME` type.
         // if `arg1 - arg2` is in [`i64::MIN`, `-MAX_NANOS`), return min value of mysql `TIME` type.
         // if `arg1 - arg2` is overflow or underflow i64, return `None`.
@@ -865,6 +888,12 @@ pub fn duration_string_time_diff(
     duration_duration_time_diff(ctx, arg1, &arg2)
 }
 
+#[rpn_fn]
+#[inline]
+pub fn quarter(t: &DateTime) -> Result<Option<Int>> {
+    Ok(Some(Int::from(t.month() + 2) / 3))
+}
+
 /// Cast Duration into string representation and drop subsec if possible.
 fn duration_to_string(duration: Duration) -> String {
     match duration.subsec_micros() {
@@ -884,15 +913,18 @@ fn datetime_to_string(mut datetime: DateTime) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::{
+            error::ERR_TRUNCATE_WRONG_VALUE,
+            mysql::{Time, MAX_FSP},
+        },
+        FieldTypeTp,
+    };
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
-    use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
-    use tidb_query_datatype::FieldTypeTp;
 
     #[test]
     fn test_add_duration_and_duration() {
@@ -1044,23 +1076,26 @@ mod tests {
             assert_eq!(output, expect, "{:?} {:?}", date, format);
         }
 
-        //                // TODO: pass this test after refactoring the issue #3953 is fixed.
-        //                {
-        //                    let format: Option<Bytes> =  Some("abc%b %M %m %c %D %d %e %j".as_bytes().to_vec());
-        //                    let time: Option<DateTime> = Some( DateTime::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap());
-        //
-        //                    let mut cfg = EvalConfig::new();
-        //                    cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
-        //                        .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
-        //                    let ctx = EvalContext::new(Arc::new(cfg));
-        //
-        //                    let output = RpnFnScalarEvaluator::new()
-        //                        .context(ctx)
-        //                        .push_param(time.clone())
-        //                        .push_param(format)
-        //                        .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig);
-        //                    assert!(output.is_err());
-        //                }
+        // TODO: pass this test after refactoring the issue #3953 is fixed.
+        // {
+        //     let format: Option<Bytes> = Some(
+        //          "abc%b %M %m %c %D %d %e %j".as_bytes().to_vec());
+        //     let time: Option<DateTime> =
+        //         Some(DateTime::parse_utc_datetime(
+        //            "0000-00-00 00:00:00", 6).unwrap());
+
+        //     let mut cfg = EvalConfig::new();
+        //     cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+        //         .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
+        //     let ctx = EvalContext::new(Arc::new(cfg));
+
+        //     let output = RpnFnScalarEvaluator::new()
+        //         .context(ctx)
+        //         .push_param(time.clone())
+        //         .push_param(format)
+        //         .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig);
+        //     assert!(output.is_err());
+        // }
 
         {
             let mut cfg = EvalConfig::new();
@@ -1837,8 +1872,10 @@ mod tests {
     #[test]
     fn test_from_days() {
         let cases = vec![
-            (ScalarValue::Int(Some(-140)), Some("0000-00-00")), // mysql FROM_DAYS returns 0000-00-00 for any day <= 365.
-            (ScalarValue::Int(Some(140)), Some("0000-00-00")), // mysql FROM_DAYS returns 0000-00-00 for any day <= 365.
+            (ScalarValue::Int(Some(-140)), Some("0000-00-00")), /* mysql FROM_DAYS returns
+                                                                 * 0000-00-00 for any day <=
+                                                                 * 365. */
+            (ScalarValue::Int(Some(140)), Some("0000-00-00")), /* mysql FROM_DAYS returns 0000-00-00 for any day <= 365. */
             (ScalarValue::Int(Some(735_000)), Some("2012-05-12")), // Leap year.
             (ScalarValue::Int(Some(735_030)), Some("2012-06-11")),
             (ScalarValue::Int(Some(735_130)), Some("2012-09-19")),
@@ -1851,7 +1888,9 @@ mod tests {
             (ScalarValue::Int(Some(734_544)), Some("2011-02-11")),
             (ScalarValue::Int(Some(734_513)), Some("2011-01-11")),
             (ScalarValue::Int(Some(3_652_424)), Some("9999-12-31")),
-            (ScalarValue::Int(Some(3_652_425)), Some("0000-00-00")), // mysql FROM_DAYS returns 0000-00-00 for any day >= 3652425
+            (ScalarValue::Int(Some(3_652_425)), Some("0000-00-00")), /* mysql FROM_DAYS returns
+                                                                      * 0000-00-00 for any day
+                                                                      * >= 3652425 */
             (ScalarValue::Int(None), None),
         ];
         let mut ctx = EvalContext::default();
@@ -2355,7 +2394,7 @@ mod tests {
                         .build(),
                 )
                 .evaluate::<Duration>(ScalarFuncSig::MakeTime);
-            assert!(output.is_err());
+            output.unwrap_err();
         }
     }
 
@@ -2415,7 +2454,7 @@ mod tests {
                 .push_param(duration2)
                 .evaluate::<Duration>(ScalarFuncSig::DurationDurationTimeDiff)
                 .unwrap();
-            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+            assert_eq!(output, expected, "got {}", output.unwrap());
         }
     }
 
@@ -2475,7 +2514,7 @@ mod tests {
                 .push_param(duration)
                 .evaluate::<Duration>(ScalarFuncSig::StringDurationTimeDiff)
                 .unwrap();
-            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+            assert_eq!(output, expected, "got {}", output.unwrap());
         }
     }
 
@@ -2535,7 +2574,7 @@ mod tests {
                 .push_param(string2)
                 .evaluate::<Duration>(ScalarFuncSig::StringStringTimeDiff)
                 .unwrap();
-            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+            assert_eq!(output, expected, "got {}", output.unwrap());
         }
     }
 
@@ -2595,7 +2634,34 @@ mod tests {
                 .push_param(string)
                 .evaluate::<Duration>(ScalarFuncSig::DurationStringTimeDiff)
                 .unwrap();
-            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+            assert_eq!(output, expected, "got {}", output.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_quarter() {
+        let cases = vec![
+            (Some("2008-04-01"), Some(2)),
+            (Some("2008-01-01"), Some(1)),
+            (Some("2008-03-31"), Some(1)),
+            (Some("2008-06-30"), Some(2)),
+            (Some("2008-07-01"), Some(3)),
+            (Some("2008-09-30"), Some(3)),
+            (Some("2008-10-01"), Some(4)),
+            (Some("2008-12-31"), Some(4)),
+            (Some("2008-00-01"), Some(0)),
+            (None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (datetime, exp) in cases {
+            let expected = exp.map(|exp| Int::from(exp));
+            let datetime = datetime
+                .map(|arg1| DateTime::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(datetime)
+                .evaluate::<Int>(ScalarFuncSig::Quarter)
+                .unwrap();
+            assert_eq!(output, expected, "got {}", output.unwrap());
         }
     }
 }

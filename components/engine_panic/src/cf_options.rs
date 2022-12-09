@@ -1,14 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::db_options::PanicTitanDBOptions;
-use crate::engine::PanicEngine;
-use engine_traits::{CFOptionsExt, Result};
-use engine_traits::{ColumnFamilyOptions, SstPartitionerFactory};
+use engine_traits::{CfOptions, CfOptionsExt, Result, SstPartitionerFactory};
 
-impl CFOptionsExt for PanicEngine {
-    type ColumnFamilyOptions = PanicColumnFamilyOptions;
+use crate::{db_options::PanicTitanDbOptions, engine::PanicEngine};
 
-    fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
+impl CfOptionsExt for PanicEngine {
+    type CfOptions = PanicCfOptions;
+
+    fn get_options_cf(&self, cf: &str) -> Result<Self::CfOptions> {
         panic!()
     }
     fn set_options_cf(&self, cf: &str, options: &[(&str, &str)]) -> Result<()> {
@@ -16,10 +15,10 @@ impl CFOptionsExt for PanicEngine {
     }
 }
 
-pub struct PanicColumnFamilyOptions;
+pub struct PanicCfOptions;
 
-impl ColumnFamilyOptions for PanicColumnFamilyOptions {
-    type TitanDBOptions = PanicTitanDBOptions;
+impl CfOptions for PanicCfOptions {
+    type TitanCfOptions = PanicTitanDbOptions;
 
     fn new() -> Self {
         panic!()
@@ -27,10 +26,10 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
     fn get_max_write_buffer_number(&self) -> u32 {
         panic!()
     }
-    fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {
+    fn get_level_zero_slowdown_writes_trigger(&self) -> i32 {
         panic!()
     }
-    fn get_level_zero_stop_writes_trigger(&self) -> u32 {
+    fn get_level_zero_stop_writes_trigger(&self) -> i32 {
         panic!()
     }
     fn set_level_zero_file_num_compaction_trigger(&mut self, v: i32) {
@@ -45,10 +44,10 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
     fn get_block_cache_capacity(&self) -> u64 {
         panic!()
     }
-    fn set_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
+    fn set_block_cache_capacity(&self, capacity: u64) -> Result<()> {
         panic!()
     }
-    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
+    fn set_titan_cf_options(&mut self, opts: &Self::TitanCfOptions) {
         panic!()
     }
     fn get_target_file_size_base(&self) -> u64 {

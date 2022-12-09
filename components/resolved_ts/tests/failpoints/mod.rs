@@ -2,12 +2,13 @@
 
 #[path = "../mod.rs"]
 mod testsuite;
-pub use testsuite::*;
-
 use futures::executor::block_on;
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::{new_peer, sleep_ms};
+pub use testsuite::*;
+use tikv_util::config::ReadableDuration;
+use txn_types::TimeStamp;
 
 #[test]
 fn test_check_leader_timeout() {
@@ -21,7 +22,7 @@ fn test_check_leader_timeout() {
     mutation.set_op(Op::Put);
     mutation.key = k.to_vec();
     mutation.value = v.to_vec();
-    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts);
+    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
     suite
         .cluster
         .must_transfer_leader(region.id, new_peer(1, 1));
@@ -48,5 +49,82 @@ fn test_check_leader_timeout() {
     suite.must_get_rts_ge(region.id, commit_ts);
 
     fail::remove(store3_fp);
+    suite.stop();
+}
+
+#[test]
+fn test_report_min_resolved_ts() {
+    fail::cfg("mock_tick_interval", "return(0)").unwrap();
+    fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
+    fail::cfg("mock_min_resolved_ts_interval", "return(0)").unwrap();
+    let mut suite = TestSuite::new(1);
+    // default config is 1s
+    assert_eq!(
+        suite
+            .cluster
+            .cfg
+            .tikv
+            .raft_store
+            .report_min_resolved_ts_interval,
+        ReadableDuration::secs(1)
+    );
+    let region = suite.cluster.get_region(&[]);
+    let ts1 = suite.cluster.pd_client.get_min_resolved_ts();
+
+    // Prewrite
+    let (k, v) = (b"k1", b"v");
+    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.to_vec();
+    mutation.value = v.to_vec();
+    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
+
+    // Commit
+    let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(region.id, vec![k.to_vec()], start_ts, commit_ts);
+
+    sleep_ms(100);
+    let ts3 = suite.cluster.pd_client.get_min_resolved_ts();
+    let unapplied_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    assert!(ts3 > ts1);
+    assert!(TimeStamp::new(ts3) > commit_ts);
+    assert!(TimeStamp::new(ts3) < unapplied_ts);
+    fail::remove("mock_tick_interval");
+    fail::remove("mock_collect_tick_interval");
+    fail::remove("mock_min_resolved_ts_interval");
+    suite.stop();
+}
+
+#[test]
+fn test_report_min_resolved_ts_disable() {
+    fail::cfg("mock_tick_interval", "return(0)").unwrap();
+    fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
+    fail::cfg("mock_min_resolved_ts_interval_disable", "return(0)").unwrap();
+    let mut suite = TestSuite::new(1);
+    let region = suite.cluster.get_region(&[]);
+    let ts1 = suite.cluster.pd_client.get_min_resolved_ts();
+
+    // Prewrite
+    let (k, v) = (b"k1", b"v");
+    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.to_vec();
+    mutation.value = v.to_vec();
+    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
+
+    // Commit
+    let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(region.id, vec![k.to_vec()], start_ts, commit_ts);
+
+    sleep_ms(100);
+
+    // no report
+    let ts3 = suite.cluster.pd_client.get_min_resolved_ts();
+    assert!(ts3 == ts1);
+    fail::remove("mock_tick_interval");
+    fail::remove("mock_collect_tick_interval");
+    fail::remove("mock_min_resolved_ts_interval_disable");
     suite.stop();
 }

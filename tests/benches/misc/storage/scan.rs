@@ -1,9 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use test::Bencher;
-
 use kvproto::kvrpcpb::Context;
-
+use test::Bencher;
 use test_storage::SyncTestStorageBuilder;
 use test_util::*;
 use txn_types::{Key, Mutation};
@@ -13,7 +11,7 @@ use txn_types::{Key, Mutation};
 #[ignore]
 #[bench]
 fn bench_tombstone_scan(b: &mut Bencher) {
-    let store = SyncTestStorageBuilder::default().build().unwrap();
+    let store = SyncTestStorageBuilder::default().build(0).unwrap();
     let mut ts_generator = 1..;
 
     let mut kvs = KvGenerator::new(100, 1000);
@@ -63,7 +61,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
             store
                 .scan(
                     Context::default(),
-                    k,
+                    Key::from_raw(&k),
                     None,
                     1,
                     false,

@@ -1,9 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Result;
-use std::sync::Arc;
+use std::{io::Result, sync::Arc};
 
-use crate::raw::Env;
 use encryption::{self, DataKeyManager};
 use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 use rocksdb::{
@@ -11,17 +9,19 @@ use rocksdb::{
     FileEncryptionInfo as DBFileEncryptionInfo,
 };
 
+use crate::{r2e, raw::Env};
+
 // Use engine::Env directly since Env is not abstracted.
 pub(crate) fn get_env(
     base_env: Option<Arc<Env>>,
     key_manager: Option<Arc<DataKeyManager>>,
-) -> std::result::Result<Arc<Env>, String> {
+) -> engine_traits::Result<Arc<Env>> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
     if let Some(manager) = key_manager {
-        Ok(Arc::new(Env::new_key_managed_encrypted_env(
-            base_env,
-            WrappedEncryptionKeyManager { manager },
-        )?))
+        Ok(Arc::new(
+            Env::new_key_managed_encrypted_env(base_env, WrappedEncryptionKeyManager { manager })
+                .map_err(r2e)?,
+        ))
     } else {
         Ok(base_env)
     }
@@ -64,6 +64,7 @@ fn convert_encryption_method(input: EncryptionMethod) -> DBEncryptionMethod {
         EncryptionMethod::Aes128Ctr => DBEncryptionMethod::Aes128Ctr,
         EncryptionMethod::Aes192Ctr => DBEncryptionMethod::Aes192Ctr,
         EncryptionMethod::Aes256Ctr => DBEncryptionMethod::Aes256Ctr,
+        EncryptionMethod::Sm4Ctr => DBEncryptionMethod::Sm4Ctr,
         EncryptionMethod::Unknown => DBEncryptionMethod::Unknown,
     }
 }

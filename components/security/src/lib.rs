@@ -3,11 +3,13 @@
 #[macro_use]
 extern crate serde_derive;
 
-use std::error::Error;
-use std::fs::{self, File};
-use std::io::Read;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::{
+    error::Error,
+    fs::{self, File},
+    io::Read,
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
 use collections::HashSet;
 use encryption::EncryptionConfig;
@@ -17,7 +19,7 @@ use grpcio::{
     ServerCredentialsFetcher,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct SecurityConfig {
@@ -33,25 +35,12 @@ pub struct SecurityConfig {
     pub encryption: EncryptionConfig,
 }
 
-impl Default for SecurityConfig {
-    fn default() -> SecurityConfig {
-        SecurityConfig {
-            ca_path: String::new(),
-            cert_path: String::new(),
-            key_path: String::new(),
-            override_ssl_target: String::new(),
-            cert_allowed_cn: HashSet::default(),
-            redact_info_log: None,
-            encryption: EncryptionConfig::default(),
-        }
-    }
-}
-
 /// Checks and opens key file. Returns `Ok(None)` if the path is empty.
 ///
 ///  # Arguments
 ///
-///  - `tag`: only used in the error message, like "ca key", "cert key", "private key", etc.
+///  - `tag`: only used in the error message, like "ca key", "cert key",
+///    "private key", etc.
 fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<dyn Error>> {
     if path.is_empty() {
         return Ok(None);
@@ -78,6 +67,23 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<dyn Error>> {
 }
 
 type CertResult = Result<(Vec<u8>, Vec<u8>, Vec<u8>), Box<dyn Error>>;
+
+type Pem = Box<[u8]>;
+
+pub struct Secret(pub Pem);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Secret").finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct ClientSuite {
+    pub ca: Pem,
+    pub client_cert: Pem,
+    pub client_key: Secret,
+}
 
 impl SecurityConfig {
     /// Validates ca, cert and private key.
@@ -109,7 +115,7 @@ impl SecurityConfig {
 
     /// Determine if the cert file has been modified.
     /// If modified, update the timestamp of this modification.
-    fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
+    pub fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
         let this = fs::metadata(&self.cert_path)?.modified()?;
         if let Some(last) = last {
             if *last == this {
@@ -130,6 +136,15 @@ impl SecurityManager {
     pub fn new(cfg: &SecurityConfig) -> Result<SecurityManager, Box<dyn Error>> {
         Ok(SecurityManager {
             cfg: Arc::new(cfg.clone()),
+        })
+    }
+
+    pub fn client_suite(&self) -> Result<ClientSuite, Box<dyn Error>> {
+        let (ca, cert, key) = self.cfg.load_certs()?;
+        Ok(ClientSuite {
+            ca: ca.into_boxed_slice(),
+            client_cert: cert.into_boxed_slice(),
+            client_key: Secret(key.into_boxed_slice()),
         })
     }
 
@@ -158,7 +173,7 @@ impl SecurityManager {
             sb.bind(addr, port)
         } else {
             if !self.cfg.cert_allowed_cn.is_empty() {
-                let cn_checker = CNChecker {
+                let cn_checker = CnChecker {
                     allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
                 };
                 sb = sb.add_checker(cn_checker);
@@ -178,11 +193,11 @@ impl SecurityManager {
 }
 
 #[derive(Clone)]
-struct CNChecker {
+struct CnChecker {
     allowed_cn: Arc<HashSet<String>>,
 }
 
-impl ServerChecker for CNChecker {
+impl ServerChecker for CnChecker {
     fn check(&mut self, ctx: &RpcContext<'_>) -> CheckResult {
         match check_common_name(&self.allowed_cn, ctx) {
             Ok(()) => CheckResult::Continue,
@@ -269,11 +284,11 @@ pub fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{fs, io::Write};
 
-    use std::fs;
-    use std::io::Write;
     use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_security() {
@@ -305,11 +320,11 @@ mod tests {
         let example_ca = temp.path().join("ca");
         let example_cert = temp.path().join("cert");
         let example_key = temp.path().join("key");
-        for (id, f) in (&[&example_ca, &example_cert, &example_key])
+        for (id, f) in [&example_ca, &example_cert, &example_key]
             .iter()
             .enumerate()
         {
-            fs::write(f, &[id as u8]).unwrap();
+            fs::write(f, [id as u8]).unwrap();
         }
 
         let mut c = cfg.clone();

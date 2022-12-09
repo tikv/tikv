@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::decode_properties::DecodeProperties;
-use crate::{RocksEngine, UserProperties};
 use engine_traits::{MvccProperties, MvccPropertiesExt, Result};
 use txn_types::TimeStamp;
+
+use crate::{decode_properties::DecodeProperties, RocksEngine, UserProperties};
 
 pub const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 pub const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -41,7 +41,7 @@ impl RocksMvccProperties {
         // To be compatible with old versions.
         res.num_deletes = props
             .decode_u64(PROP_NUM_DELETES)
-            .unwrap_or_else(|_| res.num_versions - res.num_puts);
+            .unwrap_or(res.num_versions - res.num_puts);
         res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
         Ok(res)
     }

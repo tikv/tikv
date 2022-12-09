@@ -1,8 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
-use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
 use std::path::Path;
+
+use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
+
+use crate::engine::PanicEngine;
 
 impl ImportExt for PanicEngine {
     type IngestExternalFileOptions = PanicIngestExternalFileOptions;

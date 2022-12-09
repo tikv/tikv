@@ -15,17 +15,20 @@ use fail::fail_point;
 mod key_handle;
 mod lock_table;
 
-pub use self::key_handle::{KeyHandle, KeyHandleGuard};
-pub use self::lock_table::LockTable;
-
 use std::{
-    mem::{self, MaybeUninit},
+    mem::MaybeUninit,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
 };
+
 use txn_types::{Key, Lock, TimeStamp};
+
+pub use self::{
+    key_handle::{KeyHandle, KeyHandleGuard},
+    lock_table::LockTable,
+};
 
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
@@ -55,8 +58,8 @@ impl ConcurrencyManager {
         }
     }
 
-    /// Acquires a mutex of the key and returns an RAII guard. When the guard goes
-    /// out of scope, the mutex will be unlocked.
+    /// Acquires a mutex of the key and returns an RAII guard. When the guard
+    /// goes out of scope, the mutex will be unlocked.
     ///
     /// The guard can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
@@ -64,8 +67,8 @@ impl ConcurrencyManager {
         self.lock_table.lock_key(key).await
     }
 
-    /// Acquires mutexes of the keys and returns the RAII guards. The order of the
-    /// guards is the same with the given keys.
+    /// Acquires mutexes of the keys and returns the RAII guards. The order of
+    /// the guards is the same with the given keys.
     ///
     /// The guards can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
@@ -78,10 +81,7 @@ impl ConcurrencyManager {
         for (index, key) in keys_with_index {
             result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
         }
-        #[allow(clippy::unsound_collection_transmute)]
-        unsafe {
-            mem::transmute(result)
-        }
+        unsafe { tikv_util::memory::vec_transmute(result) }
     }
 
     /// Checks if there is a memory lock of the key which blocks the read.
@@ -128,15 +128,17 @@ impl ConcurrencyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use txn_types::LockType;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_lock_keys_order() {
         let concurrency_manager = ConcurrencyManager::new(1.into());
         let keys: Vec<_> = [b"c", b"a", b"b"]
             .iter()
-            .map(|k| Key::from_raw(*k))
+            .copied()
+            .map(|k| Key::from_raw(k))
             .collect();
         let guards = concurrency_manager.lock_keys(keys.iter()).await;
         for (key, guard) in keys.iter().zip(&guards) {
@@ -180,8 +182,9 @@ mod tests {
             vec![20, 40, 30],
             vec![30, 20, 40],
         ];
-        let keys: Vec<_> = vec![b"a", b"b", b"c"]
-            .into_iter()
+        let keys: Vec<_> = [b"a", b"b", b"c"]
+            .iter()
+            .copied()
             .map(|k| Key::from_raw(k))
             .collect();
 

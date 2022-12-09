@@ -2,51 +2,58 @@
 
 // TODO(mornyx): crate doc.
 
-#![feature(shrink_to)]
 #![feature(hash_drain_filter)]
 #![feature(core_intrinsics)]
+
+use std::{
+    intrinsics::unlikely,
+    pin::Pin,
+    sync::{
+        atomic::Ordering::{Relaxed, SeqCst},
+        Arc,
+    },
+    task::{Context, Poll},
+};
+
+pub use collector::Collector;
+pub use config::{Config, ConfigManager};
+pub use model::*;
+pub use recorder::{
+    init_recorder, record_read_keys, record_write_keys, CollectorGuard, CollectorId,
+    CollectorRegHandle, ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder,
+    Recorder, RecorderBuilder, SummaryRecorder,
+};
+use recorder::{LocalStorage, LocalStorageRef, STORAGE};
+pub use reporter::{
+    data_sink::DataSink,
+    data_sink_reg::DataSinkRegHandle,
+    init_reporter,
+    pubsub::PubSubService,
+    single_target::{init_single_target, AddressChangeNotifier, SingleTargetDataSink},
+    ConfigChangeNotifier as ReporterConfigChangeNotifier, Reporter, Task,
+};
+use tikv_util::{
+    sys::thread,
+    warn,
+    worker::{Scheduler, Worker},
+};
 
 mod collector;
 mod config;
 pub mod error;
-mod localstorage;
 mod model;
 mod recorder;
 mod reporter;
-pub mod utils;
 
 pub(crate) mod metrics;
 
-pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegHandle};
-pub use config::{Config, ConfigManager};
-pub use model::*;
-pub use recorder::{
-    init_recorder, record_read_keys, record_write_keys, CpuRecorder, Recorder, RecorderBuilder,
-    RecorderHandle, SummaryRecorder,
-};
-pub use reporter::data_sink::DataSink;
-pub use reporter::single_target::SingleTargetDataSink;
-pub use reporter::{Reporter, Task};
-
 pub const MAX_THREAD_REGISTER_RETRY: u32 = 10;
-pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
-
-use crate::localstorage::{LocalStorage, LocalStorageRef, STORAGE};
-
-use std::intrinsics::unlikely;
-use std::pin::Pin;
-use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
-use crossbeam::channel::Sender;
-use tikv_util::warn;
 
 /// This structure is used as a label to distinguish different request contexts.
 ///
-/// In order to associate `ResourceMeteringTag` with a certain piece of code logic,
-/// we added a function to [Future] to bind `ResourceMeteringTag` to the specified
-/// future context. It is used in the main business logic of TiKV.
+/// In order to associate `ResourceMeteringTag` with a certain piece of code
+/// logic, we added a function to [Future] to bind `ResourceMeteringTag` to the
+/// specified future context. It is used in the main business logic of TiKV.
 ///
 /// [Future]: futures::Future
 pub struct ResourceMeteringTag {
@@ -75,14 +82,18 @@ impl ResourceMeteringTag {
                 }
             }
 
-            assert!(!ls.is_set, "nested attachment is not allowed");
-            ls.attached_tag.store(Some(self.infos.clone()));
+            // unexpected nested attachment
+            if ls.is_set {
+                debug_assert!(false, "nested attachment is not allowed");
+                return Guard;
+            }
+
+            let prev_tag = ls.attached_tag.swap(Some(self.infos.clone()));
+            debug_assert!(prev_tag.is_none());
             ls.is_set = true;
             ls.summary_cur_record.reset();
 
-            Guard {
-                tag: self.infos.clone(),
-            }
+            Guard
         })
     }
 }
@@ -95,9 +106,7 @@ impl ResourceMeteringTag {
 ///
 /// [ResourceMeteringTag]: crate::ResourceMeteringTag
 /// [ResourceMeteringTag::attach]: crate::ResourceMeteringTag::attach
-pub struct Guard {
-    tag: Arc<TagInfos>,
-}
+pub struct Guard;
 
 // Unlike attached_tag in STORAGE, summary_records will continue to grow as the
 // request arrives. If the recorder thread is not working properly, these maps
@@ -108,12 +117,25 @@ impl Drop for Guard {
     fn drop(&mut self) {
         STORAGE.with(|s| {
             let mut ls = s.borrow_mut();
-            ls.attached_tag.store(None);
+
+            if !ls.is_set {
+                return;
+            }
             ls.is_set = false;
+
+            // If the shared tag is occupied by the recorder thread
+            // with `SharedTagInfos::load_full`, spin wait for releasing.
+            let tag = loop {
+                let tag = ls.attached_tag.swap(None);
+                if let Some(t) = tag {
+                    break t;
+                }
+            };
+
             if !ls.summary_enable.load(SeqCst) {
                 return;
             }
-            if self.tag.extra_attachment.is_empty() {
+            if tag.extra_attachment.is_empty() {
                 return;
             }
             let cur_record = ls.summary_cur_record.take_and_reset();
@@ -121,15 +143,12 @@ impl Drop for Guard {
                 return;
             }
             let mut records = ls.summary_records.lock().unwrap();
-            match records.get(&self.tag) {
-                Some(record) => {
-                    record.merge(&cur_record);
-                }
-                None => {
-                    // See MAX_SUMMARY_RECORDS_LEN.
-                    if records.len() < MAX_SUMMARY_RECORDS_LEN {
-                        records.insert(self.tag.clone(), cur_record);
-                    }
+            if let Some(record) = records.get(&tag) {
+                record.merge(&cur_record);
+            } else {
+                // See MAX_SUMMARY_RECORDS_LEN.
+                if records.len() < MAX_SUMMARY_RECORDS_LEN {
+                    records.insert(tag, cur_record);
                 }
             }
         })
@@ -138,17 +157,20 @@ impl Drop for Guard {
 
 #[derive(Clone)]
 pub struct ResourceTagFactory {
-    tx: Sender<LocalStorageRef>,
+    scheduler: Scheduler<recorder::Task>,
 }
 
 impl ResourceTagFactory {
-    fn new(tx: Sender<LocalStorageRef>) -> Self {
-        Self { tx }
+    fn new(scheduler: Scheduler<recorder::Task>) -> Self {
+        Self { scheduler }
     }
 
     pub fn new_for_test() -> Self {
-        let (tx, _) = crossbeam::channel::unbounded();
-        Self { tx }
+        Self {
+            scheduler: Worker::new("mock-resource-tag-factory")
+                .lazy_build("mock-resource-tag-factory")
+                .scheduler(),
+        }
     }
 
     pub fn new_tag(&self, context: &kvproto::kvrpcpb::Context) -> ResourceMeteringTag {
@@ -159,12 +181,25 @@ impl ResourceTagFactory {
         }
     }
 
+    // create a new tag with key ranges for a read request.
+    pub fn new_tag_with_key_ranges(
+        &self,
+        context: &kvproto::kvrpcpb::Context,
+        key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
+    ) -> ResourceMeteringTag {
+        let tag_infos = TagInfos::from_rpc_context_with_key_ranges(context, key_ranges);
+        ResourceMeteringTag {
+            infos: Arc::new(tag_infos),
+            resource_tag_factory: self.clone(),
+        }
+    }
+
     fn register_local_storage(&self, storage: &LocalStorage) -> bool {
         let lsr = LocalStorageRef {
-            id: utils::thread_id(),
+            id: thread::thread_id(),
             storage: storage.clone(),
         };
-        match self.tx.send(lsr) {
+        match self.scheduler.schedule(recorder::Task::ThreadReg(lsr)) {
             Ok(_) => true,
             Err(err) => {
                 warn!("failed to register thread"; "err" => ?err);
@@ -176,14 +211,15 @@ impl ResourceTagFactory {
 
 /// This trait extends the standard [Future].
 ///
-/// When the user imports [FutureExt], all futures in its module (such as async block)
-/// will additionally support the [FutureExt::in_resource_metering_tag] method. This method
-/// can bind a [ResourceMeteringTag] to the scope of this future (actually, it is stored in
-/// the local storage of the thread where `Future` is located). During the polling period of
-/// the future, we can continue to observe the system resources used by the thread in which
-/// it is located, which is associated with `ResourceMeteringTag` and is also stored in thread
-/// local storage. There is a background thread that continuously summarizes the storage of
-/// each thread and reports it regularly.
+/// When the user imports [FutureExt], all futures in its module (such as async
+/// block) will additionally support the [FutureExt::in_resource_metering_tag]
+/// method. This method can bind a [ResourceMeteringTag] to the scope of this
+/// future (actually, it is stored in the local storage of the thread where
+/// `Future` is located). During the polling period of the future, we can
+/// continue to observe the system resources used by the thread in which it is
+/// located, which is associated with `ResourceMeteringTag` and is also stored
+/// in thread local storage. There is a background thread that continuously
+/// summarizes the storage of each thread and reports it regularly.
 ///
 /// [Future]: futures::Future
 pub trait FutureExt: Sized {
@@ -207,8 +243,9 @@ pub trait StreamExt: Sized {
 
 impl<T: futures::Stream> StreamExt for T {}
 
-/// This structure is the return value of the [FutureExt::in_resource_metering_tag] method,
-/// which wraps the original [Future] with a [ResourceMeteringTag].
+/// This structure is the return value of the
+/// [FutureExt::in_resource_metering_tag] method, which wraps the original
+/// [Future] with a [ResourceMeteringTag].
 ///
 /// see [FutureExt] for more information.
 ///
@@ -241,7 +278,7 @@ impl<T: futures::Stream> futures::Stream for InTags<T> {
 }
 
 /// This structure is the actual internal data of [ResourceMeteringTag], and all
-/// internal data comes from the requested [Context].
+/// internal data comes from the request's [Context] and the request itself.
 ///
 /// [Context]: kvproto::kvrpcpb::Context
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
@@ -249,6 +286,8 @@ pub struct TagInfos {
     pub store_id: u64,
     pub region_id: u64,
     pub peer_id: u64,
+    // Only a read request contains the key ranges.
+    pub key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
     pub extra_attachment: Vec<u8>,
 }
 
@@ -259,6 +298,22 @@ impl TagInfos {
             store_id: peer.get_store_id(),
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
+            key_ranges: vec![],
+            extra_attachment: Vec::from(context.get_resource_group_tag()),
+        }
+    }
+
+    // create a TagInfos with start and end keys for a read request.
+    pub fn from_rpc_context_with_key_ranges(
+        context: &kvproto::kvrpcpb::Context,
+        key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
+    ) -> Self {
+        let peer = context.get_peer();
+        Self {
+            store_id: peer.get_store_id(),
+            peer_id: peer.get_id(),
+            region_id: context.get_region_id(),
+            key_ranges,
             extra_attachment: Vec::from(context.get_resource_group_tag()),
         }
     }
@@ -267,34 +322,31 @@ impl TagInfos {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossbeam::channel::unbounded;
 
     #[test]
     fn test_attach() {
         // Use a thread created by ourself. If we use unit test thread directly,
         // the test results may be affected by parallel testing.
         std::thread::spawn(|| {
-            let (tx, _rx) = unbounded();
-            let resource_tag_factory = ResourceTagFactory::new(tx);
+            let resource_tag_factory = ResourceTagFactory::new_for_test();
             let tag = ResourceMeteringTag {
                 infos: Arc::new(TagInfos {
                     store_id: 1,
                     region_id: 2,
                     peer_id: 3,
+                    key_ranges: vec![],
                     extra_attachment: b"12345".to_vec(),
                 }),
                 resource_tag_factory,
             };
             {
-                let guard = tag.attach();
-                assert_eq!(guard.tag, tag.infos);
+                let _guard = tag.attach();
                 STORAGE.with(|s| {
                     let ls = s.borrow_mut();
                     let local_tag = ls.attached_tag.swap(None);
                     assert!(local_tag.is_some());
                     let tag_infos = local_tag.unwrap();
                     assert_eq!(tag_infos, tag.infos);
-                    assert_eq!(tag_infos, guard.tag);
                     assert!(ls.attached_tag.swap(Some(tag_infos)).is_none());
                 });
                 // drop here.

@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error;
-use std::result::Result;
+use std::{error::Error, result::Result};
+
 use tikv_util::config::ReadableDuration;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -14,6 +14,8 @@ pub struct Config {
     ///
     /// Default is 10m.
     pub import_mode_timeout: ReadableDuration,
+    /// the ratio of system memory used for import.
+    pub memory_use_ratio: f64,
 }
 
 impl Default for Config {
@@ -22,17 +24,34 @@ impl Default for Config {
             num_threads: 8,
             stream_channel_window: 128,
             import_mode_timeout: ReadableDuration::minutes(10),
+            memory_use_ratio: 0.3,
         }
     }
 }
 
 impl Config {
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        let default_cfg = Config::default();
         if self.num_threads == 0 {
-            return Err("import.num_threads can not be 0".into());
+            warn!(
+                "import.num_threads can not be 0, change it to {}",
+                default_cfg.num_threads
+            );
+            self.num_threads = default_cfg.num_threads;
         }
         if self.stream_channel_window == 0 {
-            return Err("import.stream_channel_window can not be 0".into());
+            warn!(
+                "import.stream_channel_window can not be 0, change it to {}",
+                default_cfg.stream_channel_window
+            );
+            self.stream_channel_window = default_cfg.stream_channel_window;
+        }
+        if self.memory_use_ratio > 0.5 || self.memory_use_ratio < 0.0 {
+            warn!(
+                "import.mem_ratio should belong to [0.0, 0.5], change it to {}",
+                default_cfg.memory_use_ratio,
+            );
+            self.memory_use_ratio = default_cfg.memory_use_ratio;
         }
         Ok(())
     }
