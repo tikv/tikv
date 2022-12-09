@@ -151,11 +151,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.post_split_init(ctx, init);
             }
         }
-        {
-            let mut meta = ctx.store_meta.lock().unwrap();
-            meta.readers
-                .insert(self.region_id(), self.generate_read_delegate());
-        }
     }
 }
 
