@@ -1109,6 +1109,12 @@ where
         for msg in msgs {
             let msg_type = msg.get_msg_type();
             let snapshot_index = msg.get_request_snapshot();
+            if msg_type == MessageType::MsgSnapshot {
+                let snap_index = msg.get_snapshot().get_metadata().get_index();
+                if snap_index > self.last_sent_snapshot_idx {
+                    self.last_sent_snapshot_idx = snap_index;
+                }
+            }
             let i = self.send_raft_message(msg, trans) as usize;
             match msg_type {
                 MessageType::MsgAppend => metrics.append[i] += 1,
@@ -1122,13 +1128,7 @@ where
                 MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp[i] += 1,
                 MessageType::MsgRequestVote => metrics.vote[i] += 1,
                 MessageType::MsgRequestVoteResponse => metrics.vote_resp[i] += 1,
-                MessageType::MsgSnapshot => {
-                    let snap_index = msg.get_message().get_snapshot().get_metadata().get_index();
-                    if snap_index > self.last_sent_snapshot_idx {
-                        self.last_sent_snapshot_idx = snap_index;
-                    }
-                    metrics.snapshot[i] += 1
-                },
+                MessageType::MsgSnapshot => metrics.snapshot[i] += 1,
                 MessageType::MsgHeartbeat => metrics.heartbeat[i] += 1,
                 MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp[i] += 1,
                 MessageType::MsgTransferLeader => metrics.transfer_leader[i] += 1,
