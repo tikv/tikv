@@ -305,7 +305,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     regions,
                     derived_index,
                     tablet_index,
-                }) => self.on_ready_split_region(ctx, derived_index, tablet_index, regions),
+                }) => self.on_apply_res_split(ctx, derived_index, tablet_index, regions),
             }
         }
 

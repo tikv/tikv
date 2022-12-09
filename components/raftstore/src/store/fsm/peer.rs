@@ -5107,7 +5107,9 @@ where
         // proposed. Skip the not prepared error because the
         // `self.region().is_in_flashback` may not be the latest right after applying
         // the `PrepareFlashback` admin command, we will let it pass here and check in
-        // the apply phase.
+        // the apply phase and because a read-only request doesn't need to be applied,
+        // so it will be allowed during the flashback progress, for example, a snapshot
+        // request.
         if let Err(e) =
             util::check_flashback_state(self.region().is_in_flashback, msg, region_id, true)
         {

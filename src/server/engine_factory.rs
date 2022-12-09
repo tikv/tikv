@@ -24,7 +24,7 @@ use crate::config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 struct FactoryInner {
     env: Arc<Env>,
     region_info_accessor: Option<RegionInfoAccessor>,
-    block_cache: Option<Cache>,
+    block_cache: Cache,
     rocksdb_config: Arc<DbConfig>,
     store_path: PathBuf,
     api_version: ApiVersion,
@@ -39,12 +39,17 @@ pub struct KvEngineFactoryBuilder {
 }
 
 impl KvEngineFactoryBuilder {
-    pub fn new(env: Arc<Env>, config: &TikvConfig, store_path: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        env: Arc<Env>,
+        config: &TikvConfig,
+        store_path: impl Into<PathBuf>,
+        cache: Cache,
+    ) -> Self {
         Self {
             inner: FactoryInner {
                 env,
                 region_info_accessor: None,
-                block_cache: None,
+                block_cache: cache,
                 rocksdb_config: Arc::new(config.rocksdb.clone()),
                 store_path: store_path.into(),
                 api_version: config.storage.api_version(),
@@ -58,11 +63,6 @@ impl KvEngineFactoryBuilder {
 
     pub fn region_info_accessor(mut self, accessor: RegionInfoAccessor) -> Self {
         self.inner.region_info_accessor = Some(accessor);
-        self
-    }
-
-    pub fn block_cache(mut self, cache: Cache) -> Self {
-        self.inner.block_cache = Some(cache);
         self
     }
 
@@ -158,16 +158,10 @@ impl KvEngineFactory {
             kv_db_opts,
             kv_cfs_opts,
         );
-        let mut kv_engine = match kv_engine {
-            Ok(e) => e,
-            Err(e) => {
-                error!("failed to create kv engine"; "path" => %tablet_path.display(), "err" => ?e);
-                return Err(e);
-            }
-        };
-        let shared_block_cache = self.inner.block_cache.is_some();
-        kv_engine.set_shared_block_cache(shared_block_cache);
-        Ok(kv_engine)
+        if let Err(e) = &kv_engine {
+            error!("failed to create kv engine"; "path" => %tablet_path.display(), "err" => ?e);
+        }
+        kv_engine
     }
 
     pub fn on_tablet_created(&self, region_id: u64, suffix: u64) {

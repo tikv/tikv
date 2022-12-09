@@ -237,7 +237,8 @@ impl TabletAccessor<RocksEngine> for KvEngineFactoryV2 {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{OpenOptions, TabletFactory, CF_WRITE, SPLIT_PREFIX};
+    use engine_traits::{OpenOptions, CF_WRITE, SPLIT_PREFIX};
+    use tempfile::TempDir;
 
     use super::*;
     use crate::{config::TikvConfig, server::KvEngineFactoryBuilder};
@@ -257,18 +258,19 @@ mod tests {
         };
     }
 
-    #[test]
-    fn test_kvengine_factory() {
+    fn create_test_tablet_factory(name: &'static str) -> (TempDir, KvEngineFactoryBuilder) {
         let cfg = TEST_CONFIG.clone();
-        assert!(cfg.storage.block_cache.shared);
         let cache = cfg.storage.block_cache.build_shared_cache();
-        let dir = test_util::temp_dir("test_kvengine_factory", false);
+        let dir = test_util::temp_dir(name, false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        if let Some(cache) = cache {
-            builder = builder.block_cache(cache);
-        }
+        let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path(), cache);
+        (dir, builder)
+    }
+
+    #[test]
+    fn test_kvengine_factory() {
+        let (_dir, builder) = create_test_tablet_factory("test_kvengine_factory");
         let factory = builder.build();
         let shared_db = factory.create_shared_db().unwrap();
 
@@ -307,16 +309,7 @@ mod tests {
 
     #[test]
     fn test_kvengine_factory_root_db_implicit_creation() {
-        let cfg = TEST_CONFIG.clone();
-        assert!(cfg.storage.block_cache.shared);
-        let cache = cfg.storage.block_cache.build_shared_cache();
-        let dir = test_util::temp_dir("test_kvengine_factory", false);
-        let env = cfg.build_shared_rocks_env(None, None).unwrap();
-
-        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        if let Some(cache) = cache {
-            builder = builder.block_cache(cache);
-        }
+        let (_dir, builder) = create_test_tablet_factory("test_kvengine_factory");
         let factory = builder.build();
 
         // root_db should be created implicitly here
@@ -346,16 +339,7 @@ mod tests {
 
     #[test]
     fn test_kvengine_factory_v2() {
-        let cfg = TEST_CONFIG.clone();
-        assert!(cfg.storage.block_cache.shared);
-        let cache = cfg.storage.block_cache.build_shared_cache();
-        let dir = test_util::temp_dir("test_kvengine_factory_v2", false);
-        let env = cfg.build_shared_rocks_env(None, None).unwrap();
-
-        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        if let Some(cache) = cache {
-            builder = builder.block_cache(cache);
-        }
+        let (_dir, builder) = create_test_tablet_factory("test_kvengine_factory_v2");
 
         let factory = builder.build_v2();
         let tablet = factory
@@ -443,16 +427,7 @@ mod tests {
 
     #[test]
     fn test_existed_db_not_in_registry() {
-        let cfg = TEST_CONFIG.clone();
-        assert!(cfg.storage.block_cache.shared);
-        let cache = cfg.storage.block_cache.build_shared_cache();
-        let dir = test_util::temp_dir("test_kvengine_factory_v2", false);
-        let env = cfg.build_shared_rocks_env(None, None).unwrap();
-
-        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        if let Some(cache) = cache {
-            builder = builder.block_cache(cache);
-        }
+        let (_dir, builder) = create_test_tablet_factory("test_kvengine_factory_v2");
 
         let factory = builder.build_v2();
         let tablet = factory
@@ -493,11 +468,7 @@ mod tests {
 
     #[test]
     fn test_get_live_tablets() {
-        let cfg = TEST_CONFIG.clone();
-        let dir = test_util::temp_dir("test_get_live_tablets", false);
-        let env = cfg.build_shared_rocks_env(None, None).unwrap();
-
-        let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        let (_dir, builder) = create_test_tablet_factory("test_get_live_tablets");
         let factory = builder.build_v2();
         factory
             .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))

@@ -4146,11 +4146,7 @@ mod tests {
                 (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
             RocksEngine::new(
-                &path,
-                None,
-                cfs_opts,
-                cache.is_some(),
-                None, // io_rate_limiter
+                &path, None, cfs_opts, None, // io_rate_limiter
             )
         }
         .unwrap();

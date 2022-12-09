@@ -91,7 +91,7 @@ fn test_check_need_gc() {
 
     // Set ratio_threshold, let (props.num_versions as f64 > props.num_rows as
     // f64 * ratio_threshold) return true
-    gc_runner.ratio_threshold = Option::Some(f64::MIN);
+    gc_runner.ratio_threshold = Option::Some(0.0f64);
 
     // is_bottommost_level = false
     do_gc(&raw_engine, 1, &mut gc_runner, &dir);
