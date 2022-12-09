@@ -120,11 +120,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     region_id
                 ));
             }
-            // TODO: Perhaps we should stop create the tablet automatically.
+
+            // the tablet must exist.
             Some(tablet_factory.open_tablet(
                 region_id,
                 Some(tablet_index),
-                OpenOptions::default().set_create(true),
+                OpenOptions::default(),
             )?)
         } else {
             None
