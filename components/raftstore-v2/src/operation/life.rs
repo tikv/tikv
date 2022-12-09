@@ -176,7 +176,7 @@ impl Store {
             return;
         }
         let from_epoch = msg.get_region_epoch();
-        let local_state = match ctx.engine.get_region_state(region_id) {
+        let local_state = match ctx.engine.get_region_state(region_id, 0) {
             Ok(s) => s,
             Err(e) => {
                 error!(self.logger(), "failed to get region state"; "region_id" => region_id, "err" => ?e);

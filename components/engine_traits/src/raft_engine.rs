@@ -19,8 +19,20 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>>;
 
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
-    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
-    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
+    /// Get the latest region state not after the apply index.
+    fn get_region_state(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<RegionLocalState>>;
+    /// Get the latest apply state not after the apply index.
+    fn get_apply_state(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<RaftApplyState>>;
+    /// Get the flushed index of the given CF.
+    fn get_flushed_index(&self, raft_group_id: u64, cf: &str) -> Result<Option<u64>>;
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
@@ -157,8 +169,36 @@ pub trait RaftLogBatch: Send {
     fn remove_prepare_bootstrap_region(&mut self) -> Result<()>;
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
-    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
-    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
+    fn put_region_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_index: u64,
+        state: &RegionLocalState,
+    ) -> Result<()>;
+    fn put_apply_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_index: u64,
+        state: &RaftApplyState,
+    ) -> Result<()>;
+
+    /// Record the flushed apply index.
+    ///
+    /// There are two types of apply index:
+    /// 1. Normal apply index that only related to single tablet. These apply
+    /// indexes    are recorded using its own CF.
+    /// 2. Apply index that can affect other tablets, like split, merge. These
+    /// apply indexes are recorded using special Raft CF.
+    ///
+    /// Because a peer may have multiple tablets (only one is latest), we use
+    /// `tablet_index` to avoid conflicts.
+    fn put_flushed_index(
+        &mut self,
+        raft_group_id: u64,
+        cf: &str,
+        tablet_index: u64,
+        apply_index: u64,
+    ) -> Result<()>;
 
     /// Indicate whether region states should be recovered from raftdb and
     /// replay raft logs.
