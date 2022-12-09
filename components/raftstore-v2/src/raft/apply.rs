@@ -2,7 +2,7 @@
 
 use std::{mem, sync::Arc};
 
-use engine_traits::{CachedTablet, KvEngine, TabletRegistry};
+use engine_traits::{CachedTablet, KvEngine, TabletRegistry, WriteBatch};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
 use slog::Logger;
@@ -21,7 +21,9 @@ pub struct Apply<EK: KvEngine, R> {
     /// publish the update of the tablet
     remote_tablet: CachedTablet<EK>,
     tablet: EK,
-    write_batch: Option<EK::WriteBatch>,
+    pub write_batch: Option<EK::WriteBatch>,
+    /// A buffer for encoding key.
+    pub key_buffer: Vec<u8>,
 
     tablet_registry: TabletRegistry<EK>,
 
@@ -67,6 +69,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             region_state,
             tablet_registry,
             read_scheduler,
+            key_buffer: vec![],
             res_reporter,
             logger,
         }
@@ -88,16 +91,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn write_batch_mut(&mut self) -> &mut Option<EK::WriteBatch> {
-        &mut self.write_batch
-    }
-
-    #[inline]
-    pub fn write_batch_or_default(&mut self) -> &mut EK::WriteBatch {
-        if self.write_batch.is_none() {
-            self.write_batch = Some(self.tablet.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE));
+    pub fn ensure_write_buffer(&mut self) {
+        if self.write_batch.is_some() {
+            return;
         }
-        self.write_batch.as_mut().unwrap()
+        self.write_batch = Some(self.tablet.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE));
     }
 
     #[inline]
@@ -169,5 +167,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn take_admin_result(&mut self) -> Vec<AdminCmdResult> {
         mem::take(&mut self.admin_cmd_result)
+    }
+
+    #[inline]
+    pub fn release_memory(&mut self) {
+        mem::take(&mut self.key_buffer);
+        if self.write_batch.as_ref().map_or(false, |wb| wb.is_empty()) {
+            self.write_batch = None;
+        }
     }
 }

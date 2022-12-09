@@ -17,21 +17,21 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{self, Receiver, Sender, TrySendError};
 use engine_test::{
     ctor::{CfOptions, DbOptions},
-    kv::{KvTestEngine, TestTabletFactory},
+    kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
 use engine_traits::{TabletRegistry, ALL_CFS};
 use futures::executor::block_on;
 use kvproto::{
     metapb::{self, RegionEpoch, Store},
-    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request},
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
 use raftstore::store::{
     region_meta::{RegionLocalState, RegionMeta},
-    Config, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+    Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
 };
 use raftstore_v2::{
     create_store_batch_system,
@@ -45,6 +45,7 @@ use tikv_util::{
     config::{ReadableDuration, VersionTrack},
     store::new_peer,
 };
+use txn_types::WriteBatchFlags;
 
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
@@ -149,6 +150,17 @@ impl TestRouter {
         req.mut_header().set_peer(peer);
         req.mut_header().set_term(meta.raft_status.hard_state.term);
         req
+    }
+
+    pub fn stale_snapshot(&mut self, region_id: u64) -> RegionSnapshot<KvTestSnapshot> {
+        let mut req = self.new_request_for(region_id);
+        let header = req.mut_header();
+        header.set_flags(WriteBatchFlags::STALE_READ.bits());
+        header.set_flag_data(vec![0; 8]);
+        let mut snap_req = Request::default();
+        snap_req.set_cmd_type(CmdType::Snap);
+        req.mut_requests().push(snap_req);
+        block_on(self.get_snapshot(req)).unwrap()
     }
 
     pub fn region_detail(&self, region_id: u64) -> metapb::Region {
@@ -306,6 +318,7 @@ impl TestNode {
         router
     }
 
+    #[allow(dead_code)]
     pub fn tablet_registry(&self) -> &TabletRegistry<KvTestEngine> {
         &self.running_state().unwrap().registry
     }

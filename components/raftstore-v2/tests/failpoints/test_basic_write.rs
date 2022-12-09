@@ -12,8 +12,8 @@ use crate::cluster::Cluster;
 /// Check if write batch is correctly maintained during apply.
 #[test]
 fn test_write_batch_rollback() {
-    let cluster = Cluster::default();
-    let router = &cluster.routers[0];
+    let mut cluster = Cluster::default();
+    let router = &mut cluster.routers[0];
     let mut req = router.new_request_for(2);
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
@@ -24,9 +24,6 @@ fn test_write_batch_rollback() {
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
     // Make several entries to batch in apply thread.
     fail::cfg("APPLY_COMMITTED_ENTRIES", "pause").unwrap();
-
-    let tablet_registry = cluster.node(0).tablet_registry();
-    let tablet = tablet_registry.get(2).unwrap().latest().unwrap().clone();
 
     // Good proposal should be committed.
     let (msg, mut sub0) = PeerMsg::raft_command(req.clone());
@@ -58,8 +55,10 @@ fn test_write_batch_rollback() {
     );
     let resp = block_on(sub1.result()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
-    assert_matches!(tablet.get_value(b"key"), Ok(None));
-    assert_eq!(tablet.get_value(b"key1").unwrap().unwrap(), b"value");
+
+    let snap = router.stale_snapshot(2);
+    assert_matches!(snap.get_value(b"key"), Ok(None));
+    assert_eq!(snap.get_value(b"key1").unwrap().unwrap(), b"value");
 
     fail::cfg("APPLY_COMMITTED_ENTRIES", "pause").unwrap();
 
@@ -91,6 +90,7 @@ fn test_write_batch_rollback() {
     );
     let resp = block_on(sub1.result()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
-    assert_matches!(tablet.get_value(b"key2"), Ok(None));
-    assert_eq!(tablet.get_value(b"key3").unwrap().unwrap(), b"value");
+    let snap = router.stale_snapshot(2);
+    assert_matches!(snap.get_value(b"key2"), Ok(None));
+    assert_eq!(snap.get_value(b"key3").unwrap().unwrap(), b"value");
 }
