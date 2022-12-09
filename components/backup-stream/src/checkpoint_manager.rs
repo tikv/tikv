@@ -458,7 +458,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::{
         assert_matches,
         collections::HashMap,
@@ -510,7 +510,7 @@ mod tests {
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 24);
     }
 
-    struct MockPdClient {
+    pub struct MockPdClient {
         safepoint: RwLock<HashMap<String, TimeStamp>>,
     }
 
