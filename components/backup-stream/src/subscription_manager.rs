@@ -460,7 +460,6 @@ where
                     // safely.
                     let rts = min_region.map(|rs| rs.checkpoint).unwrap_or(min_ts);
                     info!("getting checkpoint"; "defined_by_region" => ?min_region);
-                    self.subs.warn_if_gap_too_huge(rts);
                     callback(ResolvedRegions::new(
                         rts,
                         cps.into_iter().map(|r| (r.region, r.checkpoint)).collect(),
@@ -482,6 +481,7 @@ where
                         .with_label_values(&["region-changed"])
                         .inc();
                     let r = async {
+                        self.subs.add_pending_region(&region);
                         self.observe_over_with_initial_data_from_checkpoint(
                             region,
                             self.get_last_checkpoint_of(&for_task, region).await?,
@@ -503,7 +503,7 @@ where
                 } else {
                     warn!(
                         "BUG: the region {:?} is register to no task but being observed",
-                        &region
+                        utils::debug_region(&region)
                     );
                 }
             }
@@ -538,6 +538,7 @@ where
 
     async fn start_observe(&self, region: Region) {
         let handle = ObserveHandle::new();
+        self.subs.add_pending_region(&region);
         if let Err(err) = self.try_start_observe(&region, handle.clone()).await {
             warn!("failed to start observe, retrying"; "err" => %err);
             try_send!(
