@@ -64,11 +64,11 @@ fn assert_tombstone(raft_engine: &impl RaftEngine, region_id: u64, peer: &metapb
 #[test]
 fn test_life_by_message() {
     let mut cluster = Cluster::default();
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     let test_region_id = 4;
     let test_peer_id = 5;
     let test_leader_id = 6;
-    assert_peer_not_exist(test_region_id, test_peer_id, &router);
+    assert_peer_not_exist(test_region_id, test_peer_id, router);
 
     // Build a correct message.
     let mut msg = Box::<RaftMessage>::default();
@@ -85,7 +85,7 @@ fn test_life_by_message() {
         let mut wrong_msg = msg.clone();
         f(&mut wrong_msg);
         router.send_raft_message(wrong_msg).unwrap();
-        assert_peer_not_exist(test_region_id, test_peer_id, &router);
+        assert_peer_not_exist(test_region_id, test_peer_id, router);
     };
 
     // Check mismatch store id.
@@ -113,7 +113,7 @@ fn test_life_by_message() {
 
     // The peer should survive restart.
     cluster.restart(0);
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     let meta = router
         .must_query_debug_info(test_region_id, timeout)
         .unwrap();
@@ -129,13 +129,13 @@ fn test_life_by_message() {
     let mut tombstone_msg = msg.clone();
     tombstone_msg.set_is_tombstone(true);
     router.send_raft_message(tombstone_msg).unwrap();
-    assert_peer_not_exist(test_region_id, test_peer_id, &router);
+    assert_peer_not_exist(test_region_id, test_peer_id, router);
     assert_tombstone(raft_engine, test_region_id, &new_peer(1, test_peer_id));
 
     // Restart should not recreate tombstoned peer.
     cluster.restart(0);
-    let router = cluster.router(0);
-    assert_peer_not_exist(test_region_id, test_peer_id, &router);
+    let router = &cluster.routers[0];
+    assert_peer_not_exist(test_region_id, test_peer_id, router);
     let raft_engine = &cluster.node(0).running_state().unwrap().raft_engine;
     assert_tombstone(raft_engine, test_region_id, &new_peer(1, test_peer_id));
 }
@@ -143,7 +143,7 @@ fn test_life_by_message() {
 #[test]
 fn test_destroy_by_larger_id() {
     let mut cluster = Cluster::default();
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     let test_region_id = 4;
     let test_peer_id = 6;
     let init_term = 5;
@@ -180,7 +180,7 @@ fn test_destroy_by_larger_id() {
     let mut larger_id_msg = smaller_id_msg;
     larger_id_msg.set_to_peer(new_peer(1, test_peer_id + 1));
     router.send_raft_message(larger_id_msg).unwrap();
-    assert_peer_not_exist(test_region_id, test_peer_id, &router);
+    assert_peer_not_exist(test_region_id, test_peer_id, router);
     let meta = router
         .must_query_debug_info(test_region_id, timeout)
         .unwrap();
@@ -189,7 +189,7 @@ fn test_destroy_by_larger_id() {
 
     // New peer should survive restart.
     cluster.restart(0);
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     let meta = router
         .must_query_debug_info(test_region_id, timeout)
         .unwrap();

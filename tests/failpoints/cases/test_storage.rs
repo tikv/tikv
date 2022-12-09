@@ -12,7 +12,6 @@ use std::{
 
 use api_version::{ApiV1, ApiV2, KvFormat};
 use collections::HashMap;
-use engine_traits::DummyFactory;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use grpcio::*;
@@ -267,7 +266,7 @@ fn test_scale_scheduler_pool() {
     cfg_controller.register(
         Module::Storage,
         Box::new(StorageConfigManger::new(
-            Arc::new(DummyFactory::new(Some(kv_engine), "".to_string())),
+            kv_engine,
             scheduler,
             flow_controller,
             storage.get_scheduler(),

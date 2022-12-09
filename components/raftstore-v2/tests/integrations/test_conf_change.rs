@@ -2,7 +2,7 @@
 
 use std::{self, time::Duration};
 
-use engine_traits::{OpenOptions, Peekable, TabletFactory};
+use engine_traits::Peekable;
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
 use raft::prelude::ConfChangeType;
 use raftstore_v2::router::{PeerMsg, PeerTick};
@@ -14,7 +14,7 @@ use crate::cluster::Cluster;
 fn test_simple_change() {
     let cluster = Cluster::with_node_count(2, None);
     let region_id = 2;
-    let router0 = cluster.router(0);
+    let router0 = &cluster.routers[0];
     let mut req = router0.new_request_for(2);
     let admin_req = req.mut_admin_request();
     admin_req.set_cmd_type(AdminCmdType::ChangePeer);
@@ -39,7 +39,7 @@ fn test_simple_change() {
 
     // So heartbeat will create a learner.
     cluster.dispatch(2, vec![]);
-    let router1 = cluster.router(1);
+    let router1 = &cluster.routers[1];
     let meta = router1
         .must_query_debug_info(2, Duration::from_secs(3))
         .unwrap();
@@ -77,10 +77,8 @@ fn test_simple_change() {
     // read the new written kv.
     assert_eq!(match_index, meta.raft_apply.truncated_state.index);
     assert!(meta.raft_apply.applied_index >= match_index);
-    let tablet_factory = cluster.node(1).tablet_factory();
-    let tablet = tablet_factory
-        .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-        .unwrap();
+    let registry = cluster.node(1).tablet_registry();
+    let tablet = registry.get(region_id).unwrap().latest().unwrap().clone();
     assert_eq!(tablet.get_value(key).unwrap().unwrap(), val);
 
     req.mut_header()

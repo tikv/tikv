@@ -2,7 +2,7 @@
 
 use std::{assert_matches::assert_matches, time::Duration};
 
-use engine_traits::{OpenOptions, Peekable, TabletFactory};
+use engine_traits::Peekable;
 use futures::executor::block_on;
 use kvproto::{
     raft_cmdpb::{CmdType, Request},
@@ -18,7 +18,7 @@ use crate::cluster::Cluster;
 #[test]
 fn test_basic_write() {
     let cluster = Cluster::default();
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     let mut req = router.new_request_for(2);
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
@@ -113,7 +113,7 @@ fn test_basic_write() {
 #[test]
 fn test_put_delete() {
     let cluster = Cluster::default();
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     let mut req = router.new_request_for(2);
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
@@ -123,10 +123,8 @@ fn test_put_delete() {
 
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
 
-    let tablet_factory = cluster.node(0).tablet_factory();
-    let tablet = tablet_factory
-        .open_tablet(2, None, OpenOptions::default().set_cache_only(true))
-        .unwrap();
+    let registry = cluster.node(0).tablet_registry();
+    let tablet = registry.get(2).unwrap().latest().unwrap().clone();
     assert!(tablet.get_value(b"key").unwrap().is_none());
     let (msg, mut sub) = PeerMsg::raft_command(req.clone());
     router.send(2, msg).unwrap();

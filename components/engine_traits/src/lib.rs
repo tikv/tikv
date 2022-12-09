@@ -294,6 +294,8 @@ mod sst_partitioner;
 pub use crate::sst_partitioner::*;
 mod range_properties;
 pub use crate::{mvcc_properties::*, range_properties::*};
+mod tablet;
+pub use tablet::*;
 mod ttl_properties;
 pub use crate::ttl_properties::*;
 mod perf_context;
