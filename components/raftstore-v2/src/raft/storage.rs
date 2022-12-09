@@ -372,11 +372,11 @@ mod tests {
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::{KvTestEngine, TestTabletFactoryV2},
+        kv::{KvTestEngine, TestTabletFactory},
         raft::RaftTestEngine,
     };
     use engine_traits::{
-        KvEngine, OpenOptions, RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletFactory, ALL_CFS,
+        KvEngine, RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletRegistry, ALL_CFS,
     };
     use kvproto::{
         metapb::{Peer, Region},
@@ -392,7 +392,7 @@ mod tests {
     use tikv_util::worker::{Runnable, Worker};
 
     use super::*;
-    use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes, tablet::CachedTablet};
+    use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes};
 
     #[derive(Clone)]
     pub struct TestRouter {
@@ -477,11 +477,8 @@ mod tests {
         // building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
-        let factory = Arc::new(TestTabletFactoryV2::new(
-            path.path().join("tablet").as_path(),
-            ops,
-            cf_opts,
-        ));
+        let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
+        let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
         let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
         let logger = slog_global::borrow_global().new(o!());
@@ -491,8 +488,7 @@ mod tests {
 
         let snapshot = new_empty_snapshot(region.clone(), 10, 1, false);
         let mut task = WriteTask::new(region.get_id(), 5, 0);
-        s.apply_snapshot(&snapshot, &mut task, mgr, factory)
-            .unwrap();
+        s.apply_snapshot(&snapshot, &mut task, mgr, reg).unwrap();
 
         // It can be set before load tablet.
         assert_eq!(PeerState::Normal, s.region_state().get_state());
@@ -528,15 +524,9 @@ mod tests {
         // building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
-        let factory = Arc::new(TestTabletFactoryV2::new(
-            path.path().join("tablet").as_path(),
-            ops,
-            cf_opts,
-        ));
-        // create tablet with region_id 1
-        let tablet = factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-            .unwrap();
+        let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
+        let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
+        reg.load(region.get_id(), 10, true).unwrap();
         // setup read runner worker and peer storage
         let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
@@ -548,13 +538,14 @@ mod tests {
         let mut read_runner = ReadRunner::new(router.clone(), raft_engine);
         read_runner.set_snap_mgr(mgr.clone());
         worker.start(read_runner);
+        let mut state = RegionLocalState::default();
+        state.set_region(region.clone());
         // setup peer applyer
         let mut apply = Apply::new(
             region.get_peers()[0].clone(),
-            RegionLocalState::default(),
+            state,
             router,
-            CachedTablet::new(Some(tablet)),
-            factory,
+            reg,
             sched,
             logger,
         );
@@ -577,6 +568,7 @@ mod tests {
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
         let checkpointer_path = mgr.tablet_gen_path(&snap_key);
         assert!(checkpointer_path.exists());
+        s.snapshot(0, 7).unwrap();
 
         // Test cancel snapshot
         let snap = s.snapshot(0, 0);

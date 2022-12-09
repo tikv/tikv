@@ -5,6 +5,8 @@
 //! TiKV is configured through the `TikvConfig` type, which is in turn
 //! made up of many other configuration types.
 
+mod configurable;
+
 use std::{
     cmp,
     collections::{HashMap, HashSet},
@@ -20,6 +22,7 @@ use std::{
 
 use api_version::ApiV1Ttl;
 use causal_ts::Config as CausalTsConfig;
+pub use configurable::{ConfigRes, ConfigurableDb};
 use encryption_export::DataKeyManager;
 use engine_rocks::{
     config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel as RocksLogLevel},
@@ -36,8 +39,8 @@ use engine_rocks::{
     DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, MiscExt, TabletAccessor,
-    TabletErrorCollector, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CfOptions as _, DbOptions as _, MiscExt, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
 };
 use file_system::IoRateLimiter;
 use keys::region_raft_prefix_len;
@@ -1539,36 +1542,21 @@ pub enum DbType {
     Raft,
 }
 
-pub struct DbConfigManger<T: TabletAccessor<RocksEngine>> {
-    tablet_accessor: Arc<T>,
+pub struct DbConfigManger<D> {
+    db: D,
     db_type: DbType,
 }
 
-impl<T: TabletAccessor<RocksEngine>> DbConfigManger<T> {
-    pub fn new(tablet_accessor: Arc<T>, db_type: DbType) -> Self {
-        DbConfigManger {
-            tablet_accessor,
-            db_type,
-        }
+impl<D> DbConfigManger<D> {
+    pub fn new(db: D, db_type: DbType) -> Self {
+        DbConfigManger { db, db_type }
     }
+}
 
-    fn set_db_config(&self, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
-        let mut error_collector = TabletErrorCollector::new();
-        self.tablet_accessor
-            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
-                error_collector.add_result(region_id, suffix, db.set_db_options(opts));
-            });
-        error_collector.take_result()
-    }
-
+impl<D: ConfigurableDb> DbConfigManger<D> {
     fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
-        let mut error_collector = TabletErrorCollector::new();
         self.validate_cf(cf)?;
-        self.tablet_accessor
-            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
-                error_collector.add_result(region_id, suffix, db.set_options_cf(cf, opts));
-            });
-        error_collector.take_result()?;
+        self.db.set_cf_config(cf, opts)?;
 
         // Write config to metric
         for (cfg_name, cfg_value) in opts {
@@ -1586,73 +1574,6 @@ impl<T: TabletAccessor<RocksEngine>> DbConfigManger<T> {
         Ok(())
     }
 
-    fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {
-        let mut error_collector = TabletErrorCollector::new();
-        self.tablet_accessor
-            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
-                let mut opt = db.get_db_options();
-                let r = opt.set_rate_bytes_per_sec(rate_bytes_per_sec);
-                if r.is_err() {
-                    error_collector.add_result(region_id, suffix, r);
-                }
-            });
-        error_collector.take_result()
-    }
-
-    fn set_rate_limiter_auto_tuned(
-        &self,
-        rate_limiter_auto_tuned: bool,
-    ) -> Result<(), Box<dyn Error>> {
-        let mut error_collector = TabletErrorCollector::new();
-        self.tablet_accessor
-            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
-                let mut opt = db.get_db_options();
-                let r = opt.set_rate_limiter_auto_tuned(rate_limiter_auto_tuned);
-                if r.is_err() {
-                    error_collector.add_result(region_id, suffix, r);
-                } else {
-                    // double check the new state
-                    let new_auto_tuned = opt.get_rate_limiter_auto_tuned();
-                    if new_auto_tuned.is_none()
-                        || new_auto_tuned.unwrap() != rate_limiter_auto_tuned
-                    {
-                        error_collector.add_result(
-                            region_id,
-                            suffix,
-                            Err(engine_traits::Status::with_error(
-                                engine_traits::Code::IoError,
-                                "fail to set rate_limiter_auto_tuned",
-                            )
-                            .into()),
-                        );
-                    }
-                }
-            });
-
-        error_collector.take_result()
-    }
-
-    fn set_max_background_jobs(&self, max_background_jobs: i32) -> Result<(), Box<dyn Error>> {
-        self.set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
-        Ok(())
-    }
-
-    fn set_max_background_flushes(
-        &self,
-        max_background_flushes: i32,
-    ) -> Result<(), Box<dyn Error>> {
-        self.set_db_config(&[(
-            "max_background_flushes",
-            &max_background_flushes.to_string(),
-        )])?;
-        Ok(())
-    }
-
-    fn set_max_subcompactions(&self, max_subcompactions: u32) -> Result<(), Box<dyn Error>> {
-        self.set_db_config(&[("max_subcompactions", &max_subcompactions.to_string())])?;
-        Ok(())
-    }
-
     fn validate_cf(&self, cf: &str) -> Result<(), Box<dyn Error>> {
         match (self.db_type, cf) {
             (DbType::Kv, CF_DEFAULT)
@@ -1665,7 +1586,7 @@ impl<T: TabletAccessor<RocksEngine>> DbConfigManger<T> {
     }
 }
 
-impl<T: TabletAccessor<RocksEngine> + Send + Sync> ConfigManager for DbConfigManger<T> {
+impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
     fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
@@ -1698,7 +1619,8 @@ impl<T: TabletAccessor<RocksEngine> + Send + Sync> ConfigManager for DbConfigMan
             .next()
         {
             let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
-            self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
+            self.db
+                .set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
         }
 
         if let Some(rate_bytes_config) = change
@@ -1706,37 +1628,43 @@ impl<T: TabletAccessor<RocksEngine> + Send + Sync> ConfigManager for DbConfigMan
             .next()
         {
             let rate_limiter_auto_tuned: bool = rate_bytes_config.1.into();
-            self.set_rate_limiter_auto_tuned(rate_limiter_auto_tuned)?;
+            self.db
+                .set_rate_limiter_auto_tuned(rate_limiter_auto_tuned)?;
         }
 
         if let Some(background_jobs_config) = change
             .drain_filter(|(name, _)| name == "max_background_jobs")
             .next()
         {
-            let max_background_jobs = background_jobs_config.1.into();
-            self.set_max_background_jobs(max_background_jobs)?;
+            let max_background_jobs: i32 = background_jobs_config.1.into();
+            self.db
+                .set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
         }
 
         if let Some(background_subcompactions_config) = change
             .drain_filter(|(name, _)| name == "max_sub_compactions")
             .next()
         {
-            let max_subcompactions = background_subcompactions_config.1.into();
-            self.set_max_subcompactions(max_subcompactions)?;
+            let max_subcompactions: u32 = background_subcompactions_config.1.into();
+            self.db
+                .set_db_config(&[("max_subcompactions", &max_subcompactions.to_string())])?;
         }
 
         if let Some(background_flushes_config) = change
             .drain_filter(|(name, _)| name == "max_background_flushes")
             .next()
         {
-            let max_background_flushes = background_flushes_config.1.into();
-            self.set_max_background_flushes(max_background_flushes)?;
+            let max_background_flushes: i32 = background_flushes_config.1.into();
+            self.db.set_db_config(&[(
+                "max_background_flushes",
+                &max_background_flushes.to_string(),
+            )])?;
         }
 
         if !change.is_empty() {
             let change = config_value_to_string(change);
             let change_slice = config_to_slice(&change);
-            self.set_db_config(&change_slice)?;
+            self.db.set_db_config(&change_slice)?;
         }
         info!(
             "rocksdb config changed";
@@ -4019,7 +3947,7 @@ mod tests {
     use api_version::{ApiV1, KvFormat};
     use case_macros::*;
     use engine_rocks::raw::LRUCacheOptions;
-    use engine_traits::{CfOptions as _, DbOptions as _, DummyFactory};
+    use engine_traits::{CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt};
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
     use itertools::Itertools;
@@ -4464,13 +4392,13 @@ mod tests {
         let cfg_controller = ConfigController::new(cfg);
         cfg_controller.register(
             Module::Rocksdb,
-            Box::new(DbConfigManger::new(Arc::new(engine.clone()), DbType::Kv)),
+            Box::new(DbConfigManger::new(engine.clone(), DbType::Kv)),
         );
         let (scheduler, receiver) = dummy_scheduler();
         cfg_controller.register(
             Module::Storage,
             Box::new(StorageConfigManger::new(
-                Arc::new(DummyFactory::new(Some(engine), "".to_string())),
+                engine,
                 scheduler,
                 flow_controller.clone(),
                 storage.get_scheduler(),
@@ -5305,9 +5233,11 @@ mod tests {
         );
     }
 
+    static CONFIG_TEMPLATE: &str = include_str!("../../etc/config-template.toml");
+
     #[test]
     fn test_config_template_is_valid() {
-        let template_config = std::include_str!("../etc/config-template.toml")
+        let template_config = CONFIG_TEMPLATE
             .lines()
             .map(|l| l.strip_prefix('#').unwrap_or(l))
             .join("\n");
@@ -5318,7 +5248,7 @@ mod tests {
 
     #[test]
     fn test_config_template_no_superfluous_keys() {
-        let template_config = std::include_str!("../etc/config-template.toml")
+        let template_config = CONFIG_TEMPLATE
             .lines()
             .map(|l| l.strip_prefix('#').unwrap_or(l))
             .join("\n");
@@ -5336,7 +5266,7 @@ mod tests {
 
     #[test]
     fn test_config_template_matches_default() {
-        let template_config = std::include_str!("../etc/config-template.toml")
+        let template_config = CONFIG_TEMPLATE
             .lines()
             .map(|l| l.strip_prefix('#').unwrap_or(l))
             .join("\n");

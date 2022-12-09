@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use engine_traits::{OpenOptions, Peekable, TabletFactory};
+use engine_traits::Peekable;
 use futures::executor::block_on;
 use kvproto::{
     metapb,
@@ -21,19 +21,24 @@ fn put_data(
     node_off_for_verify: usize,
     key: &[u8],
 ) {
-    let router = cluster.router(node_off);
-    let mut req = router.new_request_for(2);
+    let router = &cluster.routers[node_off];
+    let mut req = router.new_request_for(region_id);
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
-    put_req.mut_put().set_key(key.to_vec());
+    put_req.mut_put().set_key(key[1..].to_vec());
     put_req.mut_put().set_value(b"value".to_vec());
     req.mut_requests().push(put_req);
 
+    router.wait_applied_to_current_term(region_id, Duration::from_secs(3));
+
     // router.wait_applied_to_current_term(2, Duration::from_secs(3));
-    let tablet_factory = cluster.node(node_off).tablet_factory();
-    let tablet = tablet_factory
-        .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-        .unwrap();
+    let tablet_registry = cluster.node(node_off).tablet_registry();
+    let tablet = tablet_registry
+        .get(region_id)
+        .unwrap()
+        .latest()
+        .unwrap()
+        .clone();
     assert!(tablet.get_value(key).unwrap().is_none());
 
     let (msg, mut sub) = PeerMsg::raft_command(req.clone());
@@ -54,10 +59,13 @@ fn put_data(
     assert_eq!(tablet.get_value(key).unwrap().unwrap(), b"value");
 
     // Verify the data is ready in the other node
-    let tablet_factory = cluster.node(node_off_for_verify).tablet_factory();
-    let tablet = tablet_factory
-        .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-        .unwrap();
+    let tablet_registry = cluster.node(node_off_for_verify).tablet_registry();
+    let tablet = tablet_registry
+        .get(region_id)
+        .unwrap()
+        .latest()
+        .unwrap()
+        .clone();
     assert_eq!(tablet.get_value(key).unwrap().unwrap(), b"value");
 }
 
@@ -68,8 +76,8 @@ pub fn must_transfer_leader(
     to_off: usize,
     to_peer: metapb::Peer,
 ) {
-    let router = cluster.router(from_off);
-    let router2 = cluster.router(to_off);
+    let router = &cluster.routers[from_off];
+    let router2 = &cluster.routers[to_off];
     let mut req = router.new_request_for(region_id);
     let mut transfer_req = TransferLeaderRequest::default();
     transfer_req.set_peer(to_peer.clone());
@@ -94,7 +102,7 @@ pub fn must_transfer_leader(
 fn test_transfer_leader() {
     let cluster = Cluster::with_node_count(3, None);
     let region_id = 2;
-    let router0 = cluster.router(0);
+    let router0 = &cluster.routers[0];
 
     let mut req = router0.new_request_for(region_id);
     let admin_req = req.mut_admin_request();
@@ -121,7 +129,7 @@ fn test_transfer_leader() {
 
     // So heartbeat will create a learner.
     cluster.dispatch(region_id, vec![]);
-    let router1 = cluster.router(1);
+    let router1 = &cluster.routers[1];
     let meta = router1
         .must_query_debug_info(region_id, Duration::from_secs(3))
         .unwrap();
@@ -132,13 +140,13 @@ fn test_transfer_leader() {
     cluster.dispatch(region_id, vec![]);
 
     // Ensure follower has latest entries before transfer leader.
-    put_data(region_id, &cluster, 0, 1, b"key1");
+    put_data(region_id, &cluster, 0, 1, b"zkey1");
 
     // Perform transfer leader
     must_transfer_leader(&cluster, region_id, 0, 1, peer1);
 
     // Before transfer back to peer0, put some data again.
-    put_data(region_id, &cluster, 1, 0, b"key2");
+    put_data(region_id, &cluster, 1, 0, b"zkey2");
 
     // Perform transfer leader
     let store_id = cluster.node(0).id();

@@ -11,7 +11,7 @@ use std::{
 use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
 use raftstore::store::{util::KeysInfoFormatter, TxnExt};
@@ -97,7 +97,7 @@ where
     store_id: u64,
     pd_client: Arc<T>,
     raft_engine: ER,
-    tablet_factory: Arc<dyn TabletFactory<EK>>,
+    tablet_registry: TabletRegistry<EK>,
     router: StoreRouter<EK, ER>,
 
     remote: Remote<TaskCell>,
@@ -130,7 +130,7 @@ where
         store_id: u64,
         pd_client: Arc<T>,
         raft_engine: ER,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        tablet_registry: TabletRegistry<EK>,
         router: StoreRouter<EK, ER>,
         remote: Remote<TaskCell>,
         concurrency_manager: ConcurrencyManager,
@@ -142,7 +142,7 @@ where
             store_id,
             pd_client,
             raft_engine,
-            tablet_factory,
+            tablet_registry,
             router,
             remote,
             region_peers: HashMap::default(),

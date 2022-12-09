@@ -18,7 +18,7 @@ use raftstore::{
     Result,
 };
 use slog::info;
-pub use split::{SplitInit, SplitResult};
+pub use split::{SplitInit, SplitResult, SPLIT_PREFIX};
 use tikv_util::box_err;
 use txn_types::WriteBatchFlags;
 

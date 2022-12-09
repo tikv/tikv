@@ -1064,7 +1064,7 @@ where
     Box::new(move |k: Vec<u8>, v: Vec<u8>| {
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
-        if k.is_empty() || v.is_empty() {
+        if k.is_empty() || (!is_delete && v.is_empty()) {
             return;
         }
 

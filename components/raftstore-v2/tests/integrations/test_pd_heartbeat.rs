@@ -11,7 +11,7 @@ use crate::cluster::Cluster;
 fn test_region_heartbeat() {
     let region_id = 2;
     let cluster = Cluster::with_node_count(1, None);
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
 
     // When there is only one peer, it should campaign immediately.
     let mut req = RaftCmdRequest::default();
