@@ -1100,7 +1100,6 @@ where
         I: IntoIterator<Item = eraftpb::Message>,
     {
         for msg in msgs {
-<<<<<<< HEAD
             let msg_type = msg.get_msg_type();
             let snapshot_index = msg.get_request_snapshot();
             let i = self.send_raft_message(msg, trans) as usize;
@@ -1109,54 +1108,6 @@ where
                 MessageType::MsgAppendResponse => {
                     if snapshot_index != raft::INVALID_INDEX {
                         metrics.request_snapshot[i] += 1;
-=======
-            let msg_type = msg.get_message().get_msg_type();
-            if msg_type == MessageType::MsgSnapshot {
-                let snap_index = msg.get_message().get_snapshot().get_metadata().get_index();
-                if snap_index > self.last_sent_snapshot_idx {
-                    self.last_sent_snapshot_idx = snap_index;
-                }
-            }
-            if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
-                // After a leader transfer procedure is triggered, the lease for
-                // the old leader may be expired earlier than usual, since a new leader
-                // may be elected and the old leader doesn't step down due to
-                // network partition from the new leader.
-                // For lease safety during leader transfer, transit `leader_lease`
-                // to suspect.
-                self.leader_lease.suspect(monotonic_raw_now());
-            }
-
-            let to_peer_id = msg.get_to_peer().get_id();
-            let to_store_id = msg.get_to_peer().get_store_id();
-
-            debug!(
-                "send raft msg";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "msg_type" => ?msg_type,
-                "msg_size" => msg.get_message().compute_size(),
-                "to" => to_peer_id,
-                "disk_usage" => ?msg.get_disk_usage(),
-            );
-
-            for index in msg
-                .get_message()
-                .get_entries()
-                .iter()
-                .map(|e| e.get_index())
-            {
-                while let Some((propose_idx, instant)) = self.pending_propose_instants.front() {
-                    if index == *propose_idx {
-                        ctx.raft_metrics
-                            .proposal_send_wait
-                            .observe(now.saturating_duration_since(*instant).as_secs_f64());
-                    }
-                    if index >= *propose_idx {
-                        self.pending_propose_instants.pop_front();
-                    } else {
-                        break;
->>>>>>> 0ddac9965... *: check last sent snapshot for prepare merge (#12682)
                     }
                     metrics.append_resp[i] += 1;
                 }
@@ -1164,7 +1115,13 @@ where
                 MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp[i] += 1,
                 MessageType::MsgRequestVote => metrics.vote[i] += 1,
                 MessageType::MsgRequestVoteResponse => metrics.vote_resp[i] += 1,
-                MessageType::MsgSnapshot => metrics.snapshot[i] += 1,
+                MessageType::MsgSnapshot => {
+                    let snap_index = msg.get_message().get_snapshot().get_metadata().get_index();
+                    if snap_index > self.last_sent_snapshot_idx {
+                        self.last_sent_snapshot_idx = snap_index;
+                    }
+                    metrics.snapshot[i] += 1
+                },
                 MessageType::MsgHeartbeat => metrics.heartbeat[i] += 1,
                 MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp[i] += 1,
                 MessageType::MsgTransferLeader => metrics.transfer_leader[i] += 1,
