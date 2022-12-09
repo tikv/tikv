@@ -1917,7 +1917,7 @@ mod tests {
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
     }
-    
+
     #[test]
     fn test_repeated_prewrite_commit_ts_too_large() {
         let engine = TestEngineBuilder::new().build().unwrap();
