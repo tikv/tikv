@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
+use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
@@ -14,10 +14,9 @@ use grpcio_health::HealthService;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
 };
-use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::{
     coprocessor::dispatcher::CoprocessorHost,
-    router::{LocalReadRouter, RaftStoreRouter},
     store::{
         self,
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
@@ -25,69 +24,17 @@ use raftstore::{
         RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
     },
 };
-use resource_metering::{CollectorRegHandle, ResourceTagFactory};
+use resource_metering::CollectorRegHandle;
 use tikv_util::{
     config::VersionTrack,
-    quota_limiter::QuotaLimiter,
     worker::{LazyWorker, Scheduler, Worker},
 };
 
-use super::{RaftKv, Result};
-use crate::{
-    import::SstImporter,
-    read_pool::ReadPoolHandle,
-    server::Config as ServerConfig,
-    storage::{
-        config::Config as StorageConfig, kv::FlowStatsReporter, lock_manager,
-        txn::flow_controller::FlowController, DynamicConfigs as StorageDynamicConfigs, Storage,
-    },
-};
+use super::Result;
+use crate::{import::SstImporter, server::Config as ServerConfig};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
-
-/// Creates a new storage engine which is backed by the Raft consensus
-/// protocol.
-pub fn create_raft_storage<
-    S,
-    EK,
-    R: FlowStatsReporter,
-    F: KvFormat,
-    LM: lock_manager::LockManager,
->(
-    engine: RaftKv<EK, S>,
-    cfg: &StorageConfig,
-    read_pool: ReadPoolHandle,
-    lock_mgr: LM,
-    concurrency_manager: ConcurrencyManager,
-    dynamic_configs: StorageDynamicConfigs,
-    flow_controller: Arc<FlowController>,
-    reporter: R,
-    resource_tag_factory: ResourceTagFactory,
-    quota_limiter: Arc<QuotaLimiter>,
-    feature_gate: FeatureGate,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
-) -> Result<Storage<RaftKv<EK, S>, LM, F>>
-where
-    S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
-    EK: KvEngine,
-{
-    let store = Storage::from_engine(
-        engine,
-        cfg,
-        read_pool,
-        lock_mgr,
-        concurrency_manager,
-        dynamic_configs,
-        flow_controller,
-        reporter,
-        resource_tag_factory,
-        quota_limiter,
-        feature_gate,
-        causal_ts_provider,
-    )?;
-    Ok(store)
-}
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.

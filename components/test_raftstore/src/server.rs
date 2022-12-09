@@ -42,6 +42,7 @@ use raftstore::{
     },
     Result,
 };
+use resource_control::ResourceController;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tempfile::TempDir;
@@ -52,7 +53,6 @@ use tikv::{
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
-        create_raft_storage,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
         lock_manager::LockManager,
@@ -66,7 +66,7 @@ use tikv::{
         self,
         kv::SnapContext,
         txn::flow_controller::{EngineFlowController, FlowController},
-        Engine,
+        Engine, Storage,
     },
 };
 use tikv_util::{
@@ -405,7 +405,7 @@ impl ServerCluster {
             cfg.quota.max_delay_duration,
             cfg.quota.enable_auto_tune,
         ));
-        let store = create_raft_storage::<_, _, _, F, _>(
+        let store = Storage::from_engine(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
@@ -418,6 +418,7 @@ impl ServerCluster {
             quota_limiter.clone(),
             self.pd_client.feature_gate().clone(),
             self.get_causal_ts_provider(node_id),
+            Arc::new(ResourceController::new("test-raftstore".to_owned())),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -517,7 +518,7 @@ impl ServerCluster {
         let node_id = node.id();
 
         for _ in 0..100 {
-            let mut svr = Server::new(
+            let mut svr = Server::new::<_, F>(
                 node_id,
                 &server_cfg,
                 &security_mgr,

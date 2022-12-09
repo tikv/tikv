@@ -8,14 +8,16 @@ use std::{
 
 use collections::HashMap;
 use file_system::{set_io_type, IoType};
-use kvproto::pdpb::QueryKind;
+use kvproto::{kvrpcpb::CommandPri, pdpb::QueryKind};
 use pd_client::{Feature, FeatureGate};
 use prometheus::local::*;
 use raftstore::store::WriteStats;
+use resource_control::{ControlledFuture, ResourceController};
 use tikv_util::{
     sys::SysQuota,
-    yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder},
+    yatp_pool::{Full, FuturePool, PoolTicker, YatpPoolBuilder},
 };
+use yatp::queue::Extras;
 
 use crate::storage::{
     kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics},
@@ -42,11 +44,6 @@ thread_local! {
 }
 
 #[derive(Clone)]
-pub struct SchedPool {
-    pub pool: FuturePool,
-}
-
-#[derive(Clone)]
 pub struct SchedTicker<R: FlowStatsReporter> {
     reporter: R,
 }
@@ -57,6 +54,12 @@ impl<R: FlowStatsReporter> PoolTicker for SchedTicker<R> {
     }
 }
 
+#[derive(Clone)]
+pub struct SchedPool {
+    pub pool: FuturePool,
+    resource_ctl: Arc<ResourceController>,
+}
+
 impl SchedPool {
     pub fn new<E: Engine, R: FlowStatsReporter>(
         engine: E,
@@ -64,6 +67,7 @@ impl SchedPool {
         reporter: R,
         feature_gate: FeatureGate,
         name_prefix: &str,
+        resource_ctl: Arc<ResourceController>,
     ) -> Self {
         let engine = Arc::new(Mutex::new(engine));
         // for low cpu quota env, set the max-thread-count as 4 to allow potential cases
@@ -87,8 +91,30 @@ impl SchedPool {
                 destroy_tls_engine::<E>();
                 tls_flush(&reporter);
             })
-            .build_future_pool();
-        SchedPool { pool }
+            .build_priority_future_pool();
+        SchedPool { pool, resource_ctl }
+    }
+
+    pub fn spawn(
+        &self,
+        group_name: &str,
+        pri: CommandPri,
+        f: impl futures::Future<Output = ()> + Send + 'static,
+    ) -> Result<(), Full> {
+        let mut extras = Extras::single_level();
+        let priority = self.resource_ctl.get_priority(group_name, pri);
+        extras.set_priority(priority);
+        self.pool.spawn_with_extras(
+            ControlledFuture::new(
+                async move {
+                    f.await;
+                },
+                self.resource_ctl.clone(),
+                group_name.to_owned(),
+                pri,
+            ),
+            extras,
+        )
     }
 }
 

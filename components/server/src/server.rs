@@ -92,7 +92,6 @@ use tikv::{
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
-        create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
@@ -108,7 +107,7 @@ use tikv::{
         config_manager::StorageConfigManger,
         mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{EngineFlowController, FlowController},
-        Engine,
+        Engine, Storage,
     },
 };
 use tikv_util::{
@@ -812,7 +811,7 @@ where
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage::<_, _, _, F, _>(
+        let storage = Storage::from_engine(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -825,6 +824,8 @@ where
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
             self.causal_ts_provider.clone(),
+            self.resource_manager
+                .derive_controller("scheduler-worker-pool".to_owned()),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -955,7 +956,7 @@ where
 
         self.snap_mgr = Some(snap_mgr.clone());
         // Create server
-        let server = Server::new(
+        let server = Server::new::<_, F>(
             node.id(),
             &server_config,
             &self.security_mgr,

@@ -240,7 +240,6 @@ impl ResourceGroup {
             .fetch_add(base_priority_delta, Ordering::Relaxed)
             + base_priority_delta
             + task_extra_priority
-        // self.virtual_time.load(Ordering::Relaxed) + task_extra_priority
     }
 
     #[inline]

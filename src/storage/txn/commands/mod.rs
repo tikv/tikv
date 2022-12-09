@@ -668,6 +668,10 @@ impl Command {
         self.command_ext().get_ctx().get_priority()
     }
 
+    pub fn group_name(&self) -> String {
+        String::from_utf8_lossy(self.command_ext().get_ctx().get_resource_group_tag().into()).into()
+    }
+
     pub fn need_flow_control(&self) -> bool {
         !self.readonly() && self.priority() != CommandPri::High
     }

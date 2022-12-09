@@ -290,6 +290,12 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         )
     }
 
+    pub fn build_priority_future_pool(&mut self) -> FuturePool {
+        let pool = self.build_priority_pool();
+        let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
+        FuturePool::from_pool(pool, name, self.core_thread_count, self.max_tasks)
+    }
+
     fn create_builder(&mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
         let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
         let mut builder = yatp::Builder::new(thd_name!(name));
