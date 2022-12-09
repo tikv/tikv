@@ -2,7 +2,7 @@
 
 use std::{mem, sync::Arc};
 
-use engine_traits::{CachedTablet, KvEngine, TabletRegistry};
+use engine_traits::{CachedTablet, KvEngine, TabletRegistry, WriteBatch};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
 use slog::Logger;
@@ -172,6 +172,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn release_memory(&mut self) {
         mem::take(&mut self.key_buffer);
-        self.write_batch.take();
+        if self.write_batch.as_ref().map_or(false, |wb| wb.is_empty()) {
+            self.write_batch = None;
+        }
     }
 }
