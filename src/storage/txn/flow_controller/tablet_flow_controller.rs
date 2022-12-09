@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use collections::HashMap;
+use collections::{HashMap, HashMapEntry};
 use engine_rocks::FlowInfo;
 use engine_traits::{CfNamesExt, FlowControlFactorsExt, TabletRegistry};
 use rand::Rng;
@@ -116,26 +116,6 @@ impl FlowInfoDispatcher {
                         Err(_) => {}
                     }
 
-                    let insert_limiter_and_checker = |region_id, suffix| -> FlowChecker<E> {
-                        let engine = registry.get(region_id).unwrap().latest().unwrap().clone();
-                        let mut v = limiters.as_ref().write().unwrap();
-                        let discard_ratio = Arc::new(AtomicU32::new(0));
-                        let limiter = v.entry(region_id).or_insert((
-                            Arc::new(
-                                <Limiter>::builder(f64::INFINITY)
-                                    .refill(Duration::from_millis(1))
-                                    .build(),
-                            ),
-                            discard_ratio,
-                        ));
-                        FlowChecker::new_with_tablet_suffix(
-                            &config,
-                            engine,
-                            limiter.1.clone(),
-                            limiter.0.clone(),
-                            suffix,
-                        )
-                    };
                     let msg = flow_info_receiver.recv_deadline(deadline);
                     match msg.clone() {
                         Ok(FlowInfo::L0(_cf, _, region_id, suffix))
@@ -159,9 +139,33 @@ impl FlowInfoDispatcher {
                         }
                         Ok(FlowInfo::Created(region_id, suffix)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
-                            let checker = checkers
-                                .entry(region_id)
-                                .or_insert_with(|| insert_limiter_and_checker(region_id, suffix));
+                            let checker = match checkers.entry(region_id) {
+                                HashMapEntry::Occupied(e) => e.into_mut(),
+                                HashMapEntry::Vacant(e) => {
+                                    let engine = if let Some(mut c) = registry.get(region_id) && let Some(t) = c.latest() {
+                                        t.clone()
+                                    } else {
+                                        continue;
+                                    };
+                                    let mut v = limiters.as_ref().write().unwrap();
+                                    let discard_ratio = Arc::new(AtomicU32::new(0));
+                                    let limiter = v.entry(region_id).or_insert((
+                                        Arc::new(
+                                            <Limiter>::builder(f64::INFINITY)
+                                                .refill(Duration::from_millis(1))
+                                                .build(),
+                                        ),
+                                        discard_ratio,
+                                    ));
+                                    e.insert(FlowChecker::new_with_tablet_suffix(
+                                        &config,
+                                        engine,
+                                        limiter.1.clone(),
+                                        limiter.0.clone(),
+                                        suffix,
+                                    ))
+                                },
+                            };
                             // check if the checker's engine is exactly (region_id, suffix)
                             // if checker.suffix < suffix, it means its tablet is old and needs the
                             // refresh
