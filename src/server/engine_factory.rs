@@ -7,7 +7,9 @@ use engine_rocks::{
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener,
 };
-use engine_traits::{CompactionJobInfo, MiscExt, Result, TabletFactory, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    CompactionJobInfo, MiscExt, Result, TabletContext, TabletFactory, CF_DEFAULT, CF_WRITE,
+};
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
@@ -151,24 +153,24 @@ impl KvEngineFactory {
 }
 
 impl TabletFactory<RocksEngine> for KvEngineFactory {
-    fn open_tablet(&self, id: u64, suffix: Option<u64>, path: &Path) -> Result<RocksEngine> {
+    fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<RocksEngine> {
         let mut db_opts = self.db_opts();
         let cf_opts = self.cf_opts(EngineType::RaftKv2);
-        if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = suffix {
-            db_opts.add_event_listener(listener.clone_with(id, suffix));
+        if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
+            db_opts.add_event_listener(listener.clone_with(ctx.id, suffix));
         }
         let kv_engine =
             engine_rocks::util::new_engine_opt(path.to_str().unwrap(), db_opts, cf_opts);
         if let Err(e) = &kv_engine {
-            error!("failed to create tablet"; "id" => id, "suffix" => ?suffix, "path" => %path.display(), "err" => ?e);
-        } else if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = suffix {
-            listener.clone_with(id, suffix).on_created();
+            error!("failed to create tablet"; "id" => ctx.id, "suffix" => ?ctx.suffix, "path" => %path.display(), "err" => ?e);
+        } else if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
+            listener.clone_with(ctx.id, suffix).on_created();
         }
         kv_engine
     }
 
-    fn destroy_tablet(&self, id: u64, suffix: Option<u64>, path: &Path) -> Result<()> {
-        info!("destroy tablet"; "path" => %path.display(), "id" => id, "suffix" => ?suffix);
+    fn destroy_tablet(&self, ctx: TabletContext, path: &Path) -> Result<()> {
+        info!("destroy tablet"; "path" => %path.display(), "id" => ctx.id, "suffix" => ?ctx.suffix);
         // Create kv engine.
         let _db_opts = self.db_opts();
         let _cf_opts = self.cf_opts(EngineType::RaftKv2);
@@ -179,8 +181,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         //   kv_cfs_opts,
         // )?;
         let _ = std::fs::remove_dir_all(path);
-        if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = suffix {
-            listener.clone_with(id, suffix).on_destroyed();
+        if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
+            listener.clone_with(ctx.id, suffix).on_destroyed();
         }
         Ok(())
     }
@@ -218,15 +220,20 @@ mod tests {
         let reg = TabletRegistry::new(Box::new(factory), dir.path()).unwrap();
         let path = reg.tablet_path(1, 3);
         assert!(!reg.tablet_factory().exists(&path));
-        let engine = reg.tablet_factory().open_tablet(1, Some(3), &path).unwrap();
+        let mut tablet_ctx = TabletContext::with_infinite_region(1, Some(3));
+        let engine = reg
+            .tablet_factory()
+            .open_tablet(tablet_ctx.clone(), &path)
+            .unwrap();
         assert!(reg.tablet_factory().exists(&path));
         // Second attempt should fail with lock.
         reg.tablet_factory()
-            .open_tablet(1, Some(3), &path)
+            .open_tablet(tablet_ctx.clone(), &path)
             .unwrap_err();
         drop(engine);
+        tablet_ctx.suffix = Some(3);
         reg.tablet_factory()
-            .destroy_tablet(1, Some(3), &path)
+            .destroy_tablet(tablet_ctx, &path)
             .unwrap();
         assert!(!reg.tablet_factory().exists(&path));
     }

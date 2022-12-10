@@ -8,7 +8,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletRegistry};
+use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletContext, TabletRegistry};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
@@ -109,16 +109,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
-        let cached_tablet = tablet_registry.get_or_default(region_id);
-        // Another option is always create tablet even if tablet index is 0. But this
-        // can introduce race when gc old tablet and create new peer.
-        if tablet_index != 0 {
-            // TODO: Perhaps we should stop create the tablet automatically.
-            tablet_registry.load(region_id, tablet_index, false)?;
-        }
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
+
+        let cached_tablet = tablet_registry.get_or_default(region_id);
+        // We can't create tablet if tablet index is 0. It can introduce race when gc
+        // old tablet and create new peer. We also can't get the correct range of the
+        // region, which is required for kv data gc.
+        if tablet_index != 0 {
+            let ctx = TabletContext::new(&region, Some(tablet_index));
+            // TODO: Perhaps we should stop create the tablet automatically.
+            tablet_registry.load(ctx, false)?;
+        }
+
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: cached_tablet,

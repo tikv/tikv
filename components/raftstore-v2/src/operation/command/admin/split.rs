@@ -30,7 +30,8 @@ use std::{cmp, collections::VecDeque};
 use collections::HashSet;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{
-    Checkpointer, DeleteStrategy, KvEngine, RaftEngine, RaftLogBatch, Range, CF_DEFAULT,
+    Checkpointer, DeleteStrategy, KvEngine, RaftEngine, RaftLogBatch, Range, TabletContext,
+    CF_DEFAULT,
 };
 use fail::fail_point;
 use keys::enc_end_key;
@@ -260,10 +261,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             });
         let reg = self.tablet_registry();
         let path = reg.tablet_path(region_id, log_index);
-        let tablet = reg
-            .tablet_factory()
-            .open_tablet(region_id, Some(log_index), &path)
-            .unwrap();
+        let ctx = TabletContext::new(&regions[derived_index], Some(log_index));
+        let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
         // Remove the old write batch.
         self.write_batch.take();
         self.publish_tablet(tablet);
@@ -638,7 +637,8 @@ mod test {
             .collect();
         let factory = Box::new(TestTabletFactory::new(DbOptions::default(), cf_opts));
         let reg = TabletRegistry::new(factory, path.path()).unwrap();
-        reg.load(region.id, 5, true).unwrap();
+        let ctx = TabletContext::new(&region, Some(5));
+        reg.load(ctx, true).unwrap();
 
         let mut region_state = RegionLocalState::default();
         region_state.set_state(PeerState::Normal);

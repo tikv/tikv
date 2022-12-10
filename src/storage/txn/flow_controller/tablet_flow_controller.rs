@@ -291,7 +291,7 @@ impl TabletFlowController {
 #[cfg(test)]
 mod tests {
     use engine_rocks::FlowInfo;
-    use engine_traits::SingletonFactory;
+    use engine_traits::{SingletonFactory, TabletContext};
     use tempfile::TempDir;
 
     use super::{
@@ -327,7 +327,8 @@ mod tests {
         let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
-        reg.load(region_id, tablet_suffix, false).unwrap();
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        reg.load(tablet_context, false).unwrap();
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
             .unwrap();
         tx.send(FlowInfo::L0Intra(
@@ -354,7 +355,8 @@ mod tests {
         let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
-        let mut cached = reg.load(region_id, tablet_suffix, false).unwrap();
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        let mut cached = reg.load(tablet_context, false).unwrap();
         let stub = cached.latest().unwrap().clone();
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
             .unwrap();
@@ -373,7 +375,8 @@ mod tests {
         let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
-        let mut cached = reg.load(region_id, tablet_suffix, false).unwrap();
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        let mut cached = reg.load(tablet_context, false).unwrap();
         let stub = cached.latest().unwrap().clone();
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
             .unwrap();
@@ -392,7 +395,8 @@ mod tests {
         let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
-        let mut cached = reg.load(region_id, tablet_suffix, false).unwrap();
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        let mut cached = reg.load(tablet_context, false).unwrap();
         let stub = cached.latest().unwrap().clone();
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
             .unwrap();

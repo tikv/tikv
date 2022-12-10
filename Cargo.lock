@@ -1630,6 +1630,7 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
+ "keys",
  "kvproto",
  "log_wrappers",
  "protobuf",
