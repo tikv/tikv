@@ -309,6 +309,7 @@ fn test_serde_custom_tikv_config() {
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
         enable_multi_batch_write: Some(true),
+        paranoid_checks: None,
         allow_concurrent_memtable_write: Some(false),
         enable_unordered_write: true,
         defaultcf: DefaultCfConfig {

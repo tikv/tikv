@@ -31,6 +31,7 @@ use engine_rocks::{
     raw::{
         BlockBasedOptions, Cache, ChecksumType, CompactionPriority, DBCompactionStyle,
         DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env, PrepopulateBlockCache,
+        Statistics,
     },
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
     RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
@@ -1076,6 +1077,10 @@ pub struct DbConfig {
     pub enable_unordered_write: bool,
     #[online_config(skip)]
     pub allow_concurrent_memtable_write: Option<bool>,
+    // Dangerous option only for programming use.
+    #[online_config(skip)]
+    #[serde(skip)]
+    pub paranoid_checks: Option<bool>,
     #[online_config(submodule)]
     pub defaultcf: DefaultCfConfig,
     #[online_config(submodule)]
@@ -1128,6 +1133,7 @@ impl Default for DbConfig {
             enable_multi_batch_write: None, // deprecated
             enable_unordered_write: false,
             allow_concurrent_memtable_write: None,
+            paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -1150,7 +1156,7 @@ impl DbConfig {
         }
     }
 
-    pub fn build_opt(&self) -> RocksDbOptions {
+    pub fn build_opt(&self, stats: Option<&Statistics>) -> RocksDbOptions {
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -1166,7 +1172,12 @@ impl DbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        opts.enable_statistics(self.enable_statistics);
+        if self.enable_statistics {
+            match stats {
+                Some(stats) => opts.set_statistics(stats),
+                None => opts.set_statistics(&Statistics::new_titan()),
+            }
+        }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
@@ -1208,6 +1219,9 @@ impl DbConfig {
         opts.enable_multi_batch_write(enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write.unwrap_or(true));
+        if let Some(b) = self.paranoid_checks {
+            opts.set_paranoid_checks(b);
+        }
         opts.set_info_log(RocksdbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
@@ -1485,7 +1499,9 @@ impl RaftDbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        opts.enable_statistics(self.enable_statistics);
+        if self.enable_statistics {
+            opts.set_statistics(&Statistics::new_titan());
+        }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
@@ -4402,7 +4418,7 @@ mod tests {
         assert_eq!(F::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
-            Some(cfg.rocksdb.build_opt()),
+            Some(cfg.rocksdb.build_opt(None)),
             cfg.rocksdb.build_cf_opts(
                 &cfg.storage.block_cache.build_shared_cache(),
                 None,

@@ -3,7 +3,7 @@
 use std::{path::Path, sync::Arc};
 
 use engine_rocks::{
-    raw::{Cache, Env},
+    raw::{Cache, Env, Statistics},
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener,
 };
@@ -27,6 +27,8 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
+    statistics: Statistics,
+    lite: bool,
 }
 
 pub struct KvEngineFactoryBuilder {
@@ -45,6 +47,8 @@ impl KvEngineFactoryBuilder {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
+                statistics: Statistics::new_titan(),
+                lite: false,
             },
             compact_event_sender: None,
         }
@@ -70,6 +74,14 @@ impl KvEngineFactoryBuilder {
         sender: Arc<dyn CompactedEventSender + Send + Sync>,
     ) -> Self {
         self.compact_event_sender = Some(sender);
+        self
+    }
+
+    /// Set whether enable lite mode.
+    ///
+    /// In lite mode, most listener/filters will not be installed.
+    pub fn lite(mut self, lite: bool) -> Self {
+        self.inner.lite = lite;
         self
     }
 
@@ -112,14 +124,19 @@ impl KvEngineFactory {
 
     fn db_opts(&self) -> RocksDbOptions {
         // Create kv engine.
-        let mut db_opts = self.inner.rocksdb_config.build_opt();
+        let mut db_opts = self
+            .inner
+            .rocksdb_config
+            .build_opt(Some(&self.inner.statistics));
         db_opts.set_env(self.inner.env.clone());
-        db_opts.add_event_listener(RocksEventListener::new(
-            "kv",
-            self.inner.sst_recovery_sender.clone(),
-        ));
-        if let Some(filter) = self.create_raftstore_compaction_listener() {
-            db_opts.add_event_listener(filter);
+        if !self.inner.lite {
+            db_opts.add_event_listener(RocksEventListener::new(
+                "kv",
+                self.inner.sst_recovery_sender.clone(),
+            ));
+            if let Some(filter) = self.create_raftstore_compaction_listener() {
+                db_opts.add_event_listener(filter);
+            }
         }
         db_opts
     }
@@ -133,10 +150,15 @@ impl KvEngineFactory {
         )
     }
 
+    pub fn block_cache(&self) -> &Cache {
+        &self.inner.block_cache
+    }
+
     /// Create a shared db.
     ///
     /// It will always create in path/DEFAULT_DB_SUB_DIR.
-    pub fn create_shared_db(&self, path: &Path) -> Result<RocksEngine> {
+    pub fn create_shared_db(&self, path: impl AsRef<Path>) -> Result<RocksEngine> {
+        let path = path.as_ref();
         let mut db_opts = self.db_opts();
         let cf_opts = self.cf_opts(EngineType::RaftKv);
         if let Some(listener) = &self.inner.flow_listener {
