@@ -15,7 +15,7 @@ failpoints = ["fail/failpoints", "tikv/failpoints"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
-testexport = ["raftstore/testexport", "tikv/testexport", "engine_tiflash/testexport"]
+testexport = ["raftstore/testexport", "tikv/testexport", "engine_tiflash/testexport", "engine_store_ffi/testexport"]
 profiling = ["profiler/profiling"]
 
 test-engine-kv-rocksdb = [

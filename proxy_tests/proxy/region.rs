@@ -367,86 +367,20 @@ fn test_add_delayed_started_learner_by_joint() {
     cluster.shutdown();
 }
 
-pub fn copy_meta_from(
-    source_engines: &Engines<
-        impl KvEngine,
-        impl RaftEngine + engine_traits::Peekable + RaftEngineDebug,
-    >,
-    target_engines: &Engines<impl KvEngine, impl RaftEngine>,
-    source: &Box<new_mock_engine_store::Region>,
-    target: &mut Box<new_mock_engine_store::Region>,
-    new_region_meta: kvproto::metapb::Region,
-) -> raftstore::Result<()> {
-    let region_id = source.region.get_id();
-
-    let mut wb = target_engines.kv.write_batch();
-    let mut raft_wb = target_engines.raft.log_batch(1024);
-
-    // box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, &source.region));
-
-    // region local state
-    let mut state = RegionLocalState::default();
-    state.set_region(new_region_meta);
-    box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &state));
-
-    // apply state
-    {
-        let key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState = source_engines
-            .kv
-            .get_msg_cf(CF_RAFT, &key)
-            .unwrap()
-            .unwrap();
-        wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
-        target.apply_state = apply_state.clone();
-        target.applied_term = source.applied_term;
-    }
-
-    wb.write()?;
-    target_engines.sync_kv()?;
-
-    // raft state
-    {
-        let key = keys::raft_state_key(region_id);
-        let raft_state = source_engines
-            .raft
-            .get_msg_cf(CF_DEFAULT, &key)
-            .unwrap()
-            .unwrap();
-        raft_wb.put_raft_state(region_id, &raft_state)?;
-    };
-
-    // raft log
-    let mut entries: Vec<Entry> = Default::default();
-    source_engines
-        .raft
-        .scan_entries(region_id, |e| {
-            debug!("copy raft log"; "e" => ?e);
-            entries.push(e.clone());
-            Ok(true)
-        })
-        .unwrap();
-
-    raft_wb.append(region_id, entries)?;
-    box_try!(target_engines.raft.consume(&mut raft_wb, true));
-
-    Ok(())
-}
+use new_mock_engine_store::{copy_data_from, copy_meta_from};
 
 fn recover_from_peer(cluster: &Cluster<NodeCluster>, from: u64, to: u64, region_id: u64) {
-    let source_region_1 = cluster
-        .ffi_helper_set
-        .lock()
-        .unwrap()
-        .get_mut(&from)
-        .unwrap()
-        .engine_store_server
-        .kvstore
-        .get(&region_id)
-        .unwrap()
-        .clone();
-
-    let mut new_region_meta = source_region_1.region.clone();
+    let mut maybe_source_region = None;
+    iter_ffi_helpers(
+        cluster,
+        Some(vec![from]),
+        &mut |id: u64, engine: &engine_rocks::RocksEngine, ffi: &mut FFIHelperSet| {
+            let server = &mut ffi.engine_store_server;
+            maybe_source_region = server.kvstore.get(&region_id).cloned();
+        },
+    );
+    let source_region = maybe_source_region.unwrap();
+    let mut new_region_meta = source_region.region.clone();
     new_region_meta.mut_peers().push(new_learner_peer(to, to));
 
     // Copy all node `from`'s data to node `to`
@@ -457,24 +391,29 @@ fn recover_from_peer(cluster: &Cluster<NodeCluster>, from: u64, to: u64, region_
             let server = &mut ffi.engine_store_server;
             assert!(server.kvstore.get(&region_id).is_none());
 
-            let new_region = make_new_region(Some(source_region_1.region.clone()), Some(id));
+            let new_region = make_new_region(Some(source_region.region.clone()), Some(id));
             server
                 .kvstore
-                .insert(source_region_1.region.get_id(), Box::new(new_region));
+                .insert(source_region.region.get_id(), Box::new(new_region));
             if let Some(region) = server.kvstore.get_mut(&region_id) {
-                for cf in 0..3 {
-                    for (k, v) in &source_region_1.data[cf] {
-                        write_kv_in_mem(region, cf, k.as_slice(), v.as_slice());
-                    }
-                }
                 let source_engines = cluster.get_engines(from);
                 let target_engines = cluster.get_engines(to);
+                copy_data_from(
+                    source_engines,
+                    target_engines,
+                    source_region.as_ref(),
+                    region.as_mut(),
+                )
+                .unwrap();
                 copy_meta_from(
                     source_engines,
                     target_engines,
-                    &source_region_1,
-                    region,
+                    source_region.as_ref(),
+                    region.as_mut(),
                     new_region_meta.clone(),
+                    true,
+                    true,
+                    true,
                 )
                 .unwrap();
             } else {
@@ -489,24 +428,6 @@ fn recover_from_peer(cluster: &Cluster<NodeCluster>, from: u64, to: u64, region_
             prev_states.get(&to).unwrap().in_disk_apply_state
         );
     }
-}
-
-fn force_compact_log(
-    cluster: &mut Cluster<NodeCluster>,
-    key: &[u8],
-    use_nodes: Option<Vec<u64>>,
-) -> u64 {
-    let region = cluster.get_region(key);
-    let region_id = region.get_id();
-    let prev_states = maybe_collect_states(&cluster, region_id, None);
-
-    let (compact_index, compact_term) = get_valid_compact_index_by(&prev_states, use_nodes);
-    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
-    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
-    let _ = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-    return compact_index;
 }
 
 #[test]

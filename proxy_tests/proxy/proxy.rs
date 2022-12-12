@@ -27,7 +27,7 @@ pub use kvproto::{
 };
 pub use new_mock_engine_store::{
     config::Config,
-    make_new_region,
+    get_apply_state, get_raft_local_state, get_region_local_state, make_new_region,
     mock_cluster::{new_put_cmd, new_request, FFIHelperSet},
     must_get_equal, must_get_none,
     node::NodeCluster,
@@ -46,36 +46,6 @@ pub use tikv_util::{
     time::Duration,
     HandyRwLock,
 };
-
-// TODO Need refactor if moved to raft-engine
-pub fn get_region_local_state(
-    engine: &engine_rocks::RocksEngine,
-    region_id: u64,
-) -> RegionLocalState {
-    let region_state_key = keys::region_state_key(region_id);
-    let region_state = match engine.get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key) {
-        Ok(Some(s)) => s,
-        _ => unreachable!(),
-    };
-    region_state
-}
-
-// TODO Need refactor if moved to raft-engine
-pub fn get_apply_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RaftApplyState {
-    let apply_state_key = keys::apply_state_key(region_id);
-    let apply_state = match engine.get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key) {
-        Ok(Some(s)) => s,
-        _ => unreachable!(),
-    };
-    apply_state
-}
-
-pub fn get_raft_local_state<ER: engine_traits::RaftEngine>(
-    raft_engine: &ER,
-    region_id: u64,
-) -> RaftLocalState {
-    raft_engine.get_raft_state(region_id).unwrap().unwrap()
-}
 
 pub fn new_compute_hash_request() -> AdminRequest {
     let mut req = AdminRequest::default();
@@ -103,21 +73,12 @@ pub struct States {
     pub ident: StoreIdent,
 }
 
-pub fn iter_ffi_helpers(
-    cluster: &Cluster<NodeCluster>,
+pub fn iter_ffi_helpers<C: Simulator<engine_store_ffi::TiFlashEngine>>(
+    cluster: &Cluster<C>,
     store_ids: Option<Vec<u64>>,
     f: &mut dyn FnMut(u64, &engine_rocks::RocksEngine, &mut FFIHelperSet) -> (),
 ) {
-    let ids = match store_ids {
-        Some(ids) => ids,
-        None => cluster.engines.keys().map(|e| *e).collect::<Vec<_>>(),
-    };
-    for id in ids {
-        let engine = cluster.get_engine(id);
-        let mut lock = cluster.ffi_helper_set.lock().unwrap();
-        let ffiset = lock.get_mut(&id).unwrap();
-        f(id, &engine, ffiset);
-    }
+    cluster.iter_ffi_helpers(store_ids, f);
 }
 
 pub fn maybe_collect_states(
@@ -142,9 +103,9 @@ pub fn maybe_collect_states(
                     States {
                         in_memory_apply_state: region.apply_state.clone(),
                         in_memory_applied_term: region.applied_term,
-                        in_disk_apply_state: get_apply_state(&engine, region_id),
-                        in_disk_region_state: get_region_local_state(&engine, region_id),
-                        in_disk_raft_state: get_raft_local_state(raft_engine, region_id),
+                        in_disk_apply_state: get_apply_state(&engine, region_id).unwrap(),
+                        in_disk_region_state: get_region_local_state(&engine, region_id).unwrap(),
+                        in_disk_raft_state: get_raft_local_state(raft_engine, region_id).unwrap(),
                         ident,
                     },
                 );
@@ -183,7 +144,8 @@ pub fn new_mock_cluster_snap(id: u64, count: usize) -> (Cluster<NodeCluster>, Ar
 }
 
 pub fn must_get_mem(
-    engine_store_server: &Box<new_mock_engine_store::EngineStoreServer>,
+    cluster: &Cluster<NodeCluster>,
+    node_id: u64,
     region_id: u64,
     key: &[u8],
     value: Option<&[u8]>,
@@ -191,15 +153,30 @@ pub fn must_get_mem(
     let last_res: Option<&Vec<u8>> = None;
     let cf = new_mock_engine_store::ffi_interfaces::ColumnFamilyType::Default;
     for _ in 1..300 {
-        let res = engine_store_server.get_mem(region_id, cf, &key.to_vec());
+        let mut ok = false;
+        {
+            iter_ffi_helpers(
+                &cluster,
+                Some(vec![node_id]),
+                &mut |_, _, ffi: &mut FFIHelperSet| {
+                    let server = &ffi.engine_store_server;
+                    let res = server.get_mem(region_id, cf, &key.to_vec());
+                    if let (Some(value), Some(last_res)) = (value, res) {
+                        assert_eq!(value, &last_res[..]);
+                        ok = true;
+                        return;
+                    }
+                    if value.is_none() && last_res.is_none() {
+                        ok = true;
+                        return;
+                    }
+                },
+            );
+        }
+        if ok {
+            return;
+        }
 
-        if let (Some(value), Some(last_res)) = (value, res) {
-            assert_eq!(value, &last_res[..]);
-            return;
-        }
-        if value.is_none() && last_res.is_none() {
-            return;
-        }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     let s = std::str::from_utf8(key).unwrap_or("");
@@ -208,7 +185,7 @@ pub fn must_get_mem(
         value.map(tikv_util::escape),
         log_wrappers::hex_encode_upper(key),
         s,
-        engine_store_server.id,
+        node_id,
         cf,
         last_res,
     )
@@ -279,7 +256,7 @@ pub fn check_key(
         }
     };
     for id in engine_keys {
-        let engine = &cluster.get_engine(id);
+        let engine = cluster.get_engine(id);
 
         match in_disk {
             Some(b) => {
@@ -293,12 +270,10 @@ pub fn check_key(
         };
         match in_mem {
             Some(b) => {
-                let lock = cluster.ffi_helper_set.lock().unwrap();
-                let server = &lock.get(&id).unwrap().engine_store_server;
                 if b {
-                    must_get_mem(server, region_id, k, Some(v));
+                    must_get_mem(cluster, id, region_id, k, Some(v));
                 } else {
-                    must_get_mem(server, region_id, k, None);
+                    must_get_mem(cluster, id, region_id, k, None);
                 }
             }
             None => (),
@@ -593,4 +568,54 @@ pub fn must_wait_until_cond_states(
             panic!("states not as expect after timeout")
         }
     }
+}
+
+pub fn force_compact_log(
+    cluster: &mut Cluster<NodeCluster>,
+    key: &[u8],
+    use_nodes: Option<Vec<u64>>,
+) -> u64 {
+    let region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let prev_states = maybe_collect_states(&cluster, region_id, None);
+
+    let (compact_index, compact_term) = get_valid_compact_index_by(&prev_states, use_nodes);
+    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+    let _ = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    return compact_index;
+}
+
+pub fn stop_tiflash_node(cluster: &mut Cluster<NodeCluster>, node_id: u64) {
+    info!("stop node {}", node_id);
+    {
+        cluster.stop_node(node_id);
+    }
+    {
+        iter_ffi_helpers(
+            &cluster,
+            Some(vec![node_id]),
+            &mut |_, _, ffi: &mut FFIHelperSet| {
+                let server = &mut ffi.engine_store_server;
+                server.stop();
+            },
+        );
+    }
+}
+
+pub fn restart_tiflash_node(cluster: &mut Cluster<NodeCluster>, node_id: u64) {
+    info!("restored node {}", node_id);
+    {
+        iter_ffi_helpers(
+            &cluster,
+            Some(vec![node_id]),
+            &mut |_, _, ffi: &mut FFIHelperSet| {
+                let server = &mut ffi.engine_store_server;
+                server.restore();
+            },
+        );
+    }
+    cluster.run_node(node_id).unwrap();
 }

@@ -32,13 +32,13 @@ elif [[ $M == "testnew" ]]; then
     export ENABLE_FEATURES="test-engine-kv-rocksdb test-engine-raft-raft-engine"
     cargo check --package proxy_server --features="$ENABLE_FEATURES"
     # tests based on new-mock-engine-store, with compat for new proxy
+    cargo test --package proxy_tests --test proxy write
+    cargo test --package proxy_tests --test proxy snapshot
     cargo test --package proxy_tests --test proxy normal::store
     cargo test --package proxy_tests --test proxy normal::config
     cargo test --package proxy_tests --test proxy normal::ingest
     cargo test --package proxy_tests --test proxy normal::restart
     cargo test --package proxy_tests --test proxy normal::persist
-    cargo test --package proxy_tests --test proxy write
-    cargo test --package proxy_tests --test proxy snapshot
     cargo test --package proxy_tests --test proxy config
     cargo test --package proxy_tests --test proxy region
     cargo test --package proxy_tests --test proxy flashback

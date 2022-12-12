@@ -93,7 +93,7 @@ pub struct TestData {
 pub struct Cluster<T: Simulator<TiFlashEngine>> {
     // Helper to set ffi_helper_set.
     pub ffi_helper_lst: Vec<FFIHelperSet>,
-    pub ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
+    ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
 
     pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,
@@ -230,6 +230,28 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             self.cfg.proxy_compat,
             self.cfg.mock_cfg.clone(),
         )
+    }
+
+    pub fn iter_ffi_helpers(
+        &self,
+        store_ids: Option<Vec<u64>>,
+        f: &mut dyn FnMut(u64, &engine_rocks::RocksEngine, &mut FFIHelperSet),
+    ) {
+        let ids = match store_ids {
+            Some(ids) => ids,
+            None => self.engines.keys().copied().collect::<Vec<_>>(),
+        };
+        for id in ids {
+            let engine = self.get_engine(id);
+            let lock = self.ffi_helper_set.lock();
+            match lock {
+                Ok(mut l) => {
+                    let ffiset = l.get_mut(&id).unwrap();
+                    f(id, &engine, ffiset);
+                }
+                Err(_) => std::process::exit(1),
+            }
+        }
     }
 
     pub fn create_engines(&mut self) {
@@ -1067,6 +1089,13 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
 
     pub fn get_engine(&self, node_id: u64) -> &engine_rocks::RocksEngine {
         &self.get_tiflash_engine(node_id).rocks
+    }
+
+    pub fn clear_send_filters(&mut self) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            sim.clear_send_filters(node_id);
+        }
     }
 
     pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {

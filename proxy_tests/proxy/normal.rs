@@ -430,32 +430,8 @@ mod restart {
             );
         }
 
-        info!("stop node {}", eng_ids[2]);
-        {
-            cluster.stop_node(eng_ids[2]);
-        }
-        {
-            let lock = cluster.ffi_helper_set.lock();
-            lock.unwrap()
-                .deref_mut()
-                .get_mut(&eng_ids[2])
-                .unwrap()
-                .engine_store_server
-                .stop();
-        }
-
-        info!("resume node {}", eng_ids[2]);
-        {
-            let lock = cluster.ffi_helper_set.lock();
-            lock.unwrap()
-                .deref_mut()
-                .get_mut(&eng_ids[2])
-                .unwrap()
-                .engine_store_server
-                .restore();
-        }
-        info!("restored node {}", eng_ids[2]);
-        cluster.run_node(eng_ids[2]).unwrap();
+        stop_tiflash_node(&mut cluster, eng_ids[2]);
+        restart_tiflash_node(&mut cluster, eng_ids[2]);
 
         fail::remove("apply_pending_snapshot");
 
@@ -514,32 +490,9 @@ mod restart {
         // So we have to disable this test.
         // std::thread::sleep(std::time::Duration::from_millis(2500));
 
-        info!("stop node {}", eng_ids[1]);
-        cluster.stop_node(eng_ids[1]);
-        {
-            let lock = cluster.ffi_helper_set.lock();
-            lock.unwrap()
-                .deref_mut()
-                .get_mut(&eng_ids[1])
-                .unwrap()
-                .engine_store_server
-                .stop();
-        }
-
+        stop_tiflash_node(&mut cluster, eng_ids[1]);
         fail::remove("on_ob_pre_handle_snapshot");
-        fail::remove("on_ob_post_apply_snapshot");
-        info!("resume node {}", eng_ids[1]);
-        {
-            let lock = cluster.ffi_helper_set.lock();
-            lock.unwrap()
-                .deref_mut()
-                .get_mut(&eng_ids[1])
-                .unwrap()
-                .engine_store_server
-                .restore();
-        }
-        info!("restored node {}", eng_ids[1]);
-        cluster.run_node(eng_ids[1]).unwrap();
+        restart_tiflash_node(&mut cluster, eng_ids[1]);
 
         let (key, value) = (b"k2", b"v2");
         cluster.must_put(key, value);
@@ -636,30 +589,8 @@ mod restart {
             );
         }
 
-        info!("stop node {}", eng_ids[0]);
-        cluster.stop_node(eng_ids[0]);
-        {
-            let lock = cluster.ffi_helper_set.lock();
-            lock.unwrap()
-                .deref_mut()
-                .get_mut(&eng_ids[0])
-                .unwrap()
-                .engine_store_server
-                .stop();
-        }
-
-        info!("resume node {}", eng_ids[0]);
-        {
-            let lock = cluster.ffi_helper_set.lock();
-            lock.unwrap()
-                .deref_mut()
-                .get_mut(&eng_ids[0])
-                .unwrap()
-                .engine_store_server
-                .restore();
-        }
-        info!("restored node {}", eng_ids[0]);
-        cluster.run_node(eng_ids[0]).unwrap();
+        stop_tiflash_node(&mut cluster, eng_ids[0]);
+        restart_tiflash_node(&mut cluster, eng_ids[0]);
 
         std::thread::sleep(std::time::Duration::from_millis(2000));
 

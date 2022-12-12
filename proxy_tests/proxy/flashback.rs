@@ -89,29 +89,8 @@ mod persist {
         must_cmd_add_flashback_flag(&mut cluster, &mut region.clone(), new_put_cmd(b"k3", b"v3"));
 
         let victim = 1;
-        info!("stop node {}", victim);
-        cluster.stop_node(victim);
-        {
-            let lock = cluster.ffi_helper_set.lock();
-            lock.unwrap()
-                .deref_mut()
-                .get_mut(&victim)
-                .unwrap()
-                .engine_store_server
-                .stop();
-        }
-
-        info!("restored node {}", victim);
-        {
-            let lock = cluster.ffi_helper_set.lock();
-            lock.unwrap()
-                .deref_mut()
-                .get_mut(&victim)
-                .unwrap()
-                .engine_store_server
-                .restore();
-        }
-        cluster.run_node(victim).unwrap();
+        stop_tiflash_node(&mut cluster, victim);
+        restart_tiflash_node(&mut cluster, victim);
 
         let new_states = collect_all_states(&cluster, region_id);
 

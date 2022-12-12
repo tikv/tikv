@@ -14,6 +14,7 @@ use new_mock_engine_store::{
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 static INIT: Once = Once::new();
+use crate::proxy::{iter_ffi_helpers, FFIHelperSet};
 
 pub fn init() {
     INIT.call_once(test_util::setup_for_ci);
@@ -139,27 +140,33 @@ fn test_pprof() {
     let peer = region.get_peers().get(0);
     assert!(peer.is_some());
     let store_id = peer.unwrap().get_store_id();
-    let router = cluster.sim.rl().get_router(store_id);
-    assert!(router.is_some());
     let id = 1;
     let engine = cluster.get_engine(id);
-    let mut lock = cluster.ffi_helper_set.lock().unwrap();
-    let ffiset = lock.get_mut(&id).unwrap();
-    let mut status_server = StatusServer::new(
-        engine_store_ffi::gen_engine_store_server_helper(ffiset.engine_store_server_helper_ptr),
-        1,
-        ConfigController::default(),
-        Arc::new(SecurityConfig::default()),
-        router.unwrap(),
-        std::env::temp_dir(),
-    )
-    .unwrap();
-    let addr = format!("127.0.0.1:{}", test_util::alloc_port());
-    status_server.start(addr).unwrap();
-    let check_task = check(status_server.listening_addr(), region_id);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    if let Err(err) = rt.block_on(check_task) {
-        panic!("{}", err);
-    }
-    status_server.stop();
+    iter_ffi_helpers(
+        &cluster,
+        Some(vec![id]),
+        &mut |_, _, ffiset: &mut FFIHelperSet| {
+            let router = cluster.sim.rl().get_router(store_id);
+            assert!(router.is_some());
+            let mut status_server = StatusServer::new(
+                engine_store_ffi::gen_engine_store_server_helper(
+                    ffiset.engine_store_server_helper_ptr,
+                ),
+                1,
+                ConfigController::default(),
+                Arc::new(SecurityConfig::default()),
+                router.unwrap(),
+                std::env::temp_dir(),
+            )
+            .unwrap();
+            let addr = format!("127.0.0.1:{}", test_util::alloc_port());
+            status_server.start(addr).unwrap();
+            let check_task = check(status_server.listening_addr(), region_id);
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            if let Err(err) = rt.block_on(check_task) {
+                panic!("{}", err);
+            }
+            status_server.stop();
+        },
+    );
 }
