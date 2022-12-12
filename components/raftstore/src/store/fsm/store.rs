@@ -86,7 +86,6 @@ type Key = Vec<u8>;
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const PENDING_MSG_CAP: usize = 100;
-const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 
 pub struct StoreInfo<E> {
@@ -1528,7 +1527,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
                 // Maybe the target is promoted from learner to voter, but the follower
                 // doesn't know it. So we only compare peer id.
-                assert_eq!(peer.get_id(), msg.get_from_peer().get_id());
+                if peer.get_id() < msg.get_from_peer().get_id() {
+                    panic!(
+                        "peer id increased after region is merged, message peer id {}, local peer id {}, region {:?}",
+                        msg.get_from_peer().get_id(),
+                        peer.get_id(),
+                        region
+                    );
+                }
                 // Let stale peer decides whether it should wait for merging or just remove
                 // itself.
                 Some(local_state.get_merge_state().get_target().to_owned())
@@ -2403,13 +2409,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_store_unreachable(&mut self, store_id: u64) {
         let now = Instant::now();
+        let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
         if self
             .fsm
             .store
             .last_unreachable_report
             .get(&store_id)
-            .map_or(UNREACHABLE_BACKOFF, |t| now.saturating_duration_since(*t))
-            < UNREACHABLE_BACKOFF
+            .map_or(unreachable_backoff, |t| now.saturating_duration_since(*t))
+            < unreachable_backoff
         {
             return;
         }
