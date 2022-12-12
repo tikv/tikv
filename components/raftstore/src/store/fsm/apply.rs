@@ -190,17 +190,15 @@ impl<C> PendingCmdQueue<C> {
     }
 
     fn push_compact(&mut self, cmd: PendingCmd<C>) {
-        self.compacts.push_front(cmd);
+        self.compacts.push_back(cmd);
     }
 
     fn pop_compact(&mut self, index: u64) -> Option<PendingCmd<C>> {
-        match self.compacts.iter().position(|c| c.index < index) {
-            Some(pos) => {
-                self.compacts.truncate(pos + 1);
-                self.compacts.pop_back()
-            }
-            None => None,
+        let mut front = None;
+        while self.compacts.front().map_or(false, |c| c.index < index) {
+            front = self.compacts.pop_front();
         }
+        front
     }
 
     fn has_compact(&mut self) -> bool {
@@ -4057,6 +4055,8 @@ where
         match res {
             Ok(res) => {
                 if let Some(res) = res {
+                    self.delegate.write_apply_state(ctx.kv_wb_mut());
+                    ctx.commit(&mut self.delegate);
                     ctx.notifier
                         .notify_one(self.delegate.region_id(), PeerMsg::ApplyRes { res });
                 }
