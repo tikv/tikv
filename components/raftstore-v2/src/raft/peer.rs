@@ -17,8 +17,8 @@ use raftstore::{
     store::{
         fsm::Proposal,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
-        TxnExt,
+        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
+        ReadProgress, TrackVer, TxnExt,
     },
     Error,
 };
@@ -37,7 +37,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
-    router::{CmdResChannel, QueryResChannel},
+    router::{CmdResChannel, PeerTick, QueryResChannel},
     worker::PdTask,
     Result,
 };
@@ -84,6 +84,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
+    pending_ticks: Vec<PeerTick>,
 
     /// Check whether this proposal can be proposed based on its epoch.
     proposal_control: ProposalControl,
@@ -149,6 +151,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             proposal_control: ProposalControl::new(0),
+            pending_ticks: Vec::new(),
             split_trace: vec![],
         };
 
@@ -519,6 +522,46 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn set_apply_scheduler(&mut self, apply_scheduler: ApplyScheduler) {
         self.apply_scheduler = Some(apply_scheduler);
+    }
+
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
+    #[inline]
+    pub fn is_handling_snapshot(&self) -> bool {
+        // todo: This method may be unnecessary now?
+        false
+    }
+
+    /// Returns `true` if the raft group has replicated a snapshot but not
+    /// committed it yet.
+    #[inline]
+    pub fn has_pending_snapshot(&self) -> bool {
+        self.raft_group().snap().is_some()
+    }
+
+    #[inline]
+    pub fn add_pending_tick(&mut self, tick: PeerTick) {
+        self.pending_ticks.push(tick);
+    }
+
+    #[inline]
+    pub fn take_pending_ticks(&mut self) -> Vec<PeerTick> {
+        mem::take(&mut self.pending_ticks)
+    }
+
+    pub fn activate_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.status = LocksStatus::Normal;
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
+    }
+
+    pub fn clear_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.status = LocksStatus::NotLeader;
+        pessimistic_locks.clear();
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
     }
 
     #[inline]
