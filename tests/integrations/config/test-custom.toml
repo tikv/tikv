@@ -182,6 +182,7 @@ future-poll-size = 2
 hibernate-regions = false
 dev-assert = true
 perf-level = 5
+unreachable-backoff = "111s"
 
 [coprocessor]
 split-region-on-table = false
