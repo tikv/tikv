@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod conf_change;
-mod transfer_leader;
 mod split;
+mod transfer_leader;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
