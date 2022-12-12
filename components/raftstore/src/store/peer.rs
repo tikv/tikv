@@ -464,6 +464,8 @@ where
     last_urgent_proposal_idx: u64,
     /// The index of the latest committed split command.
     last_committed_split_idx: u64,
+    /// The index of last sent snapshot
+    last_sent_snapshot_idx: u64,
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
@@ -595,6 +597,7 @@ where
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
+            last_sent_snapshot_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
@@ -1162,6 +1165,13 @@ where
         self.get_store().is_applying_snapshot()
     }
 
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
+    #[inline]
+    pub fn is_handling_snapshot(&self) -> bool {
+        self.get_store().is_handling_snapshot()
+    }
+
     /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
     #[inline]
     pub fn has_pending_snapshot(&self) -> bool {
@@ -1204,6 +1214,12 @@ where
         for msg in msgs {
             let msg_type = msg.get_msg_type();
             let snapshot_index = msg.get_request_snapshot();
+            if msg_type == MessageType::MsgSnapshot {
+                let snap_index = msg.get_snapshot().get_metadata().get_index();
+                if snap_index > self.last_sent_snapshot_idx {
+                    self.last_sent_snapshot_idx = snap_index;
+                }
+            }
             let i = self.send_raft_message(msg, trans) as usize;
             match msg_type {
                 MessageType::MsgAppend => metrics.append[i] += 1,
@@ -1269,7 +1285,8 @@ where
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
             fail_point!("on_step_read_index_msg");
-            ctx.coprocessor_host.on_step_read_index(&mut m);
+            ctx.coprocessor_host
+                .on_step_read_index(&mut m, self.get_role());
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
@@ -1544,6 +1561,7 @@ where
                     // prewrites or commits will be just a waste.
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
+                    self.last_sent_snapshot_idx = self.raft_group.raft.raft_log.last_index();
 
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
@@ -2537,6 +2555,7 @@ where
             Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
+        fail_point!("after_propose");
 
         match res {
             Err(e) => {
@@ -3096,12 +3115,14 @@ where
             || min_committed == 0
             || last_index - min_matched > ctx.cfg.merge_max_log_gap
             || last_index - min_committed > ctx.cfg.merge_max_log_gap * 2
+            || min_matched < self.last_sent_snapshot_idx
         {
             return Err(box_err!(
-                "log gap from matched: {} or committed: {} to last index: {} is too large, skip merge",
+                "log gap too large, skip merge: matched: {}, committed: {}, last index: {}, last_snapshot: {}",
                 min_matched,
                 min_committed,
-                last_index
+                last_index,
+                self.last_sent_snapshot_idx
             ));
         }
         let mut entry_size = 0;
