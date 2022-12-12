@@ -47,7 +47,7 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    /// Return true to if the transfer leader request is accepted.
+    /// Return true if the transfer leader request is accepted.
     ///
     /// When transferring leadership begins, leader sends a pre-transfer
     /// to target follower first to ensures it's ready to become leader.
@@ -134,6 +134,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Broadcast heartbeat to make sure followers commit the entries immediately.
         // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group_mut().ping();
+
+        // todo: entry cache warmup
 
         let mut msg = eraftpb::Message::new();
         msg.set_to(peer.get_id());

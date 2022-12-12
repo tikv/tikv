@@ -4513,7 +4513,7 @@ where
         self.raft_group.raft.msgs.push(msg);
     }
 
-    /// Return true to if the transfer leader request is accepted.
+    /// Return true if the transfer leader request is accepted.
     ///
     /// When transferring leadership begins, leader sends a pre-transfer
     /// to target follower first to ensures it's ready to become leader.

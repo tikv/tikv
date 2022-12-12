@@ -84,6 +84,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
     pending_ticks: Vec<PeerTick>,
 
     /// Check whether this proposal can be proposed based on its epoch.

@@ -133,6 +133,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     fn schedule_pending_ticks(&mut self) {
         let pending_ticks = self.fsm.peer.take_pending_ticks();
         for tick in pending_ticks {
+            if tick == PeerTick::ReactivateMemoryLock {
+                self.fsm.reactivate_memory_lock_ticks = 0;
+            }
             self.schedule_tick(tick);
         }
     }
@@ -261,9 +264,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         // TODO: instead of propose pending commands immediately, we should use timeout.
         self.fsm.peer.propose_pending_writes(self.store_ctx);
     }
-}
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     pub fn on_reactivate_memory_lock_tick(&mut self) {
         let mut pessimistic_locks = self.fsm.peer.txn_ext().pessimistic_locks.write();
 

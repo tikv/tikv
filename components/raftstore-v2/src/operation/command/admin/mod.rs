@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod conf_change;
-mod leader_transfer;
+mod transfer_leader;
 mod split;
 
 use engine_traits::{KvEngine, RaftEngine};
