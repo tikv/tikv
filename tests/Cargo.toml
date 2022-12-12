@@ -41,11 +41,11 @@ path = "benches/deadlock_detector/mod.rs"
 
 [features]
 default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
-failpoints = ["fail/failpoints", "tikv/failpoints"]
+failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
-testexport = ["raftstore/testexport", "tikv/testexport"]
+testexport = ["raftstore/testexport", "tikv/testexport", "pd_client/testexport"]
 profiling = ["profiler/profiling"]
 
 test-engine-kv-rocksdb = [
@@ -83,7 +83,7 @@ file_system = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { version = "0.10", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 libc = "0.2"
 log_wrappers = { workspace = true }
 more-asserts = "0.2"
@@ -106,7 +106,7 @@ tidb_query_expr = { workspace = true }
 tikv = { workspace = true }
 tikv_util = { workspace = true }
 time = "0.1"
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { workspace = true }
 toml = "0.5"
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
@@ -146,6 +146,7 @@ test_sst_importer = { workspace = true }
 test_storage = { workspace = true }
 test_util = { workspace = true }
 tidb_query_datatype = { workspace = true }
+tikv_kv = { workspace = true }
 tipb_helper = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 

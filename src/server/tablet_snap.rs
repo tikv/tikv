@@ -4,7 +4,6 @@ use std::{
     convert::{TryFrom, TryInto},
     fs::{self, File},
     io::{Read, Write},
-    marker::PhantomData,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -12,7 +11,6 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::KvEngine;
 use file_system::{IoType, WithIoType};
 use futures::{
     future::{Future, TryFutureExt},
@@ -28,11 +26,9 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use protobuf::Message;
-use raftstore::{
-    router::RaftStoreRouter,
-    store::snap::{TabletSnapKey, TabletSnapManager},
-};
+use raftstore::store::snap::{TabletSnapKey, TabletSnapManager};
 use security::SecurityManager;
+use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::Instant,
@@ -82,11 +78,9 @@ impl RecvTabletSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter<impl KvEngine>>(self, raft_router: R) -> Result<()> {
+    fn finish<R: RaftExtension>(self, raft_router: R) -> Result<()> {
         let key = self.key;
-        if let Err(e) = raft_router.send_raft_msg(self.raft_msg) {
-            return Err(box_err!("{} failed to send snapshot to raft: {}", key, e));
-        }
+        raft_router.feed(self.raft_msg, true);
         info!("saving all snapshot files"; "snap_key" => %key, "takes" => ?self.start.saturating_elapsed());
         Ok(())
     }
@@ -112,7 +106,7 @@ async fn send_snap_files(
     key: TabletSnapKey,
     limiter: Limiter,
 ) -> Result<u64> {
-    let path = mgr.get_final_path_for_gen(&key);
+    let path = mgr.tablet_gen_path(&key);
     info!("begin to send snapshot file";"snap_key" => %key);
     let files = fs::read_dir(&path)?
         .map(|f| Ok(f?.path()))
@@ -236,7 +230,7 @@ async fn recv_snap_files(
         .ok_or_else(|| Error::Other("empty gRPC stream".into()))?;
     let context = RecvTabletSnapContext::new(head)?;
     let chunk_size = context.chunk_size;
-    let path = snap_mgr.get_tmp_path_for_recv(&context.key);
+    let path = snap_mgr.tmp_recv_path(&context.key);
     info!("begin to receive tablet snapshot files"; "file" => %path.display());
     fs::create_dir_all(&path)?;
     let _with_io_type = WithIoType::new(context.io_type);
@@ -274,12 +268,12 @@ async fn recv_snap_files(
         f.sync_data()?;
     }
     info!("received all tablet snapshot file"; "snap_key" => %context.key);
-    let final_path = snap_mgr.get_final_path_for_recv(&context.key);
+    let final_path = snap_mgr.final_recv_path(&context.key);
     fs::rename(&path, final_path)?;
     Ok(context)
 }
 
-fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
+fn recv_snap<R: RaftExtension + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: TabletSnapManager,
@@ -302,11 +296,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
     }
 }
 
-pub struct TabletRunner<E, R>
-where
-    E: KvEngine,
-    R: RaftStoreRouter<E> + 'static,
-{
+pub struct TabletRunner<R: RaftExtension + 'static> {
     env: Arc<Environment>,
     snap_mgr: TabletSnapManager,
     security_mgr: Arc<SecurityManager>,
@@ -316,22 +306,17 @@ where
     cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
-    engine: PhantomData<E>,
     limiter: Limiter,
 }
 
-impl<E, R> TabletRunner<E, R>
-where
-    E: KvEngine,
-    R: RaftStoreRouter<E> + 'static,
-{
+impl<R: RaftExtension> TabletRunner<R> {
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: TabletSnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
-    ) -> TabletRunner<E, R> {
+    ) -> Self {
         let config = cfg.value().clone();
         let cfg_tracker = cfg.tracker("tablet-sender".to_owned());
         let limit = i64::try_from(config.snap_max_write_bytes_per_sec.0)
@@ -358,7 +343,6 @@ where
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
-            engine: PhantomData,
             limiter,
         };
         snap_worker
@@ -385,11 +369,7 @@ pub struct SendStat {
     elapsed: Duration,
 }
 
-impl<E, R> Runnable for TabletRunner<E, R>
-where
-    E: KvEngine,
-    R: RaftStoreRouter<E> + 'static,
-{
+impl<R: RaftExtension> Runnable for TabletRunner<R> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
@@ -514,7 +494,7 @@ mod tests {
         let send_path = TempDir::new().unwrap();
         let send_snap_mgr =
             TabletSnapManager::new(send_path.path().join("snap_dir").to_str().unwrap());
-        let snap_path = send_snap_mgr.get_final_path_for_gen(&snap_key);
+        let snap_path = send_snap_mgr.tablet_gen_path(&snap_key);
         create_dir_all(snap_path.as_path()).unwrap();
         // send file should skip directory
         create_dir_all(snap_path.join("dir")).unwrap();
@@ -545,7 +525,7 @@ mod tests {
         .unwrap();
 
         let stream = rx.map(|x: (SnapshotChunk, WriteFlags)| Ok(x.0));
-        let final_path = recv_snap_manager.get_final_path_for_recv(&snap_key);
+        let final_path = recv_snap_manager.final_recv_path(&snap_key);
         let r = block_on(recv_snap_files(recv_snap_manager, stream, limiter)).unwrap();
         assert_eq!(r.key, snap_key);
         std::thread::sleep(std::time::Duration::from_secs(1));

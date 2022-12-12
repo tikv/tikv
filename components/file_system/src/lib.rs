@@ -368,11 +368,11 @@ pub fn naive_dir_size<P: AsRef<Path>>(path: P) -> io::Result<usize> {
 }
 
 #[derive(Default)]
-pub struct DedupDirSizeCalculator {
+pub struct DedupedDirSizeCalculator {
     inodes: HashSet<u64>,
 }
 
-impl DedupDirSizeCalculator {
+impl DedupedDirSizeCalculator {
     pub fn size<P: AsRef<Path>>(&mut self, path: P) -> io::Result<usize> {
         if let Ok(size) = self.size_imp(path.as_ref()) {
             return Ok(size);

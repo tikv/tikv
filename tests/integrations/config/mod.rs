@@ -684,7 +684,7 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: ReadableSize(1),
         },
         block_cache: BlockCacheConfig {
-            shared: true,
+            shared: None,
             capacity: Some(ReadableSize::gb(40)),
             num_shard_bits: 10,
             strict_capacity_limit: true,
@@ -765,6 +765,7 @@ fn test_serde_custom_tikv_config() {
         num_threads: 123,
         stream_channel_window: 123,
         import_mode_timeout: ReadableDuration::secs(1453),
+        memory_use_ratio: 0.3,
     };
     value.panic_when_unexpected_key_or_data = true;
     value.gc = GcConfig {
@@ -885,7 +886,6 @@ fn test_do_not_use_unified_readpool_with_legacy_config() {
 fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
     let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
-    assert!(cfg.storage.block_cache.shared);
     assert!(cfg.storage.block_cache.capacity.is_none());
     cfg.compatible_adjust();
     assert!(cfg.storage.block_cache.capacity.is_some());

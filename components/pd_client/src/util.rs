@@ -51,13 +51,14 @@ const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
 const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
 pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(1); // 1s
 
+#[derive(Clone)]
 pub struct TargetInfo {
     target_url: String,
     via: String,
 }
 
 impl TargetInfo {
-    fn new(target_url: String, via: &str) -> TargetInfo {
+    pub(crate) fn new(target_url: String, via: &str) -> TargetInfo {
         TargetInfo {
             target_url,
             via: trim_http_prefix(via).to_string(),
@@ -340,7 +341,13 @@ impl Client {
             async move {
                 let direct_connected = self.inner.rl().target_info().direct_connected();
                 connector
-                    .reconnect_pd(members, direct_connected, force, self.enable_forwarding)
+                    .reconnect_pd(
+                        members,
+                        direct_connected,
+                        force,
+                        self.enable_forwarding,
+                        true,
+                    )
                     .await
             }
         };
@@ -383,7 +390,7 @@ impl Client {
 
         fail_point!("pd_client_reconnect", |_| Ok(()));
 
-        self.update_client(client, target_info, members, tso);
+        self.update_client(client, target_info, members, tso.unwrap());
         info!("trying to update PD client done"; "spend" => ?start.saturating_elapsed());
         Ok(())
     }
@@ -521,11 +528,13 @@ pub type StubTuple = (
     PdClientStub,
     TargetInfo,
     GetMembersResponse,
-    TimestampOracle,
+    // Only used by RpcClient, not by RpcClientV2.
+    Option<TimestampOracle>,
 );
 
+#[derive(Clone)]
 pub struct PdConnector {
-    env: Arc<Environment>,
+    pub(crate) env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
 }
 
@@ -534,7 +543,7 @@ impl PdConnector {
         PdConnector { env, security_mgr }
     }
 
-    pub async fn validate_endpoints(&self, cfg: &Config) -> Result<StubTuple> {
+    pub async fn validate_endpoints(&self, cfg: &Config, build_tso: bool) -> Result<StubTuple> {
         let len = cfg.endpoints.len();
         let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
         let mut members = None;
@@ -575,7 +584,7 @@ impl PdConnector {
         match members {
             Some(members) => {
                 let res = self
-                    .reconnect_pd(members, true, true, cfg.enable_forwarding)
+                    .reconnect_pd(members, true, true, cfg.enable_forwarding, build_tso)
                     .await?
                     .unwrap();
                 info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
@@ -593,7 +602,9 @@ impl PdConnector {
                 .max_send_message_len(-1)
                 .max_receive_message_len(-1)
                 .keepalive_time(Duration::from_secs(10))
-                .keepalive_timeout(Duration::from_secs(3));
+                .keepalive_timeout(Duration::from_secs(3))
+                .max_reconnect_backoff(Duration::from_secs(5))
+                .initial_reconnect_backoff(Duration::from_secs(1));
             self.security_mgr.connect(cb, addr_trim)
         };
         fail_point!("cluster_id_is_not_ready", |_| {
@@ -602,7 +613,7 @@ impl PdConnector {
                 GetMembersResponse::default(),
             ))
         });
-        let client = PdClientStub::new(channel);
+        let client = PdClientStub::new(channel.clone());
         let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
         let response = client
             .get_members_async_opt(&GetMembersRequest::default(), option)
@@ -680,12 +691,13 @@ impl PdConnector {
     // not empty and it can connect the leader now which represents the network
     // partition problem to leader may be recovered 3. the member information of
     // PD has been changed
-    async fn reconnect_pd(
+    pub async fn reconnect_pd(
         &self,
         members_resp: GetMembersResponse,
         direct_connected: bool,
         force: bool,
         enable_forwarding: bool,
+        build_tso: bool,
     ) -> Result<Option<StubTuple>> {
         let resp = self.load_members(&members_resp).await?;
         let leader = resp.get_leader();
@@ -699,11 +711,15 @@ impl PdConnector {
         match res {
             Some((client, target_url)) => {
                 let info = TargetInfo::new(target_url, "");
-                let tso = TimestampOracle::new(
-                    resp.get_header().get_cluster_id(),
-                    &client,
-                    info.call_option(),
-                )?;
+                let tso = if build_tso {
+                    Some(TimestampOracle::new(
+                        resp.get_header().get_cluster_id(),
+                        &client,
+                        info.call_option(),
+                    )?)
+                } else {
+                    None
+                };
                 return Ok(Some((client, info, resp, tso)));
             }
             None => {
@@ -714,11 +730,15 @@ impl PdConnector {
                 }
                 if enable_forwarding && has_network_error {
                     if let Ok(Some((client, info))) = self.try_forward(members, leader).await {
-                        let tso = TimestampOracle::new(
-                            resp.get_header().get_cluster_id(),
-                            &client,
-                            info.call_option(),
-                        )?;
+                        let tso = if build_tso {
+                            Some(TimestampOracle::new(
+                                resp.get_header().get_cluster_id(),
+                                &client,
+                                info.call_option(),
+                            )?)
+                        } else {
+                            None
+                        };
                         return Ok(Some((client, info, resp, tso)));
                     }
                 }
@@ -774,7 +794,9 @@ impl PdConnector {
         loop {
             let (res, has_network_err) = self.connect_member(leader).await?;
             match res {
-                Some((client, ep, _)) => return Ok((Some((client, ep)), has_network_err)),
+                Some((client, ep, _)) => {
+                    return Ok((Some((client, ep)), has_network_err));
+                }
                 None => {
                     if has_network_err
                         && retry_times > 0

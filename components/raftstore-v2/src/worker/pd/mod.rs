@@ -11,8 +11,8 @@ use std::{
 use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
-use file_system::DedupDirSizeCalculator;
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+use file_system::DedupedDirSizeCalculator;
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
 use raftstore::store::{util::KeysInfoFormatter, TabletSnapManager, TxnExt};
@@ -98,7 +98,7 @@ where
     store_id: u64,
     pd_client: Arc<T>,
     raft_engine: ER,
-    tablet_factory: Arc<dyn TabletFactory<EK>>,
+    tablet_registry: TabletRegistry<EK>,
     snap_mgr: TabletSnapManager,
     router: StoreRouter<EK, ER>,
 
@@ -109,7 +109,7 @@ where
     // For store_heartbeat.
     start_ts: UnixSecs,
     store_stat: store_heartbeat::StoreStat,
-    size_calculator: DedupDirSizeCalculator,
+    size_calculator: DedupedDirSizeCalculator,
 
     // For region_heartbeat.
     region_cpu_records: HashMap<u64, u32>,
@@ -133,7 +133,7 @@ where
         store_id: u64,
         pd_client: Arc<T>,
         raft_engine: ER,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        tablet_registry: TabletRegistry<EK>,
         snap_mgr: TabletSnapManager,
         router: StoreRouter<EK, ER>,
         remote: Remote<TaskCell>,
@@ -146,14 +146,14 @@ where
             store_id,
             pd_client,
             raft_engine,
-            tablet_factory,
+            tablet_registry,
             snap_mgr,
             router,
             remote,
             region_peers: HashMap::default(),
             start_ts: UnixSecs::zero(),
             store_stat: store_heartbeat::StoreStat::default(),
-            size_calculator: DedupDirSizeCalculator::default(),
+            size_calculator: DedupedDirSizeCalculator::default(),
             region_cpu_records: HashMap::default(),
             is_hb_receiver_scheduled: false,
             concurrency_manager,

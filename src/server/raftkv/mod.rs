@@ -1,21 +1,29 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod raft_extension;
+
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
+    cell::UnsafeCell,
     fmt::{self, Debug, Display, Formatter},
     io::Error as IoError,
     mem,
     num::NonZeroU64,
+    pin::Pin,
     result,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc, RwLock,
+    },
+    task::Poll,
     time::Duration,
 };
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
-use futures::{future::BoxFuture, Future};
+use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -28,6 +36,7 @@ use raft::{
     eraftpb::{self, MessageType},
     StateRole,
 };
+pub use raft_extension::RaftRouterWrap;
 use raftstore::{
     coprocessor::{
         dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
@@ -35,12 +44,12 @@ use raftstore::{
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
-        RegionSnapshot, WriteResponse,
+        self, Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
+        RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
 use thiserror::Error;
-use tikv_kv::write_modifies;
+use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
 use tikv_util::{
     codec::number::NumberEncoder,
     future::{paired_future_callback, paired_must_called_future_callback},
@@ -51,10 +60,7 @@ use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 use super::metrics::*;
 use crate::storage::{
     self, kv,
-    kv::{
-        Callback, Engine, Error as KvError, ErrorInner as KvErrorInner, ExtCallback, Modify,
-        SnapContext, WriteData,
-    },
+    kv::{Engine, Error as KvError, ErrorInner as KvErrorInner, Modify, SnapContext, WriteData},
 };
 
 #[derive(Debug, Error)]
@@ -76,19 +82,6 @@ pub enum Error {
 
     #[error("timeout after {0:?}")]
     Timeout(Duration),
-}
-
-fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {
-    match *e {
-        Error::RequestFailed(ref header) => {
-            RequestStatusKind::from(storage::get_error_kind_from_header(header))
-        }
-        Error::Io(_) => RequestStatusKind::err_io,
-        Error::Server(_) => RequestStatusKind::err_server,
-        Error::InvalidResponse(_) => RequestStatusKind::err_invalid_resp,
-        Error::InvalidRequest(_) => RequestStatusKind::err_invalid_req,
-        Error::Timeout(_) => RequestStatusKind::err_timeout,
-    }
 }
 
 fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
@@ -208,6 +201,95 @@ pub fn drop_snapshot_callback<T>() -> kv::Result<T> {
     Err(kv::Error::from(kv::ErrorInner::Request(err)))
 }
 
+struct WriteResCore {
+    ev: AtomicU8,
+    result: UnsafeCell<Option<kv::Result<()>>>,
+    wake: AtomicWaker,
+}
+
+struct WriteResSub {
+    notified_ev: u8,
+    core: Arc<WriteResCore>,
+}
+
+unsafe impl Send for WriteResSub {}
+
+impl Stream for WriteResSub {
+    type Item = WriteEvent;
+
+    #[inline]
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let mut s = self.as_mut();
+        let mut cur_ev = s.core.ev.load(Ordering::Acquire);
+        if cur_ev == s.notified_ev {
+            s.core.wake.register(cx.waker());
+            cur_ev = s.core.ev.load(Ordering::Acquire);
+            if cur_ev == s.notified_ev {
+                return Poll::Pending;
+            }
+        }
+        s.notified_ev = cur_ev;
+        match cur_ev {
+            WriteEvent::EVENT_PROPOSED => Poll::Ready(Some(WriteEvent::Proposed)),
+            WriteEvent::EVENT_COMMITTED => Poll::Ready(Some(WriteEvent::Committed)),
+            u8::MAX => {
+                let result = unsafe { (*s.core.result.get()).take().unwrap() };
+                Poll::Ready(Some(WriteEvent::Finished(result)))
+            }
+            e => panic!("unexpected event {}", e),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct WriteResFeed {
+    core: Arc<WriteResCore>,
+}
+
+unsafe impl Send for WriteResFeed {}
+
+impl WriteResFeed {
+    fn pair() -> (Self, WriteResSub) {
+        let core = Arc::new(WriteResCore {
+            ev: AtomicU8::new(0),
+            result: UnsafeCell::new(None),
+            wake: AtomicWaker::new(),
+        });
+        (
+            Self { core: core.clone() },
+            WriteResSub {
+                notified_ev: 0,
+                core,
+            },
+        )
+    }
+
+    fn notify_proposed(&self) {
+        self.core
+            .ev
+            .store(WriteEvent::EVENT_PROPOSED, Ordering::Release);
+        self.core.wake.wake();
+    }
+
+    fn notify_committed(&self) {
+        self.core
+            .ev
+            .store(WriteEvent::EVENT_COMMITTED, Ordering::Release);
+        self.core.wake.wake();
+    }
+
+    fn notify(&self, result: kv::Result<()>) {
+        unsafe {
+            (*self.core.result.get()) = Some(result);
+        }
+        self.core.ev.store(u8::MAX, Ordering::Release);
+        self.core.wake.wake();
+    }
+}
+
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
 pub struct RaftKv<E, S>
@@ -215,7 +297,7 @@ where
     E: KvEngine,
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
-    router: S,
+    router: RaftRouterWrap<S, E>,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
@@ -229,7 +311,7 @@ where
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
         RaftKv {
-            router,
+            router: RaftRouterWrap::new(router),
             engine,
             txn_extra_scheduler: None,
             region_leaders,
@@ -238,66 +320,6 @@ where
 
     pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
         self.txn_extra_scheduler = Some(txn_extra_scheduler);
-    }
-
-    fn exec_write_requests(
-        &self,
-        ctx: &Context,
-        batch: WriteData,
-        write_cb: Callback<CmdRes<E::Snapshot>>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        #[cfg(feature = "failpoints")]
-        {
-            // If rid is some, only the specified region reports error.
-            // If rid is None, all regions report error.
-            let raftkv_early_error_report_fp = || -> Result<()> {
-                fail_point!("raftkv_early_error_report", |rid| {
-                    let region_id = ctx.get_region_id();
-                    rid.and_then(|rid| {
-                        let rid: u64 = rid.parse().unwrap();
-                        if rid == region_id { None } else { Some(()) }
-                    })
-                    .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
-                });
-                Ok(())
-            };
-            raftkv_early_error_report_fp()?;
-        }
-
-        let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
-        let txn_extra = batch.extra;
-        let mut header = new_request_header(ctx);
-        let mut flags = 0;
-        if txn_extra.one_pc {
-            flags |= WriteBatchFlags::ONE_PC.bits();
-        }
-        if txn_extra.for_flashback {
-            flags |= WriteBatchFlags::FLASHBACK.bits();
-        }
-        header.set_flags(flags);
-
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header);
-        cmd.set_requests(reqs.into());
-
-        self.schedule_txn_extra(txn_extra);
-
-        let cb = StoreCallback::write_ext(
-            Box::new(move |resp| {
-                write_cb(on_write_result(resp).map_err(Error::into));
-            }),
-            proposed_cb,
-            committed_cb,
-        );
-        let extra_opts = RaftCmdExtraOpts {
-            deadline: batch.deadline,
-            disk_full_opt: batch.disk_full_opt,
-        };
-        self.router.send_command(cmd, cb, extra_opts)?;
-
-        Ok(())
     }
 }
 
@@ -338,6 +360,12 @@ where
 
     fn kv_engine(&self) -> Option<E> {
         Some(self.engine.clone())
+    }
+
+    type RaftExtension = RaftRouterWrap<S, E>;
+    #[inline]
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        &self.router
     }
 
     fn modify_on_kv_engine(
@@ -383,59 +411,116 @@ where
         }
     }
 
+    type WriteRes = impl Stream<Item = WriteEvent> + Send + Unpin;
     fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: Callback<()>,
-    ) -> kv::Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None, None)
-    }
-
-    fn async_write_ext(
-        &self,
-        ctx: &Context,
-        batch: WriteData,
-        write_cb: Callback<()>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> kv::Result<()> {
-        fail_point!("raftkv_async_write");
-        if batch.modifies.is_empty() {
-            return Err(KvError::from(KvErrorInner::EmptyRequest));
-        }
+        subscribed: u8,
+        on_applied: Option<OnAppliedCb>,
+    ) -> Self::WriteRes {
+        let mut res = (|| {
+            fail_point!("raftkv_async_write");
+            if batch.modifies.is_empty() {
+                return Err(KvError::from(KvErrorInner::EmptyRequest));
+            }
+            Ok(())
+        })();
 
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
-        self.exec_write_requests(
-            ctx,
-            batch,
-            Box::new(move |res| match res {
+        if res.is_ok() {
+            // If rid is some, only the specified region reports error.
+            // If rid is None, all regions report error.
+            res = (|| {
+                fail_point!("raftkv_early_error_report", |rid| {
+                    let region_id = ctx.get_region_id();
+                    rid.and_then(|rid| {
+                        let rid: u64 = rid.parse().unwrap();
+                        if rid == region_id { None } else { Some(()) }
+                    })
+                    .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
+                });
+                Ok(())
+            })();
+        }
+
+        let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
+        let txn_extra = batch.extra;
+        let mut header = new_request_header(ctx);
+        let mut flags = 0;
+        if txn_extra.one_pc {
+            flags |= WriteBatchFlags::ONE_PC.bits();
+        }
+        if txn_extra.allowed_in_flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
+
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header);
+        cmd.set_requests(reqs.into());
+
+        self.schedule_txn_extra(txn_extra);
+
+        let (tx, rx) = WriteResFeed::pair();
+        let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
+            None
+        } else {
+            let tx = tx.clone();
+            Some(Box::new(move || tx.notify_proposed()) as store::ExtCallback)
+        };
+        let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
+            None
+        } else {
+            let tx = tx.clone();
+            Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
+        };
+        let applied_tx = tx.clone();
+        let applied_cb = Box::new(move |resp: WriteResponse| {
+            let mut res = match on_write_result::<E::Snapshot>(resp) {
                 Ok(CmdRes::Resp(_)) => {
+                    fail_point!("raftkv_async_write_finish");
+                    Ok(())
+                }
+                Ok(CmdRes::Snap(_)) => Err(box_err!("unexpect snapshot, should mutate instead.")),
+                Err(e) => Err(kv::Error::from(e)),
+            };
+            if let Some(cb) = on_applied {
+                cb(&mut res);
+            }
+            applied_tx.notify(res);
+        });
+
+        let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
+        let extra_opts = RaftCmdExtraOpts {
+            deadline: batch.deadline,
+            disk_full_opt: batch.disk_full_opt,
+        };
+        if res.is_ok() {
+            res = self
+                .router
+                .send_command(cmd, cb, extra_opts)
+                .map_err(kv::Error::from);
+        }
+        if res.is_err() {
+            tx.notify(res);
+        }
+        rx.inspect(move |ev| {
+            let WriteEvent::Finished(res) = ev else { return };
+            match res {
+                Ok(()) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .write
                         .observe(begin_instant.saturating_elapsed_secs());
-                    fail_point!("raftkv_async_write_finish");
-                    write_cb(Ok(()))
-                }
-                Ok(CmdRes::Snap(_)) => {
-                    write_cb(Err(box_err!("unexpect snapshot, should mutate instead.")))
                 }
                 Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(&e);
+                    let status_kind = get_status_kind_from_engine_error(e);
                     ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                    write_cb(Err(e))
                 }
-            }),
-            proposed_cb,
-            committed_cb,
-        )
-        .map_err(|e| {
-            let status_kind = get_status_kind_from_error(&e);
-            ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-            e.into()
+            }
         })
     }
 
@@ -470,7 +555,7 @@ where
             flags |= WriteBatchFlags::STALE_READ.bits();
             header.set_flag_data(data.into());
         }
-        if ctx.for_flashback {
+        if ctx.allowed_in_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
         header.set_flags(flags);
@@ -559,7 +644,7 @@ where
         // and scheduling operations for this region when propose/apply before we
         // start the actual data flashback transaction command in the next phase.
         let req = new_flashback_req(ctx, AdminCmdType::PrepareFlashback);
-        exec_admin(&self.router, req)
+        exec_admin(&*self.router, req)
     }
 
     fn end_flashback(&self, ctx: &Context) -> BoxFuture<'static, kv::Result<()>> {
@@ -567,7 +652,16 @@ where
         // in `RegionLocalState` and region's meta, and when that admin cmd is applied,
         // will update the memory state of the flashback
         let req = new_flashback_req(ctx, AdminCmdType::FinishFlashback);
-        exec_admin(&self.router, req)
+        exec_admin(&*self.router, req)
+    }
+
+    fn hint_change_in_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) {
+        self.router
+            .send_store_msg(StoreMsg::ClearRegionSizeInRange { start_key, end_key })
+            .unwrap_or_else(|e| {
+                // Warn and ignore it.
+                warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
+            });
     }
 }
 

@@ -22,9 +22,12 @@ mod snapshot;
 
 use std::{cmp, time::Instant};
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, MiscExt, RaftEngine};
 use error_code::ErrorCodeExt;
-use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
+use kvproto::{
+    raft_cmdpb::AdminCmdType,
+    raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData},
+};
 use protobuf::Message as _;
 use raft::{eraftpb, Ready, StateRole, INVALID_ID};
 use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
@@ -40,6 +43,7 @@ use crate::{
     fsm::PeerFsmDelegate,
     raft::{Peer, Storage},
     router::{ApplyTask, PeerTick},
+    Result,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
@@ -334,7 +338,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
         self.storage_mut()
-            .handle_raft_ready(&mut ready, &mut write_task);
+            .handle_raft_ready(ctx, &mut ready, &mut write_task);
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready
                 .take_persisted_messages()
@@ -388,17 +392,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(self.logger, "peer id not matched"; "persisted_peer_id" => peer_id, "persisted_number" => ready_number);
             return;
         }
-        let persisted_message = self
-            .async_writer
-            .on_persisted(ctx, ready_number, &self.logger);
+        let (persisted_message, has_snapshot) =
+            self.async_writer
+                .on_persisted(ctx, ready_number, &self.logger);
         for msgs in persisted_message {
             for msg in msgs {
                 self.send_raft_message(ctx, msg);
             }
         }
+
         let persisted_number = self.async_writer.persisted_number();
         self.raft_group_mut().on_persist_ready(persisted_number);
-        let persisted_index = self.raft_group().raft.raft_log.persisted;
+        let persisted_index = self.persisted_index();
+        /// The apply snapshot process order would be:
+        /// - Get the snapshot from the ready
+        /// - Wait for async writer to load this tablet
+        /// In this step, the snapshot has loaded finish, but some apply state
+        /// need to update.
+        if has_snapshot {
+            self.on_applied_snapshot(ctx);
+        }
+
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
@@ -509,11 +523,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Apply the ready to the storage. If there is any states need to be
     /// persisted, it will be written to `write_task`.
-    fn handle_raft_ready(&mut self, ready: &mut Ready, write_task: &mut WriteTask<EK, ER>) {
+    fn handle_raft_ready<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        ready: &mut Ready,
+        write_task: &mut WriteTask<EK, ER>,
+    ) {
         let prev_raft_state = self.entry_storage().raft_state().clone();
         let ever_persisted = self.ever_persisted();
 
-        // TODO: handle snapshot
+        if !ready.snapshot().is_empty() {
+            if let Err(e) = self.apply_snapshot(
+                ready.snapshot(),
+                write_task,
+                ctx.snap_mgr.clone(),
+                ctx.tablet_registry.clone(),
+            ) {
+                error!(self.logger(),"failed to apply snapshot";"error" => ?e)
+            }
+        }
 
         let entry_storage = self.entry_storage_mut();
         if !ready.entries().is_empty() {

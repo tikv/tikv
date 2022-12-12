@@ -62,7 +62,7 @@ gag = "1.0"
 grpcio = { workspace = true }
 hex = "0.4"
 keys = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { workspace = true }

@@ -35,7 +35,7 @@ use tikv_util::{
     Either,
 };
 use time::{Duration, Timespec};
-use txn_types::{TimeStamp, WriteBatchFlags};
+use txn_types::WriteBatchFlags;
 
 use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
 use crate::{coprocessor::CoprocessorHost, store::snap::SNAPSHOT_VERSION, Error, Result};
@@ -318,6 +318,7 @@ pub fn check_flashback_state(
     is_in_flashback: bool,
     req: &RaftCmdRequest,
     region_id: u64,
+    skip_not_prepared: bool,
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
     if req.has_admin_request()
@@ -335,7 +336,7 @@ pub fn check_flashback_state(
     }
     // If the region is not in the flashback state, the flashback request itself
     // should be rejected.
-    if !is_in_flashback && is_flashback_request {
+    if !is_in_flashback && is_flashback_request && !skip_not_prepared {
         return Err(Error::FlashbackNotPrepared(region_id));
     }
     Ok(())
@@ -1185,11 +1186,7 @@ impl RegionReadProgress {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
                 // No need to update leader safe ts here.
-                coprocessor.on_update_safe_ts(
-                    core.region_id,
-                    TimeStamp::new(ts).physical(),
-                    INVALID_TIMESTAMP,
-                )
+                coprocessor.on_update_safe_ts(core.region_id, ts, INVALID_TIMESTAMP)
             }
         }
     }
@@ -1231,11 +1228,7 @@ impl RegionReadProgress {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
                 // After region merge, self safe ts may decrease, so leader safe ts should be
                 // reset.
-                coprocessor.on_update_safe_ts(
-                    core.region_id,
-                    TimeStamp::new(ts).physical(),
-                    TimeStamp::new(ts).physical(),
-                )
+                coprocessor.on_update_safe_ts(core.region_id, ts, ts)
             }
         }
     }
@@ -1260,9 +1253,7 @@ impl RegionReadProgress {
                     }
                 }
             }
-            let self_phy_ts = TimeStamp::new(self.safe_ts()).physical();
-            let leader_phy_ts = TimeStamp::new(rs.get_safe_ts()).physical();
-            coprocessor.on_update_safe_ts(leader_info.region_id, self_phy_ts, leader_phy_ts)
+            coprocessor.on_update_safe_ts(leader_info.region_id, self.safe_ts(), rs.get_safe_ts())
         }
         // whether the provided `LeaderInfo` is same as ours
         core.leader_info.leader_term == leader_info.term

@@ -261,12 +261,12 @@ where
 
     /// Returns (capacity, used, available).
     fn collect_engine_size(&mut self) -> Option<(u64, u64, u64)> {
-        let disk_stats = match fs2::statvfs(self.tablet_factory.tablets_path()) {
+        let disk_stats = match fs2::statvfs(self.tablet_registry.tablet_root()) {
             Err(e) => {
                 error!(
                     self.logger,
                     "get disk stat for rocksdb failed";
-                    "engine_path" => self.tablet_factory.tablets_path().display(),
+                    "engine_path" => self.tablet_registry.tablet_root().display(),
                     "err" => ?e
                 );
                 return None;
@@ -276,8 +276,14 @@ where
         let disk_cap = disk_stats.total_space();
         // TODO: custom capacity.
         let capacity = disk_cap;
-        let used_size = self.size_calculator.size(self.snap_mgr.root_path()).unwrap() as u64
-            + self.size_calculator.size(self.tablet_factory.tablets_path()).unwrap() as u64
+        let used_size = self
+            .size_calculator
+            .size(self.snap_mgr.root_path())
+            .unwrap() as u64
+            + self
+                .size_calculator
+                .size(self.tablet_registry.tablet_root())
+                .unwrap() as u64
             + self
                 .raft_engine
                 .get_engine_size()

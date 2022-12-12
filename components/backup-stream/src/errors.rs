@@ -6,6 +6,7 @@ use std::{
 
 use error_code::ErrorCodeExt;
 use etcd_client::Error as EtcdError;
+use grpcio::Error as GrpcError;
 use kvproto::{errorpb::Error as StoreError, metapb::*};
 use pd_client::Error as PdError;
 use protobuf::ProtobufError;
@@ -18,6 +19,8 @@ use crate::{endpoint::Task, metrics};
 
 #[derive(ThisError, Debug)]
 pub enum Error {
+    #[error("gRPC meet error {0}")]
+    Grpc(#[from] GrpcError),
     #[error("Etcd meet error {0}")]
     Etcd(#[from] EtcdError),
     #[error("Protobuf meet error {0}")]
@@ -66,6 +69,7 @@ impl ErrorCodeExt for Error {
             Error::Other(_) => OTHER,
             Error::RaftStore(_) => RAFTSTORE,
             Error::ObserveCanceled(..) => OBSERVE_CANCELED,
+            Error::Grpc(_) => GRPC,
         }
     }
 }
@@ -112,6 +116,22 @@ where
             context: context(),
             inner_error: Box::new(err.into()),
         })
+    }
+}
+
+pub trait ReportableResult {
+    fn report_if_err(self, context: impl ToString);
+}
+
+impl<E> ReportableResult for StdResult<(), E>
+where
+    Error: From<E>,
+{
+    #[inline(always)]
+    fn report_if_err(self, context: impl ToString) {
+        if let Err(err) = self {
+            Error::from(err).report(context.to_string())
+        }
     }
 }
 

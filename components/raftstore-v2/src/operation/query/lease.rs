@@ -151,7 +151,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub(crate) fn maybe_renew_leader_lease(
         &mut self,
         ts: Timespec,
-        store_meta: &Mutex<StoreMeta<EK>>,
+        store_meta: &Mutex<StoreMeta>,
         progress: Option<ReadProgress>,
     ) {
         // A nonleader peer should never has leader lease.
@@ -175,42 +175,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.maybe_update_read_progress(reader, progress);
         }
         if let Some(progress) = read_progress {
-            // TODO: remove it
-            self.add_reader_if_necessary(store_meta);
-
             let mut meta = store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id()).unwrap();
             self.maybe_update_read_progress(reader, progress);
-        }
-    }
-
-    // TODO: remove this block of code when snapshot is done; add the logic into
-    // on_persist_snapshot.
-    pub(crate) fn add_reader_if_necessary(&mut self, store_meta: &Mutex<StoreMeta<EK>>) {
-        let mut meta = store_meta.lock().unwrap();
-        // TODO: remove this block of code when snapshot is done; add the logic into
-        // on_persist_snapshot.
-        let reader = meta.readers.get_mut(&self.region_id());
-        if reader.is_none() {
-            let region = self.region().clone();
-            let region_id = region.get_id();
-            let peer_id = self.peer_id();
-            let delegate = ReadDelegate {
-                region: Arc::new(region),
-                peer_id,
-                term: self.term(),
-                applied_term: self.entry_storage().applied_term(),
-                leader_lease: None,
-                last_valid_ts: Timespec::new(0, 0),
-                tag: format!("[region {}] {}", region_id, peer_id),
-                read_progress: self.read_progress().clone(),
-                pending_remove: false,
-                bucket_meta: None,
-                txn_extra_op: Default::default(),
-                txn_ext: Default::default(),
-                track_ver: TrackVer::new(),
-            };
-            meta.readers.insert(self.region_id(), delegate);
         }
     }
 
