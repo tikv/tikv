@@ -105,14 +105,14 @@ mod tests {
             ));
         }
         let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, Context::default());
-        let mut statistic = Statistics::default();
+        let mut statistics = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
         let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
-            statistics: &mut statistic,
+            statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext,
         };

@@ -920,11 +920,11 @@ mod tests {
                 b"100".to_vec(),
             ));
         }
-        let mut statistic = Statistics::default();
+        let mut statistics = Statistics::default();
         let mut engine = TestEngineBuilder::new().build().unwrap();
         prewrite(
             &mut engine,
-            &mut statistic,
+            &mut statistics,
             vec![Mutation::make_put(
                 Key::from_raw(&[pri_key_number]),
                 b"100".to_vec(),
@@ -934,10 +934,10 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(1, statistic.write.seek);
+        assert_eq!(1, statistics.write.seek);
         let e = prewrite(
             &mut engine,
-            &mut statistic,
+            &mut statistics,
             mutations.clone(),
             pri_key.to_vec(),
             100,
@@ -945,23 +945,23 @@ mod tests {
         )
         .err()
         .unwrap();
-        assert_eq!(3, statistic.write.seek);
+        assert_eq!(3, statistics.write.seek);
         match e {
             Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))) => (),
             _ => panic!("error type not match"),
         }
         commit(
             &mut engine,
-            &mut statistic,
+            &mut statistics,
             vec![Key::from_raw(&[pri_key_number])],
             99,
             102,
         )
         .unwrap();
-        assert_eq!(3, statistic.write.seek);
+        assert_eq!(3, statistics.write.seek);
         let e = prewrite(
             &mut engine,
-            &mut statistic,
+            &mut statistics,
             mutations.clone(),
             pri_key.to_vec(),
             101,
@@ -977,7 +977,7 @@ mod tests {
         }
         let e = prewrite(
             &mut engine,
-            &mut statistic,
+            &mut statistics,
             mutations.clone(),
             pri_key.to_vec(),
             104,
@@ -990,7 +990,7 @@ mod tests {
             _ => panic!("error type not match"),
         }
 
-        statistic.write.seek = 0;
+        statistics.write.seek = 0;
         let ctx = Context::default();
         engine
             .delete_cf(
@@ -1001,7 +1001,7 @@ mod tests {
             .unwrap();
         prewrite(
             &mut engine,
-            &mut statistic,
+            &mut statistics,
             mutations.clone(),
             pri_key.to_vec(),
             104,
@@ -1009,9 +1009,9 @@ mod tests {
         )
         .unwrap();
         // All keys are prewritten successful with only one seek operations.
-        assert_eq!(1, statistic.write.seek);
+        assert_eq!(1, statistics.write.seek);
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
-        commit(&mut engine, &mut statistic, keys.clone(), 104, 105).unwrap();
+        commit(&mut engine, &mut statistics, keys.clone(), 104, 105).unwrap();
         let snap = engine.snapshot(Default::default()).unwrap();
         for k in keys {
             let v = snap.get_cf(CF_WRITE, &k.append_ts(105.into())).unwrap();
@@ -1045,10 +1045,10 @@ mod tests {
         }
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
-        let mut statistic = Statistics::default();
+        let mut statistics = Statistics::default();
         prewrite(
             &mut engine,
-            &mut statistic,
+            &mut statistics,
             mutations.clone(),
             pri_key.to_vec(),
             100,
@@ -1056,19 +1056,19 @@ mod tests {
         )
         .unwrap();
         // Rollback to make tombstones in lock-cf.
-        rollback(&mut engine, &mut statistic, keys, 100).unwrap();
+        rollback(&mut engine, &mut statistics, keys, 100).unwrap();
         // Gc rollback flags store in write-cf to make sure the next prewrite operation
         // will skip seek write cf.
         gc_by_compact(&mut engine, pri_key, 101);
         set_perf_level(PerfLevel::EnableTimeExceptForMutex);
         let perf = ReadPerfInstant::new();
-        let mut statistic = Statistics::default();
+        let mut statistics = Statistics::default();
         while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
             mutations.pop();
         }
         prewrite(
             &mut engine,
-            &mut statistic,
+            &mut statistics,
             mutations,
             pri_key.to_vec(),
             110,
@@ -1076,7 +1076,7 @@ mod tests {
         )
         .unwrap();
         let d = perf.delta();
-        assert_eq!(1, statistic.write.seek);
+        assert_eq!(1, statistics.write.seek);
         assert_eq!(d.internal_delete_skipped_count, 0);
     }
 

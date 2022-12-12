@@ -434,7 +434,7 @@ fn raw_put<F: KvFormat>(
     let put_resp = client.raw_put(&put_req).unwrap();
     assert!(!put_resp.has_region_error());
     assert!(put_resp.error.is_empty());
-    // todo support raw kv write query statistic
+    // todo support raw kv write query statistics
     // skip raw kv write query check
 }
 

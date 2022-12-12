@@ -849,7 +849,7 @@ impl<S: Snapshot> SampleBuilder<S> {
 
     // `collect_columns_stats` returns the sample collectors which contain total
     // count, null count, distinct values count and count-min sketch. And it
-    // also returns the statistic builder for PK which contains the histogram.
+    // also returns the statistics builder for PK which contains the histogram.
     // When PK is common handle, it returns index stats for PK.
     // See https://en.wikipedia.org/wiki/Reservoir_sampling
     async fn collect_columns_stats(

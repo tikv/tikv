@@ -406,7 +406,7 @@ pub fn has_data_in_range<S: Snapshot>(
     cf: CfName,
     left: &Key,
     right: &Key,
-    statistic: &mut CfStatistics,
+    statistics: &mut CfStatistics,
 ) -> Result<bool> {
     let mut cursor = CursorBuilder::new(&snapshot, cf)
         .range(None, Some(right.clone()))
@@ -414,9 +414,9 @@ pub fn has_data_in_range<S: Snapshot>(
         .fill_cache(true)
         .max_skippable_internal_keys(100)
         .build()?;
-    match cursor.seek(left, statistic) {
+    match cursor.seek(left, statistics) {
         Ok(valid) => {
-            if valid && cursor.key(statistic) < right.as_encoded().as_slice() {
+            if valid && cursor.key(statistics) < right.as_encoded().as_slice() {
                 return Ok(true);
             }
         }
