@@ -8,7 +8,7 @@ use std::time::*;
 
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::CmdType;
-use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 use raft::eraftpb::MessageType;
 
@@ -1324,4 +1324,204 @@ fn test_merge_snapshot_demote() {
     // Now snapshot should be generated and merge on store 3 should be aborted.
     cluster.must_put(b"k4", b"v4");
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}
+
+#[test]
+fn test_stale_message_after_merge() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    pd_client.must_remove_peer(left.get_id(), find_peer(&left, 3).unwrap().to_owned());
+    pd_client.must_add_peer(left.get_id(), new_peer(3, 1004));
+    pd_client.must_merge(left.get_id(), right.get_id());
+
+    // Such stale message can be sent due to network error, consider the following example:
+    // 1. Store 1 and Store 3 can't reach each other, so peer 1003 start election and send `RequestVote`
+    //    message to peer 1001, and fail due to network error, but this message is keep backoff-retry to send out
+    // 2. Peer 1002 become the new leader and remove peer 1003 and add peer 1004 on store 3, then the region is
+    //    merged into other region, the merge can success because peer 1002 can reach both peer 1001 and peer 1004
+    // 3. Network recover, so peer 1003's `RequestVote` message is sent to peer 1001 after it is merged
+    //
+    // the backoff-retry of a stale message is hard to simulated in test, so here just send this stale message directly
+    let mut raft_msg = RaftMessage::default();
+    raft_msg.set_region_id(left.get_id());
+    raft_msg.set_from_peer(find_peer(&left, 3).unwrap().to_owned());
+    raft_msg.set_to_peer(find_peer(&left, 1).unwrap().to_owned());
+    raft_msg.set_region_epoch(left.get_region_epoch().to_owned());
+    cluster.send_raft_msg(raft_msg).unwrap();
+
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}
+
+/// Check if merge is cleaned up if the merge target is destroyed several times before it's ever
+/// scheduled.
+#[test]
+fn test_node_merge_long_isolated() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    cluster.must_transfer_leader(right.get_id(), new_peer(3, 3));
+    let target_leader = peer_on_store(&left, 3);
+    cluster.must_transfer_leader(left.get_id(), target_leader);
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+
+    // So cluster becomes:
+    //  left region: 1 I 2 3(leader)
+    // right region: 1 I 2 3(leader)
+    // I means isolation.
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    pd_client.must_merge(left.get_id(), right.get_id());
+    pd_client.must_remove_peer(right.get_id(), peer_on_store(&right, 1));
+    // Split to make sure the range of new peer won't overlap with source.
+    let right = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&right, b"k2");
+    cluster.must_put(b"k4", b"v4");
+    // Ensure the node is removed, so it will not catch up any logs but just destroy itself.
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(2), b"k4", b"v4");
+
+    let filter = RegionPacketFilter::new(left.get_id(), 1);
+    cluster.clear_send_filters();
+    // Ensure source region will not take any actions.
+    cluster.add_send_filter(CloneFilterFactory(filter));
+    must_get_none(&cluster.get_engine(1), b"k3");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+
+    // So new peer will not apply snapshot.
+    let filter = RegionPacketFilter::new(right.get_id(), 1).msg_type(MessageType::MsgSnapshot);
+    cluster.add_send_filter(CloneFilterFactory(filter));
+    pd_client.must_add_peer(right.get_id(), new_peer(1, 1010));
+    cluster.must_put(b"k5", b"v5");
+    must_get_equal(&cluster.get_engine(2), b"k5", b"v5");
+    must_get_none(&cluster.get_engine(1), b"k3");
+
+    // Now peer(1, 1010) should probably created in memory but not persisted.
+    pd_client.must_remove_peer(right.get_id(), new_peer(1, 1010));
+    cluster.wait_tombstone(right.get_id(), new_peer(1, 1010));
+    cluster.clear_send_filters();
+    // Source peer should discover it's impossible to proceed and cleanup itself.
+    must_get_none(&cluster.get_engine(1), b"k1");
+}
+
+/// Check whether merge should be prevented if follower may not have enough logs.
+#[test]
+fn test_prepare_merge_with_reset_matched() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    pd_client.add_peer(r, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+    thread::sleep(Duration::from_millis(10));
+    // So leader will replicate next command but can't know whether follower (2, 2)
+    // also commits the command. Supposing the index is i0.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppendResponse)
+            .allow(1),
+    ));
+    cluster.must_put(b"k11", b"v11");
+    cluster.clear_send_filters();
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    // So peer (3, 3) only have logs after i0.
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    // Clear match information.
+    let left_on_store3 = find_peer(&left, 3).unwrap().to_owned();
+    cluster.must_transfer_leader(left.get_id(), left_on_store3);
+    let left_on_store1 = find_peer(&left, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(left.get_id(), left_on_store1);
+    let res = cluster.try_merge(left.get_id(), right.get_id());
+    // Now leader still knows peer(2, 2) has committed i0 - 1, so the min_match will
+    // become i0 - 1. But i0 - 1 is not a safe index as peer(3, 3) starts from i0 + 1.
+    assert!(res.get_header().has_error(), "{:?}", res);
+    cluster.clear_send_filters();
+    // Now leader should replicate more logs and figure out a safe index.
+    pd_client.must_merge(left.get_id(), right.get_id());
+}
+
+/// Check if prepare merge min index is chosen correctly even if all match indexes are
+/// correct.
+#[test]
+fn test_prepare_merge_with_5_nodes_snapshot() {
+    let mut cluster = new_server_cluster(0, 5);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    let peer_on_store1 = find_peer(&left, 1).unwrap().clone();
+    cluster.must_transfer_leader(left.get_id(), peer_on_store1);
+    must_get_equal(&cluster.get_engine(5), b"k1", b"v1");
+    let peer_on_store5 = find_peer(&left, 5).unwrap().clone();
+    pd_client.must_remove_peer(left.get_id(), peer_on_store5);
+    must_get_none(&cluster.get_engine(5), b"k1");
+    cluster.add_send_filter(IsolationFilterFactory::new(5));
+    pd_client.add_peer(left.get_id(), new_peer(5, 16));
+
+    // Make sure there will be no admin entries after min_matched.
+    for (k, v) in &[(b"k11", b"v11"), (b"k12", b"v12")] {
+        cluster.must_put(*k, *v);
+        must_get_equal(&cluster.get_engine(4), *k, *v);
+    }
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+    // So index of peer 4 becomes min_matched.
+    cluster.must_put(b"k13", b"v13");
+    must_get_equal(&cluster.get_engine(1), b"k13", b"v13");
+
+    // Only remove send filter on store 5.
+    cluster.clear_send_filters();
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+    must_get_equal(&cluster.get_engine(5), b"k13", b"v13");
+    let res = cluster.try_merge(left.get_id(), right.get_id());
+    // min_matched from peer 4 is beyond the first index of peer 5, it should not be chosen
+    // for prepare merge.
+    assert!(res.get_header().has_error(), "{:?}", res);
+    cluster.clear_send_filters();
+    // Now leader should replicate more logs and figure out a safe index.
+    pd_client.must_merge(left.get_id(), right.get_id());
 }
