@@ -113,11 +113,21 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn apply_put(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         util::check_key_in_region(key, self.region_state().get_region())?;
+        // Technically it's OK to remove prefix for raftstore v2. But rocksdb doesn't
+        // support specifying infinite upper bound in various APIs.
+        keys::data_key_with_buffer(key, &mut self.key_buffer);
+        self.ensure_write_buffer();
         let res = if cf.is_empty() || cf == CF_DEFAULT {
             // TODO: use write_vector
-            self.write_batch_or_default().put(key, value)
+            self.write_batch
+                .as_mut()
+                .unwrap()
+                .put(&self.key_buffer, value)
         } else {
-            self.write_batch_or_default().put_cf(cf, key, value)
+            self.write_batch
+                .as_mut()
+                .unwrap()
+                .put_cf(cf, &self.key_buffer, value)
         };
         res.unwrap_or_else(|e| {
             panic!(
@@ -138,11 +148,15 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn apply_delete(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         util::check_key_in_region(key, self.region_state().get_region())?;
+        keys::data_key_with_buffer(key, &mut self.key_buffer);
         let res = if cf.is_empty() || cf == CF_DEFAULT {
             // TODO: use write_vector
-            self.write_batch_or_default().delete(key)
+            self.write_batch.as_mut().unwrap().delete(&self.key_buffer)
         } else {
-            self.write_batch_or_default().delete_cf(cf, key)
+            self.write_batch
+                .as_mut()
+                .unwrap()
+                .delete_cf(cf, &self.key_buffer)
         };
         res.unwrap_or_else(|e| {
             panic!(

@@ -126,9 +126,9 @@ fn split_region(
 
 #[test]
 fn test_split() {
-    let cluster = Cluster::default();
+    let mut cluster = Cluster::default();
     let store_id = cluster.node(0).id();
-    let mut router = cluster.router(0);
+    let router = &mut cluster.routers[0];
     // let factory = cluster.node(0).tablet_factory();
 
     let region_id = 2;
@@ -140,7 +140,7 @@ fn test_split() {
     //   -> Region 2    ["", "k22"] peer(1, 3)
     //      Region 1000 ["k22", ""] peer(1, 10)
     let (left, right) = split_region(
-        &mut router,
+        router,
         region,
         peer.clone(),
         1000,
@@ -155,7 +155,7 @@ fn test_split() {
     //   -> Region 2    ["", "k11"]    peer(1, 3)
     //      Region 1001 ["k11", "k22"] peer(1, 11)
     let _ = split_region(
-        &mut router,
+        router,
         left,
         peer,
         1001,
@@ -170,7 +170,7 @@ fn test_split() {
     //   -> Region 1000 ["k22", "k33"] peer(1, 10)
     //      Region 1002 ["k33", ""]    peer(1, 12)
     let _ = split_region(
-        &mut router,
+        router,
         right,
         new_peer(store_id, 10),
         1002,

@@ -151,7 +151,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub(crate) fn maybe_renew_leader_lease(
         &mut self,
         ts: Timespec,
-        store_meta: &Mutex<StoreMeta<EK>>,
+        store_meta: &Mutex<StoreMeta>,
         progress: Option<ReadProgress>,
     ) {
         // A nonleader peer should never has leader lease.

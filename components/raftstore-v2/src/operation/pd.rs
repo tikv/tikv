@@ -41,7 +41,7 @@ impl Store {
         stats.set_store_id(self.store_id());
         {
             let meta = ctx.store_meta.lock().unwrap();
-            stats.set_region_count(meta.tablet_caches.len() as u32);
+            stats.set_region_count(meta.readers.len() as u32);
         }
 
         stats.set_sending_snap_count(0);

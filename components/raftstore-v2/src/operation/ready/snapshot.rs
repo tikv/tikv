@@ -28,7 +28,7 @@ use std::{
     },
 };
 
-use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory, SPLIT_PREFIX};
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
@@ -41,6 +41,7 @@ use tikv_util::{box_err, box_try, worker::Scheduler};
 
 use crate::{
     fsm::ApplyResReporter,
+    operation::command::SPLIT_PREFIX,
     raft::{Apply, Peer, Storage},
     router::{ApplyTask, PeerTick},
     Result, StoreContext,
@@ -124,17 +125,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let first_index = self.storage().entry_storage().first_index();
         if first_index == persisted_index + 1 {
             let region_id = self.region_id();
-            let tablet = ctx
-                .tablet_factory
-                .open_tablet(region_id, Some(persisted_index), OpenOptions::default())
+            ctx.tablet_registry
+                .load(region_id, persisted_index, false)
                 .unwrap();
-            self.tablet_mut().set(tablet);
             self.schedule_apply_fsm(ctx);
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);
             {
                 let mut meta = ctx.store_meta.lock().unwrap();
-                meta.tablet_caches.insert(region_id, self.tablet().clone());
                 meta.readers
                     .insert(region_id, self.generate_read_delegate());
                 meta.region_read_progress
@@ -219,8 +217,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             SnapState::Generated(ref s) => {
                 if s.1 != to {
                     info!(self.logger(),
-                        "need previous peer to call the snapshot";
+                        "need previous peer to send the snapshot";
                         "previous_peer_id" => s.1,
+                        "request_peer_id" => to,
                     );
                     return Err(raft::Error::Store(
                         raft::StorageError::SnapshotTemporarilyUnavailable,
@@ -376,7 +375,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         snap: &Snapshot,
         task: &mut WriteTask<EK, ER>,
         snap_mgr: TabletSnapManager,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        reg: TabletRegistry<EK>,
     ) -> Result<()> {
         let region_id = self.region().get_id();
         let peer_id = self.peer().get_id();
@@ -409,10 +408,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
         let (path, clean_split) = match self.split_init_mut() {
             // If index not match, the peer may accept a newer snapshot after split.
-            Some(init) if init.scheduled && last_index == RAFT_INIT_LOG_INDEX => (
-                tablet_factory.tablet_path_with_prefix(SPLIT_PREFIX, region_id, last_index),
-                false,
-            ),
+            Some(init) if init.scheduled && last_index == RAFT_INIT_LOG_INDEX => {
+                let name = reg.tablet_name(SPLIT_PREFIX, region_id, last_index);
+                (reg.tablet_root().join(name), false)
+            }
             si => {
                 let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
                 (snap_mgr.final_recv_path(&key), si.is_some())
@@ -423,20 +422,19 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         // The snapshot require no additional processing such as ingest them to DB, but
         // it should load it into the factory after it persisted.
         let hook = move || {
-            if let Err(e) = tablet_factory.load_tablet(path.as_path(), region_id, last_index) {
+            let target_path = reg.tablet_path(region_id, last_index);
+            if let Err(e) = std::fs::rename(&path, &target_path) {
                 panic!(
-                    "{:?} failed to load tablet, path: {}, {:?}",
+                    "{:?} failed to load tablet, path: {} -> {}, {:?}",
                     logger.list(),
                     path.display(),
+                    target_path.display(),
                     e
                 );
             }
             if clean_split {
-                let path = tablet_factory.tablet_path_with_prefix(
-                    SPLIT_PREFIX,
-                    region_id,
-                    RAFT_INIT_LOG_INDEX,
-                );
+                let name = reg.tablet_name(SPLIT_PREFIX, region_id, last_index);
+                let path = reg.tablet_root().join(name);
                 let _ = fs::remove_dir_all(path);
             }
         };

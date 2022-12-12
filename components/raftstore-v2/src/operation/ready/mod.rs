@@ -22,14 +22,14 @@ mod snapshot;
 
 use std::{cmp, time::Instant};
 
-use engine_traits::{KvEngine, MiscExt, OpenOptions, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, MiscExt, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData},
 };
 use protobuf::Message as _;
-use raft::{eraftpb, Ready, StateRole, INVALID_ID};
+use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
 use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -114,16 +114,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             unimplemented!();
             // return;
         }
+
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
         let from_peer = msg.take_from_peer();
         if self.is_leader() && from_peer.get_id() != INVALID_ID {
             self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
         }
-        self.insert_peer_cache(from_peer);
-        if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+        self.insert_peer_cache(msg.take_from_peer());
+        if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
+            self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
+        } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
             error!(self.logger, "raft step error"; "err" => ?e);
         }
+
         self.set_has_ready();
     }
 
@@ -407,8 +411,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         /// The apply snapshot process order would be:
         /// - Get the snapshot from the ready
         /// - Wait for async writer to load this tablet
-        /// In this step, the snapshot has loaded finish, but some apply state
-        /// need to update.
+        /// In this step, the snapshot loading has been finished, but some apply
+        /// state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
         }
@@ -462,9 +466,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // latency.
                     self.raft_group_mut().skip_bcast_commit(false);
 
+                    // Init the in-memory pessimistic lock table when the peer becomes leader.
+                    self.activate_in_memory_pessimistic_locks();
+
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
                     self.require_updating_max_ts(ctx);
+
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
 
@@ -473,6 +481,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
                     self.storage_mut().cancel_generating_snap(None);
+                    self.clear_in_memory_pessimistic_locks();
                 }
                 _ => {}
             }
@@ -537,7 +546,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 ready.snapshot(),
                 write_task,
                 ctx.snap_mgr.clone(),
-                ctx.tablet_factory.clone(),
+                ctx.tablet_registry.clone(),
             ) {
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)
             }
