@@ -32,17 +32,18 @@ engine_traits = { workspace = true }
 error_code = { workspace = true }
 # We cannot update the etcd-client to latest version because of the cyclic requirement.
 # Also we need wait until https://github.com/etcdv3/etcd-client/pull/43/files to be merged.
-etcd-client = { git = "https://github.com/pingcap/etcd-client", rev = "e0321a1990ee561cf042973666c0db61c8d82364", features = ["pub-response-field", "tls"] }
+etcd-client = { git = "https://github.com/pingcap/etcd-client", rev = "14a6f8731f1890d5fd2f6e16a9f0d0a306b0599e", features = ["pub-response-field", "tls-openssl-vendored"] }
 external_storage = { workspace = true }
 external_storage_export = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"
-
 grpcio = { workspace = true }
 hex = "0.4"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+# Fixing ahash cyclic dep: https://github.com/tkaitchuck/ahash/issues/95
+indexmap = "=1.6.2"
+kvproto = { workspace = true }
 lazy_static = "1.4"
 log_wrappers = { workspace = true }
 online_config = { workspace = true }
@@ -54,6 +55,7 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 raftstore = { workspace = true }
 regex = "1"
 resolved_ts = { workspace = true }
+security = { path = "../security" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 thiserror = "1"
@@ -65,10 +67,10 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] } 
-tonic = "0.5"
+tonic = "0.8"
 txn_types = { workspace = true }
 uuid = "0.8"
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { workspace = true }
 
 [dev-dependencies]
 async-trait = "0.1"

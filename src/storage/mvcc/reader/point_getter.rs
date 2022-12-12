@@ -315,8 +315,10 @@ impl<S: Snapshot> PointGetter<S> {
                     return Ok(None);
                 }
                 WriteType::Lock | WriteType::Rollback => {
-                    if write.versions_to_last_change < SEEK_BOUND || write.last_change_ts.is_zero()
-                    {
+                    if write.versions_to_last_change > 0 && write.last_change_ts.is_zero() {
+                        return Ok(None);
+                    }
+                    if write.versions_to_last_change < SEEK_BOUND {
                         // Continue iterate next `write`.
                     } else {
                         let commit_ts = write.last_change_ts;
@@ -1265,5 +1267,26 @@ mod tests {
             new_point_getter_with_iso(&mut engine, 70.into(), IsolationLevel::RcCheckTs);
         must_get_value(&mut batch_getter_ok, key4, val4);
         must_get_value(&mut batch_getter_ok, key5, val5);
+    }
+
+    #[test]
+    fn test_point_get_non_exist_skip_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"k";
+
+        // Write enough LOCK recrods
+        for start_ts in (1..30).into_iter().step_by(2) {
+            must_prewrite_lock(&mut engine, k, k, start_ts);
+            must_commit(&mut engine, k, start_ts, start_ts + 1);
+        }
+
+        let mut getter = new_point_getter(&mut engine, 40.into());
+        must_get_none(&mut getter, k);
+        let s = getter.take_statistics();
+        // We can know the key doesn't exist without skipping all these locks according
+        // to last_change_ts and versions_to_last_change.
+        assert_eq!(s.write.seek, 1);
+        assert_eq!(s.write.next, 0);
+        assert_eq!(s.write.get, 0);
     }
 }

@@ -98,15 +98,6 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
         batch: &mut Self::LogBatch,
     ) -> Result<()>;
 
-    /// Append some log entries and return written bytes.
-    ///
-    /// Note: `RaftLocalState` won't be updated in this call.
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize>;
-
-    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()>;
-
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
-
     /// Like `cut_logs` but the range could be very large. Return the deleted
     /// count. Generally, `from` can be passed in `0`.
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
@@ -151,12 +142,6 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     where
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<Error>;
-
-    /// Indicate whether region states should be recovered from raftdb and
-    /// replay raft logs.
-    /// When kvdb's write-ahead-log is disabled, the sequence number of the last
-    /// boot time is saved.
-    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()>;
 }
 
 pub trait RaftLogBatch: Send {
@@ -174,6 +159,12 @@ pub trait RaftLogBatch: Send {
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
     fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
+
+    /// Indicate whether region states should be recovered from raftdb and
+    /// replay raft logs.
+    /// When kvdb's write-ahead-log is disabled, the sequence number of the last
+    /// boot time is saved.
+    fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()>;
 
     /// The data size of this RaftLogBatch.
     fn persist_size(&self) -> usize;

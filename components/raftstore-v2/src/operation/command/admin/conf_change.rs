@@ -7,6 +7,8 @@
 //! - Apply after conf change is committed
 //! - Update raft state using the result of conf change
 
+use std::time::Instant;
+
 use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
@@ -39,12 +41,12 @@ use crate::{
 #[derive(Default, Debug)]
 pub struct ConfChangeResult {
     pub index: u64,
-    // The proposed ConfChangeV2 or (legacy) ConfChange
-    // ConfChange (if it is) will convert to ConfChangeV2
+    // The proposed ConfChangeV2 or (legacy) ConfChange.
+    // ConfChange (if it is) will be converted to ConfChangeV2.
     pub conf_change: ConfChangeV2,
     // The change peer requests come along with ConfChangeV2
-    // or (legacy) ConfChange, for ConfChange, it only contains
-    // one element
+    // or (legacy) ConfChange. For ConfChange, it only contains
+    // one element.
     pub changes: Vec<ChangePeerRequest>,
     pub region_state: RegionLocalState,
 }
@@ -127,7 +129,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(proposal_index)
     }
 
-    pub fn on_apply_res_conf_change(&mut self, conf_change: ConfChangeResult) {
+    pub fn on_apply_res_conf_change<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        conf_change: ConfChangeResult,
+    ) {
         // TODO: cancel generating snapshot.
 
         // Snapshot is applied in memory without waiting for all entries being
@@ -150,6 +156,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "notify pd with change peer region";
                 "region" => ?self.region(),
             );
+            self.region_heartbeat_pd(ctx);
             let demote_self = tikv_util::store::is_learner(self.peer());
             if remove_self || demote_self {
                 warn!(self.logger, "removing or demoting leader"; "remove" => remove_self, "demote" => demote_self);
@@ -157,12 +164,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.raft_group_mut()
                     .raft
                     .become_follower(term, raft::INVALID_ID);
-            } else if conf_change.changes.iter().any(|c| {
-                matches!(
-                    c.get_change_type(),
-                    ConfChangeType::AddNode | ConfChangeType::AddLearnerNode
-                )
-            }) {
+            }
+            let mut has_new_peer = None;
+            for c in conf_change.changes {
+                let peer_id = c.get_peer().get_id();
+                match c.get_change_type() {
+                    ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
+                        if has_new_peer.is_none() {
+                            has_new_peer = Some(Instant::now());
+                        }
+                        self.add_peer_heartbeat(peer_id, has_new_peer.unwrap());
+                    }
+                    ConfChangeType::RemoveNode => {
+                        self.remove_peer_heartbeat(peer_id);
+                    }
+                }
+            }
+            if has_new_peer.is_some() {
                 // Speed up snapshot instead of waiting another heartbeat.
                 self.raft_group_mut().ping();
                 self.set_has_ready();

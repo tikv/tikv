@@ -3,8 +3,8 @@
 // #[PerformanceCriticalPath]
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
+    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, WriteBatch, WriteBatchExt,
+    WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::{
     metapb::Region,
@@ -286,17 +286,6 @@ impl RaftEngine for RocksEngine {
         Ok(())
     }
 
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
-        let mut wb = self.write_batch();
-        let buf = Vec::with_capacity(1024);
-        wb.append_impl(raft_group_id, &entries, buf)?;
-        self.consume(&mut wb, false)
-    }
-
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        self.put_msg(&keys::raft_state_key(raft_group_id), state)
-    }
-
     fn batch_gc(&self, groups: Vec<RaftLogGcTask>) -> Result<usize> {
         let mut total = 0;
         let mut raft_wb = self.write_batch_with_cap(4 * 1024);
@@ -343,10 +332,6 @@ impl RaftEngine for RocksEngine {
         self.as_inner().path()
     }
 
-    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
-        self.put_msg(keys::STORE_IDENT_KEY, ident)
-    }
-
     fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
     where
         F: FnMut(u64) -> std::result::Result<(), E>,
@@ -373,10 +358,6 @@ impl RaftEngine for RocksEngine {
             None => Ok(()),
             Some(e) => Err(e),
         }
-    }
-
-    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
-        self.put_msg(keys::RECOVER_STATE_KEY, state)
     }
 }
 
@@ -430,6 +411,10 @@ impl RaftLogBatch for RocksWriteBatchVec {
 
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         self.put_msg(&keys::apply_state_key(raft_group_id), state)
+    }
+
+    fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {
+        self.put_msg(keys::RECOVER_STATE_KEY, state)
     }
 }
 

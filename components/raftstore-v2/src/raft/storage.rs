@@ -15,12 +15,14 @@ use raft::{
     eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{util, EntryStorage, ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use raftstore::store::{
+    util, EntryStorage, ReadTask, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+};
 use slog::{info, o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
 use crate::{
-    operation::{GenSnapTask, SnapState},
+    operation::{GenSnapTask, SnapState, SplitInit},
     Result,
 };
 
@@ -67,6 +69,7 @@ pub struct Storage<EK: KvEngine, ER> {
     /// Snapshot part.
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
+    split_init: Option<Box<SplitInit>>,
 }
 
 impl<EK: KvEngine, ER> Debug for Storage<EK, ER> {
@@ -200,49 +203,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         .map(Some)
     }
 
-    /// Creates a new storage for split peer.
-    ///
-    /// Except for region local state which uses the `region` provided with the
-    /// inital tablet index, all uses the inital states.
-    pub fn with_split(
-        store_id: u64,
-        region: &metapb::Region,
-        engine: ER,
-        read_scheduler: Scheduler<ReadTask<EK>>,
-        logger: &Logger,
-    ) -> Result<Option<Storage<EK, ER>>> {
-        let mut region_state = RegionLocalState::default();
-        region_state.set_region(region.clone());
-        region_state.set_state(PeerState::Normal);
-        region_state.set_tablet_index(RAFT_INIT_LOG_INDEX);
-
-        let mut apply_state = RaftApplyState::default();
-        apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
-        apply_state
-            .mut_truncated_state()
-            .set_index(RAFT_INIT_LOG_INDEX);
-        apply_state
-            .mut_truncated_state()
-            .set_term(RAFT_INIT_LOG_TERM);
-
-        let mut raft_state = RaftLocalState::default();
-        raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
-        raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
-        raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-
-        Self::create(
-            store_id,
-            region_state,
-            raft_state,
-            apply_state,
-            engine,
-            read_scheduler,
-            true,
-            logger,
-        )
-        .map(Some)
-    }
-
     fn create(
         store_id: u64,
         region_state: RegionLocalState,
@@ -279,7 +239,18 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             logger,
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(Box::new(None)),
+            split_init: None,
         })
+    }
+
+    #[inline]
+    pub fn region_state_mut(&mut self) -> &mut RegionLocalState {
+        &mut self.region_state
+    }
+
+    #[inline]
+    pub fn split_init_mut(&mut self) -> &mut Option<Box<SplitInit>> {
+        &mut self.split_init
     }
 
     #[inline]
@@ -401,11 +372,11 @@ mod tests {
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::{KvTestEngine, TestTabletFactoryV2},
+        kv::{KvTestEngine, TestTabletFactory},
         raft::RaftTestEngine,
     };
     use engine_traits::{
-        KvEngine, OpenOptions, RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletFactory, ALL_CFS,
+        KvEngine, RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletRegistry, ALL_CFS,
     };
     use kvproto::{
         metapb::{Peer, Region},
@@ -413,15 +384,15 @@ mod tests {
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
     use raftstore::store::{
-        AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask, TabletSnapKey,
-        TabletSnapManager, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        util::new_empty_snapshot, AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask,
+        TabletSnapKey, TabletSnapManager, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     };
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::worker::{Runnable, Worker};
 
     use super::*;
-    use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes, tablet::CachedTablet};
+    use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes};
 
     #[derive(Clone)]
     pub struct TestRouter {
@@ -491,6 +462,53 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_snapshot() {
+        let region = new_region();
+        let path = TempDir::new().unwrap();
+        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap());
+        mgr.init().unwrap();
+        let raft_engine =
+            engine_test::raft::new_engine(&format!("{}", path.path().join("raft").display()), None)
+                .unwrap();
+        let mut wb = raft_engine.log_batch(10);
+        write_initial_states(&mut wb, region.clone()).unwrap();
+        assert!(!wb.is_empty());
+        raft_engine.consume(&mut wb, true).unwrap();
+        // building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
+        let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
+        let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
+        let sched = worker.scheduler();
+        let logger = slog_global::borrow_global().new(o!());
+        let mut s = Storage::new(4, 6, raft_engine.clone(), sched, &logger.clone())
+            .unwrap()
+            .unwrap();
+
+        let snapshot = new_empty_snapshot(region.clone(), 10, 1, false);
+        let mut task = WriteTask::new(region.get_id(), 5, 0);
+        s.apply_snapshot(&snapshot, &mut task, mgr, reg).unwrap();
+
+        // It can be set before load tablet.
+        assert_eq!(PeerState::Normal, s.region_state().get_state());
+        assert_eq!(10, s.entry_storage().truncated_index());
+        assert_eq!(1, s.entry_storage().truncated_term());
+        assert_eq!(1, s.entry_storage().last_term());
+        assert_eq!(10, s.entry_storage().raft_state().last_index);
+        // This index can't be set before load tablet.
+        assert_ne!(10, s.entry_storage().applied_index());
+        assert_ne!(1, s.entry_storage().applied_term());
+        assert_ne!(10, s.region_state().get_tablet_index());
+        assert!(task.persisted_cb.is_some());
+
+        s.on_applied_snapshot();
+        assert_eq!(10, s.entry_storage().applied_index());
+        assert_eq!(1, s.entry_storage().applied_term());
+        assert_eq!(10, s.region_state().get_tablet_index());
+    }
+
+    #[test]
     fn test_storage_create_snapshot() {
         let region = new_region();
         let path = TempDir::new().unwrap();
@@ -506,15 +524,9 @@ mod tests {
         // building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
-        let factory = Arc::new(TestTabletFactoryV2::new(
-            path.path().join("tablet").as_path(),
-            ops,
-            cf_opts,
-        ));
-        // create tablet with region_id 1
-        let tablet = factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-            .unwrap();
+        let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
+        let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
+        reg.load(region.get_id(), 10, true).unwrap();
         // setup read runner worker and peer storage
         let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
@@ -526,13 +538,14 @@ mod tests {
         let mut read_runner = ReadRunner::new(router.clone(), raft_engine);
         read_runner.set_snap_mgr(mgr.clone());
         worker.start(read_runner);
+        let mut state = RegionLocalState::default();
+        state.set_region(region.clone());
         // setup peer applyer
         let mut apply = Apply::new(
             region.get_peers()[0].clone(),
-            RegionLocalState::default(),
+            state,
             router,
-            CachedTablet::new(Some(tablet)),
-            factory,
+            reg,
             sched,
             logger,
         );
@@ -553,8 +566,9 @@ mod tests {
         assert_eq!(snap.get_metadata().get_term(), 0);
         assert_eq!(snap.get_data().is_empty(), false);
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
-        let checkpointer_path = mgr.get_final_path_for_gen(&snap_key);
+        let checkpointer_path = mgr.tablet_gen_path(&snap_key);
         assert!(checkpointer_path.exists());
+        s.snapshot(0, 7).unwrap();
 
         // Test cancel snapshot
         let snap = s.snapshot(0, 0);

@@ -230,7 +230,7 @@ impl Store {
             ctx.read_scheduler.clone(),
             &ctx.logger,
         )
-        .and_then(|s| PeerFsm::new(&ctx.cfg, &*ctx.tablet_factory, s))
+        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, s))
         {
             Ok(p) => p,
             res => {
@@ -280,7 +280,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// are split. It's a waste to use snapshot to restore newly split
     /// tablet.
     #[inline]
-    pub fn postpond_destroy(&self) -> bool {
+    pub fn postponed_destroy(&self) -> bool {
         let entry_storage = self.storage().entry_storage();
         // TODO: check actual split index instead of commit index.
         entry_storage.applied_index() != entry_storage.commit_index()
@@ -293,7 +293,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// memory states.
     pub fn start_destroy(&mut self, write_task: &mut WriteTask<EK, ER>) {
         let entry_storage = self.storage().entry_storage();
-        if self.postpond_destroy() {
+        if self.postponed_destroy() {
             return;
         }
         let first_index = entry_storage.first_index();

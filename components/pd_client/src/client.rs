@@ -42,8 +42,8 @@ use super::{
     UnixSecs, REQUEST_TIMEOUT,
 };
 
-const CQ_COUNT: usize = 1;
-const CLIENT_PREFIX: &str = "pd";
+pub const CQ_COUNT: usize = 1;
+pub const CLIENT_PREFIX: &str = "pd";
 
 pub struct RpcClient {
     cluster_id: u64,
@@ -86,7 +86,7 @@ impl RpcClient {
         );
         let pd_connector = PdConnector::new(env.clone(), security_mgr.clone());
         for i in 0..retries {
-            match pd_connector.validate_endpoints(cfg).await {
+            match pd_connector.validate_endpoints(cfg, true).await {
                 Ok((client, target, members, tso)) => {
                     let cluster_id = members.get_header().get_cluster_id();
                     let rpc_client = RpcClient {
@@ -97,7 +97,7 @@ impl RpcClient {
                             client,
                             members,
                             target,
-                            tso,
+                            tso.unwrap(),
                             cfg.enable_forwarding,
                         )),
                         monitor: monitor.clone(),
@@ -554,13 +554,16 @@ impl PdClient for RpcClient {
                     .client_stub
                     .get_region_by_id_async_opt(&req, call_option_inner(&inner))
                     .unwrap_or_else(|e| {
-                        panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
+                        panic!(
+                            "fail to request PD {} err {:?}",
+                            "get_region_leader_by_id", e
+                        )
                     })
             };
             Box::pin(async move {
                 let mut resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
-                    .with_label_values(&["get_region_by_id"])
+                    .with_label_values(&["get_region_leader_by_id"])
                     .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 if resp.has_region() && resp.has_leader() {
@@ -1086,29 +1089,5 @@ impl PdClient for RpcClient {
         self.pd_client
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
-    }
-}
-
-pub struct DummyPdClient {
-    pub next_ts: TimeStamp,
-}
-
-impl DummyPdClient {
-    pub fn new() -> DummyPdClient {
-        DummyPdClient {
-            next_ts: TimeStamp::zero(),
-        }
-    }
-}
-
-impl Default for DummyPdClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PdClient for DummyPdClient {
-    fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
-        Box::pin(future::ok(self.next_ts))
     }
 }

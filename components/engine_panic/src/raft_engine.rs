@@ -108,14 +108,6 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
-        panic!()
-    }
-
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        panic!()
-    }
-
     fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
         panic!()
     }
@@ -148,19 +140,11 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
-        panic!()
-    }
-
     fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
     where
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<Error>,
     {
-        panic!()
-    }
-
-    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
         panic!()
     }
 }
@@ -207,6 +191,10 @@ impl RaftLogBatch for PanicWriteBatch {
     }
 
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+        panic!()
+    }
+
+    fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {
         panic!()
     }
 }
