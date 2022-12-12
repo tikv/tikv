@@ -202,16 +202,21 @@ where
 {
     fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
         for r in apply_res {
-            self.router.try_send(
-                r.region_id,
+            let region_id = r.region_id;
+            if let Err(e) = self.router.force_send(
+                region_id,
                 PeerMsg::ApplyRes {
                     res: ApplyTaskRes::Apply(r),
                 },
-            );
+            ) {
+                error!("failed to send apply result"; "region_id" => region_id, "err" => ?e);
+            }
         }
     }
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
-        self.router.try_send(region_id, msg);
+        if let Err(e) = self.router.force_send(region_id, msg) {
+            error!("failed to notify apply msg"; "region_id" => region_id, "err" => ?e);
+        }
     }
 
     fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
@@ -777,6 +782,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     for RaftPoller<EK, ER, T>
 {
     fn begin(&mut self, _batch_size: usize) {
+        fail_point!("begin_raft_poller");
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
@@ -1521,7 +1527,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
                 // Maybe the target is promoted from learner to voter, but the follower
                 // doesn't know it. So we only compare peer id.
-                assert_eq!(peer.get_id(), msg.get_from_peer().get_id());
+                if peer.get_id() < msg.get_from_peer().get_id() {
+                    panic!(
+                        "peer id increased after region is merged, message peer id {}, local peer id {}, region {:?}",
+                        msg.get_from_peer().get_id(),
+                        peer.get_id(),
+                        region
+                    );
+                }
                 // Let stale peer decides whether it should wait for merging or just remove
                 // itself.
                 Some(local_state.get_merge_state().get_target().to_owned())
