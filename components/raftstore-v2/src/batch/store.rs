@@ -21,6 +21,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
+    disk_usage::DiskUsage,
     metapb::Store,
     raft_serverpb::{PeerState, RaftMessage},
 };
@@ -77,6 +78,10 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
     pub read_scheduler: Scheduler<ReadTask<EK>>,
+
+    /// Disk usage for the store itself.
+    pub self_disk_usage: DiskUsage,
+
     pub snap_mgr: TabletSnapManager,
     pub pd_scheduler: Scheduler<PdTask>,
 }
@@ -345,6 +350,7 @@ where
             tablet_registry: self.tablet_registry.clone(),
             apply_pool: self.apply_pool.clone(),
             read_scheduler: self.read_scheduler.clone(),
+            self_disk_usage: DiskUsage::Normal,
             snap_mgr: self.snap_mgr.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
         };
