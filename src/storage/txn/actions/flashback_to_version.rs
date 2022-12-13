@@ -13,12 +13,12 @@ pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for mul
 pub fn flashback_to_version_read_lock<S: Snapshot>(
     reader: &mut MvccReader<S>,
     next_lock_key: Key,
-    end_key: &Key,
+    end_key: Option<&Key>,
     statistics: &mut Statistics,
 ) -> TxnResult<(Vec<(Key, Lock)>, bool)> {
     let key_locks_result = reader.scan_locks(
         Some(&next_lock_key),
-        Some(end_key),
+        end_key,
         // To flashback `CF_LOCK`, we need to delete all locks.
         |_| true,
         FLASHBACK_BATCH_SIZE,
@@ -30,7 +30,7 @@ pub fn flashback_to_version_read_lock<S: Snapshot>(
 pub fn flashback_to_version_read_write<S: Snapshot>(
     reader: &mut MvccReader<S>,
     next_write_key: Key,
-    end_key: &Key,
+    end_key: Option<&Key>,
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
@@ -47,7 +47,7 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
         let key_ts_old_writes;
         (key_ts_old_writes, has_remain_writes) = reader.scan_writes(
             Some(&next_write_key),
-            Some(end_key),
+            end_key,
             Some(flashback_version),
             // No need to find an old version for the key if its latest `commit_ts` is smaller
             // than or equal to the version.
@@ -201,7 +201,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) -> usize {
-        let next_key = Key::from_raw(keys::next_key(key).as_slice());
+        let next_key = Key::from_raw_maybe_unbounded(keys::next_key(key).as_slice());
         let key = Key::from_raw(key);
         let (version, start_ts, commit_ts) = (version.into(), start_ts.into(), commit_ts.into());
         let ctx = Context::default();
@@ -210,7 +210,7 @@ pub mod tests {
         let mut statistics = Statistics::default();
         // Flashback the locks.
         let (key_locks, has_remain_locks) =
-            flashback_to_version_read_lock(&mut reader, key.clone(), &next_key, &mut statistics)
+            flashback_to_version_read_lock(&mut reader, key.clone(), next_key.as_ref(), &mut statistics)
                 .unwrap();
         assert!(!has_remain_locks);
         let cm = ConcurrencyManager::new(TimeStamp::zero());
@@ -224,7 +224,7 @@ pub mod tests {
         let key_old_writes = flashback_to_version_read_write(
             &mut reader,
             key,
-            &next_key,
+            next_key.as_ref(),
             version,
             start_ts,
             commit_ts,

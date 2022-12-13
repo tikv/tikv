@@ -859,7 +859,7 @@ fn test_mvcc_flashback_unprepared() {
     must_kv_read_equal(&client, ctx, k, v, 6);
 }
 
-[test]
+#[test]
  fn test_mvcc_flashback_with_unlimit_range() {
      let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
      let (k, v) = (b"key".to_vec(), b"value".to_vec());

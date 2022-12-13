@@ -33,7 +33,7 @@ pub fn new_flashback_to_version_read_phase_cmd(
     commit_ts: TimeStamp,
     version: TimeStamp,
     start_key: Key,
-    end_key: Key,
+    end_key: Option<Key>,
     ctx: Context,
 ) -> TypedCommand<()> {
     FlashbackToVersionReadPhase::new(
@@ -59,7 +59,7 @@ command! {
             commit_ts: TimeStamp,
             version: TimeStamp,
             start_key: Key,
-            end_key: Key,
+            end_key: Option<Key>,
             state: FlashbackToVersionState,
         }
 }
@@ -102,7 +102,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 let (mut key_locks, has_remain_locks) = flashback_to_version_read_lock(
                     &mut reader,
                     next_lock_key,
-                    &self.end_key,
+                    self.end_key.as_ref(),
                     statistics,
                 )?;
                 if key_locks.is_empty() && !has_remain_locks {
@@ -131,7 +131,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 let mut key_old_writes = flashback_to_version_read_write(
                     &mut reader,
                     next_write_key,
-                    &self.end_key,
+                    self.end_key.as_ref(),
                     self.version,
                     self.start_ts,
                     self.commit_ts,
