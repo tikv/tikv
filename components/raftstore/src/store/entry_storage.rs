@@ -1077,8 +1077,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             let mut pri = CommandPri::Low;
             for entry in &entries {
                 let header = util::get_entry_header(entry);
-                let group_name =
-                    String::from_utf8_lossy(header.get_resource_group_tag().into()).into_owned();
+                let group_name = header.get_resource_group_name().to_owned();
                 *task.groups.entry(group_name).or_default() += entry.compute_size() as u64;
                 let ent_pri = header.get_priority();
                 if ent_pri == CommandPri::High {

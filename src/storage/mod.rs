@@ -593,7 +593,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -751,9 +751,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
-        let group_name =
-            String::from_utf8_lossy(requests[0].get_context().get_resource_group_tag().into())
-                .into_owned();
+        let group_name = requests[0]
+            .get_context()
+            .get_resource_group_name()
+            .to_owned();
 
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
@@ -935,7 +936,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = keys
             .iter()
@@ -1117,7 +1118,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1286,7 +1287,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<LockInfo>>> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1931,7 +1932,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
 
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
@@ -2045,7 +2046,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
@@ -2112,7 +2113,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
@@ -2175,7 +2176,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let engine = self.engine.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
@@ -2225,7 +2226,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
@@ -2662,7 +2663,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
         let sched = self.get_scheduler();
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
@@ -2695,7 +2696,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let sched = self.get_scheduler();
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
@@ -2720,7 +2721,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let sched = self.get_scheduler();
         let priority = ctx.get_priority();
-        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = keys

@@ -669,7 +669,10 @@ impl Command {
     }
 
     pub fn group_name(&self) -> String {
-        String::from_utf8_lossy(self.command_ext().get_ctx().get_resource_group_tag().into()).into()
+        self.command_ext()
+            .get_ctx()
+            .get_resource_group_name()
+            .to_owned()
     }
 
     pub fn need_flow_control(&self) -> bool {

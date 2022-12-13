@@ -455,8 +455,7 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
-        let group_name =
-            String::from_utf8_lossy(req_ctx.context.get_resource_group_tag().into()).into_owned();
+        let group_name = req_ctx.context.get_resource_group_name().to_owned();
         let task_id = req_ctx.build_task_id();
         let key_ranges = req_ctx
             .ranges
@@ -607,8 +606,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let group_name =
-            String::from_utf8_lossy(req_ctx.context.get_resource_group_tag().into()).into_owned();
+        let group_name = req_ctx.context.get_resource_group_name().to_owned();
         let key_ranges = req_ctx
             .ranges
             .iter()

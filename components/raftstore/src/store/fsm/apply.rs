@@ -3457,9 +3457,7 @@ impl<EK: KvEngine> ResourceMetered for Msg<EK> {
                 for cached_entries in &apply.entries {
                     cached_entries.iter_entries(|entry| {
                         let header = util::get_entry_header(entry);
-                        let group_name =
-                            String::from_utf8_lossy(header.get_resource_group_tag().into())
-                                .into_owned();
+                        let group_name = header.get_resource_group_name().to_owned();
                         // TODO: compute size is not accurate enough
                         *map.entry(group_name).or_default() += entry.compute_size() as u64;
                     });
