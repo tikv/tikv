@@ -88,7 +88,7 @@ pub mod kv {
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
         RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
-    use engine_traits::{MiscExt, Result, TabletFactory};
+    use engine_traits::{MiscExt, Result, TabletContext, TabletFactory};
 
     use crate::ctor::{CfOptions as KvTestCfOptions, DbOptions, KvEngineConstructorExt};
 
@@ -119,7 +119,7 @@ pub mod kv {
     }
 
     impl TabletFactory<KvTestEngine> for TestTabletFactory {
-        fn open_tablet(&self, _id: u64, _suffix: Option<u64>, path: &Path) -> Result<KvTestEngine> {
+        fn open_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<KvTestEngine> {
             KvTestEngine::new_kv_engine_opt(
                 path.to_str().unwrap(),
                 self.db_opt.clone(),
@@ -127,7 +127,7 @@ pub mod kv {
             )
         }
 
-        fn destroy_tablet(&self, _id: u64, _suffix: Option<u64>, path: &Path) -> Result<()> {
+        fn destroy_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<()> {
             let tombstone_path = path.join(TOMBSTONE_SUFFIX);
             std::fs::remove_dir_all(&tombstone_path)?;
             std::fs::rename(path, &tombstone_path)?;

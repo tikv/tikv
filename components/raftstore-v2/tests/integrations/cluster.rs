@@ -20,7 +20,7 @@ use engine_test::{
     kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::{TabletRegistry, ALL_CFS};
+use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
     metapb::{self, RegionEpoch, Store},
@@ -46,6 +46,18 @@ use tikv_util::{
     store::new_peer,
 };
 use txn_types::WriteBatchFlags;
+
+pub fn check_skip_wal(path: &str) {
+    let mut found = false;
+    for f in std::fs::read_dir(path).unwrap() {
+        let e = f.unwrap();
+        if e.path().extension().map_or(false, |ext| ext == "log") {
+            found = true;
+            assert_eq!(e.metadata().unwrap().len(), 0, "{}", e.path().display());
+        }
+    }
+    assert!(found, "no WAL found in {}", path);
+}
 
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
@@ -209,7 +221,7 @@ impl RunningState {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
     ) -> (TestRouter, TabletSnapManager, Self) {
-        let cf_opts = ALL_CFS
+        let cf_opts = DATA_CFS
             .iter()
             .copied()
             .map(|cf| (cf, CfOptions::default()))
@@ -226,16 +238,13 @@ impl RunningState {
         if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
             let factory = registry.tablet_factory();
             let path = registry.tablet_path(region.get_id(), RAFT_INIT_LOG_INDEX);
+            let ctx = TabletContext::new(&region, Some(RAFT_INIT_LOG_INDEX));
             if factory.exists(&path) {
                 registry.remove(region.get_id());
-                factory
-                    .destroy_tablet(region.get_id(), Some(RAFT_INIT_LOG_INDEX), &path)
-                    .unwrap();
+                factory.destroy_tablet(ctx.clone(), &path).unwrap();
             }
             // Create the tablet without loading it in cache.
-            factory
-                .open_tablet(region.get_id(), Some(RAFT_INIT_LOG_INDEX), &path)
-                .unwrap();
+            factory.open_tablet(ctx, &path).unwrap();
         }
 
         let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(

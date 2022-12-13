@@ -3593,6 +3593,7 @@ mod tests {
     use txn_types::{Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::{
+        config::EngineType,
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
         txn::{
@@ -4137,12 +4138,23 @@ mod tests {
             let cfs_opts = vec![
                 (
                     CF_DEFAULT,
-                    cfg_rocksdb
-                        .defaultcf
-                        .build_opt(&cache, None, ApiVersion::V1),
+                    cfg_rocksdb.defaultcf.build_opt(
+                        &cache,
+                        None,
+                        ApiVersion::V1,
+                        EngineType::RaftKv,
+                    ),
                 ),
-                (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                (
+                    CF_LOCK,
+                    cfg_rocksdb.lockcf.build_opt(&cache, EngineType::RaftKv),
+                ),
+                (
+                    CF_WRITE,
+                    cfg_rocksdb
+                        .writecf
+                        .build_opt(&cache, None, EngineType::RaftKv),
+                ),
                 (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
             RocksEngine::new(
