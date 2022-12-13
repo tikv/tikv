@@ -8,7 +8,7 @@ use raft::prelude::ConfChangeType;
 use raftstore_v2::router::{PeerMsg, PeerTick};
 use tikv_util::store::new_learner_peer;
 
-use crate::cluster::Cluster;
+use crate::cluster::{check_skip_wal, Cluster};
 
 #[test]
 fn test_simple_change() {
@@ -97,4 +97,8 @@ fn test_simple_change() {
     assert_eq!(meta.region_state.peers, vec![leader_peer]);
     // TODO: check if the peer is removed once life trace is implemented or
     // snapshot is implemented.
+
+    // Check if WAL is skipped for admin command.
+    let mut cached = cluster.node(0).tablet_registry().get(2).unwrap();
+    check_skip_wal(cached.latest().unwrap().as_inner().path());
 }

@@ -1,13 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use raftstore::store::{
     can_amend_read, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
     msg::ReadCallback, propose_read_index, should_renew_lease, util::LeaseState, ReadDelegate,
-    ReadIndexRequest, ReadProgress, TrackVer, Transport,
+    ReadIndexRequest, ReadProgress, Transport,
 };
 use slog::debug;
 use tikv_util::time::monotonic_raw_now;
@@ -99,10 +99,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// awake the read tasks waiting in frontend (such as unified thread pool)
     /// In v1, it's named as response_read.
-    pub(crate) fn respond_read_index<T>(
+    pub(crate) fn respond_read_index(
         &self,
         read_index_req: &mut ReadIndexRequest<QueryResChannel>,
-        ctx: &mut StoreContext<EK, ER, T>,
     ) {
         debug!(
             self.logger,
@@ -111,7 +110,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
         let time = monotonic_raw_now();
-        for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
+        for (_, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)

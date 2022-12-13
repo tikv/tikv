@@ -1,19 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    task::{Context, Poll},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, TabletRegistry};
-use futures::{compat::Future01CompatExt, Future, FutureExt, StreamExt};
+use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use raftstore::store::ReadTask;
 use slog::Logger;
