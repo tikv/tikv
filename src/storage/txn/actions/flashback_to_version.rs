@@ -209,9 +209,13 @@ pub mod tests {
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
         let mut statistics = Statistics::default();
         // Flashback the locks.
-        let (key_locks, has_remain_locks) =
-            flashback_to_version_read_lock(&mut reader, key.clone(), next_key.as_ref(), &mut statistics)
-                .unwrap();
+        let (key_locks, has_remain_locks) = flashback_to_version_read_lock(
+            &mut reader,
+            key.clone(),
+            next_key.as_ref(),
+            &mut statistics,
+        )
+        .unwrap();
         assert!(!has_remain_locks);
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm.clone());

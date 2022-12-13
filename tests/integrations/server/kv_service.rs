@@ -860,33 +860,33 @@ fn test_mvcc_flashback_unprepared() {
 }
 
 #[test]
- fn test_mvcc_flashback_with_unlimit_range() {
-     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
-     let (k, v) = (b"key".to_vec(), b"value".to_vec());
-     let mut ts = 0;
-     write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
-     must_kv_read_equal(&client, ctx.clone(), k.clone(), v, 6);
+fn test_mvcc_flashback_with_unlimit_range() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let mut ts = 0;
+    write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
+    must_kv_read_equal(&client, ctx.clone(), k.clone(), v, 6);
 
-     let mut req = FlashbackToVersionRequest::default();
-     req.set_context(ctx.clone());
-     req.set_start_ts(6);
-     req.set_commit_ts(7);
-     req.set_version(0);
-     req.set_start_key(b"".to_vec());
-     req.set_end_key(b"".to_vec());
-     let resp = client.kv_flashback_to_version(&req).unwrap();
-     assert!(!resp.has_region_error());
-     assert!(resp.get_error().is_empty());
+    let mut req = FlashbackToVersionRequest::default();
+    req.set_context(ctx.clone());
+    req.set_start_ts(6);
+    req.set_commit_ts(7);
+    req.set_version(0);
+    req.set_start_key(b"".to_vec());
+    req.set_end_key(b"".to_vec());
+    let resp = client.kv_flashback_to_version(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_error().is_empty());
 
-     let mut get_req = GetRequest::default();
-     get_req.set_context(ctx);
-     get_req.key = k;
-     get_req.version = 7;
-     let get_resp = client.kv_get(&get_req).unwrap();
-     assert!(!get_resp.has_region_error());
-     assert!(!get_resp.has_error());
-     assert_eq!(get_resp.value, b"".to_vec());
- }
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.key = k;
+    get_req.version = 7;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(!get_resp.has_error());
+    assert_eq!(get_resp.value, b"".to_vec());
+}
 
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.
 
