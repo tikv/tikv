@@ -111,8 +111,12 @@ pub struct PendingCmd<C> {
 }
 
 impl<C> PendingCmd<C> {
-    fn new(index: u64, term: u64, cb: Option<C>) -> PendingCmd<C> {
-        PendingCmd { index, term, cb }
+    fn new(index: u64, term: u64, cb: C) -> PendingCmd<C> {
+        PendingCmd {
+            index,
+            term,
+            cb: Some(cb),
+        }
     }
 }
 
@@ -197,6 +201,7 @@ impl<C> PendingCmdQueue<C> {
         let mut front = None;
         while self.compacts.front().map_or(false, |c| c.index < index) {
             front = self.compacts.pop_front();
+            front.as_mut().unwrap().cb.take().unwrap();
         }
         front
     }
@@ -1559,6 +1564,9 @@ where
             notify_region_removed(self.region.get_id(), id, cmd);
         }
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
+            notify_region_removed(self.region.get_id(), id, cmd);
+        }
+        for cmd in self.pending_cmds.compacts.drain(..) {
             notify_region_removed(self.region.get_id(), id, cmd);
         }
         self.yield_state = None;
@@ -3060,7 +3068,7 @@ where
                     self.pending_cmds.push_compact(PendingCmd::new(
                         compact_index,
                         compact_term,
-                        None,
+                        Callback::None,
                     ));
                     return Ok((resp, ApplyResult::Res(ExecResult::PendingCompactCmd)));
                 }
@@ -3775,13 +3783,13 @@ where
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
             for p in props_drainer {
-                let cmd = PendingCmd::new(p.index, p.term, Some(p.cb));
+                let cmd = PendingCmd::new(p.index, p.term, p.cb);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
         }
         for p in props_drainer {
-            let cmd = PendingCmd::new(p.index, p.term, Some(p.cb));
+            let cmd = PendingCmd::new(p.index, p.term, p.cb);
             if p.is_conf_change {
                 if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
                     // if it loses leadership before conf change is replicated, there may be
@@ -4509,7 +4517,7 @@ where
                     // So only shutdown needs to be checked here.
                     if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                         for p in apply.cbs.drain(..) {
-                            let cmd = PendingCmd::new(p.index, p.term, Some(p.cb));
+                            let cmd = PendingCmd::new(p.index, p.term, p.cb);
                             notify_region_removed(apply.region_id, apply.peer_id, cmd);
                         }
                     }
@@ -6912,7 +6920,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::new(1, 1, Some(Callback::<KvTestSnapshot>::None));
+            let _cmd = PendingCmd::new(1, 1, Callback::<KvTestSnapshot>::None);
         });
         res.unwrap_err();
     }
@@ -6920,7 +6928,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::new(1, 1, Some(Callback::<KvTestSnapshot>::None));
+            let _cmd = PendingCmd::new(1, 1, Callback::<KvTestSnapshot>::None);
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd
             // dtor.
