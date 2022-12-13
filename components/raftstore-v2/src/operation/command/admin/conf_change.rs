@@ -9,7 +9,6 @@
 
 use std::time::Instant;
 
-use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb::{self, PeerRole},
@@ -18,7 +17,6 @@ use kvproto::{
 };
 use protobuf::Message;
 use raft::prelude::*;
-use raft_proto::ConfChangeI;
 use raftstore::{
     store::{
         metrics::{PEER_ADMIN_CMD_COUNTER_VEC, PEER_PROPOSE_LOG_SIZE_HISTOGRAM},
@@ -34,7 +32,6 @@ use super::AdminCmdResult;
 use crate::{
     batch::StoreContext,
     raft::{Apply, Peer},
-    router::ApplyRes,
 };
 
 /// The apply result of conf change.
@@ -56,7 +53,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn propose_conf_change<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
     ) -> Result<u64> {
         if self.raft_group().raft.has_pending_conf() {
             info!(
@@ -67,7 +64,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let data = req.write_to_bytes()?;
         let admin = req.get_admin_request();
-        let leader_role = self.peer().get_role();
         if admin.has_change_peer() {
             self.propose_conf_change_imp(ctx, admin.get_change_peer(), data)
         } else if admin.has_change_peer_v2() {
@@ -229,7 +225,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         legacy: bool,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         let region = self.region_state().get_region();
-        let peer_id = self.peer().get_id();
         let change_kind = ConfChangeKind::confchange_kind(changes.len());
         info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch());
         let mut new_region = region.clone();
@@ -284,7 +279,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         }
         let mut resp = AdminResponse::default();
         resp.mut_change_peer().set_region(new_region);
-        let mut conf_change = ConfChangeResult {
+        let conf_change = ConfChangeResult {
             index,
             conf_change: cc,
             changes: changes.to_vec(),

@@ -1,16 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, Mutable, RaftEngine, CF_DEFAULT};
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use raftstore::{
     store::{
         cmd_resp,
-        fsm::{apply, Proposal, MAX_PROPOSAL_SIZE_RATIO},
+        fsm::{apply, MAX_PROPOSAL_SIZE_RATIO},
         msg::ErrorCallback,
         util::{self, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER},
-        WriteCallback,
     },
-    Error, Result,
+    Result,
 };
 
 use crate::{
@@ -24,7 +23,6 @@ mod simple_write;
 pub use simple_write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
 pub use self::simple_write::SimpleWrite;
-use super::CommittedEntries;
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
@@ -93,7 +91,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     NORMAL_REQ_CHECK_VER,
                     true,
                 );
-                if let Err(mut e) = res {
+                if let Err(e) = res {
                     // TODO: query sibling regions.
                     ctx.raft_metrics.invalid_proposal.epoch_not_match.inc();
                     encoder.encode().1.report_error(cmd_resp::new_error(e));
@@ -173,12 +171,12 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn apply_delete_range(
         &mut self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        notify_only: bool,
+        _cf: &str,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _notify_only: bool,
     ) -> Result<()> {
-        /// TODO: reuse the same delete as split/merge.
+        // TODO: reuse the same delete as split/merge.
         Ok(())
     }
 }

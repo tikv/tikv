@@ -16,13 +16,9 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::cmp;
-
-use batch_system::{Fsm, FsmScheduler, Mailbox};
 use engine_traits::{KvEngine, RaftEngine, WriteBatch, WriteOptions};
-use kvproto::{
-    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader},
-    raft_serverpb::RegionLocalState,
+use kvproto::raft_cmdpb::{
+    AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
@@ -31,16 +27,12 @@ use raftstore::{
     store::{
         cmd_resp,
         fsm::{
-            apply::{
-                self, APPLY_WB_SHRINK_SIZE, DEFAULT_APPLY_WB_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP,
-            },
+            apply::{self, APPLY_WB_SHRINK_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP},
             Proposal,
         },
         local_metrics::RaftMetrics,
-        metrics::*,
         msg::ErrorCallback,
-        util::{self, admin_cmd_epoch_lookup},
-        WriteCallback,
+        util, WriteCallback,
     },
     Error, Result,
 };
@@ -50,9 +42,8 @@ use tikv_util::{box_err, time::monotonic_raw_now};
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
-    operation::GenSnapTask,
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, PeerMsg},
+    router::{ApplyRes, ApplyTask, CmdResChannel},
 };
 
 mod admin;
@@ -122,7 +113,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn schedule_apply_fsm<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let region_state = self.storage().region_state().clone();
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
-        let tablet = self.tablet().clone();
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
@@ -165,7 +155,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return Err(e);
         }
         if let Err(mut e) = util::check_region_epoch(req, self.region(), true) {
-            if let Error::EpochNotMatch(_, new_regions) = &mut e {
+            if let Error::EpochNotMatch(_, _new_regions) = &mut e {
                 // TODO: query sibling regions.
                 metrics.invalid_proposal.epoch_not_match.inc();
             }
@@ -247,15 +237,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn schedule_apply_committed_entries<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        committed_entries: Vec<Entry>,
-    ) {
-        let last_entry = match committed_entries.last() {
-            Some(e) => e,
-            None => return,
-        };
+    pub fn schedule_apply_committed_entries(&mut self, committed_entries: Vec<Entry>) {
+        if committed_entries.is_empty() {
+            return;
+        }
         let current_term = self.term();
         let mut entry_and_proposals = vec![];
         let queue = self.proposals_mut();
@@ -511,7 +496,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);
             if let Err(e) = wb.write_opt(&write_opt) {
-                panic!("failed to write data: {:?}", self.logger.list());
+                panic!("failed to write data: {:?}: {:?}", self.logger.list(), e);
             }
             if wb.data_size() <= APPLY_WB_SHRINK_SIZE {
                 wb.clear();

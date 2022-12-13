@@ -12,33 +12,19 @@ use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletContext, TabletReg
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
-use raftstore::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
-    store::{
-        fsm::Proposal,
-        util::{Lease, RegionReadProgress},
-        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-        ReadProgress, TrackVer, TxnExt,
-    },
-    Error,
+use raftstore::store::{
+    util::{Lease, RegionReadProgress},
+    Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
+    ReadProgress, TxnExt,
 };
-use slog::{debug, error, info, o, warn, Logger};
-use tikv_util::{
-    box_err,
-    config::ReadableSize,
-    time::{monotonic_raw_now, Instant as TiInstant},
-    worker::Scheduler,
-    Either,
-};
-use time::Timespec;
+use slog::Logger;
 
-use super::{storage::Storage, Apply};
+use super::storage::Storage;
 use crate::{
     batch::StoreContext,
-    fsm::{ApplyFsm, ApplyScheduler},
+    fsm::ApplyScheduler,
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
     router::{CmdResChannel, PeerTick, QueryResChannel},
-    worker::PdTask,
     Result,
 };
 
@@ -193,7 +179,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
-        reason: RegionChangeReason,
         tablet_index: u64,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -487,11 +472,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn destroy_progress_mut(&mut self) -> &mut DestroyProgress {
         &mut self.destroy_progress
-    }
-
-    #[inline]
-    pub(crate) fn has_applied_to_current_term(&self) -> bool {
-        self.entry_storage().applied_term() == self.term()
     }
 
     #[inline]

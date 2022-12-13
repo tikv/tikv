@@ -22,12 +22,9 @@ mod snapshot;
 
 use std::{cmp, time::Instant};
 
-use engine_traits::{KvEngine, MiscExt, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
-use kvproto::{
-    raft_cmdpb::AdminCmdType,
-    raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData},
-};
+use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use protobuf::Message as _;
 use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
 use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
@@ -43,7 +40,6 @@ use crate::{
     fsm::PeerFsmDelegate,
     raft::{Peer, Storage},
     router::{ApplyTask, PeerTick},
-    Result,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
@@ -169,11 +165,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// If the recipient can't be found, `None` is returned.
     #[inline]
-    fn build_raft_message<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        msg: eraftpb::Message,
-    ) -> Option<RaftMessage> {
+    fn build_raft_message(&mut self, msg: eraftpb::Message) -> Option<RaftMessage> {
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
@@ -265,7 +257,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
-        self.schedule_apply_committed_entries(ctx, committed_entries);
+        self.schedule_apply_committed_entries(committed_entries);
     }
 
     /// Processing the ready of raft. A detail description of how it's handled
@@ -320,7 +312,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !ready.messages().is_empty() {
             debug_assert!(self.is_leader());
             for msg in ready.take_messages() {
-                if let Some(msg) = self.build_raft_message(ctx, msg) {
+                if let Some(msg) = self.build_raft_message(msg) {
                     self.send_raft_message(ctx, msg);
                 }
             }
@@ -347,7 +339,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             write_task.messages = ready
                 .take_persisted_messages()
                 .into_iter()
-                .flat_map(|m| self.build_raft_message(ctx, m))
+                .flat_map(|m| self.build_raft_message(m))
                 .collect();
         }
         if !self.serving() {
@@ -408,11 +400,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let persisted_number = self.async_writer.persisted_number();
         self.raft_group_mut().on_persist_ready(persisted_number);
         let persisted_index = self.persisted_index();
-        /// The apply snapshot process order would be:
-        /// - Get the snapshot from the ready
-        /// - Wait for async writer to load this tablet
-        /// In this step, the snapshot loading has been finished, but some apply
-        /// state need to update.
+        // The apply snapshot process order would be:
+        // - Get the snapshot from the ready
+        // - Wait for async writer to load this tablet
+        // In this step, the snapshot loading has been finished, but some apply
+        // state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
         }
