@@ -5,29 +5,16 @@ mod split;
 mod transfer_leader;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
+use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::Message;
-use raft::prelude::ConfChangeV2;
-use raftstore::{
-    store::{
-        self, cmd_resp,
-        fsm::apply,
-        msg::ErrorCallback,
-        util::{ChangePeerI, ConfChangeKind},
-    },
-    Result,
-};
+use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
 pub use split::{SplitInit, SplitResult, SPLIT_PREFIX};
 use tikv_util::box_err;
 use txn_types::WriteBatchFlags;
 
 use self::conf_change::ConfChangeResult;
-use crate::{
-    batch::StoreContext,
-    raft::{Apply, Peer},
-    router::CmdResChannel,
-};
+use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
 
 #[derive(Debug)]
 pub enum AdminCmdResult {
@@ -43,7 +30,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_admin_command<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
         ch: CmdResChannel,
     ) {
         if !self.serving() {

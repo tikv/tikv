@@ -8,37 +8,23 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletRegistry};
+use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletContext, TabletRegistry};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
-use raftstore::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
-    store::{
-        fsm::Proposal,
-        util::{Lease, RegionReadProgress},
-        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-        ReadProgress, TrackVer, TxnExt,
-    },
-    Error,
+use raftstore::store::{
+    util::{Lease, RegionReadProgress},
+    Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
+    ReadProgress, TxnExt,
 };
-use slog::{debug, error, info, o, warn, Logger};
-use tikv_util::{
-    box_err,
-    config::ReadableSize,
-    time::{monotonic_raw_now, Instant as TiInstant},
-    worker::Scheduler,
-    Either,
-};
-use time::Timespec;
+use slog::Logger;
 
-use super::{storage::Storage, Apply};
+use super::storage::Storage;
 use crate::{
     batch::StoreContext,
-    fsm::{ApplyFsm, ApplyScheduler},
+    fsm::ApplyScheduler,
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
     router::{CmdResChannel, PeerTick, QueryResChannel},
-    worker::PdTask,
     Result,
 };
 
@@ -111,16 +97,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
-        let cached_tablet = tablet_registry.get_or_default(region_id);
-        // Another option is always create tablet even if tablet index is 0. But this
-        // can introduce race when gc old tablet and create new peer.
-        if tablet_index != 0 {
-            // TODO: Perhaps we should stop create the tablet automatically.
-            tablet_registry.load(region_id, tablet_index, false)?;
-        }
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
+
+        let cached_tablet = tablet_registry.get_or_default(region_id);
+        // We can't create tablet if tablet index is 0. It can introduce race when gc
+        // old tablet and create new peer. We also can't get the correct range of the
+        // region, which is required for kv data gc.
+        if tablet_index != 0 {
+            let ctx = TabletContext::new(&region, Some(tablet_index));
+            // TODO: Perhaps we should stop create the tablet automatically.
+            tablet_registry.load(ctx, false)?;
+        }
+
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: cached_tablet,
@@ -189,7 +179,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
-        reason: RegionChangeReason,
         tablet_index: u64,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -483,11 +472,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn destroy_progress_mut(&mut self) -> &mut DestroyProgress {
         &mut self.destroy_progress
-    }
-
-    #[inline]
-    pub(crate) fn has_applied_to_current_term(&self) -> bool {
-        self.entry_storage().applied_term() == self.term()
     }
 
     #[inline]

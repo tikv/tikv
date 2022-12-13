@@ -18,7 +18,7 @@ use raft::{eraftpb, ProgressState, Storage};
 use raftstore::{
     store::{
         fsm::new_admin_request, make_transfer_leader_response, metrics::PEER_ADMIN_CMD_COUNTER,
-        LocksStatus, Transport, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+        LocksStatus, TRANSFER_LEADER_COMMAND_REPLY_CTX,
     },
     Result,
 };
@@ -29,7 +29,7 @@ use txn_types::WriteBatchFlags;
 use super::AdminCmdResult;
 use crate::{
     batch::StoreContext,
-    fsm::{ApplyResReporter, PeerFsmDelegate},
+    fsm::ApplyResReporter,
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick},
 };
@@ -199,7 +199,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         cmd.mut_admin_request()
                             .set_cmd_type(AdminCmdType::TransferLeader);
                         cmd.mut_admin_request().mut_transfer_leader().set_peer(from);
-                        if let (PeerMsg::RaftCommand(req), sub) = PeerMsg::raft_command(cmd) {
+                        if let PeerMsg::RaftCommand(req) = PeerMsg::raft_command(cmd).0 {
                             self.on_admin_command(ctx, req.request, req.ch);
                         } else {
                             unreachable!();
@@ -380,7 +380,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.logger,
             "propose {} locks before transferring leader", cmd.get_requests().len();
         );
-        let (PeerMsg::RaftCommand(req), sub) = PeerMsg::raft_command(cmd) else {unreachable!()};
+        let PeerMsg::RaftCommand(req) = PeerMsg::raft_command(cmd).0 else {unreachable!()};
         self.on_write_command(ctx, req.request, req.ch);
         true
     }

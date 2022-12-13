@@ -6,11 +6,7 @@ use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::{compat::Future01CompatExt, FutureExt};
-use kvproto::{metapb::Region, raft_serverpb::RaftMessage};
-use raftstore::{
-    coprocessor::RegionChangeReason,
-    store::{Config, ReadDelegate, RegionReadProgressRegistry},
-};
+use raftstore::store::{Config, ReadDelegate, RegionReadProgressRegistry};
 use slog::{info, o, Logger};
 use tikv_util::{
     future::poll_future_notify,
@@ -20,7 +16,6 @@ use tikv_util::{
 
 use crate::{
     batch::StoreContext,
-    raft::Peer,
     router::{StoreMsg, StoreTick},
 };
 

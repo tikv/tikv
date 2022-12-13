@@ -8,9 +8,7 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use raftstore::store::{AsyncReadNotifier, FetchedLogs, GenSnapRes, RegionSnapshot};
-use slog::Logger;
 
 use super::PeerMsg;
 use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};

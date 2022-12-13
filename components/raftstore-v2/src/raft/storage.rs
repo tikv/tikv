@@ -3,7 +3,6 @@
 use std::{
     cell::{RefCell, RefMut},
     fmt::{self, Debug, Formatter},
-    sync::{mpsc::Receiver, Arc},
 };
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
@@ -15,10 +14,8 @@ use raft::{
     eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{
-    util, EntryStorage, ReadTask, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
-};
-use slog::{info, o, Logger};
+use raftstore::store::{util, EntryStorage, ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use slog::{o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
 use crate::{
@@ -366,30 +363,29 @@ impl<EK: KvEngine, ER: RaftEngine> raft::Storage for Storage<EK, ER> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::mpsc::{sync_channel, SyncSender},
+        sync::mpsc::{sync_channel, Receiver, SyncSender},
         time::Duration,
     };
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::{KvTestEngine, TestTabletFactory},
-        raft::RaftTestEngine,
+        kv::TestTabletFactory,
     };
     use engine_traits::{
-        KvEngine, RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletRegistry, ALL_CFS,
+        RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
     };
     use kvproto::{
         metapb::{Peer, Region},
         raft_serverpb::PeerState,
     };
-    use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
+    use raft::{Error as RaftError, StorageError};
     use raftstore::store::{
-        util::new_empty_snapshot, AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask,
-        TabletSnapKey, TabletSnapManager, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        util::new_empty_snapshot, AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner,
+        TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::worker::{Runnable, Worker};
+    use tikv_util::worker::Worker;
 
     use super::*;
     use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes};
@@ -476,10 +472,10 @@ mod tests {
         raft_engine.consume(&mut wb, true).unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
         let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
-        let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
+        let worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
         let logger = slog_global::borrow_global().new(o!());
         let mut s = Storage::new(4, 6, raft_engine.clone(), sched, &logger.clone())
@@ -523,15 +519,16 @@ mod tests {
         mgr.init().unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
         let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
-        reg.load(region.get_id(), 10, true).unwrap();
+        let tablet_ctx = TabletContext::new(&region, Some(10));
+        reg.load(tablet_ctx, true).unwrap();
         // setup read runner worker and peer storage
         let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
         let logger = slog_global::borrow_global().new(o!());
-        let mut s = Storage::new(4, 6, raft_engine.clone(), sched.clone(), &logger.clone())
+        let s = Storage::new(4, 6, raft_engine.clone(), sched.clone(), &logger.clone())
             .unwrap()
             .unwrap();
         let (router, rx) = TestRouter::new();
@@ -575,7 +572,7 @@ mod tests {
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
-        let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.cancel_generating_snap(None);
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
 
