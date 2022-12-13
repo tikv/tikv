@@ -3,9 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
-use engine_traits::Snapshot;
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use tikv_util::time::Instant;
 

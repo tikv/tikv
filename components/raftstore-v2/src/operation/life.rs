@@ -149,7 +149,6 @@ impl Store {
         } else {
             return;
         };
-        let msg_type = msg.get_message().get_msg_type();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
         // Now the peer should not exist.
@@ -239,9 +238,10 @@ impl Store {
             }
         };
         let mailbox = BasicMailbox::new(tx, fsm, ctx.router.state_cnt().clone());
-        if let Err((p, _)) = ctx
+        if ctx
             .router
             .send_and_register(region_id, mailbox, PeerMsg::Start)
+            .is_err()
         {
             panic!(
                 "[region {}] {} failed to register peer",
