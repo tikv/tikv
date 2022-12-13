@@ -27,7 +27,7 @@ use std::{
     },
 };
 
-use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+use engine_traits::{KvEngine, RaftEngine, TabletContext, TabletRegistry};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
@@ -121,9 +121,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let first_index = self.storage().entry_storage().first_index();
         if first_index == persisted_index + 1 {
             let region_id = self.region_id();
-            ctx.tablet_registry
-                .load(region_id, persisted_index, false)
-                .unwrap();
+            let tablet_ctx = TabletContext::new(self.region(), Some(persisted_index));
+            ctx.tablet_registry.load(tablet_ctx, false).unwrap();
             self.schedule_apply_fsm(ctx);
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);

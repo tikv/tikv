@@ -14,6 +14,6 @@ pub use rocksdb::{
     DBCompactionFilter, DBCompactionStyle, DBCompressionType, DBEntryType, DBRateLimiterMode,
     DBRecoveryMode, DBStatisticsTickerType, DBTitanDBBlobRunMode, Env, EventListener,
     IngestExternalFileOptions, LRUCacheOptions, MemoryAllocator, PerfContext,
-    PrepopulateBlockCache, Range, SliceTransform, TablePropertiesCollector,
+    PrepopulateBlockCache, Range, SliceTransform, Statistics, TablePropertiesCollector,
     TablePropertiesCollectorFactory,
 };

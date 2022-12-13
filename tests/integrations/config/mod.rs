@@ -32,7 +32,7 @@ use tikv::{
         lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
     },
     storage::config::{
-        BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IoRateLimitConfig,
+        BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
     },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
@@ -308,7 +308,9 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
-        enable_multi_batch_write: true,
+        enable_multi_batch_write: Some(true),
+        paranoid_checks: None,
+        allow_concurrent_memtable_write: Some(false),
         enable_unordered_write: true,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
@@ -665,6 +667,7 @@ fn test_serde_custom_tikv_config() {
     raft_engine_config.memory_limit = Some(RaftEngineReadableSize::gb(1));
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
+        engine: EngineType::RaftKv2,
         gc_ratio_threshold: 1.2,
         max_key_size: 4096,
         scheduler_concurrency: 123,
@@ -758,8 +761,13 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     value.backup_stream = BackupStreamConfig {
-        num_threads: 12,
-        ..Default::default()
+        max_flush_interval: ReadableDuration::secs(11),
+        num_threads: 7,
+        enable: true,
+        temp_path: "./stream".to_string(),
+        file_size_limit: ReadableSize::gb(5),
+        initial_scan_pending_memory_quota: ReadableSize::kb(2),
+        initial_scan_rate_limit: ReadableSize::mb(3),
     };
     value.import = ImportConfig {
         num_threads: 123,
@@ -817,6 +825,7 @@ fn test_serde_custom_tikv_config() {
     }
 }
 
+#[track_caller]
 fn diff_config(lhs: &TikvConfig, rhs: &TikvConfig) {
     let lhs_str = format!("{:?}", lhs);
     let rhs_str = format!("{:?}", rhs);

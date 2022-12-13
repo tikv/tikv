@@ -433,7 +433,7 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, TestTabletFactory},
     };
-    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, TabletContext, DATA_CFS};
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use raftstore::store::{
@@ -541,7 +541,7 @@ mod tests {
 
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test-local-reader")
             .tempdir()
@@ -626,7 +626,8 @@ mod tests {
             };
             meta.readers.insert(1, read_delegate);
             // create tablet with region_id 1 and prepare some data
-            reg.load(1, 10, true).unwrap();
+            let ctx = TabletContext::new(&region1, Some(10));
+            reg.load(ctx, true).unwrap();
         }
 
         let (ch_tx, ch_rx) = sync_channel(1);
@@ -732,7 +733,7 @@ mod tests {
     fn test_read_delegate() {
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test-local-reader")
             .tempdir()
@@ -753,7 +754,8 @@ mod tests {
             meta.readers.insert(1, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
-            reg.load(1, 10, true).unwrap();
+            let mut ctx = TabletContext::with_infinite_region(1, Some(10));
+            reg.load(ctx, true).unwrap();
             tablet1 = reg.get(1).unwrap().latest().unwrap().clone();
             tablet1.put(b"a1", b"val1").unwrap();
 
@@ -762,7 +764,8 @@ mod tests {
             meta.readers.insert(2, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
-            reg.load(2, 10, true).unwrap();
+            ctx = TabletContext::with_infinite_region(2, Some(10));
+            reg.load(ctx, true).unwrap();
             tablet2 = reg.get(2).unwrap().latest().unwrap().clone();
             tablet2.put(b"a2", b"val2").unwrap();
         }

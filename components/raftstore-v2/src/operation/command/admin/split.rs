@@ -29,7 +29,7 @@ use std::cmp;
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
-use engine_traits::{Checkpointer, KvEngine, RaftEngine};
+use engine_traits::{Checkpointer, KvEngine, RaftEngine, TabletContext};
 use fail::fail_point;
 use kvproto::{
     metapb::{self, Region},
@@ -255,10 +255,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             });
         let reg = self.tablet_registry();
         let path = reg.tablet_path(region_id, log_index);
-        let tablet = reg
-            .tablet_factory()
-            .open_tablet(region_id, Some(log_index), &path)
-            .unwrap();
+        let ctx = TabletContext::new(&regions[derived_index], Some(log_index));
+        let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
         // Remove the old write batch.
         self.write_batch.take();
         self.publish_tablet(tablet);
@@ -481,7 +479,9 @@ mod test {
         ctor::{CfOptions, DbOptions},
         kv::TestTabletFactory,
     };
-    use engine_traits::{Peekable, TabletRegistry, WriteBatch, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{
+        Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
+    };
     use kvproto::{
         metapb::RegionEpoch,
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
@@ -610,14 +610,15 @@ mod test {
 
         let logger = slog_global::borrow_global().new(o!());
         let path = TempDir::new().unwrap();
-        let cf_opts = ALL_CFS
+        let cf_opts = DATA_CFS
             .iter()
             .copied()
             .map(|cf| (cf, CfOptions::default()))
             .collect();
         let factory = Box::new(TestTabletFactory::new(DbOptions::default(), cf_opts));
         let reg = TabletRegistry::new(factory, path.path()).unwrap();
-        reg.load(region.id, 5, true).unwrap();
+        let ctx = TabletContext::new(&region, Some(5));
+        reg.load(ctx, true).unwrap();
 
         let mut region_state = RegionLocalState::default();
         region_state.set_state(PeerState::Normal);
