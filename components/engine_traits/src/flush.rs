@@ -43,7 +43,21 @@ struct StateChanges {
 pub struct FlushProgress {
     cf: String,
     apply_index: u64,
+    earliest_seqno: u64,
     state_changes: StateChanges,
+}
+
+impl FlushProgress {
+    fn merge(&mut self, pr: FlushProgress) {
+        debug_assert_eq!(self.cf, pr.cf);
+        debug_assert!(self.apply_index <= pr.apply_index);
+        self.apply_index = pr.apply_index;
+        self.state_changes.changes.extend(pr.state_changes.changes);
+    }
+
+    pub fn applied_index(&self) -> u64 {
+        self.apply_index
+    }
 }
 
 /// A share state between raftstore and underlying engine.
@@ -117,7 +131,7 @@ impl FlushState {
 
 /// A helper trait to avoid exposing `RaftEngine` to `TabletFactory`.
 pub trait StateStorage: Sync + Send {
-    fn persist_progress(&self, region_id: u64, tablet_index: u64, cf: &str, pr: FlushProgress);
+    fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: FlushProgress);
 }
 
 /// A flush listener that maps memtable to apply index and persist the relation
@@ -156,7 +170,7 @@ impl PersistenceListener {
     ///
     /// `id` should be unique between memtables, which is used to identify
     /// memtable in the flushed event.
-    pub fn on_memtable_sealed(&self, cf: String) {
+    pub fn on_memtable_sealed(&self, cf: String, earliest_seqno: u64) {
         // The correctness relies on the assumption that there will be only one
         // thread writting to the DB and increasing apply index.
         let mut state_changes = self.state.changes.lock().unwrap();
@@ -167,32 +181,48 @@ impl PersistenceListener {
         self.progress.lock().unwrap().push_back(FlushProgress {
             cf,
             apply_index,
+            earliest_seqno,
             state_changes: changes,
         });
     }
 
     /// Called a memtable finished flushing.
-    pub fn on_flush_completed(&self, cf: &str) {
+    pub fn on_flush_completed(&self, cf: &str, largest_seqno: u64) {
         // Maybe we should hook the compaction to avoid the file is compacted before
         // being recorded.
         let pr = {
             let mut prs = self.progress.lock().unwrap();
             let mut cursor = prs.cursor_front_mut();
-            while let Some(pr) = cursor.current() && pr.cf != cf {
-                cursor.move_next();
+            let mut flushed_pr = None;
+            while let Some(pr) = cursor.current() {
+                if pr.cf != cf {
+                    cursor.move_next();
+                    continue;
+                }
+                // Note flushed largest_seqno equals to earliest_seqno of next memtable.
+                if pr.earliest_seqno < largest_seqno {
+                    match &mut flushed_pr {
+                        None => flushed_pr = cursor.remove_current(),
+                        Some(flushed_pr) => {
+                            flushed_pr.merge(cursor.remove_current().unwrap());
+                        }
+                    }
+                    continue;
+                }
+                break;
             }
-            match cursor.remove_current() {
+            match flushed_pr {
                 Some(pr) => pr,
                 None => panic!("{} not found in {:?}", cf, prs),
             }
         };
         self.storage
-            .persist_progress(self.region_id, self.tablet_index, cf, pr);
+            .persist_progress(self.region_id, self.tablet_index, pr);
     }
 }
 
 impl<R: RaftEngine> StateStorage for R {
-    fn persist_progress(&self, region_id: u64, tablet_index: u64, cf: &str, pr: FlushProgress) {
+    fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: FlushProgress) {
         let mut batch = self.log_batch(1);
         // TODO: It's possible that flush succeeds but fails to call
         // `on_flush_completed` before exit. In this case the flushed data will
@@ -212,7 +242,7 @@ impl<R: RaftEngine> StateStorage for R {
         }
         if pr.apply_index != 0 {
             batch
-                .put_flushed_index(region_id, cf, tablet_index, pr.apply_index)
+                .put_flushed_index(region_id, &pr.cf, tablet_index, pr.apply_index)
                 .unwrap();
         }
         self.consume(&mut batch, true).unwrap();
