@@ -109,6 +109,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
         });
+        fail::fail_point!("worker_gc_raft_log_flush");
         let tasks = std::mem::take(&mut self.tasks);
         for t in tasks {
             debug!("gc raft log"; "region_id" => t.region_id, "end_index" => t.end_idx);
