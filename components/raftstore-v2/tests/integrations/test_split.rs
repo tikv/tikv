@@ -181,3 +181,9 @@ fn test_split() {
         false,
     );
 }
+
+// TODO: test split race with
+// - created peer
+// - created peer with pending snapshot
+// - created peer with persisting snapshot
+// - created peer with persisted snapshot

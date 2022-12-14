@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{PersistenceListener, RaftEngine};
+use engine_traits::PersistenceListener;
 use file_system::{get_io_type, set_io_type, IoType};
 use regex::Regex;
 use rocksdb::{
@@ -179,15 +179,15 @@ fn resolve_sst_filename_from_err(err: &str) -> Option<String> {
     Some(filename)
 }
 
-pub struct RocksPersistenceListener<ER>(PersistenceListener<ER>);
+pub struct RocksPersistenceListener(PersistenceListener);
 
-impl<ER> RocksPersistenceListener<ER> {
-    pub fn new(listener: PersistenceListener<ER>) -> RocksPersistenceListener<ER> {
+impl RocksPersistenceListener {
+    pub fn new(listener: PersistenceListener) -> RocksPersistenceListener {
         RocksPersistenceListener(listener)
     }
 }
 
-impl<ER: RaftEngine> rocksdb::EventListener for RocksPersistenceListener<ER> {
+impl rocksdb::EventListener for RocksPersistenceListener {
     fn on_memtable_sealed(&self, info: &MemTableInfo) {
         self.0
             .on_memtable_sealed(info.cf_name().to_string(), info.first_seqno());

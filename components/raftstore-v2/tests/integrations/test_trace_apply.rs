@@ -1,0 +1,222 @@
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::{path::Path, time::Duration};
+
+use engine_traits::{DbOptionsExt, Peekable, CF_LOCK, CF_WRITE, DATA_CFS};
+use futures::executor::block_on;
+use raftstore::store::RAFT_INIT_LOG_INDEX;
+use raftstore_v2::router::{CmdResChannel, PeerMsg};
+
+use crate::cluster::{new_put_request, Cluster};
+
+fn count_file(path: &Path, pat: impl Fn(&Path) -> bool) -> usize {
+    let mut count = 0;
+    for path in std::fs::read_dir(path).unwrap() {
+        if pat(&path.unwrap().path()) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn count_sst(path: &Path) -> usize {
+    count_file(path, |path| {
+        path.extension().map_or(false, |ext| ext == "sst")
+    })
+}
+
+fn count_info_log(path: &Path) -> usize {
+    count_file(path, |path| {
+        path.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("LOG")
+    })
+}
+
+#[test]
+fn test_data_recovery() {
+    let mut cluster = Cluster::default();
+    let router = &mut cluster.routers[0];
+    router.wait_applied_to_current_term(2, Duration::from_secs(3));
+
+    let mut req = router.new_request_for(2);
+    for i in 0..100 {
+        let put_req = new_put_request(format!("key{}", i), format!("value{}", i));
+        req.clear_requests();
+        req.mut_requests().push(put_req);
+        router
+            .send(2, PeerMsg::raft_command(req.clone()).0)
+            .unwrap();
+    }
+
+    let mut sub = None;
+    for i in 0..50 {
+        let mut put_req = new_put_request(format!("key{}", i), format!("value{}", i));
+        put_req.mut_put().set_cf(CF_WRITE.to_owned());
+        req.clear_requests();
+        req.mut_requests().push(put_req);
+        let (ch, s) = PeerMsg::raft_command(req.clone());
+        router.send(2, ch).unwrap();
+        sub = Some(s);
+    }
+    let resp = block_on(sub.take().unwrap().result()).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+    router
+        .send(
+            2,
+            PeerMsg::ManualFlush {
+                cfs: vec![CF_WRITE],
+                ch: CmdResChannel::pair().0,
+            },
+        )
+        .unwrap();
+    for i in 50..100 {
+        let mut put_req = new_put_request(format!("key{}", i), format!("value{}", i));
+        put_req.mut_put().set_cf(CF_WRITE.to_owned());
+        req.clear_requests();
+        req.mut_requests().push(put_req);
+        router
+            .send(2, PeerMsg::raft_command(req.clone()).0)
+            .unwrap();
+    }
+
+    for i in 0..100 {
+        let mut put_req = new_put_request(format!("key{}", i), format!("value{}", i));
+        put_req.mut_put().set_cf(CF_LOCK.to_owned());
+        req.clear_requests();
+        req.mut_requests().push(put_req);
+        let (ch, s) = PeerMsg::raft_command(req.clone());
+        router.send(2, ch).unwrap();
+        sub = Some(s);
+    }
+    let resp = block_on(sub.take().unwrap().result()).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+    let (ch, sub) = CmdResChannel::pair();
+    let manual_flush = PeerMsg::ManualFlush {
+        cfs: vec![CF_LOCK],
+        ch,
+    };
+    router.send(2, manual_flush).unwrap();
+    let res = block_on(sub.result()).unwrap();
+    assert!(!res.get_header().has_error(), "{:?}", res);
+
+    let registry = cluster.node(0).tablet_registry();
+    let mut cached = registry.get(2).unwrap();
+    let tablet = cached.latest().unwrap();
+    for cf in DATA_CFS {
+        for i in 0..100 {
+            let key = format!("key{}", i);
+            let value = tablet.get_value_cf(cf, key.as_bytes()).unwrap();
+            assert_eq!(
+                value.as_deref(),
+                Some(format!("value{}", i).as_bytes()),
+                "{} {}",
+                cf,
+                key
+            );
+        }
+    }
+    tablet
+        .set_db_options(&[("avoid_flush_during_shutdown", "true")])
+        .unwrap();
+    drop(cached);
+
+    cluster.restart(0);
+
+    let registry = cluster.node(0).tablet_registry();
+    let path = registry.tablet_path(2, RAFT_INIT_LOG_INDEX);
+    let mut cached = registry.get(2).unwrap();
+    let tablet = cached.latest().unwrap();
+    tablet
+        .set_db_options(&[("avoid_flush_during_shutdown", "true")])
+        .unwrap();
+    let router = &mut cluster.routers[0];
+
+    // Write another key to ensure all data are recovered.
+    let put_req = new_put_request("key101", "value101");
+    req.clear_requests();
+    req.mut_requests().push(put_req);
+    let (msg, sub) = PeerMsg::raft_command(req.clone());
+    router.send(2, msg).unwrap();
+    let resp = block_on(sub.result()).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+    // After being restarted, all unflushed logs should be applied again. So there
+    // should be no missing data.
+    for cf in DATA_CFS {
+        for i in 0..100 {
+            let key = format!("key{}", i);
+            let value = tablet.get_value_cf(cf, key.as_bytes()).unwrap();
+            assert_eq!(
+                value.as_deref(),
+                Some(format!("value{}", i).as_bytes()),
+                "{} {}",
+                cf,
+                key
+            );
+        }
+    }
+
+    // There is a restart, so LOG file should be rotate.
+    assert_eq!(count_info_log(&path), 2);
+    // We only trigger Flush twice, so there should be only 2 files. And because WAL
+    // is disabled, so when rocksdb is restarted, there should be no WAL to recover,
+    // so no additional flush will be triggered.
+    assert_eq!(count_sst(&path), 2);
+
+    let (ch, sub) = CmdResChannel::pair();
+    let manual_flush = PeerMsg::ManualFlush {
+        cfs: DATA_CFS.to_vec(),
+        ch,
+    };
+    router.send(2, manual_flush).unwrap();
+    let res = block_on(sub.result()).unwrap();
+    assert!(!res.get_header().has_error(), "{:?}", res);
+
+    // Although all CFs are triggered again, but recovery should only write:
+    // 1. [0, 101) to CF_DEFAULT
+    // 2. [50, 100) to CF_WRITE
+    //
+    // So there will be only 2 memtables to be flushed.
+    assert_eq!(count_sst(&path), 4);
+
+    drop(cached);
+
+    cluster.restart(0);
+
+    let registry = cluster.node(0).tablet_registry();
+    let mut cached = registry.get(2).unwrap();
+    let tablet = cached.latest().unwrap();
+    let router = &mut cluster.routers[0];
+
+    assert_eq!(count_info_log(&path), 3);
+    // Because data is flushed before restarted, so all data can be read
+    // immediately.
+    for cf in DATA_CFS {
+        for i in 0..100 {
+            let key = format!("key{}", i);
+            let value = tablet.get_value_cf(cf, key.as_bytes()).unwrap();
+            assert_eq!(
+                value.as_deref(),
+                Some(format!("value{}", i).as_bytes()),
+                "{} {}",
+                cf,
+                key
+            );
+        }
+    }
+    // Trigger flush again.
+    let (ch, sub) = CmdResChannel::pair();
+    let manual_flush = PeerMsg::ManualFlush {
+        cfs: DATA_CFS.to_vec(),
+        ch,
+    };
+    router.send(2, manual_flush).unwrap();
+    let res = block_on(sub.result()).unwrap();
+    assert!(!res.get_header().has_error(), "{:?}", res);
+    // There is no recovery, so there should be nothing to flush.
+    assert_eq!(count_sst(&path), 4);
+}

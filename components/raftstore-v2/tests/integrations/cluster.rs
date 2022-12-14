@@ -59,6 +59,13 @@ pub fn check_skip_wal(path: &str) {
     assert!(found, "no WAL found in {}", path);
 }
 
+pub fn new_put_request(key: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Request {
+    let mut req = Request::default();
+    req.set_cmd_type(CmdType::Put);
+    req.mut_put().set_key(key.into());
+    req.mut_put().set_value(value.into());
+    req
+}
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
@@ -209,6 +216,7 @@ pub struct RunningState {
     pub system: StoreSystem<KvTestEngine, RaftTestEngine>,
     pub cfg: Arc<VersionTrack<Config>>,
     pub transport: TestTransport,
+    snap_mgr: TabletSnapManager,
 }
 
 impl RunningState {
@@ -220,17 +228,20 @@ impl RunningState {
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
-    ) -> (TestRouter, TabletSnapManager, Self) {
+    ) -> (TestRouter, Self) {
+        let raft_engine =
+            engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
+                .unwrap();
         let cf_opts = DATA_CFS
             .iter()
             .copied()
             .map(|cf| (cf, CfOptions::default()))
             .collect();
-        let factory = Box::new(TestTabletFactory::new(DbOptions::default(), cf_opts));
+        let mut db_opt = DbOptions::default();
+        db_opt.set_state_storage(Arc::new(raft_engine.clone()));
+        let factory = Box::new(TestTabletFactory::new(db_opt, cf_opts));
         let registry = TabletRegistry::new(factory, path).unwrap();
-        let raft_engine =
-            engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
-                .unwrap();
+
         let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client.as_ref(), logger.clone());
         let store_id = bootstrap.bootstrap_store().unwrap();
         let mut store = Store::default();
@@ -280,8 +291,9 @@ impl RunningState {
             system,
             cfg,
             transport,
+            snap_mgr,
         };
-        (TestRouter(router), snap_mgr, state)
+        (TestRouter(router), state)
     }
 }
 
@@ -296,7 +308,6 @@ pub struct TestNode {
     path: TempDir,
     running_state: Option<RunningState>,
     logger: Logger,
-    snap_mgr: Option<TabletSnapManager>,
 }
 
 impl TestNode {
@@ -308,12 +319,11 @@ impl TestNode {
             path,
             running_state: None,
             logger,
-            snap_mgr: None,
         }
     }
 
     fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
-        let (router, snap_mgr, state) = RunningState::new(
+        let (router, state) = RunningState::new(
             &self.pd_client,
             self.path.path(),
             cfg,
@@ -323,7 +333,6 @@ impl TestNode {
             &self.logger,
         );
         self.running_state = Some(state);
-        self.snap_mgr = Some(snap_mgr);
         router
     }
 
@@ -350,10 +359,6 @@ impl TestNode {
 
     pub fn running_state(&self) -> Option<&RunningState> {
         self.running_state.as_ref()
-    }
-
-    pub fn snap_mgr(&self) -> Option<&TabletSnapManager> {
-        self.snap_mgr.as_ref()
     }
 
     pub fn id(&self) -> u64 {
@@ -521,8 +526,8 @@ impl Cluster {
                         msg.get_message().get_snapshot().get_metadata().get_term(),
                         msg.get_message().get_snapshot().get_metadata().get_index(),
                     );
-                    let from_snap_mgr = self.node(from_offset).snap_mgr().unwrap();
-                    let to_snap_mgr = self.node(offset).snap_mgr().unwrap();
+                    let from_snap_mgr = &self.node(from_offset).running_state().unwrap().snap_mgr;
+                    let to_snap_mgr = &self.node(offset).running_state().unwrap().snap_mgr;
                     let gen_path = from_snap_mgr.tablet_gen_path(&key);
                     let recv_path = to_snap_mgr.final_recv_path(&key);
                     assert!(gen_path.exists());

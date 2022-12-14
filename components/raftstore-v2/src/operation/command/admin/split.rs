@@ -253,12 +253,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     e
                 )
             });
-        let reg = self.tablet_registry();
-        let path = reg.tablet_path(region_id, log_index);
-        let ctx = TabletContext::new(&regions[derived_index], Some(log_index));
-        let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
         // Remove the old write batch.
         self.write_batch.take();
+        let reg = self.tablet_registry();
+        let path = reg.tablet_path(region_id, log_index);
+        let mut ctx = TabletContext::new(&regions[derived_index], Some(log_index));
+        // Now the tablet is flushed, so all previous states should be persisted.
+        // Reusing the tablet should not be a problem.
+        // TODO: Should we avoid flushing for the old tablet?
+        ctx.flush_state = Some(self.flush_state().clone());
+        let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
         self.publish_tablet(tablet);
 
         self.region_state_mut()
@@ -465,15 +469,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             split_trace.drain(..off);
             // TODO: save admin_flushed.
             assert_ne!(admin_flushed, 0);
+            self.storage_mut()
+                .apply_trace_mut()
+                .record_admin_flush(admin_flushed);
             // Persist admin flushed.
-            self.set_has_ready();
+            self.set_has_extra_write();
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    };
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
@@ -638,6 +648,8 @@ mod test {
             reporter,
             reg,
             read_scheduler,
+            Arc::default(),
+            None,
             logger.clone(),
         );
 
@@ -811,14 +823,14 @@ mod test {
 
         // Split will create checkpoint tablet, so if there are some writes before
         // split, they should be flushed immediately.
-        apply.apply_put(CF_DEFAULT, b"k04", b"v4").unwrap();
+        apply.apply_put(CF_DEFAULT, 50, b"k04", b"v4").unwrap();
         assert!(!WriteBatch::is_empty(apply.write_batch.as_ref().unwrap()));
         splits.mut_requests().clear();
         splits
             .mut_requests()
             .push(new_split_req(b"k05", 70, vec![71, 72, 73]));
         req.set_splits(splits);
-        apply.apply_batch_split(&req, 50).unwrap();
+        apply.apply_batch_split(&req, 51).unwrap();
         assert!(apply.write_batch.is_none());
         assert_eq!(
             apply

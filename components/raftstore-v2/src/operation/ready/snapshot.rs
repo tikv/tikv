@@ -121,7 +121,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let first_index = self.storage().entry_storage().first_index();
         if first_index == persisted_index + 1 {
             let region_id = self.region_id();
-            let tablet_ctx = TabletContext::new(self.region(), Some(persisted_index));
+            let flush_state = self.reset_flush_state();
+            let mut tablet_ctx = TabletContext::new(self.region(), Some(persisted_index));
+            // Use a new FlushState to avoid conflicts with the old one.
+            tablet_ctx.flush_state = Some(flush_state);
             ctx.tablet_registry.load(tablet_ctx, false).unwrap();
             self.schedule_apply_fsm(ctx);
             self.storage_mut().on_applied_snapshot();

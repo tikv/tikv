@@ -38,7 +38,7 @@ struct StateChanges {
     changes: Vec<(u64, StateChange)>,
 }
 
-struct FlushProgress {
+pub struct FlushProgress {
     cf: String,
     id: u64,
     apply_index: u64,
@@ -114,29 +114,39 @@ impl FlushState {
     }
 }
 
+/// A helper trait to avoid exposing `RaftEngine` to `TabletFactory`.
+pub trait StateStorage: Sync + Send {
+    fn persist_progress(&self, region_id: u64, tablet_index: u64, cf: &str, pr: FlushProgress);
+}
+
 /// A flush listener that maps memtable to apply index and persist the relation
 /// to raft engine.
-pub struct PersistenceListener<ER> {
+pub struct PersistenceListener {
     region_id: u64,
     tablet_index: u64,
     state: Arc<FlushState>,
     progress: Mutex<Vec<FlushProgress>>,
-    raft: ER,
+    storage: Arc<dyn StateStorage>,
 }
 
-impl<ER: RaftEngine> PersistenceListener<ER> {
-    pub fn new(region_id: u64, tablet_index: u64, state: Arc<FlushState>, raft: ER) -> Self {
+impl PersistenceListener {
+    pub fn new(
+        region_id: u64,
+        tablet_index: u64,
+        state: Arc<FlushState>,
+        storage: Arc<dyn StateStorage>,
+    ) -> Self {
         Self {
             region_id,
             tablet_index,
             state,
             progress: Mutex::new(Vec::new()),
-            raft,
+            storage,
         }
     }
 }
 
-impl<ER: RaftEngine> PersistenceListener<ER> {
+impl PersistenceListener {
     pub fn flush_state(&self) -> &Arc<FlushState> {
         &self.state
     }
@@ -173,7 +183,14 @@ impl<ER: RaftEngine> PersistenceListener<ER> {
                 .unwrap();
             prs.swap_remove(pos)
         };
-        let mut batch = self.raft.log_batch(1);
+        self.storage
+            .persist_progress(self.region_id, self.tablet_index, cf, pr);
+    }
+}
+
+impl<R: RaftEngine> StateStorage for R {
+    fn persist_progress(&self, region_id: u64, tablet_index: u64, cf: &str, pr: FlushProgress) {
+        let mut batch = self.log_batch(1);
         // TODO: It's possible that flush succeeds but fails to call
         // `on_flush_completed` before exit. In this case the flushed data will
         // be replayed again after restarted. To solve the problem, we need to
@@ -183,20 +200,18 @@ impl<ER: RaftEngine> PersistenceListener<ER> {
         for (index, change) in pr.state_changes.changes {
             match &change {
                 StateChange::ApplyState(state) => {
-                    batch.put_apply_state(self.region_id, index, state).unwrap();
+                    batch.put_apply_state(region_id, index, state).unwrap();
                 }
                 StateChange::RegionState(state) => {
-                    batch
-                        .put_region_state(self.region_id, index, state)
-                        .unwrap();
+                    batch.put_region_state(region_id, index, state).unwrap();
                 }
             }
         }
         if pr.apply_index != 0 {
             batch
-                .put_flushed_index(self.region_id, cf, self.tablet_index, pr.apply_index)
+                .put_flushed_index(region_id, cf, tablet_index, pr.apply_index)
                 .unwrap();
         }
-        self.raft.consume(&mut batch, true).unwrap();
+        self.consume(&mut batch, true).unwrap();
     }
 }
