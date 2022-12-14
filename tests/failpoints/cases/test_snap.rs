@@ -776,7 +776,7 @@ fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     // Avoid triggering snapshot at final step.
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 10;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -858,13 +858,6 @@ fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
     cluster.run_node(1).unwrap();
     // Snapshot is applied.
     must_get_equal(&cluster.get_engine(1), b"k319", b"v3");
-    let mut ents = Vec::new();
-    cluster
-        .get_raft_engine(1)
-        .get_all_entries_to(1, &mut ents)
-        .unwrap();
-    // Raft logs are cleared.
-    assert!(ents.is_empty());
 
     // Final step: append some more entries to make sure raftdb is healthy.
     for i in 20..25 {
