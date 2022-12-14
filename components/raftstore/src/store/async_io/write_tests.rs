@@ -354,7 +354,7 @@ fn test_worker_split_raft_wb() {
         let mut apply_state_1 = RaftApplyState::default();
         apply_state_1.set_applied_index(10);
         let lb = task_1.extra_write.ensure_v2(|| engines.raft.log_batch(0));
-        lb.put_apply_state(region_1, &apply_state_1).unwrap();
+        lb.put_apply_state(region_1, 10, &apply_state_1).unwrap();
         put_raft_kv(task_1.raft_wb.as_mut(), raft_key_1);
         task_1.entries.append(&mut vec![
             new_entry(5, 5),
@@ -370,7 +370,7 @@ fn test_worker_split_raft_wb() {
         let mut apply_state_2 = RaftApplyState::default();
         apply_state_2.set_applied_index(16);
         let lb = task_2.extra_write.ensure_v2(|| engines.raft.log_batch(0));
-        lb.put_apply_state(region_2, &apply_state_2).unwrap();
+        lb.put_apply_state(region_2, 16, &apply_state_2).unwrap();
         put_raft_kv(task_2.raft_wb.as_mut(), raft_key_2);
         task_2
             .entries
@@ -389,7 +389,7 @@ fn test_worker_split_raft_wb() {
         let mut apply_state_3 = RaftApplyState::default();
         apply_state_3.set_applied_index(25);
         let lb = task_3.extra_write.ensure_v2(|| engines.raft.log_batch(0));
-        lb.put_apply_state(region_1, &apply_state_3).unwrap();
+        lb.put_apply_state(region_1, 25, &apply_state_3).unwrap();
         put_raft_kv(task_3.raft_wb.as_mut(), raft_key_3);
         delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), raft_key_1);
         task_3
@@ -431,14 +431,14 @@ fn test_worker_split_raft_wb() {
             ],
         );
         assert_eq!(
-            engines.raft.get_apply_state(region_1).unwrap(),
+            engines.raft.get_apply_state(region_1, 25).unwrap(),
             Some(RaftApplyState {
                 applied_index: 25,
                 ..Default::default()
             })
         );
         assert_eq!(
-            engines.raft.get_apply_state(region_2).unwrap(),
+            engines.raft.get_apply_state(region_2, 16).unwrap(),
             Some(RaftApplyState {
                 applied_index: 16,
                 ..Default::default()
@@ -565,8 +565,8 @@ fn test_basic_flow_with_states() {
         .mut_region_epoch()
         .set_version(3);
     let lb = task_1.extra_write.ensure_v2(|| engines.raft.log_batch(0));
-    lb.put_apply_state(region_1, &apply_state_1).unwrap();
-    lb.put_region_state(region_1, &region_state_1).unwrap();
+    lb.put_apply_state(region_1, 2, &apply_state_1).unwrap();
+    lb.put_region_state(region_1, 2, &region_state_1).unwrap();
     put_raft_kv(task_1.raft_wb.as_mut(), 17);
     task_1
         .entries
@@ -583,7 +583,7 @@ fn test_basic_flow_with_states() {
     let mut apply_state_2 = RaftApplyState::default();
     apply_state_2.applied_index = 30;
     let lb = task_2.extra_write.ensure_v2(|| engines.raft.log_batch(0));
-    lb.put_apply_state(2, &apply_state_2).unwrap();
+    lb.put_apply_state(2, 30, &apply_state_2).unwrap();
     put_raft_kv(task_2.raft_wb.as_mut(), 27);
     task_2
         .entries
@@ -600,7 +600,7 @@ fn test_basic_flow_with_states() {
     let mut apply_state_3 = RaftApplyState::default();
     apply_state_3.applied_index = 5;
     let lb = task_3.extra_write.ensure_v2(|| engines.raft.log_batch(0));
-    lb.put_apply_state(region_1, &apply_state_3).unwrap();
+    lb.put_apply_state(region_1, 5, &apply_state_3).unwrap();
     put_raft_kv(task_3.raft_wb.as_mut(), 37);
     delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), 17);
     task_3.entries.append(&mut vec![new_entry(6, 6)]);
@@ -634,18 +634,18 @@ fn test_basic_flow_with_states() {
         ],
     );
     assert_eq!(
-        engines.raft.get_apply_state(region_1).unwrap().unwrap(),
+        engines.raft.get_apply_state(region_1, 5).unwrap().unwrap(),
         apply_state_3
     );
     assert_eq!(
-        engines.raft.get_apply_state(region_2).unwrap().unwrap(),
+        engines.raft.get_apply_state(region_2, 30).unwrap().unwrap(),
         apply_state_2
     );
     assert_eq!(
-        engines.raft.get_region_state(region_1).unwrap().unwrap(),
+        engines.raft.get_region_state(region_1, 2).unwrap().unwrap(),
         region_state_1
     );
-    assert_eq!(engines.raft.get_region_state(region_2).unwrap(), None);
+    assert_eq!(engines.raft.get_region_state(region_2, 1).unwrap(), None);
 
     must_have_same_count_msg(6, &t.msg_rx);
 

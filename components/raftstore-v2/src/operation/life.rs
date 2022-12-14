@@ -175,7 +175,7 @@ impl Store {
             return;
         }
         let from_epoch = msg.get_region_epoch();
-        let local_state = match ctx.engine.get_region_state(region_id) {
+        let local_state = match ctx.engine.get_region_state(region_id, u64::MAX) {
             Ok(s) => s,
             Err(e) => {
                 error!(self.logger(), "failed to get region state"; "region_id" => region_id, "err" => ?e);
@@ -315,7 +315,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         raft_engine.clean(region_id, 0, raft_state, lb).unwrap();
         // Write worker will do the clean up when meeting tombstone state.
         region_state.set_state(PeerState::Tombstone);
-        lb.put_region_state(region_id, &region_state).unwrap();
+        let applied_index = self.entry_storage().applied_index();
+        lb.put_region_state(region_id, applied_index, &region_state)
+            .unwrap();
         self.destroy_progress_mut().start();
     }
 

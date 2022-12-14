@@ -560,8 +560,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             let lb = write_task
                 .extra_write
                 .ensure_v2(|| raft_engine.log_batch(3));
-            lb.put_apply_state(region_id, self.apply_state()).unwrap();
-            lb.put_region_state(region_id, self.region_state()).unwrap();
+            lb.put_apply_state(region_id, 0, self.apply_state())
+                .unwrap();
+            lb.put_region_state(region_id, 0, self.region_state())
+                .unwrap();
             self.set_ever_persisted();
         }
     }
