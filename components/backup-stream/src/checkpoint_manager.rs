@@ -356,9 +356,13 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
             .update_service_safe_point(
                 format!("backup-stream-{}-{}", task, self.store_id),
                 TimeStamp::new(rts.saturating_sub(1)),
-                // Add a service safe point for 30 mins (6x the default flush interval).
-                // It would probably be safe.
-                Duration::from_secs(1800),
+                // Add a service safe point for 2 hours.
+                // We make it the same duration as we meet fatal errors because TiKV may be
+                // SIGKILL'ed after it meets fatal error and before it successfully updated the
+                // fatal error safepoint.
+                // TODO: We'd better make the coordinator, who really
+                // calculates the checkpoint to register service safepoint.
+                Duration::from_secs(60 * 60 * 2),
             )
             .await
         {
@@ -454,7 +458,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::{
         assert_matches,
         collections::HashMap,
@@ -506,7 +510,7 @@ mod tests {
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 24);
     }
 
-    struct MockPdClient {
+    pub struct MockPdClient {
         safepoint: RwLock<HashMap<String, TimeStamp>>,
     }
 

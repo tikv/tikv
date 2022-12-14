@@ -16,11 +16,11 @@ use crate::{
     metadata::{store::SlashEtcStore, MetadataEvent},
 };
 
-fn test_meta_cli() -> MetadataClient<SlashEtcStore> {
+pub fn test_meta_cli() -> MetadataClient<SlashEtcStore> {
     MetadataClient::new(SlashEtcStore::default(), 42)
 }
 
-fn simple_task(name: &str) -> StreamTask {
+pub fn simple_task(name: &str) -> StreamTask {
     let mut task = StreamTask::default();
     task.info.set_name(name.to_owned());
     task.info.set_start_ts(1);

@@ -33,7 +33,7 @@ command! {
             commit_ts: TimeStamp,
             version: TimeStamp,
             start_key: Key,
-            end_key: Key,
+            end_key: Option<Key>,
             state: FlashbackToVersionState,
         }
 }
@@ -118,7 +118,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         let rows = txn.modifies.len();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         // To let the flashback modification could be proposed and applied successfully.
-        write_data.extra.for_flashback = true;
+        write_data.extra.allowed_in_flashback = true;
         // To let the CDC treat the flashback modification as an 1PC transaction.
         if matches!(self.state, FlashbackToVersionState::FlashbackWrite { .. }) {
             write_data.extra.one_pc = true;

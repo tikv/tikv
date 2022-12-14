@@ -353,6 +353,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_fetch"]).observe(now.saturating_elapsed().as_secs_f64())
         }
+        fail::fail_point!("failed_to_get_tasks", |_| {
+            Err(Error::MalformedMetadata(
+                "faild to connect etcd client".to_string(),
+            ))
+        });
         let snap = self.meta_store.snapshot().await?;
         let kvs = snap.get(Keys::Prefix(MetaKey::tasks())).await?;
 
