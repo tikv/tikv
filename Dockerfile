@@ -50,6 +50,11 @@ RUN ln -s /usr/bin/cmake3 /usr/bin/cmake
 ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
 ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
 
+# Install protoc
+RUN curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v3.15.8/protoc-3.15.8-linux-x86_64.zip"
+RUN unzip protoc-3.15.8-linux-x86_64.zip -d /usr/local/
+ENV PATH /usr/local/bin/:$PATH
+
 # Install Rustup
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
 ENV PATH /root/.cargo/bin/:$PATH
