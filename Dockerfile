@@ -72,8 +72,7 @@ RUN mkdir -p ./cmd/tikv-ctl/src ./cmd/tikv-server/src && \
     echo 'fn main() {}' > ./cmd/tikv-ctl/src/main.rs && \
     echo 'fn main() {}' > ./cmd/tikv-server/src/main.rs && \
     for cargotoml in $(find . -type f -name "Cargo.toml"); do \
-        sed -i '/fuzz/d' ${cargotoml} && \
-        sed -i '/profiler/d' ${cargotoml} ; \
+        sed -i '/fuzz/d' ${cargotoml} ; \
     done
 
 COPY Makefile ./
