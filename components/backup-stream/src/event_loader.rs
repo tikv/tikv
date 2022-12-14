@@ -236,7 +236,9 @@ where
     ) -> Result<impl Snapshot> {
         let mut last_err = None;
         for _ in 0..MAX_GET_SNAPSHOT_RETRY {
-            let r = self.observe_over(region, cmd());
+            let c = cmd();
+            let h = c.observer_id();
+            let r = self.observe_over(region, c);
             match r {
                 Ok(s) => {
                     return Ok(s);
@@ -266,6 +268,8 @@ where
                     };
 
                     if !can_retry {
+                        self.tracing
+                            .deregister_region_if(region, |r, sub| r.handle().id == h);
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(500));
