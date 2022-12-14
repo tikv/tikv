@@ -47,11 +47,23 @@ impl RaftEngineReadOnly for PanicEngine {
         panic!()
     }
 
-    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+    fn get_region_state(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<RegionLocalState>> {
         panic!()
     }
 
-    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+    fn get_apply_state(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<RaftApplyState>> {
+        panic!()
+    }
+
+    fn get_flushed_index(&self, raft_group_id: u64, cf: &str) -> Result<Option<u64>> {
         panic!()
     }
 
@@ -186,11 +198,31 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+    fn put_region_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_index: u64,
+        state: &RegionLocalState,
+    ) -> Result<()> {
         panic!()
     }
 
-    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+    fn put_apply_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_index: u64,
+        state: &RaftApplyState,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_flushed_index(
+        &mut self,
+        raft_group_id: u64,
+        cf: &str,
+        tablet_index: u64,
+        apply_index: u64,
+    ) -> Result<()> {
         panic!()
     }
 

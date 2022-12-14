@@ -416,10 +416,11 @@ where
                             )
                             .unwrap();
                     }
-                    wb.put_region_state(region_id, &region_state).unwrap();
+                    wb.put_region_state(region_id, 0, &region_state).unwrap();
                 }
                 if !tombstone {
-                    wb.put_apply_state(region_id, &state.apply_state).unwrap();
+                    wb.put_apply_state(region_id, 0, &state.apply_state)
+                        .unwrap();
                 }
             }
         }

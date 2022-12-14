@@ -29,7 +29,7 @@ pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Resul
     let mut state = RegionLocalState::default();
     state.set_region(region);
     state.set_tablet_index(RAFT_INIT_LOG_INDEX);
-    wb.put_region_state(region_id, &state)?;
+    wb.put_region_state(region_id, 0, &state)?;
 
     let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
@@ -39,7 +39,7 @@ pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Resul
     apply_state
         .mut_truncated_state()
         .set_term(RAFT_INIT_LOG_TERM);
-    wb.put_apply_state(region_id, &apply_state)?;
+    wb.put_apply_state(region_id, 0, &apply_state)?;
 
     let mut raft_state = RaftLocalState::default();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
@@ -158,7 +158,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         read_scheduler: Scheduler<ReadTask<EK>>,
         logger: &Logger,
     ) -> Result<Option<Storage<EK, ER>>> {
-        let region_state = match engine.get_region_state(region_id) {
+        let region_state = match engine.get_region_state(region_id, 0) {
             Ok(Some(s)) => s,
             res => {
                 return Err(box_err!(
@@ -180,7 +180,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         };
 
-        let apply_state = match engine.get_apply_state(region_id) {
+        let apply_state = match engine.get_apply_state(region_id, 0) {
             Ok(Some(s)) => s,
             res => {
                 return Err(box_err!("failed to get apply state: {:?}", res));
@@ -439,7 +439,7 @@ mod tests {
         assert!(!wb.is_empty());
         raft_engine.consume(&mut wb, true).unwrap();
 
-        let local_state = raft_engine.get_region_state(4).unwrap().unwrap();
+        let local_state = raft_engine.get_region_state(4, 0).unwrap().unwrap();
         assert_eq!(local_state.get_state(), PeerState::Normal);
         assert_eq!(*local_state.get_region(), region);
         assert_eq!(local_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(hs.get_term(), RAFT_INIT_LOG_TERM);
         assert_eq!(hs.get_commit(), RAFT_INIT_LOG_INDEX);
 
-        let apply_state = raft_engine.get_apply_state(4).unwrap().unwrap();
+        let apply_state = raft_engine.get_apply_state(4, 0).unwrap().unwrap();
         assert_eq!(apply_state.get_applied_index(), RAFT_INIT_LOG_INDEX);
         let ts = apply_state.get_truncated_state();
         assert_eq!(ts.get_index(), RAFT_INIT_LOG_INDEX);

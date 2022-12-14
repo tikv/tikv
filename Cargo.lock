@@ -4251,6 +4251,7 @@ dependencies = [
 name = "raft_log_engine"
 version = "0.0.1"
 dependencies = [
+ "codec",
  "encryption",
  "engine_traits",
  "file_system",
@@ -4265,6 +4266,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv_util",
  "time",
  "tracker",

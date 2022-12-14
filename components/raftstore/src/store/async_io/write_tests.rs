@@ -431,14 +431,14 @@ fn test_worker_split_raft_wb() {
             ],
         );
         assert_eq!(
-            engines.raft.get_apply_state(region_1).unwrap(),
+            engines.raft.get_apply_state(region_1, 0).unwrap(),
             Some(RaftApplyState {
                 applied_index: 25,
                 ..Default::default()
             })
         );
         assert_eq!(
-            engines.raft.get_apply_state(region_2).unwrap(),
+            engines.raft.get_apply_state(region_2, 0).unwrap(),
             Some(RaftApplyState {
                 applied_index: 16,
                 ..Default::default()
@@ -634,18 +634,18 @@ fn test_basic_flow_with_states() {
         ],
     );
     assert_eq!(
-        engines.raft.get_apply_state(region_1).unwrap().unwrap(),
+        engines.raft.get_apply_state(region_1, 0).unwrap().unwrap(),
         apply_state_3
     );
     assert_eq!(
-        engines.raft.get_apply_state(region_2).unwrap().unwrap(),
+        engines.raft.get_apply_state(region_2, 0).unwrap().unwrap(),
         apply_state_2
     );
     assert_eq!(
-        engines.raft.get_region_state(region_1).unwrap().unwrap(),
+        engines.raft.get_region_state(region_1, 0).unwrap().unwrap(),
         region_state_1
     );
-    assert_eq!(engines.raft.get_region_state(region_2).unwrap(), None);
+    assert_eq!(engines.raft.get_region_state(region_2, 0).unwrap(), None);
 
     must_have_same_count_msg(6, &t.msg_rx);
 
