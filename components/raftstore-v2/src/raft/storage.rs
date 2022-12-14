@@ -158,7 +158,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         read_scheduler: Scheduler<ReadTask<EK>>,
         logger: &Logger,
     ) -> Result<Option<Storage<EK, ER>>> {
-        let region_state = match engine.get_region_state(region_id, 0) {
+        let region_state = match engine.get_region_state(region_id, u64::MAX) {
             Ok(Some(s)) => s,
             res => {
                 return Err(box_err!(
@@ -180,7 +180,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         };
 
-        let apply_state = match engine.get_apply_state(region_id, 0) {
+        let apply_state = match engine.get_apply_state(region_id, u64::MAX) {
             Ok(Some(s)) => s,
             res => {
                 return Err(box_err!("failed to get apply state: {:?}", res));
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(hs.get_term(), RAFT_INIT_LOG_TERM);
         assert_eq!(hs.get_commit(), RAFT_INIT_LOG_INDEX);
 
-        let apply_state = raft_engine.get_apply_state(4, 0).unwrap().unwrap();
+        let apply_state = raft_engine.get_apply_state(4, u64::MAX).unwrap().unwrap();
         assert_eq!(apply_state.get_applied_index(), RAFT_INIT_LOG_INDEX);
         let ts = apply_state.get_truncated_state();
         assert_eq!(ts.get_index(), RAFT_INIT_LOG_INDEX);

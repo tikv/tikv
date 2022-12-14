@@ -508,6 +508,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.apply_scheduler = Some(apply_scheduler);
     }
 
+    #[inline]
+    pub fn clear_apply_scheduler(&mut self) {
+        self.apply_scheduler.take();
+    }
+
     /// Whether the snapshot is handling.
     /// See the comments of `check_snap_status` for more details.
     #[inline]

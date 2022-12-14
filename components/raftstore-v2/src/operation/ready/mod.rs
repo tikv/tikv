@@ -22,12 +22,12 @@ mod snapshot;
 
 use std::{cmp, time::Instant};
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use error_code::ErrorCodeExt;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use protobuf::Message as _;
 use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
-use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
+use raftstore::store::{util, FetchedLogs, ReadProgress, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 
@@ -555,9 +555,15 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             write_task.raft_state = Some(entry_storage.raft_state().clone());
         }
         if !ever_persisted {
-            let mut extra_states = ExtraStates::new(self.apply_state().clone());
-            extra_states.set_region_state(self.region_state().clone());
-            write_task.extra_write.set_v2(extra_states);
+            let region_id = self.region().get_id();
+            let raft_engine = self.entry_storage().raft_engine();
+            let lb = write_task
+                .extra_write
+                .ensure_v2(|| raft_engine.log_batch(3));
+            lb.put_apply_state(region_id, 0, self.apply_state())
+                .unwrap();
+            lb.put_region_state(region_id, 0, self.region_state())
+                .unwrap();
             self.set_ever_persisted();
         }
     }
