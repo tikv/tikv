@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use collections::HashSet;
-use crossbeam::channel::unbounded;
+use crossbeam::channel::{unbounded, Sender};
 use engine_test::{kv::KvTestEngine, new_temp_engine, raft::RaftTestEngine};
 use engine_traits::{Engines, Mutable, Peekable, RaftEngineReadOnly, WriteBatchExt};
 use kvproto::raft_serverpb::RaftMessage;
@@ -246,8 +246,9 @@ impl TestWriters {
         }
     }
 
-    fn write_sender(&self, id: usize) -> Sender<WriteMsg<KvTestEngine, RaftTestEngine>> {
-        self.writers.senders()[id].clone()
+    fn send(&self, id: usize, msg: WriteMsg<KvTestEngine, RaftTestEngine>) -> Result<()> {
+        self.writers.senders().send(id, msg).unwrap();
+        Ok(())
     }
 }
 
@@ -478,7 +479,7 @@ fn test_basic_flow() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(0).send(WriteMsg::WriteTask(task_1)).unwrap();
+    t.send(0, WriteMsg::WriteTask(task_1)).unwrap();
 
     let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(2, 2, 20);
     init_write_batch(&engines, &mut task_2);
@@ -492,7 +493,7 @@ fn test_basic_flow() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(1).send(WriteMsg::WriteTask(task_2)).unwrap();
+    t.send(1, WriteMsg::WriteTask(task_2)).unwrap();
 
     let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 15);
     init_write_batch(&engines, &mut task_3);
@@ -507,7 +508,7 @@ fn test_basic_flow() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(0).send(WriteMsg::WriteTask(task_3)).unwrap();
+    t.send(0, WriteMsg::WriteTask(task_3)).unwrap();
 
     must_wait_same_notifies(vec![(region_1, (1, 15)), (region_2, (2, 20))], &t.notify_rx);
 
@@ -576,7 +577,7 @@ fn test_basic_flow_with_states() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(0).send(WriteMsg::WriteTask(task_1)).unwrap();
+    t.send(0, WriteMsg::WriteTask(task_1)).unwrap();
 
     let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(2, 2, 20);
     task_2.raft_wb = Some(engines.raft.log_batch(0));
@@ -593,7 +594,7 @@ fn test_basic_flow_with_states() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(1).send(WriteMsg::WriteTask(task_2)).unwrap();
+    t.send(1, WriteMsg::WriteTask(task_2)).unwrap();
 
     let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 15);
     task_3.raft_wb = Some(engines.raft.log_batch(0));
@@ -610,7 +611,7 @@ fn test_basic_flow_with_states() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(0).send(WriteMsg::WriteTask(task_3)).unwrap();
+    t.send(0, WriteMsg::WriteTask(task_3)).unwrap();
 
     must_wait_same_notifies(vec![(region_1, (1, 15)), (region_2, (2, 20))], &t.notify_rx);
 

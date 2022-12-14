@@ -5,7 +5,6 @@
 
 use std::{
     mem,
-    ops::Index,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -13,8 +12,9 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::channel::{Sender, TrySendError};
+use crossbeam::channel::{SendError, Sender, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
+use parking_lot::RwLock;
 use tikv_util::{info, time::Instant};
 
 use crate::store::{
@@ -158,13 +158,14 @@ where
         if self.last_unpersisted.is_some() {
             return false;
         }
-        if ctx.config().store_io_pool_size <= 1 {
+        let async_io_pool_size = ctx.write_senders().capacity();
+        if async_io_pool_size <= 1 {
             self.writer_id = 0;
             return true;
         }
         if last_unpersisted.is_none() {
             // If no previous pending ready, we can randomly select a new writer worker.
-            self.writer_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
+            self.writer_id = rand::random::<usize>() % async_io_pool_size;
             self.next_retry_time =
                 Instant::now_coarse() + ctx.config().io_reschedule_hotpot_duration.0;
             self.next_writer_id = None;
@@ -183,7 +184,7 @@ where
             // The hot write peers should not be rescheduled entirely.
             // So it will not be rescheduled if the random id is the same as the original
             // one.
-            let new_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
+            let new_id = rand::random::<usize>() % async_io_pool_size;
             if new_id == self.writer_id {
                 // Reset the time
                 self.next_retry_time = now + ctx.config().io_reschedule_hotpot_duration.0;
@@ -223,11 +224,12 @@ where
     }
 
     fn send<C: WriteRouterContext<EK, ER>>(&self, ctx: &mut C, msg: WriteMsg<EK, ER>) {
-        match ctx.write_senders()[self.writer_id].try_send(msg) {
+        let write_senders = ctx.write_senders();
+        match write_senders.try_send(self.writer_id, msg) {
             Ok(()) => (),
             Err(TrySendError::Full(msg)) => {
                 let now = Instant::now();
-                if ctx.write_senders()[self.writer_id].send(msg).is_err() {
+                if write_senders.send(self.writer_id, msg).is_err() {
                     // Write threads are destroyed after store threads during shutdown.
                     panic!("{} failed to send write msg, err: disconnected", self.tag);
                 }
@@ -247,30 +249,76 @@ where
 /// you should use `WriteRouter` to decide which sender to be used.
 #[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
-    write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+    write_senders: Arc<RwLock<Vec<Sender<WriteMsg<EK, ER>>>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
+    io_capacity: Arc<AtomicUsize>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
-    pub fn new(write_senders: Vec<Sender<WriteMsg<EK, ER>>>) -> Self {
+    pub fn new(write_senders: Arc<RwLock<Vec<Sender<WriteMsg<EK, ER>>>>>) -> Self {
+        let len = write_senders.read().len();
         WriteSenders {
             write_senders,
             io_reschedule_concurrent_count: Arc::default(),
+            io_capacity: Arc::new(len.into()),
         }
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.write_senders.is_empty()
+        self.write_senders.read().is_empty()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.write_senders.read().len()
+    }
+
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.io_capacity.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn reserve(&mut self, expected_capacity: usize) {
+        self.io_capacity.store(expected_capacity, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn push(&mut self, sender: Sender<WriteMsg<EK, ER>>) {
+        self.write_senders.write().push(sender);
+    }
+
+    #[inline]
+    pub fn pop(&mut self) -> Option<Sender<WriteMsg<EK, ER>>> {
+        self.write_senders.write().pop()
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Index<usize> for WriteSenders<EK, ER> {
-    type Output = Sender<WriteMsg<EK, ER>>;
+impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
+    #[inline]
+    pub fn send(
+        &self,
+        idx: usize,
+        msg: WriteMsg<EK, ER>,
+    ) -> Result<(), SendError<WriteMsg<EK, ER>>> {
+        let write_senders = self.write_senders.read();
+        debug_assert!(!write_senders.is_empty());
+        write_senders[idx % write_senders.len()].send(msg)
+    }
 
     #[inline]
-    fn index(&self, index: usize) -> &Sender<WriteMsg<EK, ER>> {
-        &self.write_senders[index]
+    pub fn try_send(
+        &self,
+        idx: usize,
+        msg: WriteMsg<EK, ER>,
+    ) -> Result<(), TrySendError<WriteMsg<EK, ER>>> {
+        // TODO: one problem -- if capacity was reset to `0`, that is, no async-io, we
+        // should find a elegant way to initialize the sync_io after we release all
+        // async-io threads and pipes.
+        let write_senders = self.write_senders.read();
+        debug_assert!(!write_senders.is_empty());
+        write_senders[idx % write_senders.len()].try_send(msg)
     }
 }
 
@@ -301,7 +349,7 @@ mod tests {
             }
             Self {
                 receivers,
-                senders: WriteSenders::new(senders),
+                senders: WriteSenders::new(Arc::new(RwLock::new(senders))),
                 config,
                 raft_metrics: RaftMetrics::new(true),
             }

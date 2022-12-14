@@ -73,7 +73,7 @@ use crate::{
     store::{
         async_io::{
             read::{ReadRunner, ReadTask},
-            write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+            write::{StoreWriters, StoreWritersMeta, Worker as WriteWorker, WriteMsg},
             write_router::WriteSenders,
         },
         config::Config,
@@ -1009,16 +1009,14 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     inspector.finish();
                 }
             }
-        } else {
-            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-            if let Err(err) =
-                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
-                    send_time: write_begin,
-                    inspector: latency_inspect,
-                })
-            {
-                warn!("send latency inspecting to write workers failed"; "err" => ?err);
-            }
+        } else if let Err(err) = self.poll_ctx.write_senders.try_send(
+            rand::random::<usize>(),
+            WriteMsg::LatencyInspect {
+                send_time: write_begin,
+                inspector: latency_inspect,
+            },
+        ) {
+            warn!("send latency inspecting to write workers failed"; "err" => ?err);
         }
         dur = self.timer.saturating_elapsed();
         if self.poll_ctx.has_ready {
@@ -1692,6 +1690,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let refresh_config_runner = RefreshConfigRunner::new(
+            StoreWritersMeta {
+                store_id: store.get_id(),
+                notifier: self.router.clone(),
+                raft_engine: raft_builder.engines.raft.clone(),
+                kv_engine: Some(raft_builder.engines.kv.clone()),
+                transfer: raft_builder.trans.clone(),
+                cfg: raft_builder.cfg.clone(),
+            },
+            self.store_writers.clone(),
             self.apply_router.router.clone(),
             self.router.router.clone(),
             self.apply_system.build_pool_state(apply_builder),
