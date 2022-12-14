@@ -34,12 +34,19 @@ fn count_info_log(path: &Path) -> usize {
     })
 }
 
+/// Test if data will be recovered correctly after being restarted.
 #[test]
 fn test_data_recovery() {
     let mut cluster = Cluster::default();
+    let registry = cluster.node(0).tablet_registry();
+    let tablet_2_path = registry.tablet_path(2, RAFT_INIT_LOG_INDEX);
+    // The rocksdb is a bootstrapped tablet, so it will be opened and closed in
+    // bootstrap, and then open again in fsm initialization.
+    assert_eq!(count_info_log(&tablet_2_path), 2);
     let router = &mut cluster.routers[0];
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
 
+    // Write 100 keys to default CF and not flush.
     let mut req = router.new_request_for(2);
     for i in 0..100 {
         let put_req = new_put_request(format!("key{}", i), format!("value{}", i));
@@ -50,6 +57,7 @@ fn test_data_recovery() {
             .unwrap();
     }
 
+    // Write 100 keys to write CF and flush half.
     let mut sub = None;
     for i in 0..50 {
         let mut put_req = new_put_request(format!("key{}", i), format!("value{}", i));
@@ -82,6 +90,7 @@ fn test_data_recovery() {
             .unwrap();
     }
 
+    // Write 100 keys to lock CF and flush all.
     for i in 0..100 {
         let mut put_req = new_put_request(format!("key{}", i), format!("value{}", i));
         put_req.mut_put().set_cf(CF_LOCK.to_owned());
@@ -103,13 +112,12 @@ fn test_data_recovery() {
     let res = block_on(sub.result()).unwrap();
     assert!(!res.get_header().has_error(), "{:?}", res);
 
-    let registry = cluster.node(0).tablet_registry();
-    let mut cached = registry.get(2).unwrap();
-    let tablet = cached.latest().unwrap();
+    // Make sure all keys must be written.
+    let snap = router.stale_snapshot(2);
     for cf in DATA_CFS {
         for i in 0..100 {
             let key = format!("key{}", i);
-            let value = tablet.get_value_cf(cf, key.as_bytes()).unwrap();
+            let value = snap.get_value_cf(cf, key.as_bytes()).unwrap();
             assert_eq!(
                 value.as_deref(),
                 Some(format!("value{}", i).as_bytes()),
@@ -119,18 +127,22 @@ fn test_data_recovery() {
             );
         }
     }
-    tablet
+    let registry = cluster.node(0).tablet_registry();
+    let mut cached = registry.get(2).unwrap();
+    cached
+        .latest()
+        .unwrap()
         .set_db_options(&[("avoid_flush_during_shutdown", "true")])
         .unwrap();
-    drop(cached);
+    drop((snap, cached));
 
     cluster.restart(0);
 
     let registry = cluster.node(0).tablet_registry();
-    let path = registry.tablet_path(2, RAFT_INIT_LOG_INDEX);
     let mut cached = registry.get(2).unwrap();
-    let tablet = cached.latest().unwrap();
-    tablet
+    cached
+        .latest()
+        .unwrap()
         .set_db_options(&[("avoid_flush_during_shutdown", "true")])
         .unwrap();
     let router = &mut cluster.routers[0];
@@ -146,10 +158,11 @@ fn test_data_recovery() {
 
     // After being restarted, all unflushed logs should be applied again. So there
     // should be no missing data.
+    let snap = router.stale_snapshot(2);
     for cf in DATA_CFS {
         for i in 0..100 {
             let key = format!("key{}", i);
-            let value = tablet.get_value_cf(cf, key.as_bytes()).unwrap();
+            let value = snap.get_value_cf(cf, key.as_bytes()).unwrap();
             assert_eq!(
                 value.as_deref(),
                 Some(format!("value{}", i).as_bytes()),
@@ -161,11 +174,11 @@ fn test_data_recovery() {
     }
 
     // There is a restart, so LOG file should be rotate.
-    assert_eq!(count_info_log(&path), 2);
+    assert_eq!(count_info_log(&tablet_2_path), 3);
     // We only trigger Flush twice, so there should be only 2 files. And because WAL
     // is disabled, so when rocksdb is restarted, there should be no WAL to recover,
     // so no additional flush will be triggered.
-    assert_eq!(count_sst(&path), 2);
+    assert_eq!(count_sst(&tablet_2_path), 2);
 
     let (ch, sub) = CmdResChannel::pair();
     let manual_flush = PeerMsg::ManualFlush {
@@ -181,24 +194,22 @@ fn test_data_recovery() {
     // 2. [50, 100) to CF_WRITE
     //
     // So there will be only 2 memtables to be flushed.
-    assert_eq!(count_sst(&path), 4);
+    assert_eq!(count_sst(&tablet_2_path), 4);
 
-    drop(cached);
+    drop((snap, cached));
 
     cluster.restart(0);
 
-    let registry = cluster.node(0).tablet_registry();
-    let mut cached = registry.get(2).unwrap();
-    let tablet = cached.latest().unwrap();
     let router = &mut cluster.routers[0];
 
-    assert_eq!(count_info_log(&path), 3);
+    assert_eq!(count_info_log(&tablet_2_path), 4);
     // Because data is flushed before restarted, so all data can be read
     // immediately.
+    let snap = router.stale_snapshot(2);
     for cf in DATA_CFS {
         for i in 0..100 {
             let key = format!("key{}", i);
-            let value = tablet.get_value_cf(cf, key.as_bytes()).unwrap();
+            let value = snap.get_value_cf(cf, key.as_bytes()).unwrap();
             assert_eq!(
                 value.as_deref(),
                 Some(format!("value{}", i).as_bytes()),
@@ -218,5 +229,5 @@ fn test_data_recovery() {
     let res = block_on(sub.result()).unwrap();
     assert!(!res.get_header().has_error(), "{:?}", res);
     // There is no recovery, so there should be nothing to flush.
-    assert_eq!(count_sst(&path), 4);
+    assert_eq!(count_sst(&tablet_2_path), 4);
 }
