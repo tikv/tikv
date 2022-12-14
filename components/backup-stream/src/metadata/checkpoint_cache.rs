@@ -21,6 +21,8 @@ impl Default for CheckpointCache {
         Self {
             last_access: Instant::now_coarse(),
             checkpoint: TimeStamp::zero(),
+
+            cache_lease_time: CACHE_LEASE_TIME,
         }
     }
 }
@@ -57,13 +59,13 @@ mod test {
 
     #[test]
     fn test_basic() {
-        let c = CheckpointCache::with_cache_lease(Duration::from_millis(100));
+        let mut c = CheckpointCache::with_cache_lease(Duration::from_millis(100));
         assert_eq!(c.get(), None);
         c.update(42);
-        assert_eq!(c.get(), Some(42));
+        assert_eq!(c.get(), Some(42.into()));
         c.update(41);
-        assert_eq!(c.get(), Some(41));
-        std::time::sleep(Duration::from_millis(200));
+        assert_eq!(c.get(), Some(42.into()));
+        std::thread::sleep(Duration::from_millis(200));
         assert_eq!(c.get(), None);
     }
 }

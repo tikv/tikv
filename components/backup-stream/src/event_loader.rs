@@ -269,7 +269,7 @@ where
 
                     if !can_retry {
                         self.tracing
-                            .deregister_region_if(region, |r, sub| r.handle().id == h);
+                            .deregister_region_if(region, |sub, _| sub.handle().id == h);
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(500));
