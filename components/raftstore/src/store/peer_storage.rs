@@ -20,6 +20,7 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
+use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 use crate::store::fsm::GenSnapTask;
 use crate::store::memory::*;
 use crate::store::util;
@@ -31,21 +32,6 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
-
-<<<<<<< HEAD
-use super::metrics::*;
-use super::worker::RegionTask;
-use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
-=======
-use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
-use crate::{
-    store::{
-        async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
-        peer::PersistSnapshotResult, util, worker::RaftlogFetchTask,
-    },
-    Error, Result,
-};
->>>>>>> 741594664... raftstore: fix checking for snapshot last index (#13088)
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -523,15 +509,6 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
 
     let raft_state = box_try!(engines.raft.get_raft_state(region_id)).unwrap_or_default();
 
-<<<<<<< HEAD
-    // if we recv append log when applying snapshot, last_index in raft_local_state will
-    // larger than snapshot_index. since raft_local_state is written to raft engine, and
-    // raft write_batch is written after kv write_batch, raft_local_state may wrong if
-    // restart happen between the two write. so we copy raft_local_state to kv engine
-    // (snapshot_raft_state), and set snapshot_raft_state.last_index = snapshot_index.
-    // after restart, we need check last_index.
-    if last_index(&snapshot_raft_state) > last_index(&raft_state) {
-=======
     // since raft_local_state is written to raft engine, and
     // raft write_batch is written after kv write_batch. raft_local_state may wrong
     // if restart happen between the two write. so we copy raft_local_state to
@@ -544,7 +521,6 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
         engines
             .raft
             .clean(region_id, 0 /* first_index */, &raft_state, raft_wb)?;
->>>>>>> 741594664... raftstore: fix checking for snapshot last index (#13088)
         raft_wb.put_raft_state(region_id, &snapshot_raft_state)?;
     }
     Ok(())
