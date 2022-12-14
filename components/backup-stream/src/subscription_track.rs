@@ -143,7 +143,7 @@ impl SubscriptionTracer {
                 }
                 false
             }
-            Entry::Vacant(x) => false,
+            Entry::Vacant(_) => false,
         }
     }
 
