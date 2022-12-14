@@ -17,7 +17,7 @@ use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
-    },
+    }, collections::LinkedList,
 };
 
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState};
@@ -38,6 +38,7 @@ struct StateChanges {
     changes: Vec<(u64, StateChange)>,
 }
 
+#[derive(Debug)]
 pub struct FlushProgress {
     cf: String,
     id: u64,
@@ -125,7 +126,7 @@ pub struct PersistenceListener {
     region_id: u64,
     tablet_index: u64,
     state: Arc<FlushState>,
-    progress: Mutex<Vec<FlushProgress>>,
+    progress: Mutex<LinkedList<FlushProgress>>,
     storage: Arc<dyn StateStorage>,
 }
 
@@ -140,7 +141,7 @@ impl PersistenceListener {
             region_id,
             tablet_index,
             state,
-            progress: Mutex::new(Vec::new()),
+            progress: Mutex::new(LinkedList::new()),
             storage,
         }
     }
@@ -163,7 +164,7 @@ impl PersistenceListener {
         let apply_index = self.state.applied_index.load(Ordering::SeqCst);
         let changes = mem::take(&mut *state_changes);
         drop(state_changes);
-        self.progress.lock().unwrap().push(FlushProgress {
+        self.progress.lock().unwrap().push_back(FlushProgress {
             cf,
             id,
             apply_index,
@@ -179,9 +180,13 @@ impl PersistenceListener {
             let mut prs = self.progress.lock().unwrap();
             let pos = prs
                 .iter()
-                .position(|pr| pr.cf == cf && pr.id == id)
-                .unwrap();
-            prs.swap_remove(pos)
+                .position(|pr| pr.cf == cf)
+                .unwrap_or_else(|| {
+                    println!("{} {} not found in {:?}", cf, id, prs);
+                    std::thread::sleep(std::time::Duration::from_secs(3600));
+                    panic!("{} {} not found in {:?}", cf, id, prs)
+                });
+            prs.remove(pos)
         };
         self.storage
             .persist_progress(self.region_id, self.tablet_index, cf, pr);

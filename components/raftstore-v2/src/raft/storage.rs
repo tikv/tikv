@@ -358,7 +358,7 @@ mod tests {
         let ops = DbOptions::default();
         let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
-        let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
+        let reg = TabletRegistry::new(factory, path.path().join("tablets")).unwrap();
         let worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
         let logger = slog_global::borrow_global().new(o!());
@@ -405,7 +405,7 @@ mod tests {
         let ops = DbOptions::default();
         let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
-        let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
+        let reg = TabletRegistry::new(factory, path.path().join("tablets")).unwrap();
         let tablet_ctx = TabletContext::new(&region, Some(10));
         reg.load(tablet_ctx, true).unwrap();
         // setup read runner worker and peer storage

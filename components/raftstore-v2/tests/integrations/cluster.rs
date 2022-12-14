@@ -240,7 +240,7 @@ impl RunningState {
         let mut db_opt = DbOptions::default();
         db_opt.set_state_storage(Arc::new(raft_engine.clone()));
         let factory = Box::new(TestTabletFactory::new(db_opt, cf_opts));
-        let registry = TabletRegistry::new(factory, path).unwrap();
+        let registry = TabletRegistry::new(factory, path.join("tablets")).unwrap();
 
         let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client.as_ref(), logger.clone());
         let store_id = bootstrap.bootstrap_store().unwrap();
@@ -551,6 +551,15 @@ impl Cluster {
             if msgs.is_empty() {
                 return;
             }
+        }
+    }
+}
+
+impl Drop for Cluster {
+    fn drop(&mut self) {
+        self.routers.clear();
+        for node in &mut self.nodes {
+            node.stop();
         }
     }
 }
