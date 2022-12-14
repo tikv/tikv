@@ -189,13 +189,11 @@ impl RocksPersistenceListener {
 
 impl rocksdb::EventListener for RocksPersistenceListener {
     fn on_memtable_sealed(&self, info: &MemTableInfo) {
-        self.0
-            .on_memtable_sealed(info.cf_name().to_string(), info.first_seqno());
+        self.0.on_memtable_sealed(info.cf_name().to_string());
     }
 
     fn on_flush_completed(&self, job: &FlushJobInfo) {
-        self.0
-            .on_flush_completed(job.cf_name(), job.smallest_seqno());
+        self.0.on_flush_completed(job.cf_name());
     }
 }
 

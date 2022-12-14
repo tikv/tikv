@@ -13,11 +13,12 @@
 //! be used as the start state.
 
 use std::{
+    collections::LinkedList,
     mem,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
-    }, collections::LinkedList,
+    },
 };
 
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState};
@@ -41,7 +42,6 @@ struct StateChanges {
 #[derive(Debug)]
 pub struct FlushProgress {
     cf: String,
-    id: u64,
     apply_index: u64,
     state_changes: StateChanges,
 }
@@ -156,7 +156,7 @@ impl PersistenceListener {
     ///
     /// `id` should be unique between memtables, which is used to identify
     /// memtable in the flushed event.
-    pub fn on_memtable_sealed(&self, cf: String, id: u64) {
+    pub fn on_memtable_sealed(&self, cf: String) {
         // The correctness relies on the assumption that there will be only one
         // thread writting to the DB and increasing apply index.
         let mut state_changes = self.state.changes.lock().unwrap();
@@ -166,27 +166,25 @@ impl PersistenceListener {
         drop(state_changes);
         self.progress.lock().unwrap().push_back(FlushProgress {
             cf,
-            id,
             apply_index,
             state_changes: changes,
         });
     }
 
     /// Called a memtable finished flushing.
-    pub fn on_flush_completed(&self, cf: &str, id: u64) {
+    pub fn on_flush_completed(&self, cf: &str) {
         // Maybe we should hook the compaction to avoid the file is compacted before
         // being recorded.
         let pr = {
             let mut prs = self.progress.lock().unwrap();
-            let pos = prs
-                .iter()
-                .position(|pr| pr.cf == cf)
-                .unwrap_or_else(|| {
-                    println!("{} {} not found in {:?}", cf, id, prs);
-                    std::thread::sleep(std::time::Duration::from_secs(3600));
-                    panic!("{} {} not found in {:?}", cf, id, prs)
-                });
-            prs.remove(pos)
+            let mut cursor = prs.cursor_front_mut();
+            while let Some(pr) = cursor.current() && pr.cf != cf {
+                cursor.move_next();
+            }
+            match cursor.remove_current() {
+                Some(pr) => pr,
+                None => panic!("{} not found in {:?}", cf, prs),
+            }
         };
         self.storage
             .persist_progress(self.region_id, self.tablet_index, cf, pr);
