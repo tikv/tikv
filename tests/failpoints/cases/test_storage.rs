@@ -18,8 +18,8 @@ use futures::executor::block_on;
 use grpcio::*;
 use kvproto::{
     kvrpcpb::{
-        self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
-        Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
+        self, AssertionLevel, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op,
+        PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
     },
     tikvpb::TikvClient,
 };
@@ -313,13 +313,7 @@ fn test_scale_scheduler_pool() {
         cfg_controller
             .update_config("storage.scheduler-worker-pool-size", &format!("{}", size))
             .unwrap();
-        assert_eq!(
-            scheduler
-                .get_sched_pool(CommandPri::Normal)
-                .pool
-                .get_pool_size(),
-            size
-        );
+        assert_eq!(scheduler.get_sched_pool().pool.get_pool_size(), size);
     };
 
     scale_pool(1);

@@ -4,6 +4,7 @@ use std::{error::Error, net::SocketAddr, sync::Arc};
 
 use hyper::{body, Client, StatusCode, Uri};
 use raftstore::store::region_meta::RegionMeta;
+use resource_control::ResourceGroupManager;
 use security::SecurityConfig;
 use test_raftstore::{new_server_cluster, Simulator};
 use tikv::{config::ConfigController, server::status_server::StatusServer};
@@ -44,6 +45,7 @@ fn test_region_meta_endpoint() {
     let mut status_server = StatusServer::new(
         1,
         ConfigController::default(),
+        Arc::new(ResourceGroupManager::new()),
         Arc::new(SecurityConfig::default()),
         router.unwrap(),
         std::env::temp_dir(),

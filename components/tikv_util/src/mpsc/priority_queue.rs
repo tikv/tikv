@@ -156,11 +156,13 @@ impl<T: Send + 'static> Receiver<T> {
             match self.try_recv() {
                 Ok(msg) => return Ok(msg),
                 Err(TryRecvError::Disconnected) => {
+                    println!("disconnected");
                     return Err(RecvError);
                 }
                 Err(TryRecvError::Empty) => {
                     let mut disconnected = self.inner.disconnected.lock();
                     if *disconnected {
+                        println!("disconnected1");
                         return Err(RecvError);
                     }
                     self.inner.available.wait(&mut disconnected);

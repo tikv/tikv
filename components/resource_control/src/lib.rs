@@ -102,6 +102,11 @@ impl ResourceGroupManager {
     pub fn derive_controller(&self, name: String) -> Arc<ResourceController> {
         let controller = Arc::new(ResourceController::new(name));
         self.registry.lock().unwrap().push(controller.clone());
+        for g in &self.resource_groups {
+            let priority_factor = (self.total_cpu_quota / g.value().cpu_quota * 100.0) as u64;
+            controller.add_resource_group(g.key(), priority_factor);
+        }
+
         controller
     }
 
@@ -120,6 +125,16 @@ pub struct ResourceController {
 }
 
 impl ResourceController {
+    pub fn test() -> Self {
+        let r = Self {
+            name: "test".into(),
+            resource_consumptions: DashMap::new(),
+            last_min_vt: AtomicU64::new(0),
+        };
+        r.add_resource_group("default", 100);
+        r
+    }
+
     pub fn new(name: String) -> Self {
         Self {
             name,

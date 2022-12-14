@@ -131,6 +131,7 @@ fn test_serde_custom_tikv_config() {
             stack_size: ReadableSize::mb(20),
             max_tasks_per_worker: 2200,
             auto_adjust_pool_size: false,
+            enable_priority: true,
         },
         storage: StorageReadPoolConfig {
             use_unified_pool: Some(true),

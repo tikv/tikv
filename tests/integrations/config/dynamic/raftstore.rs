@@ -19,6 +19,7 @@ use raftstore::{
     },
     Result,
 };
+use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -66,7 +67,8 @@ fn start_raftstore(
     ApplyRouter<RocksEngine>,
     RaftBatchSystem<RocksEngine, RocksEngine>,
 ) {
-    let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
+    let (raft_router, mut system) =
+        create_raft_batch_system(&cfg.raft_store, &Arc::new(ResourceGroupManager::new()));
     let engines = create_tmp_engine(dir);
     let host = CoprocessorHost::default();
     let importer = {

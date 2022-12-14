@@ -26,7 +26,7 @@ use kvproto::{
 };
 use protobuf::{self, parse_length_delimited_from, CodedInputStream, Message};
 use raft::{
-    eraftpb::{self, ConfChangeType, ConfState, Entry, MessageType, Snapshot},
+    eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
     Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
@@ -710,18 +710,22 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
 }
 
 pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
+    if entry.get_entry_type() != EntryType::EntryNormal {
+        return RaftRequestHeader::default();
+    }
     // TODO: parse partially
+    // request header is encoded into data
     let mut is = CodedInputStream::from_bytes(entry.get_data());
     if is.eof().unwrap() {
         return RaftRequestHeader::default();
     }
     let (field_number, _) = is.read_tag_unpack().unwrap();
+    let t = parse_length_delimited_from(&mut is).unwrap();
     // Header field is of number 1
     if field_number != 1 {
-        panic!("unexpected field number: {}", field_number);
+        panic!("unexpected field number: {} {:?}", field_number, t);
     }
-
-    parse_length_delimited_from(&mut is).unwrap()
+    t
 }
 
 /// Parse data of entry `index`.
@@ -1639,6 +1643,7 @@ mod tests {
         metapb::{self, RegionEpoch},
         raft_cmdpb::AdminRequest,
     };
+    use protobuf::Message as _;
     use raft::eraftpb::{ConfChangeType, Entry, Message, MessageType};
     use tikv_util::store::new_peer;
     use time::Duration as TimeDuration;
@@ -1715,6 +1720,20 @@ mod tests {
         // A new remote lease.
         let m1 = lease.maybe_new_remote_lease(1).unwrap();
         assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
+    }
+
+    #[test]
+    fn test_get_entry_header() {
+        let mut req = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_resource_group_name("test".to_owned());
+        req.set_header(header);
+        let mut entry = Entry::new();
+        entry.set_term(1);
+        entry.set_index(2);
+        entry.set_data(req.write_to_bytes().unwrap().into());
+        let header = get_entry_header(&entry);
+        assert_eq!(header.get_resource_group_name(), "test");
     }
 
     #[test]

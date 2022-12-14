@@ -418,7 +418,7 @@ impl ServerCluster {
             quota_limiter.clone(),
             self.pd_client.feature_gate().clone(),
             self.get_causal_ts_provider(node_id),
-            Arc::new(ResourceController::new("test-raftstore".to_owned())),
+            Arc::new(ResourceController::test()),
         )?;
         self.storages.insert(node_id, raft_engine);
 

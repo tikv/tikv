@@ -6011,6 +6011,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.3",
  "rand_xorshift",
+ "resource_control",
  "resource_metering",
  "security",
  "serde_json",

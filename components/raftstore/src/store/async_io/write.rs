@@ -624,7 +624,10 @@ where
                     stopped |= self.handle_msg(msg);
                     now
                 }
-                Err(_) => return,
+                Err(e) => {
+                    println!("drop here {:?}", e);
+                    return;
+                }
             };
 
             while self.batch.get_raft_size() < self.raft_write_size_limit {
@@ -923,36 +926,39 @@ where
         cfg: &Arc<VersionTrack<Config>>,
     ) -> Result<()> {
         let pool_size = cfg.value().store_io_pool_size;
-        for i in 0..pool_size {
-            let tag = format!("store-writer-{}", i);
-            let (tx, rx) = priority_queue::unbounded();
-            let mut worker = Worker::new(
-                store_id,
-                tag.clone(),
-                raft_engine.clone(),
-                kv_engine.clone(),
-                rx,
-                notifier.clone(),
-                trans.clone(),
-                cfg,
-            );
-            info!("starting store writer {}", i);
-            let t = thread::Builder::new()
-                .name(thd_name!(tag))
-                .spawn_wrapper(move || {
-                    worker.run();
-                })?;
-            self.pri_writer = Some(tx);
-            self.handlers.push(t);
-        }
+        let tag = format!("store-writer-{}", 0);
+        let (tx, rx) = priority_queue::unbounded();
+        let mut worker = Worker::new(
+            store_id,
+            tag.clone(),
+            raft_engine.clone(),
+            kv_engine.clone(),
+            rx,
+            notifier.clone(),
+            trans.clone(),
+            cfg,
+        );
+        info!("starting store writer {}", 0);
+        let t = thread::Builder::new()
+            .name(thd_name!(tag))
+            .spawn_wrapper(move || {
+                worker.run();
+            })?;
+        self.pri_writer = Some(tx);
+        self.handlers.push(t);
         Ok(())
     }
 
     pub fn shutdown(&mut self) {
-        assert_eq!(self.writers.len(), self.handlers.len());
         for (i, handler) in self.handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
-            self.writers[i].send(WriteMsg::Shutdown).unwrap();
+            // TODO: doesn't support multiple threads, use another way to notify the worker
+            // to exit.
+            self.pri_writer
+                .as_ref()
+                .unwrap()
+                .send(WriteMsg::Shutdown, 0)
+                .unwrap();
             handler.join().unwrap();
         }
     }

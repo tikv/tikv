@@ -197,6 +197,10 @@ macro_rules! handle_request {
             let begin_instant = Instant::now();
 
             let source = req.mut_context().take_request_source();
+            let resource_group_name = req.get_context().get_resource_group_name();
+            GRPC_RESOURCE_GROUP_COUNTER_VEC
+                    .with_label_values(&[resource_group_name])
+                    .inc();
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;

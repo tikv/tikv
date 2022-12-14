@@ -267,7 +267,7 @@ where
 #[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
     resource_ctl: Arc<ResourceController>,
-    pri_write_sender: priority_queue::Sender<WriteMsg<EK, ER>>,
+    pub pri_write_sender: priority_queue::Sender<WriteMsg<EK, ER>>,
     write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
 }
@@ -311,187 +311,188 @@ mod tests {
 
     use super::*;
 
-    struct TestWriteRouter {
-        receivers: Vec<Receiver<WriteMsg<KvTestEngine, KvTestEngine>>>,
-        senders: WriteSenders<KvTestEngine, KvTestEngine>,
-        config: Config,
-        raft_metrics: RaftMetrics,
-    }
+    //     struct TestWriteRouter {
+    //         receivers: Vec<Receiver<WriteMsg<KvTestEngine, KvTestEngine>>>,
+    //         senders: WriteSenders<KvTestEngine, KvTestEngine>,
+    //         config: Config,
+    //         raft_metrics: RaftMetrics,
+    //     }
 
-    impl TestWriteRouter {
-        fn new(config: Config) -> Self {
-            let (mut receivers, mut senders) = (vec![], vec![]);
-            for _ in 0..config.store_io_pool_size {
-                let (tx, rx) = bounded(config.store_io_notify_capacity);
-                receivers.push(rx);
-                senders.push(tx);
-            }
-            Self {
-                receivers,
-                senders: WriteSenders::new(senders),
-                config,
-                raft_metrics: RaftMetrics::new(true),
-            }
-        }
+    //     impl TestWriteRouter {
+    //         fn new(config: Config) -> Self {
+    //             let (mut receivers, mut senders) = (vec![], vec![]);
+    //             for _ in 0..config.store_io_pool_size {
+    //                 let (tx, rx) = bounded(config.store_io_notify_capacity);
+    //                 receivers.push(rx);
+    //                 senders.push(tx);
+    //             }
+    //             Self {
+    //                 receivers,
+    //                 senders:
+    // WriteSenders::new(Arc::new(ResourceController::test()), senders),
+    //                 config,
+    //                 raft_metrics: RaftMetrics::new(true),
+    //             }
+    //         }
 
-        fn must_same_msg_count(&self, id: usize, mut count: usize) {
-            while self.receivers[id].try_recv().is_ok() {
-                if count == 0 {
-                    panic!("msg count is smaller");
-                }
-                count -= 1;
-            }
-            if count != 0 {
-                panic!("msg count is larger, {} left", count);
-            }
-        }
+    //         fn must_same_msg_count(&self, id: usize, mut count: usize) {
+    //             while self.receivers[id].try_recv().is_ok() {
+    //                 if count == 0 {
+    //                     panic!("msg count is smaller");
+    //                 }
+    //                 count -= 1;
+    //             }
+    //             if count != 0 {
+    //                 panic!("msg count is larger, {} left", count);
+    //             }
+    //         }
 
-        fn must_same_reschedule_count(&self, count: usize) {
-            let cnt = self
-                .senders
-                .io_reschedule_concurrent_count
-                .load(Ordering::Relaxed);
-            if cnt != count {
-                panic!("reschedule count not same, {} != {}", cnt, count);
-            }
-        }
-    }
+    //         fn must_same_reschedule_count(&self, count: usize) {
+    //             let cnt = self
+    //                 .senders
+    //                 .io_reschedule_concurrent_count
+    //                 .load(Ordering::Relaxed);
+    //             if cnt != count {
+    //                 panic!("reschedule count not same, {} != {}", cnt,
+    // count);             }
+    //         }
+    //     }
 
-    impl WriteRouterContext<KvTestEngine, KvTestEngine> for TestWriteRouter {
-        fn write_senders(&self) -> &WriteSenders<KvTestEngine, KvTestEngine> {
-            &self.senders
-        }
+    //     impl WriteRouterContext<KvTestEngine, KvTestEngine> for
+    // TestWriteRouter {         fn write_senders(&self) ->
+    // &WriteSenders<KvTestEngine, KvTestEngine> {             &self.senders
+    //         }
 
-        fn config(&self) -> &Config {
-            &self.config
-        }
+    //         fn config(&self) -> &Config {
+    //             &self.config
+    //         }
 
-        fn raft_metrics(&self) -> &RaftMetrics {
-            &self.raft_metrics
-        }
-    }
+    //         fn raft_metrics(&self) -> &RaftMetrics {
+    //             &self.raft_metrics
+    //         }
+    //     }
 
-    #[test]
-    fn test_write_router_no_schedule() {
-        let mut config = Config::new();
-        config.io_reschedule_concurrent_max_count = 0;
-        config.io_reschedule_hotpot_duration = ReadableDuration::millis(1);
-        config.store_io_pool_size = 4;
-        let mut t = TestWriteRouter::new(config);
-        let mut r = WriteRouter::new("1".to_string());
-        r.send_write_msg(&mut t, None, WriteMsg::Shutdown);
-        let writer_id = r.writer_id;
-        for _ in 1..10 {
-            r.send_write_msg(&mut t, Some(10), WriteMsg::Shutdown);
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert_eq!(writer_id, r.writer_id);
-        t.must_same_msg_count(writer_id, 10);
-        t.must_same_reschedule_count(0);
-    }
+    //     #[test]
+    //     fn test_write_router_no_schedule() {
+    //         let mut config = Config::new();
+    //         config.io_reschedule_concurrent_max_count = 0;
+    //         config.io_reschedule_hotpot_duration =
+    // ReadableDuration::millis(1);         config.store_io_pool_size = 4;
+    //         let mut t = TestWriteRouter::new(config);
+    //         let mut r = WriteRouter::new("1".to_string());
+    //         r.send_write_msg(&mut t, None, WriteMsg::Shutdown);
+    //         let writer_id = r.writer_id;
+    //         for _ in 1..10 {
+    //             r.send_write_msg(&mut t, Some(10), WriteMsg::Shutdown);
+    //             thread::sleep(Duration::from_millis(10));
+    //         }
+    //         assert_eq!(writer_id, r.writer_id);
+    //         t.must_same_msg_count(writer_id, 10);
+    //         t.must_same_reschedule_count(0);
+    //     }
 
-    #[test]
-    fn test_write_router_schedule() {
-        let mut config = Config::new();
-        config.io_reschedule_concurrent_max_count = 4;
-        config.io_reschedule_hotpot_duration = ReadableDuration::millis(5);
-        config.store_io_pool_size = 4;
-        let mut t = TestWriteRouter::new(config);
-        let mut r = WriteRouter::new("1".to_string());
+    //     #[test]
+    //     fn test_write_router_schedule() {
+    //         let mut config = Config::new();
+    //         config.io_reschedule_concurrent_max_count = 4;
+    //         config.io_reschedule_hotpot_duration =
+    // ReadableDuration::millis(5);         config.store_io_pool_size = 4;
+    //         let mut t = TestWriteRouter::new(config);
+    //         let mut r = WriteRouter::new("1".to_string());
 
-        let last_time = r.next_retry_time;
-        thread::sleep(Duration::from_millis(10));
-        // `writer_id` will be chosen randomly due to `last_unpersisted` is None
-        r.send_write_msg(&mut t, None, WriteMsg::Shutdown);
-        assert!(r.next_retry_time > last_time);
-        assert_eq!(r.next_writer_id, None);
-        assert_eq!(r.last_unpersisted, None);
-        assert!(r.pending_write_msgs.is_empty());
-        t.must_same_msg_count(r.writer_id, 1);
-        t.must_same_reschedule_count(0);
+    //         let last_time = r.next_retry_time;
+    //         thread::sleep(Duration::from_millis(10));
+    //         // `writer_id` will be chosen randomly due to `last_unpersisted`
+    // is None         r.send_write_msg(&mut t, None, WriteMsg::Shutdown);
+    //         assert!(r.next_retry_time > last_time);
+    //         assert_eq!(r.next_writer_id, None);
+    //         assert_eq!(r.last_unpersisted, None);
+    //         assert!(r.pending_write_msgs.is_empty());
+    //         t.must_same_msg_count(r.writer_id, 1);
+    //         t.must_same_reschedule_count(0);
 
-        thread::sleep(Duration::from_millis(10));
-        // Should reschedule due to `last_unpersisted` is not None.
-        // However it's possible that it will not scheduled due to random
-        // so using loop here.
-        let writer_id = r.writer_id;
-        let timer = Instant::now();
-        loop {
-            r.send_write_msg(&mut t, Some(10), WriteMsg::Shutdown);
-            if let Some(id) = r.next_writer_id {
-                assert!(writer_id != id);
-                assert_eq!(r.last_unpersisted, Some(10));
-                assert_eq!(r.pending_write_msgs.len(), 1);
-                t.must_same_msg_count(r.writer_id, 0);
-                t.must_same_reschedule_count(1);
-                break;
-            }
+    //         thread::sleep(Duration::from_millis(10));
+    //         // Should reschedule due to `last_unpersisted` is not None.
+    //         // However it's possible that it will not scheduled due to random
+    //         // so using loop here.
+    //         let writer_id = r.writer_id;
+    //         let timer = Instant::now();
+    //         loop {
+    //             r.send_write_msg(&mut t, Some(10), WriteMsg::Shutdown);
+    //             if let Some(id) = r.next_writer_id {
+    //                 assert!(writer_id != id);
+    //                 assert_eq!(r.last_unpersisted, Some(10));
+    //                 assert_eq!(r.pending_write_msgs.len(), 1);
+    //                 t.must_same_msg_count(r.writer_id, 0);
+    //                 t.must_same_reschedule_count(1);
+    //                 break;
+    //             }
 
-            t.must_same_msg_count(r.writer_id, 1);
+    //             t.must_same_msg_count(r.writer_id, 1);
 
-            if timer.saturating_elapsed() > Duration::from_secs(5) {
-                panic!("not schedule after 5 seconds")
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
+    //             if timer.saturating_elapsed() > Duration::from_secs(5) {
+    //                 panic!("not schedule after 5 seconds")
+    //             }
+    //             thread::sleep(Duration::from_millis(10));
+    //         }
 
-        r.send_write_msg(&mut t, Some(20), WriteMsg::Shutdown);
-        assert!(r.next_writer_id.is_some());
-        // `last_unpersisted` should not change
-        assert_eq!(r.last_unpersisted, Some(10));
-        assert_eq!(r.pending_write_msgs.len(), 2);
-        t.must_same_msg_count(r.writer_id, 0);
-        t.must_same_reschedule_count(1);
+    //         r.send_write_msg(&mut t, Some(20), WriteMsg::Shutdown);
+    //         assert!(r.next_writer_id.is_some());
+    //         // `last_unpersisted` should not change
+    //         assert_eq!(r.last_unpersisted, Some(10));
+    //         assert_eq!(r.pending_write_msgs.len(), 2);
+    //         t.must_same_msg_count(r.writer_id, 0);
+    //         t.must_same_reschedule_count(1);
 
-        // No effect due to 9 < `last_unpersisted`(10)
-        r.check_new_persisted(&mut t, 9);
-        assert!(r.next_writer_id.is_some());
-        assert_eq!(r.last_unpersisted, Some(10));
-        assert_eq!(r.pending_write_msgs.len(), 2);
-        t.must_same_msg_count(r.writer_id, 0);
-        t.must_same_reschedule_count(1);
+    //         // No effect due to 9 < `last_unpersisted`(10)
+    //         r.check_new_persisted(&mut t, 9);
+    //         assert!(r.next_writer_id.is_some());
+    //         assert_eq!(r.last_unpersisted, Some(10));
+    //         assert_eq!(r.pending_write_msgs.len(), 2);
+    //         t.must_same_msg_count(r.writer_id, 0);
+    //         t.must_same_reschedule_count(1);
 
-        // Should reschedule and send msg
-        r.check_new_persisted(&mut t, 10);
-        assert_eq!(r.next_writer_id, None);
-        assert_eq!(r.last_unpersisted, None);
-        assert!(r.pending_write_msgs.is_empty());
-        t.must_same_msg_count(r.writer_id, 2);
-        t.must_same_reschedule_count(0);
+    //         // Should reschedule and send msg
+    //         r.check_new_persisted(&mut t, 10);
+    //         assert_eq!(r.next_writer_id, None);
+    //         assert_eq!(r.last_unpersisted, None);
+    //         assert!(r.pending_write_msgs.is_empty());
+    //         t.must_same_msg_count(r.writer_id, 2);
+    //         t.must_same_reschedule_count(0);
 
-        thread::sleep(Duration::from_millis(10));
-        t.senders
-            .io_reschedule_concurrent_count
-            .store(4, Ordering::Relaxed);
-        // Should retry reschedule next time because the limitation of concurrent count.
-        // However it's possible that it will not scheduled due to random
-        // so using loop here.
-        let timer = Instant::now();
-        loop {
-            r.send_write_msg(&mut t, Some(30), WriteMsg::Shutdown);
-            t.must_same_msg_count(r.writer_id, 1);
-            if r.next_writer_id.is_some() {
-                assert_eq!(r.last_unpersisted, None);
-                assert!(r.pending_write_msgs.is_empty());
-                t.must_same_reschedule_count(4);
-                break;
-            }
+    //         thread::sleep(Duration::from_millis(10));
+    //         t.senders
+    //             .io_reschedule_concurrent_count
+    //             .store(4, Ordering::Relaxed);
+    //         // Should retry reschedule next time because the limitation of
+    // concurrent count.         // However it's possible that it will not
+    // scheduled due to random         // so using loop here.
+    //         let timer = Instant::now();
+    //         loop {
+    //             r.send_write_msg(&mut t, Some(30), WriteMsg::Shutdown);
+    //             t.must_same_msg_count(r.writer_id, 1);
+    //             if r.next_writer_id.is_some() {
+    //                 assert_eq!(r.last_unpersisted, None);
+    //                 assert!(r.pending_write_msgs.is_empty());
+    //                 t.must_same_reschedule_count(4);
+    //                 break;
+    //             }
 
-            if timer.saturating_elapsed() > Duration::from_secs(5) {
-                panic!("not retry schedule after 5 seconds")
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
+    //             if timer.saturating_elapsed() > Duration::from_secs(5) {
+    //                 panic!("not retry schedule after 5 seconds")
+    //             }
+    //             thread::sleep(Duration::from_millis(10));
+    //         }
 
-        t.senders
-            .io_reschedule_concurrent_count
-            .store(3, Ordering::Relaxed);
-        thread::sleep(Duration::from_millis(RETRY_SCHEDULE_MILLISECONS + 2));
-        // Should reschedule now
-        r.send_write_msg(&mut t, Some(40), WriteMsg::Shutdown);
-        assert!(r.next_writer_id.is_some());
-        assert_eq!(r.last_unpersisted, Some(40));
-        t.must_same_msg_count(r.writer_id, 0);
-        t.must_same_reschedule_count(4);
-    }
+    //         t.senders
+    //             .io_reschedule_concurrent_count
+    //             .store(3, Ordering::Relaxed);
+    //         thread::sleep(Duration::from_millis(RETRY_SCHEDULE_MILLISECONDS +
+    // 2));         // Should reschedule now
+    //         r.send_write_msg(&mut t, Some(40), WriteMsg::Shutdown);
+    //         assert!(r.next_writer_id.is_some());
+    //         assert_eq!(r.last_unpersisted, Some(40));
+    //         t.must_same_msg_count(r.writer_id, 0);
+    //         t.must_same_reschedule_count(4);
+    //     }
 }
