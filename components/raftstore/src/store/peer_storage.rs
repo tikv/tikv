@@ -517,10 +517,6 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
     // need check commit.
     if snapshot_raft_state.get_hard_state().get_commit() > raft_state.get_hard_state().get_commit()
     {
-        // There is a gap between existing raft logs and snapshot. Clean them up.
-        engines
-            .raft
-            .clean(region_id, 0 /* first_index */, &raft_state, raft_wb)?;
         raft_wb.put_raft_state(region_id, &snapshot_raft_state)?;
     }
     Ok(())
