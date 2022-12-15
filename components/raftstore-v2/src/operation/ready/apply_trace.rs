@@ -219,6 +219,21 @@ impl ApplyTrace {
         None
     }
 
+    pub fn reset_snapshot(&mut self, index: u64) {
+        for pr in self.data_cfs.iter_mut() {
+            pr.flushed = index;
+            pr.last_modified = index;
+        }
+        self.admin.flushed = index;
+        self.persisted_applied = index;
+        self.try_persist = false;
+    }
+
+    #[inline]
+    pub fn reset_should_persist(&mut self) {
+        self.try_persist = false;
+    }
+
     #[inline]
     pub fn should_persist(&self) -> bool {
         self.try_persist

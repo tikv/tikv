@@ -562,7 +562,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         if !ever_persisted || prev_raft_state != *entry_storage.raft_state() {
             write_task.raft_state = Some(entry_storage.raft_state().clone());
         }
-        if !ever_persisted {
+        // If snapshot initializes the peer, we don't need to write apply trace again.
+        if !self.ever_persisted() {
             self.init_apply_trace(write_task);
             self.set_ever_persisted();
         }

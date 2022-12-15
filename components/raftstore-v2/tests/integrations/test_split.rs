@@ -2,6 +2,7 @@
 
 use std::{thread, time::Duration};
 
+use engine_traits::RaftEngineReadOnly;
 use futures::executor::block_on;
 use kvproto::{
     metapb, pdpb,
@@ -9,6 +10,7 @@ use kvproto::{
         AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, Request, SplitRequest,
     },
 };
+use raftstore::store::{INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::router::PeerMsg;
 use tikv_util::store::new_peer;
 
@@ -128,6 +130,7 @@ fn split_region(
 fn test_split() {
     let mut cluster = Cluster::default();
     let store_id = cluster.node(0).id();
+    let raft_engine = cluster.node(0).running_state().unwrap().raft_engine.clone();
     let router = &mut cluster.routers[0];
     // let factory = cluster.node(0).tablet_factory();
 
@@ -150,6 +153,18 @@ fn test_split() {
         b"k22",
         false,
     );
+    // Only the region state before the split is persisted as flush before split.
+    let region_state = raft_engine.get_region_state(2, u64::MAX).unwrap().unwrap();
+    assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
+    assert_eq!(
+        region_state.get_region().get_region_epoch().get_version(),
+        INIT_EPOCH_VER
+    );
+    let region_state0 = raft_engine
+        .get_region_state(2, region_state.get_tablet_index())
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state, region_state0);
 
     // Region 2 ["", "k22"] peer(1, 3)
     //   -> Region 2    ["", "k11"]    peer(1, 3)
@@ -165,6 +180,20 @@ fn test_split() {
         b"k11",
         false,
     );
+    let region_state = raft_engine.get_region_state(2, u64::MAX).unwrap().unwrap();
+    assert_ne!(
+        region_state.get_tablet_index(),
+        region_state0.get_tablet_index()
+    );
+    assert_eq!(
+        region_state.get_region().get_region_epoch().get_version(),
+        INIT_EPOCH_VER + 1
+    );
+    let region_state1 = raft_engine
+        .get_region_state(2, region_state.get_tablet_index())
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state, region_state1);
 
     // Region 1000 ["k22", ""] peer(1, 10)
     //   -> Region 1000 ["k22", "k33"] peer(1, 10)
@@ -180,6 +209,20 @@ fn test_split() {
         b"k33",
         false,
     );
+    let region_state = raft_engine
+        .get_region_state(1000, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
+    assert_eq!(
+        region_state.get_region().get_region_epoch().get_version(),
+        INIT_EPOCH_VER + 1
+    );
+    let region_state2 = raft_engine
+        .get_region_state(1000, region_state.get_tablet_index())
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state, region_state2);
 }
 
 // TODO: test split race with

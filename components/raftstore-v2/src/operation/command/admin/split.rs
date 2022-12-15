@@ -272,6 +272,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
         PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
+        self.flush_state()
+            .update_region_state(log_index, self.region_state().clone());
 
         Ok((
             resp,
@@ -605,6 +607,9 @@ mod test {
                 assert!(reg.tablet_factory().exists(&path));
             }
         }
+        let (index, last_state) = apply.flush_state().last_state().unwrap();
+        assert_eq!(index, log_index);
+        assert_eq!(last_state.right().unwrap(), *apply.region_state());
     }
 
     #[test]
@@ -661,12 +666,14 @@ mod test {
         let err = apply.apply_batch_split(&req, 0).unwrap_err();
         // 3 followers are required.
         assert!(err.to_string().contains("invalid new peer id count"));
+        assert!(apply.flush_state().is_empty());
 
         splits.mut_requests().clear();
         req.set_splits(splits.clone());
         let err = apply.apply_batch_split(&req, 0).unwrap_err();
         // Empty requests should be rejected.
         assert!(err.to_string().contains("missing split requests"));
+        assert!(apply.flush_state().is_empty());
 
         splits
             .mut_requests()
@@ -679,6 +686,7 @@ mod test {
             "{:?}",
             resp
         );
+        assert!(apply.flush_state().is_empty());
 
         splits.mut_requests().clear();
         splits
@@ -688,6 +696,7 @@ mod test {
         let err = apply.apply_batch_split(&req, 0).unwrap_err();
         // Empty key will not in any region exclusively.
         assert!(err.to_string().contains("missing split key"), "{:?}", err);
+        assert!(apply.flush_state().is_empty());
 
         splits.mut_requests().clear();
         splits
@@ -704,6 +713,7 @@ mod test {
             "{:?}",
             err
         );
+        assert!(apply.flush_state().is_empty());
 
         splits.mut_requests().clear();
         splits
@@ -716,6 +726,7 @@ mod test {
         let err = apply.apply_batch_split(&req, 0).unwrap_err();
         // All requests should be checked.
         assert!(err.to_string().contains("id count"), "{:?}", err);
+        assert!(apply.flush_state().is_empty());
 
         let cases = vec![
             // region 1["", "k10"]

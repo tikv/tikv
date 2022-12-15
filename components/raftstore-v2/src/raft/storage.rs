@@ -175,6 +175,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         self.entry_storage.apply_state()
     }
 
+    /// Check if the storage is initialized.
+    ///
+    /// The storage is considered initialized when data is applied in memory.
     #[inline]
     pub fn is_initialized(&self) -> bool {
         self.region_state.get_tablet_index() != 0
