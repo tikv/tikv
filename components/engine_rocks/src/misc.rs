@@ -274,11 +274,6 @@ impl MiscExt for RocksEngine {
             s.extend_from_slice(v.as_bytes());
         }
 
-        // more stats if enable_statistics is true.
-        if let Some(v) = self.as_inner().get_statistics() {
-            s.extend_from_slice(v.as_bytes());
-        }
-
         Ok(box_try!(String::from_utf8(s)))
     }
 

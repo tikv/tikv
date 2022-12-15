@@ -5,7 +5,7 @@ use std::{path::Path, sync::Arc};
 use engine_rocks::{
     raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
-    RocksDbOptions, RocksEngine, RocksEventListener,
+    RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics,
 };
 use engine_traits::{CompactionJobInfo, MiscExt, Result, TabletFactory, CF_DEFAULT, CF_WRITE};
 use kvproto::kvrpcpb::ApiVersion;
@@ -22,6 +22,7 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
+    statistics: Option<Arc<RocksStatistics>>,
 }
 
 pub struct KvEngineFactoryBuilder {
@@ -31,6 +32,11 @@ pub struct KvEngineFactoryBuilder {
 
 impl KvEngineFactoryBuilder {
     pub fn new(env: Arc<Env>, config: &TikvConfig, cache: Cache) -> Self {
+        let statistics = if config.rocksdb.enable_statistics {
+            Some(Arc::new(RocksStatistics::new_titan()))
+        } else {
+            None
+        };
         Self {
             inner: FactoryInner {
                 env,
@@ -40,6 +46,7 @@ impl KvEngineFactoryBuilder {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
+                statistics,
             },
             compact_event_sender: None,
         }
@@ -103,6 +110,10 @@ impl KvEngineFactory {
             self.compact_event_sender.as_ref().unwrap().clone(),
             Some(size_change_filter),
         ))
+    }
+
+    pub fn rocks_statistics(&self) -> Option<Arc<RocksStatistics>> {
+        self.inner.statistics.clone()
     }
 
     fn db_opts(&self) -> RocksDbOptions {

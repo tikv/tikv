@@ -9,7 +9,7 @@ use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData,
 };
 
-use crate::{engine::RocksEngine, rocks_metrics_defs::*};
+use crate::{engine::RocksEngine, rocks_metrics_defs::*, RocksStatistics};
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {
@@ -1149,6 +1149,28 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
                 .with_label_values(&[&self.name, ROCKSDB_IOSTALL_TYPE[i]])
                 .set(self.db_stats.stall_num[i] as i64);
+        }
+    }
+}
+
+pub fn flush_engine_statistics(statistics: &RocksStatistics, name: &str) {
+    for t in ENGINE_TICKER_TYPES {
+        let v = statistics.get_and_reset_ticker_count(*t);
+        flush_engine_ticker_metrics(*t, v, name);
+    }
+    for t in ENGINE_HIST_TYPES {
+        if let Some(v) = statistics.get_histogram(*t) {
+            flush_engine_histogram_metrics(*t, v, name);
+        }
+    }
+    // TODO: check if it's titan.
+    for t in TITAN_ENGINE_TICKER_TYPES {
+        let v = statistics.get_and_reset_ticker_count(*t);
+        flush_engine_ticker_metrics(*t, v, name);
+    }
+    for t in TITAN_ENGINE_HIST_TYPES {
+        if let Some(v) = statistics.get_histogram(*t) {
+            flush_engine_histogram_metrics(*t, v, name);
         }
     }
 }
