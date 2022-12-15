@@ -7,10 +7,11 @@ use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, TabletRegistry};
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
-use raftstore::store::ReadTask;
+use raftstore::store::{metrics::STORE_APPLY_LOG_HISTOGRAM, ReadTask};
 use slog::Logger;
 use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
+    time::{duration_to_sec, Instant as TiInstant},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
@@ -86,6 +87,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
             let timeout = GLOBAL_TIMER_HANDLE
                 .delay(Instant::now() + Duration::from_secs(10))
                 .compat();
+            let received_time = TiInstant::now();
             let res = futures::select! {
                 res = self.receiver.next().fuse() => res,
                 _ = timeout.fuse() => None,
@@ -117,6 +119,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                 }
             }
             self.apply.flush();
+            STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(received_time.saturating_elapsed()));
         }
     }
 }
