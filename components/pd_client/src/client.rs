@@ -493,7 +493,7 @@ impl PdClient for RpcClient {
                     .with_label_values(&["get_region_by_id"])
                     .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
-                if resp.has_region() {
+                if resp.has_region() && resp.has_leader() {
                     Ok(Some((resp.take_region(), resp.take_leader())))
                 } else {
                     Ok(None)

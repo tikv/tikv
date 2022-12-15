@@ -1955,6 +1955,15 @@ where
 
     /// Check if destroy can be executed immediately. If it can't, the reason is returned.
     fn maybe_delay_destroy(&mut self) -> Option<DelayReason> {
+        let is_initialized = self.fsm.peer.is_initialized();
+        if !is_initialized {
+            // If the peer is uninitialized, then it can't receive any logs from leader. So
+            // no need to gc. If there was a peer with same region id on the store, and it had
+            // logs written, then it must be initialized, hence its log should be gc either
+            // before it's destroyed or during node restarts.
+            self.fsm.logs_gc_flushed = true;
+        }
+
         if self.fsm.logs_gc_flushed {
             return None;
         }
@@ -2026,6 +2035,8 @@ where
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
+
+        fail_point!("destroy_peer_after_pending_move", |_| { true });
 
         if let Some(reason) = self.maybe_delay_destroy() {
             if self
