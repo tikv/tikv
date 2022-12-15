@@ -57,16 +57,23 @@ where
     engine: E,
     router: Router,
     threads: Arc<Runtime>,
+
+    importer: Arc<SstImporter>,
+    limiter: Limiter,
+    task_slots: Arc<Mutex<HashSet<PathBuf>>>,
+    raft_entry_max_size: ReadableSize,
+
     // For now, PiTR cannot be executed in the tokio runtime because it is synchronous and may
     // blocks. (tokio is so strict... it panics if we do insane things like blocking in an async
     // context.)
     // We need to execute these code in a context which allows blocking.
     // FIXME: Make PiTR restore asynchronous. Get rid of this pool.
     block_threads: Arc<ThreadPool>,
-    importer: Arc<SstImporter>,
-    limiter: Limiter,
-    task_slots: Arc<Mutex<HashSet<PathBuf>>>,
-    raft_entry_max_size: ReadableSize,
+
+    // For now, PiTR may send too many requests to raftstore, which would make raft-rs give back a
+    // huge Ready. Then raft engine would reject to handle that ready, leading to TiKV panic.
+    // This semaphore would make sure inflight request size is less than a constant.
+    inflight_items: Arc<tokio::sync::Semaphore>,
 }
 
 pub struct SnapshotResult<E: KvEngine> {
@@ -124,6 +131,7 @@ where
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+            inflight_items: Arc::new(tokio::sync::Semaphore::new(2 << 30 /* 2GB */)),
         }
     }
 
@@ -466,6 +474,8 @@ where
         let limiter = self.limiter.clone();
         let start = Instant::now();
         let raft_size = self.raft_entry_max_size;
+        let sem = self.inflight_items.clone();
+        let handle: tokio::runtime::Handle = self.threads.handle().clone();
 
         let handle_task = async move {
             // Records how long the apply task waits to be scheduled.
@@ -564,10 +574,18 @@ where
 
                 start_apply = Instant::now();
                 for cmd in cmd_reqs {
+                    let cmd_size = cmd.compute_size();
+                    let acquire = handle
+                        .block_on(Arc::clone(&sem).acquire_many_owned(cmd_size))
+                        .unwrap();
                     let (cb, future) = paired_future_callback();
                     match router.send_command(cmd, Callback::write(cb), RaftCmdExtraOpts::default())
                     {
-                        Ok(_) => futs.push(future),
+                        Ok(_) => futs.push(handle.spawn(async {
+                            let r = future.await;
+                            drop(acquire);
+                            r
+                        })),
                         Err(e) => {
                             let mut import_err = kvproto::import_sstpb::Error::default();
                             import_err.set_message(format!("failed to send raft command: {}", e));
@@ -588,10 +606,18 @@ where
                 match x {
                     Err(e) => {
                         let mut import_err = kvproto::import_sstpb::Error::default();
+                        import_err.set_message(format!(
+                            "failed during waiting raft command complete: {}",
+                            e
+                        ));
+                        resp.set_error(import_err);
+                    }
+                    Ok(Err(e)) => {
+                        let mut import_err = kvproto::import_sstpb::Error::default();
                         import_err.set_message(format!("failed to complete raft command: {}", e));
                         resp.set_error(import_err);
                     }
-                    Ok(r) => {
+                    Ok(Ok(r)) => {
                         if r.response.get_header().has_error() {
                             let mut import_err = kvproto::import_sstpb::Error::default();
                             let err = r.response.get_header().get_error();
