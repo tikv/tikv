@@ -9,12 +9,15 @@
 
 use std::{
     fmt, mem,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     thread::{self, JoinHandle},
 };
 
 use collections::HashMap;
-use crossbeam::channel::{bounded, Receiver, TryRecvError};
+use crossbeam::channel::{bounded, Receiver, Sender, TryRecvError};
 use engine_traits::{
     KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
 };
@@ -23,7 +26,7 @@ use fail::fail_point;
 use kvproto::raft_serverpb::{
     PeerState, RaftApplyState, RaftLocalState, RaftMessage, RegionLocalState,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{
@@ -36,7 +39,7 @@ use tikv_util::{
     warn,
 };
 
-use super::write_router::WriteSenders;
+use super::write_router::{SenderVec, WriteSenders};
 use crate::{
     store::{
         config::Config,
@@ -907,8 +910,12 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    writers: WriteSenders<EK, ER>,
+    /// Mailboxes for sending raft messages to async ios.
+    writers: Arc<VersionTrack<SenderVec<EK, ER>>>,
+    /// Background threads for handling asynchronous messages.
     handlers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    /// Validate io capacity for sending messages by async ios.
+    io_capacity: Arc<AtomicUsize>,
 }
 
 impl<EK, ER> Default for StoreWriters<EK, ER>
@@ -918,8 +925,9 @@ where
 {
     fn default() -> Self {
         Self {
-            writers: WriteSenders::new(Arc::new(RwLock::new(vec![]))),
+            writers: Arc::new(VersionTrack::default()),
             handlers: Arc::new(Mutex::new(vec![])),
+            io_capacity: Arc::default(),
         }
     }
 }
@@ -930,7 +938,7 @@ where
     ER: RaftEngine,
 {
     pub fn senders(&self) -> WriteSenders<EK, ER> {
-        self.writers.clone()
+        WriteSenders::new(self.writers.clone(), self.io_capacity.clone())
     }
 
     pub fn spawn<T: Transport + 'static, N: PersistedNotifier>(
@@ -958,10 +966,11 @@ where
 
     pub fn shutdown(&mut self) {
         let mut handlers = self.handlers.lock();
-        assert_eq!(self.writers.len(), handlers.len());
+        let writers = self.writers.value();
+        assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
-            self.writers.send(i, WriteMsg::Shutdown).unwrap();
+            writers[i].send(WriteMsg::Shutdown).unwrap();
             handler.join().unwrap();
         }
     }
@@ -971,7 +980,7 @@ where
         size: usize,
         writer_meta: StoreWritersMeta<EK, ER, T, N>,
     ) -> Result<()> {
-        let current_size = self.writers.len();
+        let current_size = self.io_capacity.load(Ordering::Relaxed);
         if current_size == 0 {
             warn!("SYNC mode, not allowed to resize the size of store writers.");
             return Ok(());
@@ -984,16 +993,15 @@ where
         info!(
             "resize store writers pool";
             "from" => current_size,
-            "to" => self.writers.len()
+            "to" => self.io_capacity.load(Ordering::Relaxed)
         );
         Ok(())
     }
 
     fn decrease_by(&mut self, size: usize) -> Result<()> {
-        let mut joinable_handlers: Vec<JoinHandle<()>> = vec![];
-        {
+        let mut joinable_handlers: Vec<JoinHandle<()>> = {
             let mut handlers = self.handlers.lock();
-            let current_size = self.writers.len();
+            let current_size = self.io_capacity.load(Ordering::Relaxed);
             let mut decrease_size = size;
             assert_eq!(current_size, handlers.len());
             if current_size == decrease_size {
@@ -1002,16 +1010,23 @@ where
             }
             // We modifity the capacity of writers to make the concurrent processing of
             // sending messages can be redirected to reserved mailboxes in advance.
-            self.writers.reserve(decrease_size);
+            self.io_capacity
+                .store(current_size - decrease_size, Ordering::Relaxed);
             // Clear obsolete mailboxes and collect stale handlers.
-            while decrease_size > 0 {
-                if let Some(sender) = self.writers.pop() {
-                    sender.send(WriteMsg::Shutdown).unwrap();
-                    joinable_handlers.push(handlers.pop().unwrap());
-                }
-                decrease_size -= 1;
-            }
-        }
+            self.writers.update(
+                move |writers: &mut Vec<Sender<WriteMsg<EK, ER>>>| -> Result<Vec<JoinHandle<()>>> {
+                    let mut release_handlers: Vec<JoinHandle<()>> = vec![];
+                    while decrease_size > 0 {
+                        if let Some(sender) = writers.pop() {
+                            sender.send(WriteMsg::Shutdown).unwrap();
+                            release_handlers.push(handlers.pop().unwrap());
+                        }
+                        decrease_size -= 1;
+                    }
+                    Ok(release_handlers)
+                },
+            )?
+        };
         // Clear stale handlers.
         for (_, handler) in joinable_handlers.drain(..).enumerate() {
             handler.join().unwrap();
@@ -1025,31 +1040,40 @@ where
         writer_meta: StoreWritersMeta<EK, ER, T, N>,
     ) -> Result<()> {
         let mut handlers = self.handlers.lock();
-        let current_size = self.writers.len();
+        let current_size = self.io_capacity.load(Ordering::Relaxed);
         assert_eq!(current_size, handlers.len());
-        for i in current_size..current_size + size {
-            let tag = format!("store-writer-{}", i);
-            let (tx, rx) = bounded(writer_meta.cfg.value().store_io_notify_capacity);
-            let mut worker = Worker::new(
-                writer_meta.store_id,
-                tag.clone(),
-                writer_meta.raft_engine.clone(),
-                writer_meta.kv_engine.clone(),
-                rx,
-                writer_meta.notifier.clone(),
-                writer_meta.transfer.clone(),
-                &writer_meta.cfg,
-            );
-            info!("starting store writer {}", i);
-            let t = thread::Builder::new()
-                .name(thd_name!(tag))
-                .spawn_wrapper(move || {
-                    worker.run();
-                })?;
-            self.writers.push(tx);
-            handlers.push(t);
-        }
-        self.writers.reserve(size);
+        self.writers.update(
+            move |writers: &mut Vec<Sender<WriteMsg<EK, ER>>>| -> Result<()> {
+                for i in current_size..current_size + size {
+                    let tag = format!("store-writer-{}", i);
+                    let (tx, rx) = bounded(writer_meta.cfg.value().store_io_notify_capacity);
+                    let mut worker = Worker::new(
+                        writer_meta.store_id,
+                        tag.clone(),
+                        writer_meta.raft_engine.clone(),
+                        writer_meta.kv_engine.clone(),
+                        rx,
+                        writer_meta.notifier.clone(),
+                        writer_meta.transfer.clone(),
+                        &writer_meta.cfg,
+                    );
+                    info!("starting store writer {}", i);
+                    let t =
+                        thread::Builder::new()
+                            .name(thd_name!(tag))
+                            .spawn_wrapper(move || {
+                                worker.run();
+                            })?;
+                    writers.push(tx);
+                    handlers.push(t);
+                }
+                Ok(())
+            },
+        )?;
+        // After we successfully update senders and handlers, we can update the validate
+        // io capacity.
+        self.io_capacity
+            .store(current_size + size, Ordering::Relaxed);
         Ok(())
     }
 }

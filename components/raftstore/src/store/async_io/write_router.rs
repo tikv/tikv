@@ -14,8 +14,11 @@ use std::{
 
 use crossbeam::channel::{SendError, Sender, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
-use parking_lot::RwLock;
-use tikv_util::{info, time::Instant};
+use tikv_util::{
+    config::{Tracker, VersionTrack},
+    info,
+    time::Instant,
+};
 
 use crate::store::{
     async_io::write::WriteMsg, config::Config, fsm::store::PollContext, local_metrics::RaftMetrics,
@@ -245,66 +248,65 @@ where
     }
 }
 
+pub type SenderVec<EK, ER> = Vec<Sender<WriteMsg<EK, ER>>>;
+
 /// Senders for asynchronous writes. There can be multiple senders, generally
 /// you should use `WriteRouter` to decide which sender to be used.
 #[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
-    write_senders: Arc<RwLock<Vec<Sender<WriteMsg<EK, ER>>>>>,
+    senders: Tracker<SenderVec<EK, ER>>,
+    _cached_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
+    /// Valid capacity of async ios. It's shared between all `WriteSender`s and
+    /// the global `StoreWriter` in store.
     io_capacity: Arc<AtomicUsize>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
-    pub fn new(write_senders: Arc<RwLock<Vec<Sender<WriteMsg<EK, ER>>>>>) -> Self {
-        let len = write_senders.read().len();
+    pub fn new(
+        senders: Arc<VersionTrack<SenderVec<EK, ER>>>,
+        io_capacity: Arc<AtomicUsize>,
+    ) -> Self {
+        let cached_senders = senders.value().clone();
         WriteSenders {
-            write_senders,
+            senders: senders.tracker("async writers' trackers".to_owned()),
+            _cached_senders: cached_senders,
             io_reschedule_concurrent_count: Arc::default(),
-            io_capacity: Arc::new(len.into()),
+            io_capacity,
         }
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.write_senders.read().is_empty()
+        self._cached_senders.is_empty()
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
-        self.write_senders.read().len()
-    }
-
-    #[inline]
+    /// Returns the valid capacity of async senders.
     pub fn capacity(&self) -> usize {
         self.io_capacity.load(Ordering::Relaxed)
-    }
-
-    #[inline]
-    pub fn reserve(&mut self, expected_capacity: usize) {
-        self.io_capacity.store(expected_capacity, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub fn push(&mut self, sender: Sender<WriteMsg<EK, ER>>) {
-        self.write_senders.write().push(sender);
-    }
-
-    #[inline]
-    pub fn pop(&mut self) -> Option<Sender<WriteMsg<EK, ER>>> {
-        self.write_senders.write().pop()
     }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
+    #[inline]
+    pub fn refresh(&mut self) {
+        if let Some(senders) = self.senders.any_new() {
+            self._cached_senders = senders.clone();
+        }
+    }
+
     #[inline]
     pub fn send(
         &self,
         idx: usize,
         msg: WriteMsg<EK, ER>,
     ) -> Result<(), SendError<WriteMsg<EK, ER>>> {
-        let write_senders = self.write_senders.read();
-        debug_assert!(!write_senders.is_empty());
-        write_senders[idx % write_senders.len()].send(msg)
+        debug_assert!(!self._cached_senders.is_empty());
+        // To avoid losting several async messages when concurrently modifying the
+        // shared senders by outer operators, such as refresh_config runner, it should
+        // redirect the async messages to valid senders by `MOD self.capacity()`.
+        self._cached_senders[idx % self.capacity()].send(msg)
     }
 
     #[inline]
@@ -316,9 +318,8 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
         // TODO: one problem -- if capacity was reset to `0`, that is, no async-io, we
         // should find a elegant way to initialize the sync_io after we release all
         // async-io threads and pipes.
-        let write_senders = self.write_senders.read();
-        debug_assert!(!write_senders.is_empty());
-        write_senders[idx % write_senders.len()].try_send(msg)
+        debug_assert!(!self._cached_senders.is_empty());
+        self._cached_senders[idx % self.capacity()].try_send(msg)
     }
 }
 
@@ -349,7 +350,10 @@ mod tests {
             }
             Self {
                 receivers,
-                senders: WriteSenders::new(Arc::new(RwLock::new(senders))),
+                senders: WriteSenders::new(
+                    Arc::new(VersionTrack::new(senders)),
+                    Arc::new(config.store_io_pool_size.into()),
+                ),
                 config,
                 raft_metrics: RaftMetrics::new(true),
             }
