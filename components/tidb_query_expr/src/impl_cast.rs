@@ -143,7 +143,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Decimal, EvalType::Bytes) => cast_any_as_string_fn_meta::<Decimal>(),
         (EvalType::DateTime, EvalType::Bytes) => cast_any_as_string_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_string_fn_meta::<Duration>(),
-        (EvalType::Json, EvalType::Bytes) => cast_json_as_bytes_fn_meta(),
+        (EvalType::Json, EvalType::Bytes) => cast_json_as_string_fn_meta(),
         (EvalType::Enum, EvalType::Bytes) => cast_enum_as_bytes_fn_meta(),
 
         // any as decimal
@@ -623,7 +623,6 @@ fn cast_decimal_as_unsigned_real(
 // cast_decimal_as_string -> cast_any_as_string_fn_meta::<Decimal>
 // cast_datetime_as_string -> cast_any_as_string_fn_meta::<DateTime>
 // cast_duration_as_string -> cast_any_as_string_fn_meta::<Duration>
-// cast_json_as_string -> by cast_any_as_any<Json, String>
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
@@ -1480,14 +1479,18 @@ fn cast_any_as_bytes<From: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
     }
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
-fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Option<Bytes>> {
+fn cast_json_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<JsonRef>,
+) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
         Some(val) => {
             let val = val.convert(ctx)?;
-            Ok(Some(val))
+            cast_as_string_helper(ctx, extra, val)
         }
     }
 }
@@ -4648,7 +4651,14 @@ mod tests {
 
     #[test]
     fn test_json_as_string() {
-        test_none_with_ctx(cast_json_as_bytes);
+        // None
+        {
+            let output: Option<Int> = RpnFnScalarEvaluator::new()
+                .push_param(ScalarValue::Json(None))
+                .evaluate(ScalarFuncSig::CastJsonAsString)
+                .unwrap();
+            assert_eq!(output, None);
+        }
 
         // FIXME: this case is not exactly same as TiDB's,
         //  such as(left is TiKV, right is TiDB)
@@ -4659,7 +4669,7 @@ mod tests {
         //  i64::MIN as f64 => "-9.223372036854776e18", "-9223372036854776000",
         //  i64::MAX as f64 => "9.223372036854776e18",  "9223372036854776000",
         //  u64::MAX as f64 => "1.8446744073709552e19", "18446744073709552000",
-        let cs = vec![
+        let json_cases = [
             (
                 Json::from_object(BTreeMap::default()).unwrap(),
                 "{}".to_string(),
@@ -4704,14 +4714,12 @@ mod tests {
             (Json::from_bool(false).unwrap(), "false".to_string()),
             (Json::none().unwrap(), "null".to_string()),
         ];
+        let cs = json_cases
+            .iter()
+            .map(|(json, s)| (json.as_ref(), s.as_bytes().to_vec(), s.clone()))
+            .collect();
 
-        for (input, expect) in cs {
-            let mut ctx = EvalContext::default();
-            let r = cast_json_as_bytes(&mut ctx, Some(input.as_ref()));
-            let r = r.map(|x| x.map(|x| unsafe { String::from_utf8_unchecked(x) }));
-            let log = make_log(&input, &expect, &r);
-            check_result(Some(&expect), &r, log.as_str());
-        }
+        test_as_string_helper(cs, cast_json_as_string, "cast_json_as_string");
     }
 
     macro_rules! cast_closure_with_metadata {
