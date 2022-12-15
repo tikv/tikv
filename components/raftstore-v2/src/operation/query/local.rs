@@ -17,17 +17,12 @@ use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp, util::LeaseState, LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor,
-        ReadExecutorProvider, RegionSnapshot, RequestInspector, RequestPolicy,
-        TLS_LOCAL_READ_METRICS,
+        ReadExecutorProvider, RegionSnapshot, RequestPolicy, TLS_LOCAL_READ_METRICS,
     },
     Error, Result,
 };
 use slog::{debug, Logger};
-use tikv_util::{
-    box_err,
-    codec::number::decode_u64,
-    time::{monotonic_raw_now, ThreadReadId},
-};
+use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now};
 use time::Timespec;
 use txn_types::WriteBatchFlags;
 
@@ -202,13 +197,13 @@ where
         let mut err = errorpb::Error::default();
         match MsgRouter::send(&self.router, region_id, msg) {
             Ok(()) => return Ok(sub.result().await),
-            Err(TrySendError::Full(c)) => {
+            Err(TrySendError::Full(_)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.channel_full.inc());
                 err.set_message(RAFTSTORE_IS_BUSY.to_owned());
                 err.mut_server_is_busy()
                     .set_reason(RAFTSTORE_IS_BUSY.to_owned());
             }
-            Err(TrySendError::Disconnected(c)) => {
+            Err(TrySendError::Disconnected(_)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
                 err.set_message(format!("region {} is missing", region_id));
                 err.mut_region_not_found().set_region_id(region_id);
@@ -235,7 +230,7 @@ where
         let region_id = req.header.get_ref().region_id;
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().renew_lease_advance.inc());
         // Send a read query which may renew the lease
-        let (msg, sub) = PeerMsg::raft_query(req.clone());
+        let msg = PeerMsg::raft_query(req.clone()).0;
         if let Err(e) = MsgRouter::send(&self.router, region_id, msg) {
             debug!(
                 self.logger,
@@ -685,7 +680,7 @@ mod tests {
                 ch_tx.clone(),
             ))
             .unwrap();
-        let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
+        block_on(reader.snapshot(cmd.clone())).unwrap();
         // Updating lease makes cache miss.
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),

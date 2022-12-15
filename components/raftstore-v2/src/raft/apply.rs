@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{mem, sync::Arc};
+use std::mem;
 
 use engine_traits::{CachedTablet, KvEngine, TabletRegistry, WriteBatch};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
@@ -8,12 +8,7 @@ use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
 use slog::Logger;
 use tikv_util::worker::Scheduler;
 
-use super::Peer;
-use crate::{
-    fsm::ApplyResReporter,
-    operation::AdminCmdResult,
-    router::{ApplyRes, CmdResChannel},
-};
+use crate::{operation::AdminCmdResult, router::CmdResChannel};
 
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine, R> {

@@ -12,33 +12,19 @@ use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletContext, TabletReg
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
-use raftstore::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
-    store::{
-        fsm::Proposal,
-        util::{Lease, RegionReadProgress},
-        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-        ReadProgress, TrackVer, TxnExt,
-    },
-    Error,
+use raftstore::store::{
+    util::{Lease, RegionReadProgress},
+    Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
+    ReadProgress, TxnExt,
 };
-use slog::{debug, error, info, o, warn, Logger};
-use tikv_util::{
-    box_err,
-    config::ReadableSize,
-    time::{monotonic_raw_now, Instant as TiInstant},
-    worker::Scheduler,
-    Either,
-};
-use time::Timespec;
+use slog::Logger;
 
-use super::{storage::Storage, Apply};
+use super::storage::Storage;
 use crate::{
     batch::StoreContext,
-    fsm::{ApplyFsm, ApplyScheduler},
+    fsm::ApplyScheduler,
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
     router::{CmdResChannel, PeerTick, QueryResChannel},
-    worker::PdTask,
     Result,
 };
 
@@ -193,7 +179,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
-        reason: RegionChangeReason,
         tablet_index: u64,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -490,11 +475,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub(crate) fn has_applied_to_current_term(&self) -> bool {
-        self.entry_storage().applied_term() == self.term()
-    }
-
-    #[inline]
     pub fn simple_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
         &mut self.raw_write_encoder
     }
@@ -526,6 +506,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn set_apply_scheduler(&mut self, apply_scheduler: ApplyScheduler) {
         self.apply_scheduler = Some(apply_scheduler);
+    }
+
+    #[inline]
+    pub fn clear_apply_scheduler(&mut self) {
+        self.apply_scheduler.take();
     }
 
     /// Whether the snapshot is handling.

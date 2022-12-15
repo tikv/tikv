@@ -20,9 +20,7 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use kvproto::raft_serverpb::{
-    PeerState, RaftApplyState, RaftLocalState, RaftMessage, RegionLocalState,
-};
+use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{
@@ -39,7 +37,6 @@ use super::write_router::WriteSenders;
 use crate::{
     store::{
         config::Config,
-        entry_storage::first_index,
         fsm::RaftRouter,
         local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics, TimeTracker},
         metrics::*,
@@ -89,22 +86,24 @@ where
 ///
 /// For now, applying snapshot needs to persist some extra states. For v1,
 /// these states are written to KvEngine. For v2, they are written to
-/// RaftEngine.
+/// RaftEngine. Although in v2 these states are also written to raft engine,
+/// but we have to use `ExtraState` as they should be written as the last
+/// updates.
 // TODO: perhaps we should always pass states instead of a write batch even
 // for v1.
-pub enum ExtraWrite<W> {
+pub enum ExtraWrite<W, L> {
     None,
     V1(W),
-    V2(ExtraStates),
+    V2(L),
 }
 
-impl<W: WriteBatch> ExtraWrite<W> {
+impl<W: WriteBatch, L: RaftLogBatch> ExtraWrite<W, L> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         match self {
             ExtraWrite::None => true,
             ExtraWrite::V1(w) => w.is_empty(),
-            _ => false,
+            ExtraWrite::V2(l) => l.is_empty(),
         }
     }
 
@@ -113,7 +112,7 @@ impl<W: WriteBatch> ExtraWrite<W> {
         match self {
             ExtraWrite::None => 0,
             ExtraWrite::V1(w) => w.data_size(),
-            ExtraWrite::V2(m) => mem::size_of_val(m),
+            ExtraWrite::V2(l) => l.persist_size(),
         }
     }
 
@@ -140,18 +139,22 @@ impl<W: WriteBatch> ExtraWrite<W> {
     }
 
     #[inline]
-    pub fn set_v2(&mut self, extra_states: ExtraStates) {
-        if let ExtraWrite::V1(_) = self {
+    pub fn ensure_v2(&mut self, log_batch: impl FnOnce() -> L) -> &mut L {
+        if let ExtraWrite::None = self {
+            *self = ExtraWrite::V2(log_batch());
+        } else if let ExtraWrite::V1(_) = self {
             unreachable!("v1 and v2 are mixed used");
-        } else {
-            *self = ExtraWrite::V2(extra_states);
+        }
+        match self {
+            ExtraWrite::V2(l) => l,
+            _ => unreachable!(),
         }
     }
 
     #[inline]
-    pub fn v2_mut(&mut self) -> Option<&mut ExtraStates> {
-        if let ExtraWrite::V2(m) = self {
-            Some(m)
+    pub fn v2_mut(&mut self) -> Option<&mut L> {
+        if let ExtraWrite::V2(l) = self {
+            Some(l)
         } else {
             None
         }
@@ -175,7 +178,7 @@ where
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
-    pub extra_write: ExtraWrite<EK::WriteBatch>,
+    pub extra_write: ExtraWrite<EK::WriteBatch, ER::LogBatch>,
     pub messages: Vec<RaftMessage>,
     pub trackers: Vec<TimeTracker>,
     pub has_snapshot: bool,
@@ -264,57 +267,27 @@ where
     }
 }
 
-/// These states are set only in raftstore V2.
-#[derive(Default)]
-pub struct ExtraStates {
-    apply_state: RaftApplyState,
-    region_state: Option<RegionLocalState>,
-    // Set only want to destroy the raft group in write worker.
-    raft_state: Option<RaftLocalState>,
-}
-
-impl ExtraStates {
-    #[inline]
-    pub fn new(apply_state: RaftApplyState) -> Self {
-        Self {
-            apply_state,
-            region_state: None,
-            raft_state: None,
-        }
-    }
-
-    #[inline]
-    pub fn set_region_state(&mut self, region_state: RegionLocalState) {
-        self.region_state = Some(region_state);
-    }
-
-    #[inline]
-    pub fn set_raft_state(&mut self, raft_state: RaftLocalState) {
-        self.raft_state = Some(raft_state);
-    }
-}
-
-pub enum ExtraBatchWrite<W> {
+pub enum ExtraBatchWrite<W, L> {
     None,
     V1(W),
-    V2(HashMap<u64, ExtraStates>),
+    V2(L),
 }
 
-impl<W: WriteBatch> ExtraBatchWrite<W> {
+impl<W: WriteBatch, L: RaftLogBatch> ExtraBatchWrite<W, L> {
     #[inline]
     fn clear(&mut self) {
         match self {
             ExtraBatchWrite::None => {}
             ExtraBatchWrite::V1(w) => w.clear(),
-            ExtraBatchWrite::V2(m) => m.clear(),
+            // No clear in in `RaftLogBatch`.
+            ExtraBatchWrite::V2(_) => *self = ExtraBatchWrite::None,
         }
     }
 
     /// Merge the extra_write with this batch.
     ///
     /// If there is any new states inserted, return the size of the state.
-    fn merge(&mut self, region_id: u64, extra_write: &mut ExtraWrite<W>) -> usize {
-        let mut inserted = false;
+    fn merge(&mut self, extra_write: &mut ExtraWrite<W, L>) {
         match mem::replace(extra_write, ExtraWrite::None) {
             ExtraWrite::None => (),
             ExtraWrite::V1(wb) => match self {
@@ -322,35 +295,11 @@ impl<W: WriteBatch> ExtraBatchWrite<W> {
                 ExtraBatchWrite::V1(kv_wb) => kv_wb.merge(wb).unwrap(),
                 ExtraBatchWrite::V2(_) => unreachable!("v2 and v1 are mixed used"),
             },
-            ExtraWrite::V2(extra_states) => match self {
-                ExtraBatchWrite::None => {
-                    let mut map = HashMap::default();
-                    map.insert(region_id, extra_states);
-                    *self = ExtraBatchWrite::V2(map);
-                    inserted = true;
-                }
+            ExtraWrite::V2(lb) => match self {
+                ExtraBatchWrite::None => *self = ExtraBatchWrite::V2(lb),
                 ExtraBatchWrite::V1(_) => unreachable!("v2 and v1 are mixed used"),
-                ExtraBatchWrite::V2(extra_states_map) => match extra_states_map.entry(region_id) {
-                    collections::HashMapEntry::Occupied(mut slot) => {
-                        slot.get_mut().apply_state = extra_states.apply_state;
-                        if let Some(region_state) = extra_states.region_state {
-                            slot.get_mut().region_state = Some(region_state);
-                        }
-                        if let Some(raft_state) = extra_states.raft_state {
-                            slot.get_mut().raft_state = Some(raft_state);
-                        }
-                    }
-                    collections::HashMapEntry::Vacant(slot) => {
-                        slot.insert(extra_states);
-                        inserted = true;
-                    }
-                },
+                ExtraBatchWrite::V2(raft_wb) => raft_wb.merge(lb).unwrap(),
             },
-        };
-        if inserted {
-            std::mem::size_of::<ExtraStates>()
-        } else {
-            0
         }
     }
 }
@@ -368,7 +317,7 @@ where
     // These states only corresponds to entries inside `raft_wbs.last()`. States for other write
     // batches must be inlined early.
     pub raft_states: HashMap<u64, RaftLocalState>,
-    pub extra_batch_write: ExtraBatchWrite<EK::WriteBatch>,
+    pub extra_batch_write: ExtraBatchWrite<EK::WriteBatch, ER::LogBatch>,
     pub state_size: usize,
     pub tasks: Vec<WriteTask<EK, ER>>,
     pub persisted_cbs: Vec<Box<dyn FnOnce() + Send>>,
@@ -396,34 +345,16 @@ where
     }
 
     #[inline]
-    fn flush_states_to_raft_wb(&mut self, raft_engine: &ER) {
+    fn flush_states_to_raft_wb(&mut self) {
         let wb = self.raft_wbs.last_mut().unwrap();
         for (region_id, state) in self.raft_states.drain() {
             wb.put_raft_state(region_id, &state).unwrap();
         }
-        if let ExtraBatchWrite::V2(extra_states_map) = &mut self.extra_batch_write {
-            for (region_id, state) in extra_states_map.drain() {
-                let mut tombstone = false;
-                if let Some(region_state) = state.region_state {
-                    if region_state.get_state() == PeerState::Tombstone {
-                        tombstone = true;
-                        raft_engine
-                            .clean(
-                                region_id,
-                                first_index(&state.apply_state),
-                                state.raft_state.as_ref().unwrap(),
-                                wb,
-                            )
-                            .unwrap();
-                    }
-                    wb.put_region_state(region_id, &region_state).unwrap();
-                }
-                if !tombstone {
-                    wb.put_apply_state(region_id, &state.apply_state).unwrap();
-                }
-            }
-        }
         self.state_size = 0;
+        if let ExtraBatchWrite::V2(_) = self.extra_batch_write {
+            let ExtraBatchWrite::V2(lb) = mem::replace(&mut self.extra_batch_write, ExtraBatchWrite::None) else { unreachable!() };
+            wb.merge(lb).unwrap();
+        }
     }
 
     /// Add write task to this batch
@@ -435,7 +366,7 @@ where
         if self.raft_wb_split_size > 0
             && self.raft_wbs.last().unwrap().persist_size() >= self.raft_wb_split_size
         {
-            self.flush_states_to_raft_wb(raft_engine);
+            self.flush_states_to_raft_wb();
             self.raft_wbs
                 .push(raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE));
         }
@@ -455,9 +386,7 @@ where
             && self.raft_states.insert(task.region_id, raft_state).is_none() {
             self.state_size += std::mem::size_of::<RaftLocalState>();
         }
-        self.state_size += self
-            .extra_batch_write
-            .merge(task.region_id, &mut task.extra_write);
+        self.extra_batch_write.merge(&mut task.extra_write);
 
         if let Some(prev_readies) = self
             .readies
@@ -510,8 +439,8 @@ where
                 .sum::<usize>()
     }
 
-    fn before_write_to_db(&mut self, engine: &ER, metrics: &StoreWriteMetrics) {
-        self.flush_states_to_raft_wb(engine);
+    fn before_write_to_db(&mut self, metrics: &StoreWriteMetrics) {
+        self.flush_states_to_raft_wb();
         if metrics.waterfall_metrics {
             let now = std::time::Instant::now();
             for task in &self.tasks {
@@ -704,8 +633,7 @@ where
 
         let timer = Instant::now();
 
-        self.batch
-            .before_write_to_db(&self.raft_engine, &self.metrics);
+        self.batch.before_write_to_db(&self.metrics);
 
         fail_point!("raft_before_save");
 
@@ -967,7 +895,7 @@ pub fn write_to_db_for_test<EK, ER>(
 {
     let mut batch = WriteTaskBatch::new(engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE));
     batch.add_write_task(&engines.raft, task);
-    batch.before_write_to_db(&engines.raft, &StoreWriteMetrics::new(false));
+    batch.before_write_to_db(&StoreWriteMetrics::new(false));
     if let ExtraBatchWrite::V1(kv_wb) = &mut batch.extra_batch_write {
         if !kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();

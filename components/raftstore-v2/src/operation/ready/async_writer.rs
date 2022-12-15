@@ -86,7 +86,6 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
     }
 
     fn merge(&mut self, task: WriteTask<EK, ER>) -> Option<WriteTask<EK, ER>> {
-        let ready_number = task.ready_number();
         if self.unpersisted_readies.is_empty() {
             // If this ready don't need to be persisted and there is no previous unpersisted
             // ready, we can safely consider it is persisted so the persisted msgs can be
