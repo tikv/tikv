@@ -37,7 +37,26 @@ pub enum DeleteStrategy {
     DeleteByWriter { sst_path: String },
 }
 
+/// `StatisticsReporter` can be used to report engine's private statistics to
+/// prometheus metrics. For one single engine, using it is equivalent to calling
+/// `KvEngine::flush_metrics("name")`. For multiple engines, it can aggregate
+/// statistics accordingly.
+/// Note that it is not responsible for managing the statistics from
+/// user-provided collectors that are potentially shared between engines.
+pub trait StatisticsReporter<T: ?Sized> {
+    fn new(name: &str) -> Self;
+
+    /// Collect statistics from one single engine.
+    fn collect(&mut self, engine: &T);
+
+    /// Aggregate and report statistics to prometheus metrics counters. The
+    /// statistics are not cleared afterwards.
+    fn flush(&mut self);
+}
+
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
+    type StatisticsReporter: StatisticsReporter<Self>;
+
     fn flush_cfs(&self, wait: bool) -> Result<()>;
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;

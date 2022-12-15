@@ -8,8 +8,8 @@ use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
-    engine::RocksEngine, r2e, rocks_metrics_defs::*, sst::RocksSstWriterBuilder, util,
-    RocksSstWriter,
+    engine::RocksEngine, r2e, rocks_metrics::RocksStatisticsReporter, rocks_metrics_defs::*,
+    sst::RocksSstWriterBuilder, util, RocksSstWriter,
 };
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -126,6 +126,8 @@ impl RocksEngine {
 }
 
 impl MiscExt for RocksEngine {
+    type StatisticsReporter = RocksStatisticsReporter;
+
     fn flush_cfs(&self, wait: bool) -> Result<()> {
         let mut handles = vec![];
         for cf in self.cf_names() {

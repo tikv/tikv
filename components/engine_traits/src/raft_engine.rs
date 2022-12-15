@@ -124,7 +124,6 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     fn flush_stats(&self) -> Option<CacheStats> {
         None
     }
-    fn reset_statistics(&self) {}
 
     fn stop(&self) {}
 

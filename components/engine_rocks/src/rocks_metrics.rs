@@ -1,14 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::CF_DEFAULT;
+use collections::HashMap;
+use engine_traits::{StatisticsReporter, CF_DEFAULT};
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
 use rocksdb::{
-    DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
+    DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData,
 };
 
-use crate::rocks_metrics_defs::*;
+use crate::{engine::RocksEngine, rocks_metrics_defs::*};
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {
@@ -910,206 +911,246 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
     }
 }
 
-pub fn flush_engine_iostall_properties(engine: &DB, name: &str) {
-    let stall_num = ROCKSDB_IOSTALL_KEY.len();
-    let mut counter = vec![0; stall_num];
-    for cf in engine.cf_names() {
-        let handle = crate::util::get_cf_handle(engine, cf).unwrap();
-        if let Some(info) = engine.get_map_property_cf(handle, ROCKSDB_CFSTATS) {
-            for i in 0..stall_num {
-                let value = info.get_property_int_value(ROCKSDB_IOSTALL_KEY[i]);
-                counter[i] += value as i64;
-            }
-        } else {
-            return;
-        }
-    }
-    for i in 0..stall_num {
-        STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
-            .with_label_values(&[name, ROCKSDB_IOSTALL_TYPE[i]])
-            .set(counter[i]);
-    }
+#[derive(Default, Clone)]
+struct CfLevelStats {
+    num_files: u64,
+    num_blob_files: u64,
 }
 
-pub fn flush_engine_properties(engine: &DB, name: &str) {
-    for cf in engine.cf_names() {
-        let handle = crate::util::get_cf_handle(engine, cf).unwrap();
-        // It is important to monitor each cf's size, especially the "raft" and "lock"
-        // column families.
-        let cf_used_size = crate::util::get_engine_cf_used_size(engine, handle);
-        STORE_ENGINE_SIZE_GAUGE_VEC
-            .with_label_values(&[name, cf])
-            .set(cf_used_size as i64);
+#[derive(Default)]
+struct CfStats {
+    used_size: u64,
+    blob_cache_size: u64,
+    readers_mem: u64,
+    mem_tables: u64,
+    num_keys: u64,
+    pending_compaction_bytes: u64,
+    num_immutable_mem_table: u64,
+    live_blob_size: u64,
+    num_live_blob_file: u64,
+    num_obsolete_blob_file: u64,
+    live_blob_file_size: u64,
+    obsolete_blob_file_size: u64,
+    blob_file_discardable_ratio_le0: u64,
+    blob_file_discardable_ratio_le20: u64,
+    blob_file_discardable_ratio_le50: u64,
+    blob_file_discardable_ratio_le80: u64,
+    blob_file_discardable_ratio_le100: u64,
+    levels: Vec<CfLevelStats>,
+}
 
-        let blob_cache_usage = engine.get_blob_cache_usage_cf(handle);
-        STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
-            .with_label_values(&[name, cf])
-            .set(blob_cache_usage as i64);
+#[derive(Default)]
+struct DbStats {
+    num_snapshots: u64,
+    oldest_snapshot_time: u64,
+    block_cache_size: u64,
+    stall_num: Vec<u64>,
+}
 
-        // TODO: find a better place to record these metrics.
-        // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
-        // For index and filter blocks memory
-        if let Some(readers_mem) = engine.get_property_int_cf(handle, ROCKSDB_TABLE_READERS_MEM) {
-            STORE_ENGINE_MEMORY_GAUGE_VEC
-                .with_label_values(&[name, cf, "readers-mem"])
-                .set(readers_mem as i64);
+pub struct RocksStatisticsReporter {
+    name: String,
+    db_stats: DbStats,
+    cf_stats: HashMap<String, CfStats>,
+}
+
+impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            db_stats: DbStats::default(),
+            cf_stats: HashMap::default(),
+        }
+    }
+
+    fn collect(&mut self, engine: &RocksEngine) {
+        let db = engine.as_inner();
+        let stall_num = ROCKSDB_IOSTALL_KEY.len();
+        self.db_stats.stall_num.resize(stall_num, 0);
+        for cf in db.cf_names() {
+            let mut cf_stats = self.cf_stats.entry(cf.to_owned()).or_default();
+            let handle = crate::util::get_cf_handle(db, cf).unwrap();
+            // It is important to monitor each cf's size, especially the "raft" and "lock"
+            // column families.
+            cf_stats.used_size += crate::util::get_engine_cf_used_size(db, handle);
+            // TODO: shared or not?
+            cf_stats.blob_cache_size += db.get_blob_cache_usage_cf(handle);
+
+            // TODO: find a better place to record these metrics.
+            // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
+            // For index and filter blocks memory
+            cf_stats.readers_mem += db
+                .get_property_int_cf(handle, ROCKSDB_TABLE_READERS_MEM)
+                .unwrap_or(0);
+            cf_stats.mem_tables += db
+                .get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
+                .unwrap_or(0);
+            // TODO: add cache usage and pinned usage.
+            cf_stats.num_keys += db
+                .get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS)
+                .unwrap_or(0);
+            cf_stats.pending_compaction_bytes +=
+                crate::util::get_cf_pending_compaction_bytes(db, handle).unwrap_or(0);
+            cf_stats.num_immutable_mem_table +=
+                crate::util::get_cf_num_immutable_mem_table(db, handle).unwrap_or(0);
+            // Titan.
+            cf_stats.live_blob_size += db
+                .get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_SIZE)
+                .unwrap_or(0);
+            cf_stats.num_live_blob_file += db
+                .get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE)
+                .unwrap_or(0);
+            cf_stats.num_obsolete_blob_file += db
+                .get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE)
+                .unwrap_or(0);
+            cf_stats.live_blob_file_size += db
+                .get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE)
+                .unwrap_or(0);
+            cf_stats.obsolete_blob_file_size += db
+                .get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
+                .unwrap_or(0);
+            cf_stats.blob_file_discardable_ratio_le0 += db
+                .get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE0_FILE)
+                .unwrap_or(0);
+            cf_stats.blob_file_discardable_ratio_le20 += db
+                .get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE20_FILE)
+                .unwrap_or(0);
+            cf_stats.blob_file_discardable_ratio_le50 += db
+                .get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE50_FILE)
+                .unwrap_or(0);
+            cf_stats.blob_file_discardable_ratio_le80 += db
+                .get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE)
+                .unwrap_or(0);
+            cf_stats.blob_file_discardable_ratio_le100 += db
+                .get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE)
+                .unwrap_or(0);
+
+            let opts = db.get_options_cf(handle);
+            if cf_stats.levels.len() < opts.get_num_levels() + 1 {
+                cf_stats
+                    .levels
+                    .resize(opts.get_num_levels() + 1, CfLevelStats::default());
+            }
+            for level in 0..opts.get_num_levels() {
+                // TODO: crate::util::get_engine_compression_ratio_at_level(db, handle,
+                // level)
+                cf_stats.levels[level].num_files +=
+                    crate::util::get_cf_num_files_at_level(db, handle, level).unwrap_or(0);
+                cf_stats.levels[level].num_blob_files +=
+                    crate::util::get_cf_num_blob_files_at_level(db, handle, level).unwrap_or(0);
+            }
+
+            if let Some(info) = db.get_map_property_cf(handle, ROCKSDB_CFSTATS) {
+                for i in 0..stall_num {
+                    self.db_stats.stall_num[i] +=
+                        info.get_property_int_value(ROCKSDB_IOSTALL_KEY[i]);
+                }
+            }
         }
 
-        // For memtable
-        if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
-        {
-            STORE_ENGINE_MEMORY_GAUGE_VEC
-                .with_label_values(&[name, cf, "mem-tables"])
-                .set(mem_table as i64);
+        // For snapshot
+        self.db_stats.num_snapshots += db.get_property_int(ROCKSDB_NUM_SNAPSHOTS).unwrap_or(0);
+        let oldest_snapshot_time =
+            db.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME)
+                .map_or(0, |t| {
+                    let now = time::get_time().sec as u64;
+                    // RocksDB returns 0 if no snapshots.
+                    if t > 0 && now > t { now - t } else { 0 }
+                });
+        self.db_stats.oldest_snapshot_time =
+            std::cmp::max(self.db_stats.oldest_snapshot_time, oldest_snapshot_time);
+
+        // Since block cache is shared, getting cache size from any CF/DB is fine. Here
+        // we get from default CF.
+        if self.db_stats.block_cache_size == 0 {
+            let handle = crate::util::get_cf_handle(db, CF_DEFAULT).unwrap();
+            self.db_stats.block_cache_size = db.get_block_cache_usage_cf(handle);
         }
+    }
 
-        // TODO: add cache usage and pinned usage.
-
-        if let Some(num_keys) = engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
+    fn flush(&mut self) {
+        for (cf, cf_stats) in &self.cf_stats {
+            STORE_ENGINE_SIZE_GAUGE_VEC
+                .with_label_values(&[&self.name, cf])
+                .set(cf_stats.used_size as i64);
+            STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
+                .with_label_values(&[&self.name, cf])
+                .set(cf_stats.blob_cache_size as i64);
+            STORE_ENGINE_MEMORY_GAUGE_VEC
+                .with_label_values(&[&self.name, cf, "readers-mem"])
+                .set(cf_stats.readers_mem as i64);
+            STORE_ENGINE_MEMORY_GAUGE_VEC
+                .with_label_values(&[&self.name, cf, "mem-tables"])
+                .set(cf_stats.mem_tables as i64);
+            // TODO: add cache usage and pinned usage.
             STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC
-                .with_label_values(&[name, cf])
-                .set(num_keys as i64);
-        }
-
-        // Pending compaction bytes
-        if let Some(pending_compaction_bytes) =
-            crate::util::get_cf_pending_compaction_bytes(engine, handle)
-        {
+                .with_label_values(&[&self.name, cf])
+                .set(cf_stats.num_keys as i64);
             STORE_ENGINE_PENDING_COMPACTION_BYTES_VEC
-                .with_label_values(&[name, cf])
-                .set(pending_compaction_bytes as i64);
-        }
-
-        let opts = engine.get_options_cf(handle);
-        for level in 0..opts.get_num_levels() {
-            // Compression ratio at levels
-            if let Some(v) =
-                crate::util::get_engine_compression_ratio_at_level(engine, handle, level)
-            {
-                STORE_ENGINE_COMPRESSION_RATIO_VEC
-                    .with_label_values(&[name, cf, &level.to_string()])
-                    .set(v);
-            }
-
-            // Num files at levels
-            if let Some(v) = crate::util::get_cf_num_files_at_level(engine, handle, level) {
+                .with_label_values(&[&self.name, cf])
+                .set(cf_stats.pending_compaction_bytes as i64);
+            for (level, level_stats) in cf_stats.levels.iter().enumerate() {
+                // STORE_ENGINE_COMPRESSION_RATIO_VEC
+                //     .with_label_values(&[&self.name, cf, &level.to_string()])
+                //     .set(v);
                 STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
-                    .with_label_values(&[name, cf, &level.to_string()])
-                    .set(v as i64);
-            }
-
-            // Titan Num blob files at levels
-            if let Some(v) = crate::util::get_cf_num_blob_files_at_level(engine, handle, level) {
+                    .with_label_values(&[&self.name, cf, &level.to_string()])
+                    .set(level_stats.num_files as i64);
                 STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC
-                    .with_label_values(&[name, cf, &level.to_string()])
-                    .set(v as i64);
+                    .with_label_values(&[&self.name, cf, &level.to_string()])
+                    .set(level_stats.num_blob_files as i64);
             }
-        }
 
-        // Num immutable mem-table
-        if let Some(v) = crate::util::get_cf_num_immutable_mem_table(engine, handle) {
             STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
-                .with_label_values(&[name, cf])
-                .set(v as i64);
-        }
-
-        // Titan live blob size
-        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_SIZE) {
+                .with_label_values(&[&self.name, cf])
+                .set(cf_stats.num_immutable_mem_table as i64);
             STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC
-                .with_label_values(&[name, cf])
-                .set(v as i64);
-        }
-
-        // Titan num live blob file
-        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE) {
+                .with_label_values(&[&self.name, cf])
+                .set(cf_stats.live_blob_size as i64);
             STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC
-                .with_label_values(&[name, cf])
-                .set(v as i64);
-        }
-
-        // Titan num obsolete blob file
-        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE)
-        {
+                .with_label_values(&[&self.name, cf])
+                .set(cf_stats.num_live_blob_file as i64);
             STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC
-                .with_label_values(&[name, cf])
-                .set(v as i64);
-        }
-
-        // Titan live blob file size
-        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE) {
+                .with_label_values(&[&self.name, cf])
+                .set(cf_stats.num_obsolete_blob_file as i64);
             STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC
-                .with_label_values(&[name, cf])
-                .set(v as i64);
-        }
-
-        // Titan obsolete blob file size
-        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
-        {
+                .with_label_values(&[&self.name, cf])
+                .set(cf_stats.live_blob_file_size as i64);
             STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC
-                .with_label_values(&[name, cf])
-                .set(v as i64);
+                .with_label_values(&[&self.name, cf])
+                .set(cf_stats.obsolete_blob_file_size as i64);
+            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                .with_label_values(&[&self.name, cf, "le0"])
+                .set(cf_stats.blob_file_discardable_ratio_le0 as i64);
+            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                .with_label_values(&[&self.name, cf, "le20"])
+                .set(cf_stats.blob_file_discardable_ratio_le20 as i64);
+            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                .with_label_values(&[&self.name, cf, "le50"])
+                .set(cf_stats.blob_file_discardable_ratio_le50 as i64);
+            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                .with_label_values(&[&self.name, cf, "le80"])
+                .set(cf_stats.blob_file_discardable_ratio_le80 as i64);
+            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                .with_label_values(&[&self.name, cf, "le100"])
+                .set(cf_stats.blob_file_discardable_ratio_le100 as i64);
         }
 
-        // Titan blob file discardable ratio
-        if let Some(v) =
-            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE0_FILE)
-        {
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
-                .with_label_values(&[name, cf, "le0"])
-                .set(v as i64);
-        }
-        if let Some(v) =
-            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE20_FILE)
-        {
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
-                .with_label_values(&[name, cf, "le20"])
-                .set(v as i64);
-        }
-        if let Some(v) =
-            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE50_FILE)
-        {
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
-                .with_label_values(&[name, cf, "le50"])
-                .set(v as i64);
-        }
-        if let Some(v) =
-            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE)
-        {
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
-                .with_label_values(&[name, cf, "le80"])
-                .set(v as i64);
-        }
-        if let Some(v) =
-            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE)
-        {
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
-                .with_label_values(&[name, cf, "le100"])
-                .set(v as i64);
-        }
-    }
-
-    // For snapshot
-    if let Some(n) = engine.get_property_int(ROCKSDB_NUM_SNAPSHOTS) {
         STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
-            .with_label_values(&[name])
-            .set(n as i64);
-    }
-    if let Some(t) = engine.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME) {
-        // RocksDB returns 0 if no snapshots.
-        let now = time::get_time().sec as u64;
-        let d = if t > 0 && now > t { now - t } else { 0 };
+            .with_label_values(&[&self.name])
+            .set(self.db_stats.num_snapshots as i64);
         STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC
-            .with_label_values(&[name])
-            .set(d as i64);
+            .with_label_values(&[&self.name])
+            .set(self.db_stats.oldest_snapshot_time as i64);
+        STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+            .with_label_values(&[&self.name, "all"])
+            .set(self.db_stats.block_cache_size as i64);
+        let stall_num = ROCKSDB_IOSTALL_KEY.len();
+        for i in 0..stall_num {
+            STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
+                .with_label_values(&[&self.name, ROCKSDB_IOSTALL_TYPE[i]])
+                .set(self.db_stats.stall_num[i] as i64);
+        }
     }
-
-    // Since block cache is shared, getting cache size from any CF is fine. Here we
-    // get from default CF.
-    let handle = crate::util::get_cf_handle(engine, CF_DEFAULT).unwrap();
-    let block_cache_usage = engine.get_block_cache_usage_cf(handle);
-    STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
-        .with_label_values(&[name, "all"])
-        .set(block_cache_usage as i64);
 }
 
 // For property metrics
@@ -1618,11 +1659,8 @@ mod tests {
             flush_engine_histogram_metrics(*tp, HistogramData::default(), "kv");
         }
 
-        flush_engine_properties(engine.as_inner(), "kv");
-        let handle = engine.as_inner().cf_handle("default").unwrap();
-        let info = engine
-            .as_inner()
-            .get_map_property_cf(handle, ROCKSDB_CFSTATS);
-        assert!(info.is_some());
+        let mut reporter = RocksStatisticsReporter::new("kv");
+        reporter.collect(&engine);
+        reporter.flush();
     }
 }

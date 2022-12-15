@@ -9,10 +9,7 @@ use crate::{
     db_vector::RocksDbVector,
     options::RocksReadOptions,
     r2e,
-    rocks_metrics::{
-        flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
-        flush_engine_ticker_metrics,
-    },
+    rocks_metrics::{flush_engine_histogram_metrics, flush_engine_ticker_metrics},
     rocks_metrics_defs::{
         ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
     },
@@ -83,12 +80,6 @@ impl KvEngine for RocksEngine {
                 }
             }
         }
-        flush_engine_properties(&self.db, instance);
-        flush_engine_iostall_properties(&self.db, instance);
-    }
-
-    fn reset_statistics(&self) {
-        self.db.reset_statistics();
     }
 
     fn bad_downcast<T: 'static>(&self) -> &T {

@@ -124,10 +124,6 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn reset_statistics(&self) {
-        panic!()
-    }
-
     fn dump_stats(&self) -> Result<String> {
         panic!()
     }
