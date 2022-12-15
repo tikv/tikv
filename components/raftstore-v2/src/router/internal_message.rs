@@ -1,7 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use raftstore::store::fsm::ChangePeer;
-
 use crate::operation::{AdminCmdResult, CommittedEntries, GenSnapTask};
 
 #[derive(Debug)]

@@ -2,7 +2,6 @@
 
 use std::{
     ops::{Deref, DerefMut},
-    path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -16,14 +15,10 @@ use batch_system::{
 use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::channel::{Sender, TrySendError};
-use engine_traits::{Engines, KvEngine, RaftEngine, TabletRegistry};
+use crossbeam::channel::TrySendError;
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType};
-use futures::{compat::Future01CompatExt, FutureExt};
-use kvproto::{
-    metapb::Store,
-    raft_serverpb::{PeerState, RaftMessage},
-};
+use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::INVALID_ID;
 use raftstore::store::{
@@ -34,8 +29,6 @@ use slog::Logger;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
-    defer,
-    future::poll_future_notify,
     sys::SysQuota,
     time::Instant as TiInstant,
     timer::SteadyTimer,
@@ -49,7 +42,7 @@ use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{PdRunner, PdTask},
+    worker::pd,
     Error, Result,
 };
 
@@ -77,8 +70,12 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
     pub read_scheduler: Scheduler<ReadTask<EK>>,
+
+    /// Disk usage for the store itself.
+    pub self_disk_usage: DiskUsage,
+
     pub snap_mgr: TabletSnapManager,
-    pub pd_scheduler: Scheduler<PdTask>,
+    pub pd_scheduler: Scheduler<pd::Task>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -203,7 +200,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         }
     }
 
-    fn end(&mut self, batch: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {}
+    fn end(&mut self, _batch: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {}
 
     fn pause(&mut self) {
         if self.poll_ctx.trans.need_flush() {
@@ -226,7 +223,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     trans: T,
     router: StoreRouter<EK, ER>,
     read_scheduler: Scheduler<ReadTask<EK>>,
-    pd_scheduler: Scheduler<PdTask>,
+    pd_scheduler: Scheduler<pd::Task>,
     write_senders: WriteSenders<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
@@ -243,7 +240,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         trans: T,
         router: StoreRouter<EK, ER>,
         read_scheduler: Scheduler<ReadTask<EK>>,
-        pd_scheduler: Scheduler<PdTask>,
+        pd_scheduler: Scheduler<pd::Task>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta>>,
@@ -280,7 +277,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
     fn init(&self) -> Result<HashMap<u64, SenderFsmPair<EK, ER>>> {
         let mut regions = HashMap::default();
         let cfg = self.cfg.value();
-        let mut meta = self.store_meta.lock().unwrap();
+        let meta = self.store_meta.lock().unwrap();
         self.engine
             .for_each_raft_group::<Error, _>(&mut |region_id| {
                 assert_ne!(region_id, INVALID_ID);
@@ -312,7 +309,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         Ok(regions)
     }
 
-    fn clean_up_tablets(&self, peers: &HashMap<u64, SenderFsmPair<EK, ER>>) -> Result<()> {
+    fn clean_up_tablets(&self, _peers: &HashMap<u64, SenderFsmPair<EK, ER>>) -> Result<()> {
         // TODO: list all available tablets and destroy those which are not in the
         // peers.
         Ok(())
@@ -327,7 +324,7 @@ where
 {
     type Handler = StorePoller<EK, ER, T>;
 
-    fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
+    fn build(&mut self, _priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
         let poll_ctx = StoreContext {
             logger: self.logger.clone(),
@@ -345,6 +342,7 @@ where
             tablet_registry: self.tablet_registry.clone(),
             apply_pool: self.apply_pool.clone(),
             read_scheduler: self.read_scheduler.clone(),
+            self_disk_usage: DiskUsage::Normal,
             snap_mgr: self.snap_mgr.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
         };
@@ -420,7 +418,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let pd_scheduler = workers.pd_worker.start(
             "pd-worker",
-            PdRunner::new(
+            pd::Runner::new(
                 store_id,
                 pd_client,
                 raft_engine.clone(),
@@ -434,7 +432,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
-        let mut builder = StorePollerBuilder::new(
+        let builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
             raft_engine,

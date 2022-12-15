@@ -404,7 +404,7 @@ impl ReadCallback for QueryResChannel {
     type Response = QueryResult;
 
     #[inline]
-    fn set_result(mut self, res: QueryResult) {
+    fn set_result(self, res: QueryResult) {
         self.set_result(res);
     }
 

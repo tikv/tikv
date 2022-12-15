@@ -45,8 +45,8 @@ use engine_rocks::{
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CachedTablet, CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
-    RaftEngine, SingletonFactory, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    RaftEngine, SingletonFactory, StatisticsReporter, TabletContext, TabletRegistry, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -1850,7 +1850,8 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let reg = TabletRegistry::new(Box::new(SingletonFactory::new(kv_engine)), &self.store_path)
             .unwrap();
         // It always use the singleton kv_engine, use arbitrary id and suffix.
-        reg.load(0, 0, false).unwrap();
+        let ctx = TabletContext::with_infinite_region(0, Some(0));
+        reg.load(ctx, false).unwrap();
         self.tablet_registry = Some(reg.clone());
         engines.raft.register_config(cfg_controller);
 
@@ -2146,7 +2147,9 @@ mod test {
     };
 
     use engine_rocks::raw::Env;
-    use engine_traits::{FlowControlFactorsExt, MiscExt, SyncMutable, TabletRegistry, CF_DEFAULT};
+    use engine_traits::{
+        FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT,
+    };
     use tempfile::Builder;
     use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
     use tikv_util::{config::ReadableSize, time::Instant};
@@ -2168,7 +2171,8 @@ mod test {
         let reg = TabletRegistry::new(Box::new(factory), path.path()).unwrap();
 
         for i in 1..6 {
-            reg.load(i, 10, true).unwrap();
+            let ctx = TabletContext::with_infinite_region(i, Some(10));
+            reg.load(ctx, true).unwrap();
         }
 
         let mut cached = reg.get(1).unwrap();
@@ -2186,7 +2190,8 @@ mod test {
             .unwrap()
             .unwrap();
 
-        reg.load(1, 20, true).unwrap();
+        let ctx = TabletContext::with_infinite_region(1, Some(20));
+        reg.load(ctx, true).unwrap();
         tablet = cached.latest().unwrap();
 
         for i in 1..11 {

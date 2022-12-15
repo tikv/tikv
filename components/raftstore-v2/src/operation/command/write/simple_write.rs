@@ -31,7 +31,7 @@ impl SimpleWriteEncoder {
     /// If `notify_proposed` is true, channels will be called `notify_proposed`
     /// when it's appended.
     pub fn new(
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
         size_limit: usize,
         notify_proposed: bool,
     ) -> Result<SimpleWriteEncoder, RaftCmdRequest> {
@@ -346,7 +346,7 @@ fn encode(req: &Request, buf: &mut Vec<u8>) {
 
 #[inline]
 fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
-    let (tag, mut left) = buf.split_first()?;
+    let (tag, left) = buf.split_first()?;
     match *tag {
         PUT_TAG => {
             let (cf, left) = decode_cf(left);

@@ -1630,6 +1630,7 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
+ "keys",
  "kvproto",
  "log_wrappers",
  "protobuf",
@@ -4250,6 +4251,7 @@ dependencies = [
 name = "raft_log_engine"
 version = "0.0.1"
 dependencies = [
+ "codec",
  "encryption",
  "engine_traits",
  "file_system",
@@ -4264,6 +4266,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv_util",
  "time",
  "tracker",
@@ -4344,6 +4347,7 @@ name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
  "batch-system",
+ "bytes",
  "causal_ts",
  "collections",
  "concurrency_manager",
@@ -4358,12 +4362,14 @@ dependencies = [
  "keys",
  "kvproto",
  "log_wrappers",
+ "parking_lot 0.12.0",
  "pd_client",
  "prometheus",
  "protobuf",
  "raft",
  "raft-proto",
  "raftstore",
+ "rand 0.8.5",
  "resource_metering",
  "slog",
  "slog-global",
@@ -6220,7 +6226,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.5.0-alpha"
+version = "6.6.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
