@@ -457,6 +457,11 @@ where
         }
 
         if find_peer_by_id(&self.region, to).map_or(false, |p| p.is_witness) {
+            // Although we always sending snapshot task behind apply task to get latest
+            // snapshot, we can't use `last_applying_idx` here, as below the judgment
+            // condition will generate an witness snapshot directly, the new non-witness
+            // will ingore this mismatch snapshot and can't request snapshot successfully
+            // again.
             if self.applied_index() < request_index {
                 // It may be a request from non-witness. In order to avoid generating mismatch
                 // snapshots, wait for apply non-witness to complete

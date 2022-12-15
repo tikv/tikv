@@ -2738,6 +2738,12 @@ where
             ExtraMessageType::MsgAvailabilityResponse => {
                 self.on_availability_response(msg.get_from_peer(), msg.get_extra_msg());
             }
+            ExtraMessageType::MsgVoterReplicatedIndexRequest => {
+                unimplemented!()
+            }
+            ExtraMessageType::MsgVoterReplicatedIndexResponse => {
+                unimplemented!()
+            }
         }
     }
 
@@ -6350,6 +6356,7 @@ where
             if self.fsm.peer_id() == peer_id {
                 if is_witness && !self.fsm.peer.is_leader() {
                     let _ = self.fsm.peer.get_store().clear_data();
+                    self.fsm.peer.raft_group.set_priority(-1);
                 } else {
                     self.fsm.peer.wait_data = true;
                     self.fsm.peer.request_index = sw.index;

@@ -242,43 +242,49 @@ fn test_witness_leader() {
     );
 }
 
-// TODO: add back when election priority is supported
-// // Test the case that witness can't be elected as leader based on election
-// // priority when there is no log gap
-// #[test]
-// fn test_witness_election_priority() {
-//     let mut cluster = new_server_cluster(0, 3);
-//     cluster.run();
-//     let nodes = Vec::from_iter(cluster.get_node_ids());
-//     assert_eq!(nodes.len(), 3);
+// Test the case that witness can't be elected as leader based on election
+// priority when there is no log gap
+#[test]
+fn test_witness_election_priority() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
 
-//     let pd_client = Arc::clone(&cluster.pd_client);
-//     pd_client.disable_default_operator();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
 
-//     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-//     // nonwitness -> witness
-//     let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-//     become_witness(&cluster, region.get_id(), &mut peer_on_store3);
-//     cluster.must_put(b"k0", b"v0");
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
 
-//     // make sure logs are replicated to the witness
-//     std::thread::sleep(Duration::from_millis(100));
+    // nonwitness -> witness
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
+    cluster.must_put(b"k0", b"v0");
 
-//     for i in 1..10 {
-//         let node =
-// cluster.leader_of_region(region.get_id()).unwrap().store_id;         cluster.
-// stop_node(node);         let (k, v) = (format!("k{}", i), format!("v{}", i));
-//         let key = k.as_bytes();
-//         let value = v.as_bytes();
-//         cluster.must_put(key, value);
-//         // the witness can't be elected as the leader when there is no log
-// gap         assert_ne!(
-//             cluster.leader_of_region(region.get_id()).unwrap().store_id,
-//             nodes[2],
-//         );
-//         cluster.run_node(node).unwrap();
-//     }
-// }
+    // make sure logs are replicated to the witness
+    std::thread::sleep(Duration::from_millis(100));
+
+    for i in 1..10 {
+        let node = cluster.leader_of_region(region.get_id()).unwrap().store_id;
+        cluster.stop_node(node);
+        let (k, v) = (format!("k{}", i), format!("v{}", i));
+        let key = k.as_bytes();
+        let value = v.as_bytes();
+        cluster.must_put(key, value);
+        // the witness can't be elected as the leader when there is no log gap
+        assert_ne!(
+            cluster.leader_of_region(region.get_id()).unwrap().store_id,
+            nodes[2],
+        );
+        cluster.run_node(node).unwrap();
+        // make sure logs are replicated to the restarted node
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
 
 // TODO: add back when raft log gc logic is updated for witness
 // // Test the case that truncated index won't advance when there is a witness

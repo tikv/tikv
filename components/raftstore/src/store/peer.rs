@@ -1080,6 +1080,7 @@ where
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
+            priority: if peer.is_witness { -1 } else { 0 },
             // TODO: if peer.is_witness { 0 } else { 1 },
             ..Default::default()
         };
@@ -2569,6 +2570,7 @@ where
                     .update_applied(self.last_applying_idx, &ctx.coprocessor_host);
                 if self.wait_data {
                     self.notify_leader_the_peer_is_available(ctx);
+                    let mut apply = None;
                     if self.last_applying_idx < self.get_store().commit_index() {
                         match self.get_store().entries(
                             self.last_applying_idx + 1,
@@ -2579,7 +2581,7 @@ where
                             Ok(entries) => {
                                 let commit_term =
                                     self.get_store().term(self.last_applying_idx + 1).unwrap();
-                                let apply = Apply::new(
+                                apply = Some(Apply::new(
                                     self.peer_id(),
                                     self.region_id,
                                     self.term(),
@@ -2588,20 +2590,16 @@ where
                                     entries,
                                     vec![],
                                     self.region_buckets.as_ref().map(|b| b.meta.clone()),
-                                );
-                                ctx.apply_router
-                                    .schedule_task(self.region_id, ApplyTask::apply_gap(apply));
+                                ));
                             }
                             Err(e) => {
                                 panic!("replay failed to get entries, {:?}", e)
                             }
                         }
-                    } else {
-                        ctx.apply_router
-                            .schedule_task(self.region_id, ApplyTask::Recover(self.region_id));
                     }
+                    ctx.apply_router
+                        .schedule_task(self.region_id, ApplyTask::apply_gap(self.region_id, apply));
                     self.wait_data = false;
-                    self.request_index = 0;
                     return false;
                 }
             }
