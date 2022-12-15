@@ -76,8 +76,8 @@ use super::metrics::*;
 use crate::{
     bytes_capacity,
     coprocessor::{
-        ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveId,
-        ObserveLevel, RegionState,
+        ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
+        RegionState,
     },
     store::{
         cmd_resp,
@@ -3408,10 +3408,6 @@ pub struct ChangeObserver {
 }
 
 impl ChangeObserver {
-    pub fn observer_id(&self) -> ObserveId {
-        self.ty.handle().id
-    }
-
     pub fn from_cdc(region_id: u64, id: ObserveHandle) -> Self {
         Self {
             ty: ObserverType::Cdc(id),
