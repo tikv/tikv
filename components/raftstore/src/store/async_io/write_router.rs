@@ -255,7 +255,7 @@ pub type SenderVec<EK, ER> = Vec<Sender<WriteMsg<EK, ER>>>;
 #[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
     senders: Tracker<SenderVec<EK, ER>>,
-    _cached_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+    _cached_senders: SenderVec<EK, ER>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
     /// Valid capacity of async ios. It's shared between all `WriteSender`s and
     /// the global `StoreWriter` in store.
