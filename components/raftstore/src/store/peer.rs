@@ -1081,7 +1081,6 @@ where
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             priority: if peer.is_witness { -1 } else { 0 },
-            // TODO: if peer.is_witness { 0 } else { 1 },
             ..Default::default()
         };
 
