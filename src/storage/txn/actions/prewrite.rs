@@ -153,8 +153,7 @@ pub fn prewrite<S: Snapshot>(
         OldValue::Unspecified
     };
 
-    let is_new_lock = (!matches!(pessimistic_action, DoPessimisticCheck) || lock_amended)
-        && !mutation.try_one_pc();
+    let is_new_lock = !matches!(pessimistic_action, DoPessimisticCheck) || lock_amended;
 
     let final_min_commit_ts = mutation.write_lock(lock_status, txn, is_new_lock)?;
 

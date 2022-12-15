@@ -65,6 +65,10 @@ pub struct MvccTxn {
     // `writes`, so it can be further processed. The elements are tuples representing
     // (key, lock, remove_pessimistic_lock)
     pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
+    // Collects the information of locks that are acquired in this MvccTxn. Locks that already
+    // exists but updated in this MvccTxn won't be collected. The collected information will be
+    // used to update the lock waiting information and redo deadlock detection, if there are some
+    // pessimistic lock requests waiting on the keys.
     pub(crate) new_locks: Vec<LockInfo>,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
@@ -114,6 +118,7 @@ impl MvccTxn {
         self.modifies.len() == 0 && self.locks_for_1pc.len() == 0
     }
 
+    // Write a lock. If the key doesn't have lock before, `is_new` should be set.
     pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock, is_new: bool) {
         if is_new {
             self.new_locks
@@ -128,6 +133,8 @@ impl MvccTxn {
         self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
     }
 
+    // Write a pessimistic lock. If the key doesn't have lock before, `is_new`
+    // should be set.
     pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock, is_new: bool) {
         if is_new {
             self.new_locks
