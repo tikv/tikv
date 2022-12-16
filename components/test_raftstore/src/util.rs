@@ -575,7 +575,7 @@ pub fn create_test_engine(
     Option<Arc<DataKeyManager>>,
     TempDir,
     LazyWorker<String>,
-    Option<Arc<RocksStatistics>>,
+    Arc<RocksStatistics>,
     Option<Arc<RocksStatistics>>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);

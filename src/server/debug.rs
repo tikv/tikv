@@ -157,18 +157,24 @@ impl InnerRocksEngineExtractor for Debugger<RocksEngine> {
 impl<ER: RaftEngine> Debugger<ER> {
     pub fn new(
         engines: Engines<RocksEngine, ER>,
-        kv_statistics: Option<Arc<RocksStatistics>>,
-        raft_statistics: Option<Arc<RocksStatistics>>,
         cfg_controller: ConfigController,
     ) -> Debugger<ER> {
         let reset_to_version_manager = ResetToVersionManager::new(engines.kv.clone());
         Debugger {
             engines,
-            kv_statistics,
-            raft_statistics,
+            kv_statistics: None,
+            raft_statistics: None,
             reset_to_version_manager,
             cfg_controller,
         }
+    }
+
+    pub fn kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
+        self.kv_statistics = s;
+    }
+
+    pub fn raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
+        self.raft_statistics = s;
     }
 
     pub fn get_engine(&self) -> &Engines<RocksEngine, ER> {
@@ -1563,7 +1569,7 @@ mod tests {
         let engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
         let engines = Engines::new(engine.clone(), engine);
-        Debugger::new(engines, None, None, ConfigController::default())
+        Debugger::new(engines, ConfigController::default())
     }
 
     impl Debugger<RocksEngine> {

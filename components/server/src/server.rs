@@ -1732,14 +1732,8 @@ impl ConfiguredRaftEngine for RocksEngine {
         let config_raftdb = &config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
-        let statistics = if config.raftdb.enable_statistics {
-            Some(Arc::new(RocksStatistics::new_titan()))
-        } else {
-            None
-        };
-        if let Some(s) = statistics.as_ref() {
-            raft_db_opts.set_statistics(s);
-        }
+        let statistics = Arc::new(RocksStatistics::new_titan());
+        raft_db_opts.set_statistics(statistics.as_ref());
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
         let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
             .expect("failed to open raftdb");
@@ -1753,7 +1747,7 @@ impl ConfiguredRaftEngine for RocksEngine {
             drop(raft_engine);
             raft_data_state_machine.after_dump_data();
         }
-        (raftdb, statistics)
+        (raftdb, Some(statistics))
     }
 
     fn as_rocks_engine(&self) -> Option<&RocksEngine> {
@@ -1839,7 +1833,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let kv_engine = factory
             .create_shared_db(&self.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        self.kv_statistics = factory.rocks_statistics();
+        self.kv_statistics = Some(factory.rocks_statistics());
         let engines = Engines::new(kv_engine.clone(), raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();

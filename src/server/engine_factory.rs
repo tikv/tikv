@@ -27,7 +27,7 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
-    statistics: Option<Arc<RocksStatistics>>,
+    statistics: Arc<RocksStatistics>,
     lite: bool,
 }
 
@@ -38,11 +38,7 @@ pub struct KvEngineFactoryBuilder {
 
 impl KvEngineFactoryBuilder {
     pub fn new(env: Arc<Env>, config: &TikvConfig, cache: Cache) -> Self {
-        let statistics = if config.rocksdb.enable_statistics {
-            Some(Arc::new(RocksStatistics::new_titan()))
-        } else {
-            None
-        };
+        let statistics = Arc::new(RocksStatistics::new_titan());
         Self {
             inner: FactoryInner {
                 env,
@@ -127,20 +123,16 @@ impl KvEngineFactory {
         ))
     }
 
-    pub fn rocks_statistics(&self) -> Option<Arc<RocksStatistics>> {
+    pub fn rocks_statistics(&self) -> Arc<RocksStatistics> {
         self.inner.statistics.clone()
     }
 
     fn db_opts(&self) -> RocksDbOptions {
         // Create kv engine.
-        let mut db_opts =
-            self.inner
-                .rocksdb_config
-                .build_opt(if let Some(s) = self.inner.statistics.as_ref() {
-                    Some(s)
-                } else {
-                    None
-                });
+        let mut db_opts = self
+            .inner
+            .rocksdb_config
+            .build_opt(Some(self.inner.statistics.as_ref()));
         db_opts.set_env(self.inner.env.clone());
         if !self.inner.lite {
             db_opts.add_event_listener(RocksEventListener::new(

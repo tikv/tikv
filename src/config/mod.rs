@@ -1037,7 +1037,9 @@ pub struct DbConfig {
     pub create_if_missing: bool,
     pub max_open_files: i32,
     #[online_config(skip)]
-    pub enable_statistics: bool,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub enable_statistics: Option<bool>,
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
@@ -1110,7 +1112,7 @@ impl Default for DbConfig {
             max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
-            enable_statistics: true,
+            enable_statistics: None,
             stats_dump_period: ReadableDuration::minutes(10),
             compaction_readahead_size: ReadableSize::kb(0),
             info_log_max_size: ReadableSize::gb(1),
@@ -1171,11 +1173,9 @@ impl DbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        if self.enable_statistics {
-            match stats {
-                Some(stats) => opts.set_statistics(stats),
-                None => opts.set_statistics(&RocksStatistics::new_titan()),
-            }
+        match stats {
+            Some(stats) => opts.set_statistics(stats),
+            None => opts.set_statistics(&RocksStatistics::new_titan()),
         }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
@@ -1295,6 +1295,9 @@ impl DbConfig {
             )
             .into());
         }
+        if self.enable_statistics == Some(false) {
+            warn!("raftdb: ignoring `enable_statistics`, statistics is always on.")
+        }
         Ok(())
     }
 
@@ -1410,7 +1413,9 @@ pub struct RaftDbConfig {
     pub create_if_missing: bool,
     pub max_open_files: i32,
     #[online_config(skip)]
-    pub enable_statistics: bool,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub enable_statistics: Option<bool>,
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
@@ -1460,7 +1465,7 @@ impl Default for RaftDbConfig {
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
-            enable_statistics: true,
+            enable_statistics: None,
             stats_dump_period: ReadableDuration::minutes(10),
             compaction_readahead_size: ReadableSize::kb(0),
             info_log_max_size: ReadableSize::gb(1),
@@ -1498,9 +1503,7 @@ impl RaftDbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        if self.enable_statistics {
-            opts.set_statistics(&RocksStatistics::new_titan());
-        }
+        opts.set_statistics(&RocksStatistics::new_titan());
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
@@ -1542,6 +1545,9 @@ impl RaftDbConfig {
                     "raftdb: pipelined_write is not compatible with unordered_write".into(),
                 );
             }
+        }
+        if self.enable_statistics == Some(false) {
+            warn!("raftdb: ignoring `enable_statistics`, statistics is always on.")
         }
         Ok(())
     }

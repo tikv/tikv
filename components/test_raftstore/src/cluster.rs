@@ -170,7 +170,7 @@ pub struct Cluster<T: Simulator> {
     group_props: HashMap<u64, GroupProperties>,
     pub sst_workers: Vec<LazyWorker<String>>,
     pub sst_workers_map: HashMap<u64, usize>,
-    pub kv_statistics: Vec<Option<Arc<RocksStatistics>>>,
+    pub kv_statistics: Vec<Arc<RocksStatistics>>,
     pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
