@@ -134,7 +134,6 @@ fn pre_propose_split(logger: &Logger, req: &mut AdminRequest, region: &Region) -
                 warn!(
                     logger,
                     "skip invalid split key: key should not be larger than the previous.";
-                    "region_id" => region.id,
                     "key" => log_wrappers::Value::key(&curr.split_key),
                     "previous" => log_wrappers::Value::key(&prev.split_key),
                 );
@@ -147,7 +146,6 @@ fn pre_propose_split(logger: &Logger, req: &mut AdminRequest, region: &Region) -
         error!(
             logger,
             "failed to handle split req, no valid key found for split";
-            "region_id" => region.id,
         );
         Err(box_err!("no valid key found for split.".to_owned()))
     } else {
