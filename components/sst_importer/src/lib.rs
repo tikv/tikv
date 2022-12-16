@@ -24,6 +24,10 @@ pub mod metrics;
 pub mod sst_importer;
 
 pub use self::{
+    caching::{
+        cache_map::CacheMap,
+        quota_cache::{Quota, QuotaOf},
+    },
     config::Config,
     errors::{error_inc, Error, Result},
     import_file::sst_meta_to_path,

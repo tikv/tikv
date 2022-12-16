@@ -29,8 +29,8 @@ use raftstore::{
     store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
 };
 use sst_importer::{
-    error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, Error, Result,
-    SstImporter,
+    error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, CacheMap, Config, Error,
+    QuotaOf, Result, SstImporter,
 };
 use tikv_util::{
     config::ReadableSize,
@@ -73,7 +73,7 @@ where
     // For now, PiTR may send too many requests to raftstore, which would make raft-rs give back a
     // huge Ready. Then raft engine would reject to handle that ready, leading to TiKV panic.
     // This semaphore would make sure inflight request size is less than a constant.
-    inflight_items: Arc<tokio::sync::Semaphore>,
+    inflight_items: CacheMap<u64, QuotaOf>,
 }
 
 pub struct SnapshotResult<E: KvEngine> {
@@ -121,6 +121,8 @@ where
         importer.start_switch_mode_check(threads.handle(), engine.clone());
         threads.spawn(Self::tick(importer.clone()));
 
+        let inflight_items = CacheMap::default();
+        threads.spawn(inflight_items.gc_loop());
         ImportSstService {
             cfg,
             engine,
@@ -131,7 +133,7 @@ where
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
-            inflight_items: Arc::new(tokio::sync::Semaphore::new(2 << 30 /* 2GB */)),
+            inflight_items,
         }
     }
 
@@ -474,7 +476,7 @@ where
         let limiter = self.limiter.clone();
         let start = Instant::now();
         let raft_size = self.raft_entry_max_size;
-        let sem = self.inflight_items.clone();
+        let quotas: CacheMap<u64, QuotaOf> = self.inflight_items.clone();
         let handle: tokio::runtime::Handle = self.threads.handle().clone();
 
         let handle_task = async move {
@@ -561,6 +563,7 @@ where
                     }
                 }
 
+                let region_id = context.get_region_id();
                 if !reqs_default.is_empty() {
                     let cmd = make_request(&mut reqs_default, context.clone());
                     cmd_reqs.push(cmd);
@@ -575,15 +578,15 @@ where
                 start_apply = Instant::now();
                 for cmd in cmd_reqs {
                     let cmd_size = cmd.compute_size();
-                    let acquire = handle
-                        .block_on(Arc::clone(&sem).acquire_many_owned(cmd_size))
-                        .unwrap();
+                    let quota = quotas.cached_or_create(&region_id, &QuotaOf(1 << 30));
+                    let permits = handle.block_on(quota.unwrap().require(cmd_size));
+
                     let (cb, future) = paired_future_callback();
                     match router.send_command(cmd, Callback::write(cb), RaftCmdExtraOpts::default())
                     {
                         Ok(_) => futs.push(handle.spawn(async {
                             let r = future.await;
-                            drop(acquire);
+                            drop(permits);
                             r
                         })),
                         Err(e) => {

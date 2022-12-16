@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    borrow::Borrow,
+    fmt::Display,
+    hash::Hash,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -13,10 +16,16 @@ use futures::Future;
 
 use crate::metrics::EXT_STORAGE_CACHE_COUNT;
 
-#[derive(Clone, Default)]
-pub struct CacheMap<M: MakeCache>(Arc<CacheMapInner<M>>);
+#[derive(Clone)]
+pub struct CacheMap<K: Hash + Eq, M: MakeCache>(Arc<CacheMapInner<K, M>>);
 
-impl<M: MakeCache> CacheMap<M> {
+impl<K: Hash + Eq, M: MakeCache> Default for CacheMap<K, M> {
+    fn default() -> Self {
+        Self(Arc::default())
+    }
+}
+
+impl<K: Hash + Eq, M: MakeCache> CacheMap<K, M> {
     #[cfg(test)]
     pub fn with_inner(inner: CacheMapInner<M>) -> Self {
         Self(Arc::new(inner))
@@ -45,14 +54,14 @@ pub trait MakeCache: 'static {
 }
 
 #[derive(Debug)]
-pub struct CacheMapInner<C: MakeCache> {
-    cached: DashMap<String, Cached<C::Cached>>,
+pub struct CacheMapInner<K: Hash + Eq, C: MakeCache> {
+    cached: DashMap<K, Cached<C::Cached>>,
     now: AtomicUsize,
 
     gc_threshold: usize,
 }
 
-impl<C: MakeCache> Default for CacheMapInner<C> {
+impl<K: Hash + Eq, C: MakeCache> Default for CacheMapInner<K, C> {
     fn default() -> Self {
         Self {
             cached: DashMap::default(),
@@ -62,7 +71,7 @@ impl<C: MakeCache> Default for CacheMapInner<C> {
     }
 }
 
-impl<M: MakeCache> CacheMapInner<M> {
+impl<K: Hash + Eq, M: MakeCache> CacheMapInner<K, M> {
     #[cfg(test)]
     pub fn with_gc_threshold(n: usize) -> Self {
         Self {
@@ -92,7 +101,7 @@ impl<R: ShareOwned> Cached<R> {
     }
 }
 
-impl<M: MakeCache> CacheMapInner<M> {
+impl<K: Hash + Eq + Display, M: MakeCache> CacheMapInner<K, M> {
     fn now(&self) -> usize {
         self.now.load(Ordering::SeqCst)
     }
@@ -109,7 +118,7 @@ impl<M: MakeCache> CacheMapInner<M> {
     }
 }
 
-impl<M: MakeCache> CacheMap<M> {
+impl<K: Hash + Eq + Send + Sync + Display + 'static, M: MakeCache> CacheMap<K, M> {
     pub fn gc_loop(&self) -> impl Future<Output = ()> + Send + 'static {
         let this = Arc::downgrade(&self.0);
         async move {
@@ -123,11 +132,15 @@ impl<M: MakeCache> CacheMap<M> {
         }
     }
 
-    pub fn cached_or_create(
+    pub fn cached_or_create<Key>(
         &self,
-        cache_key: &str,
+        cache_key: &Key,
         backend: &M,
-    ) -> std::result::Result<<M::Cached as ShareOwned>::Shared, M::Error> {
+    ) -> std::result::Result<<M::Cached as ShareOwned>::Shared, M::Error>
+    where
+        Key: ToOwned<Owned = K> + ?Sized + Display + Eq + Hash,
+        K: Borrow<Key>,
+    {
         let s = self.0.cached.get_mut(cache_key);
         match s {
             Some(mut s) => {
@@ -189,7 +202,7 @@ mod tests {
         let cached = CacheMapInner::with_gc_threshold(1);
         let cached = CacheMap::with_inner(cached);
 
-        let check_cache = |key, should_make_cache: bool| {
+        let check_cache = |key: &str, should_make_cache: bool| {
             let c = CacheChecker::default();
             cached.cached_or_create(key, &c).unwrap();
             assert_eq!(c.made_cache(), should_make_cache);

@@ -98,7 +98,7 @@ pub struct SstImporter {
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
 
-    cached_storage: CacheMap<StorageBackend>,
+    cached_storage: CacheMap<String, StorageBackend>,
     download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: AtomicU64,
