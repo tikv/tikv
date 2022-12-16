@@ -44,8 +44,8 @@ use engine_rocks::{
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
-    CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
-    TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CachedTablet, CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
+    RaftEngine, SingletonFactory, TabletContext, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -238,7 +238,7 @@ struct TikvServer<ER: RaftEngine> {
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-    tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
+    tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
 }
 
@@ -390,7 +390,7 @@ where
             sst_worker: None,
             quota_limiter,
             causal_ts_provider,
-            tablet_factory: None,
+            tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
         }
     }
@@ -806,8 +806,7 @@ where
         cfg_controller.register(
             tikv::config::Module::Storage,
             Box::new(StorageConfigManger::new(
-                self.tablet_factory.as_ref().unwrap().clone(),
-                self.config.storage.block_cache.shared,
+                self.tablet_registry.as_ref().unwrap().clone(),
                 ttl_scheduler,
                 flow_controller,
                 storage.get_scheduler(),
@@ -1367,7 +1366,7 @@ where
         // for recording the latest tablet for each region.
         // `cached_latest_tablets` is passed to `update` to avoid memory
         // allocation each time when calling `update`.
-        let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
+        let mut cached_latest_tablets = HashMap::default();
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
@@ -1676,14 +1675,9 @@ where
 }
 
 pub trait ConfiguredRaftEngine: RaftEngine {
-    fn build(
-        _: &TikvConfig,
-        _: &Arc<Env>,
-        _: &Option<Arc<DataKeyManager>>,
-        _: &Option<Cache>,
-    ) -> Self;
+    fn build(_: &TikvConfig, _: &Arc<Env>, _: &Option<Arc<DataKeyManager>>, _: &Cache) -> Self;
     fn as_rocks_engine(&self) -> Option<&RocksEngine>;
-    fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool);
+    fn register_config(&self, _cfg_controller: &mut ConfigController);
 }
 
 impl<T: RaftEngine> ConfiguredRaftEngine for T {
@@ -1691,14 +1685,14 @@ impl<T: RaftEngine> ConfiguredRaftEngine for T {
         _: &TikvConfig,
         _: &Arc<Env>,
         _: &Option<Arc<DataKeyManager>>,
-        _: &Option<Cache>,
+        _: &Cache,
     ) -> Self {
         unimplemented!()
     }
     default fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         None
     }
-    default fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool) {}
+    default fn register_config(&self, _cfg_controller: &mut ConfigController) {}
 }
 
 impl ConfiguredRaftEngine for RocksEngine {
@@ -1706,7 +1700,7 @@ impl ConfiguredRaftEngine for RocksEngine {
         config: &TikvConfig,
         env: &Arc<Env>,
         key_manager: &Option<Arc<DataKeyManager>>,
-        block_cache: &Option<Cache>,
+        block_cache: &Cache,
     ) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &config.storage.data_dir,
@@ -1720,10 +1714,8 @@ impl ConfiguredRaftEngine for RocksEngine {
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-        let mut raftdb =
-            engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
-                .expect("failed to open raftdb");
-        raftdb.set_shared_block_cache(block_cache.is_some());
+        let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
+            .expect("failed to open raftdb");
 
         if should_dump {
             let raft_engine =
@@ -1741,14 +1733,10 @@ impl ConfiguredRaftEngine for RocksEngine {
         Some(self)
     }
 
-    fn register_config(&self, cfg_controller: &mut ConfigController, share_cache: bool) {
+    fn register_config(&self, cfg_controller: &mut ConfigController) {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DbConfigManger::new(
-                Arc::new(self.clone()),
-                DbType::Raft,
-                share_cache,
-            )),
+            Box::new(DbConfigManger::new(self.clone(), DbType::Raft)),
         );
     }
 }
@@ -1758,7 +1746,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
         config: &TikvConfig,
         env: &Arc<Env>,
         key_manager: &Option<Arc<DataKeyManager>>,
-        block_cache: &Option<Cache>,
+        block_cache: &Cache,
     ) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &config.storage.data_dir,
@@ -1812,38 +1800,34 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         );
 
         // Create kv engine.
-        let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
+        let builder = KvEngineFactoryBuilder::new(env, &self.config, block_cache)
             .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
                 router: Mutex::new(self.router.clone()),
             }))
             .region_info_accessor(self.region_info_accessor.clone())
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
-        if let Some(cache) = block_cache {
-            builder = builder.block_cache(cache);
-        }
-        let factory = Arc::new(builder.build());
+        let factory = Box::new(builder.build());
         let kv_engine = factory
-            .create_shared_db()
+            .create_shared_db(&self.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        let engines = Engines::new(kv_engine, raft_engine);
+        let engines = Engines::new(kv_engine.clone(), raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DbConfigManger::new(
-                factory.clone(),
-                DbType::Kv,
-                self.config.storage.block_cache.shared,
-            )),
+            Box::new(DbConfigManger::new(kv_engine.clone(), DbType::Kv)),
         );
-        self.tablet_factory = Some(factory.clone());
-        engines
-            .raft
-            .register_config(cfg_controller, self.config.storage.block_cache.shared);
+        let reg = TabletRegistry::new(Box::new(SingletonFactory::new(kv_engine)), &self.store_path)
+            .unwrap();
+        // It always use the singleton kv_engine, use arbitrary id and suffix.
+        let ctx = TabletContext::with_infinite_region(0, Some(0));
+        reg.load(ctx, false).unwrap();
+        self.tablet_registry = Some(reg.clone());
+        engines.raft.register_config(cfg_controller);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
-            factory,
+            reg,
             engines.raft.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
         ));
@@ -1995,7 +1979,7 @@ impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
 }
 
 pub struct EnginesResourceInfo {
-    tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Sync + Send>,
+    tablet_registry: TabletRegistry<RocksEngine>,
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
@@ -2005,12 +1989,12 @@ impl EnginesResourceInfo {
     const SCALE_FACTOR: u64 = 100;
 
     fn new(
-        tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Sync + Send>,
+        tablet_registry: TabletRegistry<RocksEngine>,
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
         EnginesResourceInfo {
-            tablet_factory,
+            tablet_registry,
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
@@ -2020,7 +2004,7 @@ impl EnginesResourceInfo {
     pub fn update(
         &self,
         _now: Instant,
-        cached_latest_tablets: &mut HashMap<u64, (u64, RocksEngine)>,
+        cached_latest_tablets: &mut HashMap<u64, CachedTablet<RocksEngine>>,
     ) {
         let mut normalized_pending_bytes = 0;
 
@@ -2043,19 +2027,11 @@ impl EnginesResourceInfo {
             fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
 
-        self.tablet_factory
-            .for_each_opened_tablet(
-                &mut |id, suffix, db: &RocksEngine| match cached_latest_tablets.entry(id) {
-                    collections::HashMapEntry::Occupied(mut slot) => {
-                        if slot.get().0 < suffix {
-                            slot.insert((suffix, db.clone()));
-                        }
-                    }
-                    collections::HashMapEntry::Vacant(slot) => {
-                        slot.insert((suffix, db.clone()));
-                    }
-                },
-            );
+        self.tablet_registry
+            .for_each_opened_tablet(|id, db: &mut CachedTablet<RocksEngine>| {
+                cached_latest_tablets.insert(id, db.clone());
+                true
+            });
 
         // todo(SpadeA): Now, there's a potential race condition problem where the
         // tablet could be destroyed after the clone and before the fetching
@@ -2066,7 +2042,8 @@ impl EnginesResourceInfo {
         // propose another PR to tackle it such as destory tablet lazily in a GC
         // thread.
 
-        for (_, (_, tablet)) in cached_latest_tablets.iter() {
+        for (_, cache) in cached_latest_tablets.iter_mut() {
+            let Some(tablet) = cache.latest() else { continue };
             for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
                 fetch_engine_cf(tablet, cf, &mut normalized_pending_bytes);
             }
@@ -2110,9 +2087,9 @@ mod test {
         sync::{atomic::Ordering, Arc},
     };
 
-    use engine_rocks::{raw::Env, RocksEngine};
+    use engine_rocks::raw::Env;
     use engine_traits::{
-        FlowControlFactorsExt, MiscExt, OpenOptions, SyncMutable, TabletFactory, CF_DEFAULT,
+        FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT,
     };
     use tempfile::Builder;
     use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
@@ -2129,19 +2106,18 @@ mod test {
         config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
+        let cache = config.storage.block_cache.build_shared_cache();
 
-        let builder = KvEngineFactoryBuilder::new(env, &config, path.path());
-        let factory = builder.build_v2();
+        let factory = KvEngineFactoryBuilder::new(env, &config, cache).build();
+        let reg = TabletRegistry::new(Box::new(factory), path.path()).unwrap();
 
         for i in 1..6 {
-            let _ = factory
-                .open_tablet(i, Some(10), OpenOptions::default().set_create_new(true))
-                .unwrap();
+            let ctx = TabletContext::with_infinite_region(i, Some(10));
+            reg.load(ctx, true).unwrap();
         }
 
-        let tablet = factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
-            .unwrap();
+        let mut cached = reg.get(1).unwrap();
+        let mut tablet = cached.latest().unwrap();
         // Prepare some data for two tablets of the same region. So we can test whether
         // we fetch the bytes from the latest one.
         for i in 1..21 {
@@ -2155,9 +2131,9 @@ mod test {
             .unwrap()
             .unwrap();
 
-        let tablet = factory
-            .open_tablet(1, Some(20), OpenOptions::default().set_create_new(true))
-            .unwrap();
+        let ctx = TabletContext::with_infinite_region(1, Some(20));
+        reg.load(ctx, true).unwrap();
+        tablet = cached.latest().unwrap();
 
         for i in 1..11 {
             tablet.put_cf(CF_DEFAULT, b"key", b"val").unwrap();
@@ -2172,9 +2148,9 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(Arc::new(factory), None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(reg, None, 10));
 
-        let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
+        let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);
 
         // The memory allocation should be reserved

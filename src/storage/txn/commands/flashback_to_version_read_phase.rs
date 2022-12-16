@@ -1,5 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Bound;
+
 // #[PerformanceCriticalPath]
 use txn_types::{Key, Lock, TimeStamp};
 
@@ -109,20 +111,25 @@ impl CommandExt for FlashbackToVersionReadPhase {
 ///     - Scan all locks.
 ///     - Rollback all these locks.
 ///   2. [PrepareFlashback] Prewrite phase:
-///     - Prewrite the `self.start_key` specifically to prevent the
-///       `resolved_ts` from advancing.
+///     - Prewrite the first user key after `self.start_key` specifically to
+///       prevent the `resolved_ts` from advancing.
 ///   3. [FinishFlashback] FlashbackWrite phase:
 ///     - Scan all the latest writes and their corresponding values at
 ///       `self.version`.
 ///     - Write the old MVCC version writes again for all these keys with
-///       `self.commit_ts` excluding the `self.start_key`.
+///       `self.commit_ts` excluding the first user key after `self.start_key`.
 ///   4. [FinishFlashback] Commit phase:
-///     - Commit the `self.start_key` we write at the second phase to finish the
-///       flashback.
+///     - Commit the first user key after `self.start_key` we write at the
+///       second phase to finish the flashback.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
+        // Filter out the SST that does not have a newer version than `self.version` in
+        // `CF_WRITE`, i.e, whose latest `commit_ts` <= `self.version` in the later
+        // scan. By doing this, we can only flashback those keys that have version
+        // changed since `self.version` as much as possible.
+        reader.set_hint_min_ts(Some(Bound::Excluded(self.version)));
         let mut start_key = self.start_key.clone();
         let next_state = match self.state {
             FlashbackToVersionState::RollbackLock { next_lock_key, .. } => {
@@ -141,9 +148,12 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     //   completion of the 2pc.
                     // - To make sure the key locked in the latch is the same as the actual key
                     //   written, we pass it to the key in `process_write' after getting it.
-                    let key_to_lock = if let Some(first_key) =
-                        get_first_user_key(&mut reader, &self.start_key, self.end_key.as_ref())?
-                    {
+                    let key_to_lock = if let Some(first_key) = get_first_user_key(
+                        &mut reader,
+                        &self.start_key,
+                        self.end_key.as_ref(),
+                        self.version,
+                    )? {
                         first_key
                     } else {
                         // If the key is None return directly
@@ -180,9 +190,12 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     // 2pc. So When overwriting the write, we skip the immediate
                     // write of this key and instead put it after the completion
                     // of the 2pc.
-                    next_write_key = if let Some(first_key) =
-                        get_first_user_key(&mut reader, &self.start_key, self.end_key.as_ref())?
-                    {
+                    next_write_key = if let Some(first_key) = get_first_user_key(
+                        &mut reader,
+                        &self.start_key,
+                        self.end_key.as_ref(),
+                        self.version,
+                    )? {
                         first_key
                     } else {
                         // If the key is None return directly

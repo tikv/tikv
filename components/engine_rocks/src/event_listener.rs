@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::{PersistenceListener, RaftEngine};
 use file_system::{get_io_type, set_io_type, IoType};
 use regex::Regex;
 use rocksdb::{
-    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MutableStatus,
-    SubcompactionJobInfo, WriteStallInfo,
+    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MemTableInfo,
+    MutableStatus, SubcompactionJobInfo, WriteStallInfo,
 };
 use tikv_util::{error, metrics::CRITICAL_ERROR, set_panic_mark, warn, worker::Scheduler};
 
@@ -176,6 +177,26 @@ fn resolve_sst_filename_from_err(err: &str) -> Option<String> {
     };
     let filename = matches.get(0).unwrap().as_str().to_owned();
     Some(filename)
+}
+
+pub struct RocksPersistenceListener<ER>(PersistenceListener<ER>);
+
+impl<ER> RocksPersistenceListener<ER> {
+    pub fn new(listener: PersistenceListener<ER>) -> RocksPersistenceListener<ER> {
+        RocksPersistenceListener(listener)
+    }
+}
+
+impl<ER: RaftEngine> rocksdb::EventListener for RocksPersistenceListener<ER> {
+    fn on_memtable_sealed(&self, info: &MemTableInfo) {
+        self.0
+            .on_memtable_sealed(info.cf_name().to_string(), info.first_seqno());
+    }
+
+    fn on_flush_completed(&self, job: &FlushJobInfo) {
+        self.0
+            .on_flush_completed(job.cf_name(), job.smallest_seqno());
+    }
 }
 
 #[cfg(test)]

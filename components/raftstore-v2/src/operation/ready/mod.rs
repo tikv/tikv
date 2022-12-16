@@ -22,15 +22,12 @@ mod snapshot;
 
 use std::{cmp, time::Instant};
 
-use engine_traits::{KvEngine, MiscExt, OpenOptions, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use error_code::ErrorCodeExt;
-use kvproto::{
-    raft_cmdpb::AdminCmdType,
-    raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData},
-};
+use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use protobuf::Message as _;
-use raft::{eraftpb, Ready, StateRole, INVALID_ID};
-use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
+use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
+use raftstore::store::{util, FetchedLogs, ReadProgress, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 
@@ -43,7 +40,6 @@ use crate::{
     fsm::PeerFsmDelegate,
     raft::{Peer, Storage},
     router::{ApplyTask, PeerTick},
-    Result,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
@@ -114,16 +110,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             unimplemented!();
             // return;
         }
+
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
         let from_peer = msg.take_from_peer();
         if self.is_leader() && from_peer.get_id() != INVALID_ID {
             self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
         }
-        self.insert_peer_cache(from_peer);
-        if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+        self.insert_peer_cache(msg.take_from_peer());
+        if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
+            self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
+        } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
             error!(self.logger, "raft step error"; "err" => ?e);
         }
+
         self.set_has_ready();
     }
 
@@ -165,11 +165,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// If the recipient can't be found, `None` is returned.
     #[inline]
-    fn build_raft_message<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        msg: eraftpb::Message,
-    ) -> Option<RaftMessage> {
+    fn build_raft_message(&mut self, msg: eraftpb::Message) -> Option<RaftMessage> {
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
@@ -261,7 +257,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
-        self.schedule_apply_committed_entries(ctx, committed_entries);
+        self.schedule_apply_committed_entries(committed_entries);
     }
 
     /// Processing the ready of raft. A detail description of how it's handled
@@ -316,7 +312,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !ready.messages().is_empty() {
             debug_assert!(self.is_leader());
             for msg in ready.take_messages() {
-                if let Some(msg) = self.build_raft_message(ctx, msg) {
+                if let Some(msg) = self.build_raft_message(msg) {
                     self.send_raft_message(ctx, msg);
                 }
             }
@@ -343,7 +339,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             write_task.messages = ready
                 .take_persisted_messages()
                 .into_iter()
-                .flat_map(|m| self.build_raft_message(ctx, m))
+                .flat_map(|m| self.build_raft_message(m))
                 .collect();
         }
         if !self.serving() {
@@ -403,12 +399,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let persisted_number = self.async_writer.persisted_number();
         self.raft_group_mut().on_persist_ready(persisted_number);
-        let persisted_index = self.raft_group().raft.raft_log.persisted;
-        /// The apply snapshot process order would be:
-        /// - Get the snapshot from the ready
-        /// - Wait for async writer to load this tablet
-        /// In this step, the snapshot has loaded finish, but some apply state
-        /// need to update.
+        let persisted_index = self.persisted_index();
+        // The apply snapshot process order would be:
+        // - Get the snapshot from the ready
+        // - Wait for async writer to load this tablet
+        // In this step, the snapshot loading has been finished, but some apply
+        // state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
         }
@@ -462,9 +458,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // latency.
                     self.raft_group_mut().skip_bcast_commit(false);
 
+                    // Init the in-memory pessimistic lock table when the peer becomes leader.
+                    self.activate_in_memory_pessimistic_locks();
+
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
                     self.require_updating_max_ts(ctx);
+
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
 
@@ -473,6 +473,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
                     self.storage_mut().cancel_generating_snap(None);
+                    self.clear_in_memory_pessimistic_locks();
                 }
                 _ => {}
             }
@@ -537,7 +538,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 ready.snapshot(),
                 write_task,
                 ctx.snap_mgr.clone(),
-                ctx.tablet_factory.clone(),
+                ctx.tablet_registry.clone(),
             ) {
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)
             }
@@ -554,9 +555,15 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             write_task.raft_state = Some(entry_storage.raft_state().clone());
         }
         if !ever_persisted {
-            let mut extra_states = ExtraStates::new(self.apply_state().clone());
-            extra_states.set_region_state(self.region_state().clone());
-            write_task.extra_write.set_v2(extra_states);
+            let region_id = self.region().get_id();
+            let raft_engine = self.entry_storage().raft_engine();
+            let lb = write_task
+                .extra_write
+                .ensure_v2(|| raft_engine.log_batch(3));
+            lb.put_apply_state(region_id, 0, self.apply_state())
+                .unwrap();
+            lb.put_region_state(region_id, 0, self.region_state())
+                .unwrap();
             self.set_ever_persisted();
         }
     }

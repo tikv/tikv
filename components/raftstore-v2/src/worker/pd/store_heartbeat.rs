@@ -247,7 +247,6 @@ where
 
         // TODO: slow score
 
-        let router = self.router.clone();
         let resp = self.pd_client.store_heartbeat(stats, None, None);
         let logger = self.logger.clone();
         let f = async move {
@@ -260,12 +259,12 @@ where
 
     /// Returns (capacity, used, available).
     fn collect_engine_size(&self) -> Option<(u64, u64, u64)> {
-        let disk_stats = match fs2::statvfs(self.tablet_factory.tablets_path()) {
+        let disk_stats = match fs2::statvfs(self.tablet_registry.tablet_root()) {
             Err(e) => {
                 error!(
                     self.logger,
                     "get disk stat for rocksdb failed";
-                    "engine_path" => self.tablet_factory.tablets_path().display(),
+                    "engine_path" => self.tablet_registry.tablet_root().display(),
                     "err" => ?e
                 );
                 return None;

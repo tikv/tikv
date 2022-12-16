@@ -453,7 +453,7 @@ where
         if txn_extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();
         }
-        if txn_extra.for_flashback {
+        if txn_extra.allowed_in_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
         header.set_flags(flags);
@@ -555,7 +555,7 @@ where
             flags |= WriteBatchFlags::STALE_READ.bits();
             header.set_flag_data(data.into());
         }
-        if ctx.for_flashback {
+        if ctx.allowed_in_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
         header.set_flags(flags);

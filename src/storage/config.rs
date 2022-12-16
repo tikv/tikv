@@ -31,12 +31,21 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EngineType {
+    RaftKv,
+    RaftKv2,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[online_config(skip)]
     pub data_dir: String,
+    #[online_config(skip)]
+    pub engine: EngineType,
     // Replaced by `GcConfig.ratio_threshold`. Keep it for backward compatibility.
     #[online_config(skip)]
     pub gc_ratio_threshold: f64,
@@ -75,6 +84,7 @@ impl Default for Config {
         let cpu_num = SysQuota::cpu_cores_quota();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
+            engine: EngineType::RaftKv,
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
@@ -194,7 +204,7 @@ impl Default for FlowControlConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct BlockCacheConfig {
     #[online_config(skip)]
-    pub shared: bool,
+    pub shared: Option<bool>,
     pub capacity: Option<ReadableSize>,
     #[online_config(skip)]
     pub num_shard_bits: i32,
@@ -209,7 +219,7 @@ pub struct BlockCacheConfig {
 impl Default for BlockCacheConfig {
     fn default() -> BlockCacheConfig {
         BlockCacheConfig {
-            shared: true,
+            shared: None,
             capacity: None,
             num_shard_bits: 6,
             strict_capacity_limit: false,
@@ -229,9 +239,9 @@ impl BlockCacheConfig {
         }
     }
 
-    pub fn build_shared_cache(&self) -> Option<Cache> {
-        if !self.shared {
-            return None;
+    pub fn build_shared_cache(&self) -> Cache {
+        if self.shared == Some(false) {
+            warn!("storage.block-cache.shared is deprecated, cache is always shared.");
         }
         let capacity = match self.capacity {
             None => {
@@ -248,7 +258,7 @@ impl BlockCacheConfig {
         if let Some(allocator) = self.new_memory_allocator() {
             cache_opts.set_memory_allocator(allocator);
         }
-        Some(Cache::new_lru_cache(cache_opts))
+        Cache::new_lru_cache(cache_opts)
     }
 
     fn new_memory_allocator(&self) -> Option<MemoryAllocator> {

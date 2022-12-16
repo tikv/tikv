@@ -16,13 +16,9 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::cmp;
-
-use batch_system::{Fsm, FsmScheduler, Mailbox};
 use engine_traits::{KvEngine, RaftEngine, WriteBatch, WriteOptions};
-use kvproto::{
-    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader},
-    raft_serverpb::RegionLocalState,
+use kvproto::raft_cmdpb::{
+    AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
@@ -31,16 +27,12 @@ use raftstore::{
     store::{
         cmd_resp,
         fsm::{
-            apply::{
-                self, APPLY_WB_SHRINK_SIZE, DEFAULT_APPLY_WB_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP,
-            },
+            apply::{self, APPLY_WB_SHRINK_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP},
             Proposal,
         },
         local_metrics::RaftMetrics,
-        metrics::*,
         msg::ErrorCallback,
-        util::{self, admin_cmd_epoch_lookup},
-        WriteCallback,
+        util, WriteCallback,
     },
     Error, Result,
 };
@@ -50,16 +42,15 @@ use tikv_util::{box_err, time::monotonic_raw_now};
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
-    operation::GenSnapTask,
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, PeerMsg},
+    router::{ApplyRes, ApplyTask, CmdResChannel},
 };
 
 mod admin;
 mod control;
 mod write;
 
-pub use admin::{AdminCmdResult, SplitInit, SplitResult};
+pub use admin::{AdminCmdResult, SplitInit, SplitResult, SPLIT_PREFIX};
 pub use control::ProposalControl;
 pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
@@ -122,15 +113,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn schedule_apply_fsm<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let region_state = self.storage().region_state().clone();
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
-        let tablet = self.tablet().clone();
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
             self.peer().clone(),
             region_state,
             mailbox,
-            tablet,
-            store_ctx.tablet_factory.clone(),
+            store_ctx.tablet_registry.clone(),
             read_scheduler,
             logger,
         );
@@ -166,7 +155,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return Err(e);
         }
         if let Err(mut e) = util::check_region_epoch(req, self.region(), true) {
-            if let Error::EpochNotMatch(_, new_regions) = &mut e {
+            if let Error::EpochNotMatch(_, _new_regions) = &mut e {
                 // TODO: query sibling regions.
                 metrics.invalid_proposal.epoch_not_match.inc();
             }
@@ -248,15 +237,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn schedule_apply_committed_entries<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        committed_entries: Vec<Entry>,
-    ) {
-        let last_entry = match committed_entries.last() {
-            Some(e) => e,
-            None => return,
-        };
+    pub fn schedule_apply_committed_entries(&mut self, committed_entries: Vec<Entry>) {
+        if committed_entries.is_empty() {
+            return;
+        }
         let current_term = self.term();
         let mut entry_and_proposals = vec![];
         let queue = self.proposals_mut();
@@ -298,6 +282,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         for admin_res in apply_res.admin_result {
             match admin_res {
+                AdminCmdResult::None => unreachable!(),
                 AdminCmdResult::ConfChange(conf_change) => {
                     self.on_apply_res_conf_change(ctx, conf_change)
                 }
@@ -305,7 +290,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     regions,
                     derived_index,
                     tablet_index,
-                }) => self.on_ready_split_region(ctx, derived_index, tablet_index, regions),
+                }) => self.on_apply_res_split(ctx, derived_index, tablet_index, regions),
+                AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
             }
         }
 
@@ -342,14 +328,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
             if !e.get_data().is_empty() {
                 let mut set_save_point = false;
-                if let Some(wb) = self.write_batch_mut() {
+                if let Some(wb) = &mut self.write_batch {
                     wb.set_save_point();
                     set_save_point = true;
                 }
                 let resp = match self.apply_entry(&e).await {
                     Ok(resp) => resp,
                     Err(e) => {
-                        if let Some(wb) = self.write_batch_mut() {
+                        if let Some(wb) = &mut self.write_batch {
                             if set_save_point {
                                 wb.rollback_to_save_point().unwrap();
                             } else {
@@ -449,7 +435,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::PrepareMerge => unimplemented!(),
                 AdminCmdType::CommitMerge => unimplemented!(),
                 AdminCmdType::RollbackMerge => unimplemented!(),
-                AdminCmdType::TransferLeader => unreachable!(),
+                AdminCmdType::TransferLeader => {
+                    self.apply_transfer_leader(admin_req, entry.term)?
+                }
                 AdminCmdType::ChangePeer => {
                     self.apply_conf_change(entry.get_index(), admin_req, conf_change.unwrap())?
                 }
@@ -466,7 +454,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
             };
 
-            self.push_admin_result(admin_result);
+            match admin_result {
+                AdminCmdResult::None => (),
+                _ => self.push_admin_result(admin_result),
+            }
             let mut resp = new_response(req.get_header());
             resp.set_admin_response(admin_resp);
             Ok(resp)
@@ -501,16 +492,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
     #[inline]
     pub fn flush(&mut self) {
-        if let Some(wb) = self.write_batch_mut() && !wb.is_empty() {
+        if let Some(wb) = &mut self.write_batch && !wb.is_empty() {
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);
             if let Err(e) = wb.write_opt(&write_opt) {
-                panic!("failed to write data: {:?}", self.logger.list());
+                panic!("failed to write data: {:?}: {:?}", self.logger.list(), e);
             }
             if wb.data_size() <= APPLY_WB_SHRINK_SIZE {
                 wb.clear();
             } else {
-                self.write_batch_mut().take();
+                self.write_batch.take();
             }
         }
         let callbacks = self.callbacks_mut();

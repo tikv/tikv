@@ -3,9 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
-use engine_traits::Snapshot;
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use tikv_util::time::Instant;
 
@@ -132,6 +130,7 @@ pub enum PeerMsg {
     Start,
     /// Messages from peer to peer in the same store
     SplitInit(Box<SplitInit>),
+    SplitInitFinish(u64),
     /// A message only used to notify a peer.
     Noop,
     /// A message that indicates an asynchronous write has finished.
@@ -172,6 +171,13 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::SplitInit(_) => {
                 write!(fmt, "Split initialization")
+            }
+            PeerMsg::SplitInitFinish(region_id) => {
+                write!(
+                    fmt,
+                    "Split initialization finished from region {}",
+                    region_id
+                )
             }
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {

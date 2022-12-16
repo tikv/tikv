@@ -90,6 +90,7 @@ a = "b"
 
 [storage]
 data-dir = "/var"
+engine = "raft-kv2"
 gc-ratio-threshold = 1.2
 max-key-size = 4096
 scheduler-concurrency = 123
@@ -102,7 +103,6 @@ enable-ttl = true
 ttl-check-poll-interval = "0s"
 
 [storage.block-cache]
-shared = true
 capacity = "40GB"
 num-shard-bits = 10
 strict-capacity-limit = true
@@ -269,7 +269,9 @@ max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
+enable-multi-batch-write = true
 enable-unordered-write = true
+allow-concurrent-memtable-write = false
 
 [rocksdb.titan]
 enabled = true
@@ -624,6 +626,15 @@ num-threads = 456
 batch-size = 7
 s3-multi-part-size = "15MB"
 sst-max-size = "789MB"
+
+[log-backup]
+max-flush-interval = "11s"
+num-threads = 7
+enable = true
+temp-path = "./stream"
+file-size-limit = "5GiB"
+initial-scan-pending-memory-quota = "2KiB"
+initial-scan-rate-limit = "3MiB"
 
 [backup.hadoop]
 home = "/root/hadoop"

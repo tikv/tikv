@@ -5,7 +5,7 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     thread,
     time::{Duration, Instant},
@@ -17,26 +17,26 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{self, Receiver, Sender, TrySendError};
 use engine_test::{
     ctor::{CfOptions, DbOptions},
-    kv::{KvTestEngine, TestTabletFactoryV2},
+    kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
+use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
     metapb::{self, RegionEpoch, Store},
-    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request},
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
 use raftstore::store::{
     region_meta::{RegionLocalState, RegionMeta},
-    Config, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+    Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
 };
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
-    Bootstrap, StoreMeta, StoreSystem,
+    Bootstrap, StoreSystem,
 };
 use slog::{debug, o, Logger};
 use tempfile::TempDir;
@@ -45,8 +45,20 @@ use tikv_util::{
     config::{ReadableDuration, VersionTrack},
     store::new_peer,
 };
+use txn_types::WriteBatchFlags;
 
-#[derive(Clone)]
+pub fn check_skip_wal(path: &str) {
+    let mut found = false;
+    for f in std::fs::read_dir(path).unwrap() {
+        let e = f.unwrap();
+        if e.path().extension().map_or(false, |ext| ext == "log") {
+            found = true;
+            assert_eq!(e.metadata().unwrap().len(), 0, "{}", e.path().display());
+        }
+    }
+    assert!(found, "no WAL found in {}", path);
+}
+
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
@@ -152,6 +164,17 @@ impl TestRouter {
         req
     }
 
+    pub fn stale_snapshot(&mut self, region_id: u64) -> RegionSnapshot<KvTestSnapshot> {
+        let mut req = self.new_request_for(region_id);
+        let header = req.mut_header();
+        header.set_flags(WriteBatchFlags::STALE_READ.bits());
+        header.set_flag_data(vec![0; 8]);
+        let mut snap_req = Request::default();
+        snap_req.set_cmd_type(CmdType::Snap);
+        req.mut_requests().push(snap_req);
+        block_on(self.get_snapshot(req)).unwrap()
+    }
+
     pub fn region_detail(&self, region_id: u64) -> metapb::Region {
         let RegionLocalState {
             id,
@@ -182,12 +205,10 @@ impl TestRouter {
 pub struct RunningState {
     store_id: u64,
     pub raft_engine: RaftTestEngine,
-    pub factory: Arc<TestTabletFactoryV2>,
+    pub registry: TabletRegistry<KvTestEngine>,
     pub system: StoreSystem<KvTestEngine, RaftTestEngine>,
     pub cfg: Arc<VersionTrack<Config>>,
     pub transport: TestTransport,
-    // We need this to clear the ref counts of CachedTablet when shutdown
-    store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
 }
 
 impl RunningState {
@@ -200,16 +221,13 @@ impl RunningState {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
     ) -> (TestRouter, TabletSnapManager, Self) {
-        let cf_opts = ALL_CFS
+        let cf_opts = DATA_CFS
             .iter()
             .copied()
             .map(|cf| (cf, CfOptions::default()))
             .collect();
-        let factory = Arc::new(TestTabletFactoryV2::new(
-            path,
-            DbOptions::default(),
-            cf_opts,
-        ));
+        let factory = Box::new(TestTabletFactory::new(DbOptions::default(), cf_opts));
+        let registry = TabletRegistry::new(factory, path).unwrap();
         let raft_engine =
             engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
                 .unwrap();
@@ -218,18 +236,15 @@ impl RunningState {
         let mut store = Store::default();
         store.set_id(store_id);
         if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
-            if factory.exists(region.get_id(), RAFT_INIT_LOG_INDEX) {
-                factory
-                    .destroy_tablet(region.get_id(), RAFT_INIT_LOG_INDEX)
-                    .unwrap();
+            let factory = registry.tablet_factory();
+            let path = registry.tablet_path(region.get_id(), RAFT_INIT_LOG_INDEX);
+            let ctx = TabletContext::new(&region, Some(RAFT_INIT_LOG_INDEX));
+            if factory.exists(&path) {
+                registry.remove(region.get_id());
+                factory.destroy_tablet(ctx.clone(), &path).unwrap();
             }
-            factory
-                .open_tablet(
-                    region.get_id(),
-                    Some(RAFT_INIT_LOG_INDEX),
-                    OpenOptions::default().set_create_new(true),
-                )
-                .unwrap();
+            // Create the tablet without loading it in cache.
+            factory.open_tablet(ctx, &path).unwrap();
         }
 
         let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(
@@ -238,7 +253,7 @@ impl RunningState {
             logger.clone(),
         );
 
-        let router = RaftRouter::new(store_id, router);
+        let router = RaftRouter::new(store_id, registry.clone(), router);
         let store_meta = router.store_meta().clone();
         let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap());
         snap_mgr.init().unwrap();
@@ -247,11 +262,11 @@ impl RunningState {
                 store_id,
                 cfg.clone(),
                 raft_engine.clone(),
-                factory.clone(),
+                registry.clone(),
                 transport.clone(),
                 pd_client.clone(),
                 router.store_router(),
-                store_meta.clone(),
+                store_meta,
                 snap_mgr.clone(),
                 concurrency_manager,
                 causal_ts_provider,
@@ -261,11 +276,10 @@ impl RunningState {
         let state = Self {
             store_id,
             raft_engine,
-            factory,
+            registry,
             system,
             cfg,
             transport,
-            store_meta,
         };
         (TestRouter(router), snap_mgr, state)
     }
@@ -313,8 +327,9 @@ impl TestNode {
         router
     }
 
-    pub fn tablet_factory(&self) -> &Arc<TestTabletFactoryV2> {
-        &self.running_state().unwrap().factory
+    #[allow(dead_code)]
+    pub fn tablet_registry(&self) -> &TabletRegistry<KvTestEngine> {
+        &self.running_state().unwrap().registry
     }
 
     pub fn pd_client(&self) -> &Arc<RpcClient> {
@@ -322,10 +337,7 @@ impl TestNode {
     }
 
     fn stop(&mut self) {
-        if let Some(state) = std::mem::take(&mut self.running_state) {
-            let mut meta = state.store_meta.lock().unwrap();
-            meta.tablet_caches.clear();
-        }
+        self.running_state.take();
     }
 
     fn restart(&mut self) -> TestRouter {
@@ -420,7 +432,7 @@ pub struct Cluster {
     pd_server: test_pd::Server<Service>,
     nodes: Vec<TestNode>,
     receivers: Vec<Receiver<RaftMessage>>,
-    routers: Vec<TestRouter>,
+    pub routers: Vec<TestRouter>,
     logger: Logger,
 }
 
@@ -463,16 +475,13 @@ impl Cluster {
     }
 
     pub fn restart(&mut self, offset: usize) {
+        self.routers.remove(offset);
         let router = self.nodes[offset].restart();
-        self.routers[offset] = router;
+        self.routers.insert(offset, router);
     }
 
     pub fn node(&self, offset: usize) -> &TestNode {
         &self.nodes[offset]
-    }
-
-    pub fn router(&self, offset: usize) -> TestRouter {
-        self.routers[offset].clone()
     }
 
     /// Send messages and wait for side effects are all handled.

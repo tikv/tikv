@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 encryption = { workspace = true }
 engine_traits = { workspace = true }
+codec = { workspace = true }
 file_system = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.4.0"
@@ -22,3 +23,6 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tikv_util = { workspace = true }
 time = "0.1"
 tracker = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.0"

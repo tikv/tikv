@@ -11,23 +11,21 @@
 //! Follower's read index and replica read is implemenented replica module.
 //! Leader's read index and lease renew is implemented in lease module.
 
-use std::{cmp, sync::Arc};
+use std::cmp;
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType},
-    raft_serverpb::RaftApplyState,
 };
 use raft::Ready;
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, fsm::ApplyMetrics, local_metrics::RaftMetrics,
-        metrics::RAFT_READ_INDEX_PENDING_COUNT, msg::ErrorCallback, region_meta::RegionMeta, util,
-        util::LeaseState, GroupState, ReadCallback, ReadIndexContext, ReadProgress, RequestPolicy,
-        Transport,
+        cmd_resp, local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT,
+        msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
+        ReadIndexContext, ReadProgress, RequestPolicy, Transport,
     },
     Error, Result,
 };
@@ -40,8 +38,7 @@ use crate::{
     fsm::PeerFsmDelegate,
     raft::Peer,
     router::{
-        message::RaftRequest, ApplyRes, DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult,
-        ReadResponse,
+        message::RaftRequest, DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult, ReadResponse,
     },
 };
 
@@ -146,7 +143,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // TODO: add flashback_state check
 
         // Check whether the store has the right peer to handle the request.
-        let leader_id = self.leader_id();
         let request = msg.get_requests();
 
         // TODO: add force leader
@@ -158,7 +154,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let allow_replica_read = msg.get_header().get_replica_read();
         if !self.is_leader() && !is_read_index_request && !allow_replica_read {
             raft_metrics.invalid_proposal.not_leader.inc();
-            return Err(Error::NotLeader(self.region_id(), None));
+            return Err(Error::NotLeader(self.region_id(), self.leader()));
         }
 
         // peer_id must be the same as peer's.
@@ -186,7 +182,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     fn read_index<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
         ch: QueryResChannel,
     ) {
         // TODO: add pre_read_index to handle splitting or merging
@@ -222,7 +218,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             if self.ready_to_handle_read() {
                 while let Some(mut read) = self.pending_reads_mut().pop_front() {
-                    self.respond_read_index(&mut read, ctx);
+                    self.respond_read_index(&mut read);
                 }
             }
         }
@@ -264,9 +260,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 && read.cmds()[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
             if is_read_index_request {
-                self.respond_read_index(&mut read, ctx);
+                self.respond_read_index(&mut read);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
-                self.respond_replica_read(&mut read, ctx);
+                self.respond_replica_read(&mut read);
             } else {
                 // TODO: `ReadIndex` requests could be blocked.
                 self.pending_reads_mut().push_front(read);
@@ -388,7 +384,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // V2 doesn't persist commit index and term, fill them with in-memory values.
         meta.raft_apply.commit_index = cmp::min(
             self.raft_group().raft.raft_log.committed,
-            self.raft_group().raft.raft_log.persisted,
+            self.persisted_index(),
         );
         meta.raft_apply.commit_term = self
             .raft_group()
@@ -416,7 +412,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.post_pending_read_index_on_replica(ctx)
         } else if self.ready_to_handle_read() {
             while let Some(mut read) = self.pending_reads_mut().pop_front() {
-                self.respond_read_index(&mut read, ctx);
+                self.respond_read_index(&mut read);
             }
         }
         self.pending_reads_mut().gc();
@@ -426,8 +422,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if progress_to_be_updated && self.is_leader() {
             // TODO: add coprocessor_host hook
             let progress = ReadProgress::applied_term(applied_term);
-            // TODO: remove it
-            self.add_reader_if_necessary(&ctx.store_meta);
             let mut meta = ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id()).unwrap();
             self.maybe_update_read_progress(reader, progress);

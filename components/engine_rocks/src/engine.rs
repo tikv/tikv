@@ -3,7 +3,7 @@
 use std::{any::Any, sync::Arc};
 
 use engine_traits::{
-    IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable, TabletAccessor,
+    FlushState, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
@@ -25,8 +25,8 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct RocksEngine {
     db: Arc<DB>,
-    shared_block_cache: bool,
     support_multi_batch_write: bool,
+    flush_state: Option<Arc<FlushState>>,
 }
 
 impl RocksEngine {
@@ -37,8 +37,8 @@ impl RocksEngine {
     pub fn from_db(db: Arc<DB>) -> Self {
         RocksEngine {
             db: db.clone(),
-            shared_block_cache: false,
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
+            flush_state: None,
         }
     }
 
@@ -50,16 +50,16 @@ impl RocksEngine {
         self.db.clone()
     }
 
-    pub fn set_shared_block_cache(&mut self, enable: bool) {
-        self.shared_block_cache = enable;
-    }
-
-    pub fn shared_block_cache(&self) -> bool {
-        self.shared_block_cache
-    }
-
     pub fn support_multi_batch_write(&self) -> bool {
         self.support_multi_batch_write
+    }
+
+    pub fn set_flush_state(&mut self, flush_state: Arc<FlushState>) {
+        self.flush_state = Some(flush_state);
+    }
+
+    pub fn flush_state(&self) -> Option<Arc<FlushState>> {
+        self.flush_state.clone()
     }
 }
 
@@ -95,7 +95,7 @@ impl KvEngine for RocksEngine {
                 }
             }
         }
-        flush_engine_properties(&self.db, instance, self.shared_block_cache);
+        flush_engine_properties(&self.db, instance);
         flush_engine_iostall_properties(&self.db, instance);
     }
 
@@ -106,16 +106,6 @@ impl KvEngine for RocksEngine {
     fn bad_downcast<T: 'static>(&self) -> &T {
         let e: &dyn Any = &self.db;
         e.downcast_ref().expect("bad engine downcast")
-    }
-}
-
-impl TabletAccessor<RocksEngine> for RocksEngine {
-    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
-        f(0, 0, self);
-    }
-
-    fn is_single_engine(&self) -> bool {
-        true
     }
 }
 
