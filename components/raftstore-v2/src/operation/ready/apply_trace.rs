@@ -15,6 +15,14 @@
 //! dropped). It's the recommended recovery start point. How these two indexes
 //! interact with each other can be found in the `ApplyTrace::recover`.
 //!
+//! The correctness of raft cf index relies on the fact that:
+//! - apply is sequential, so if any apply index is updated to apply trace, all
+//!   modification index must be set.
+//! - admin commands that marked by raft cf index must flush all data before
+//!   being executed. Note this contraint is not just for recovery, but also
+//!   necessary to guarantee safety of operations like split init or log gc.
+//! So data of logs before raft cf index must be applied and flushed to disk.
+//!
 //! All apply related states are associated with an apply index. During
 //! recovery states corresponding to the start index should be used.
 
@@ -177,30 +185,7 @@ impl ApplyTrace {
         let applied_region_state = engine
             .get_region_state(region_id, trace.admin.flushed)?
             .unwrap();
-        let data_index = trace.data_index();
-        // If index is not larger than applied_index, it means some CF doesn't have any
-        // data to flush.
-        if trace.admin.flushed < data_index {
-            let region_state = engine.get_region_state(region_id, data_index)?.unwrap();
-            // If there is no admin change, it means `applied_index` is not advanced in
-            // time. Otherwise, it may be waiting for flush of other tablets in cases like
-            // split.
-            if applied_region_state
-                .get_region()
-                .get_region_epoch()
-                .get_version()
-                == region_state.get_region().get_region_epoch().get_version()
-            {
-                trace.admin.flushed = data_index;
-                trace.admin.last_modified = data_index;
-            }
-        }
         Ok((trace, applied_region_state))
-    }
-
-    #[inline]
-    fn data_index(&self) -> u64 {
-        self.data_cfs.iter().map(|p| p.flushed).min().unwrap()
     }
 
     fn on_flush(&mut self, cf: &str, index: u64) {
@@ -235,33 +220,31 @@ impl ApplyTrace {
         if self.admin.flushed < self.admin.last_modified {
             return;
         }
-        let mut min_index = u64::MAX;
-        let mut max_modified = 0;
-        let mut all_flushed = true;
+        let mut min_unflushed_index = u64::MAX;
         for pr in self.data_cfs.iter() {
-            if pr.flushed < min_index {
-                min_index = pr.flushed;
+            if pr.flushed == pr.last_modified {
+                continue;
+            } else {
+                if pr.flushed < min_unflushed_index {
+                    min_unflushed_index = pr.flushed;
+                }
+                if pr.last_modified < min_unflushed_index {
+                    // Flush may race with recording modified, using the min index to make
+                    // sure admin pr should also record all modification.
+                    min_unflushed_index = pr.last_modified;
+                }
             }
-            // Flush may race with recording modified, using the min index to make
-            // sure admin pr should also record all modification.
-            if pr.last_modified < min_index {
-                min_index = pr.last_modified;
-            }
-            if pr.last_modified >= max_modified {
-                max_modified = pr.last_modified;
-            }
-            all_flushed &= pr.flushed == pr.last_modified;
         }
-        if min_index > self.admin.flushed {
-            if max_modified > self.admin.flushed {
-                // It means all modification must be received and there is no admin
-                // modification.
-                self.admin.flushed = cmp::min(max_modified, min_index);
-            }
-        } else if all_flushed {
-            // So all are flushed and no blocking admin result, we can advance the
-            // apply index up to memory.
+        if min_unflushed_index == u64::MAX {
+            // So all are flushed and there is no blocking admin command.
             self.admin.flushed = mem_index;
+        } else if min_unflushed_index > self.admin.flushed {
+            // It means all modification must be received and there is no admin
+            // modification.
+            self.admin.flushed = min_unflushed_index;
+        }
+        if self.admin.flushed > self.persisted_applied + 100 {
+            self.try_persist = true;
         }
         // TODO: persist admin.flushed every 10 minutes.
     }
@@ -436,7 +419,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         apply_trace.maybe_advance_admin_flushed(apply_index);
     }
 
-    pub fn record_data_trace(&mut self, modification: DataTrace) {
+    pub fn on_data_modified(&mut self, modification: DataTrace) {
         let apply_index = self.storage().entry_storage().applied_index();
         let apply_trace = self.storage_mut().apply_trace_mut();
         for (cf, index) in DATA_CFS.iter().zip(modification) {
@@ -588,5 +571,36 @@ mod tests {
         // Because modify is recorded, so we know there should be no admin
         // modification and index can be advanced.
         assert_eq!(5, trace.persisted_apply_index());
+    }
+
+    #[test]
+    fn test_advance_admin_flushed() {
+        let cases = &[
+            // When all are flushed, admin index should be advanced to latest.
+            ([(2, 2), (3, 3), (5, 5)], (3, 3), 5, 5),
+            ([(2, 2), (3, 3), (5, 5)], (5, 3), 6, 6),
+            // Any unflushed result should block advancing.
+            ([(2, 3), (3, 3), (5, 5)], (2, 2), 5, 2),
+            ([(2, 4), (3, 4), (5, 6)], (2, 2), 6, 2),
+            // But it should not make index go back.
+            ([(2, 4), (3, 4), (5, 6)], (3, 3), 6, 3),
+            // Unflush admin should not be advanced.
+            ([(2, 2), (3, 3), (5, 5)], (2, 3), 5, 2),
+            // Flushed may race with modification.
+            ([(2, 2), (3, 3), (6, 5)], (2, 2), 5, 5),
+            ([(8, 2), (9, 3), (7, 5)], (4, 4), 5, 5),
+            ([(8, 2), (9, 3), (7, 5)], (5, 5), 5, 5),
+        ];
+        for (case, (data_cfs, admin, mem_index, exp)) in cases.iter().enumerate() {
+            let mut trace = ApplyTrace::default();
+            for (i, (flushed, modified)) in data_cfs.iter().enumerate() {
+                trace.data_cfs[i].flushed = *flushed;
+                trace.data_cfs[i].last_modified = *modified;
+            }
+            trace.admin.flushed = admin.0;
+            trace.admin.last_modified = admin.1;
+            trace.maybe_advance_admin_flushed(*mem_index);
+            assert_eq!(trace.admin.flushed, *exp, "{case}");
+        }
     }
 }

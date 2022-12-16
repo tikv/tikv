@@ -316,7 +316,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !is_leader {
             entry_storage.compact_entry_cache(apply_res.applied_index + 1);
         }
-        self.record_data_trace(apply_res.modifications);
+        self.on_data_modified(apply_res.modifications);
         self.handle_read_on_apply(
             ctx,
             apply_res.applied_term,

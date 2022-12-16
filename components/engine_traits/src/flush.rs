@@ -14,37 +14,19 @@
 
 use std::{
     collections::LinkedList,
-    mem,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
 
-use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState};
-use tikv_util::Either;
-
 use crate::{RaftEngine, RaftLogBatch};
-
-#[derive(Debug)]
-enum StateChange {
-    ApplyState(RaftApplyState),
-    RegionState(RegionLocalState),
-}
-
-/// States that is related to apply progress.
-#[derive(Default, Debug)]
-struct StateChanges {
-    /// apply index, state change
-    changes: Vec<(u64, StateChange)>,
-}
 
 #[derive(Debug)]
 pub struct FlushProgress {
     cf: String,
     apply_index: u64,
     earliest_seqno: u64,
-    state_changes: StateChanges,
 }
 
 impl FlushProgress {
@@ -52,7 +34,6 @@ impl FlushProgress {
         debug_assert_eq!(self.cf, pr.cf);
         debug_assert!(self.apply_index <= pr.apply_index);
         self.apply_index = pr.apply_index;
-        self.state_changes.changes.extend(pr.state_changes.changes);
     }
 
     pub fn applied_index(&self) -> u64 {
@@ -72,7 +53,6 @@ impl FlushProgress {
 #[derive(Default, Debug)]
 pub struct FlushState {
     applied_index: AtomicU64,
-    changes: Mutex<StateChanges>,
 }
 
 impl FlushState {
@@ -86,50 +66,6 @@ impl FlushState {
     #[inline]
     pub fn applied_index(&self) -> u64 {
         self.applied_index.load(Ordering::Acquire)
-    }
-
-    /// Record an apply state change.
-    ///
-    /// This can be triggered by admin command like compact log. General log
-    /// apply will not trigger the change, instead they are recorded by
-    /// `set_applied_index`.
-    #[inline]
-    pub fn update_apply_state(&self, index: u64, state: RaftApplyState) {
-        self.changes
-            .lock()
-            .unwrap()
-            .changes
-            .push((index, StateChange::ApplyState(state)));
-    }
-
-    /// Record a region state change.
-    ///
-    /// This can be triggered by admin command like split/merge.
-    #[inline]
-    pub fn update_region_state(&self, index: u64, state: RegionLocalState) {
-        self.changes
-            .lock()
-            .unwrap()
-            .changes
-            .push((index, StateChange::RegionState(state)));
-    }
-
-    /// Check if there is any state change.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.changes.lock().unwrap().changes.is_empty()
-    }
-
-    /// Get the last changed state.
-    #[inline]
-    pub fn last_state(&self) -> Option<(u64, Either<RaftApplyState, RegionLocalState>)> {
-        let changes = self.changes.lock().unwrap();
-        let (index, state) = changes.changes.last()?;
-        let state = match state {
-            StateChange::ApplyState(state) => Either::Left(state.clone()),
-            StateChange::RegionState(state) => Either::Right(state.clone()),
-        };
-        Some((*index, state))
     }
 }
 
@@ -176,16 +112,13 @@ impl PersistenceListener {
     pub fn on_memtable_sealed(&self, cf: String, earliest_seqno: u64) {
         // The correctness relies on the assumption that there will be only one
         // thread writting to the DB and increasing apply index.
-        let mut state_changes = self.state.changes.lock().unwrap();
-        // Query within lock so it's correct even in manually flush.
+        // Apply index will be set within DB lock, so it's correct even with manual
+        // flush.
         let apply_index = self.state.applied_index.load(Ordering::SeqCst);
-        let changes = mem::take(&mut *state_changes);
-        drop(state_changes);
         self.progress.lock().unwrap().push_back(FlushProgress {
             cf,
             apply_index,
             earliest_seqno,
-            state_changes: changes,
         });
     }
 
@@ -228,6 +161,9 @@ impl PersistenceListener {
 
 impl<R: RaftEngine> StateStorage for R {
     fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: FlushProgress) {
+        if pr.apply_index == 0 {
+            return;
+        }
         let mut batch = self.log_batch(1);
         // TODO: It's possible that flush succeeds but fails to call
         // `on_flush_completed` before exit. In this case the flushed data will
@@ -235,21 +171,9 @@ impl<R: RaftEngine> StateStorage for R {
         // (1) persist flushed file numbers in `on_flush_begin` and (2) check
         // the file number in `on_compaction_begin`. After restart, (3) check if the
         // file exists. If (1) && ((2) || (3)), then we don't need to replay the data.
-        for (index, change) in pr.state_changes.changes {
-            match &change {
-                StateChange::ApplyState(state) => {
-                    batch.put_apply_state(region_id, index, state).unwrap();
-                }
-                StateChange::RegionState(state) => {
-                    batch.put_region_state(region_id, index, state).unwrap();
-                }
-            }
-        }
-        if pr.apply_index != 0 {
-            batch
-                .put_flushed_index(region_id, &pr.cf, tablet_index, pr.apply_index)
-                .unwrap();
-        }
+        batch
+            .put_flushed_index(region_id, &pr.cf, tablet_index, pr.apply_index)
+            .unwrap();
         self.consume(&mut batch, true).unwrap();
     }
 }

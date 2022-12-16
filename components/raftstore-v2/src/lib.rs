@@ -24,6 +24,7 @@
 #![feature(let_chains)]
 #![feature(array_windows)]
 #![feature(div_duration)]
+#![feature(box_into_inner)]
 
 mod batch;
 mod bootstrap;

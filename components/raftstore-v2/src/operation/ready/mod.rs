@@ -341,6 +341,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
+        self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
         if !ready.persisted_messages().is_empty() {

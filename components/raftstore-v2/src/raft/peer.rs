@@ -17,7 +17,7 @@ use raft::{RawNode, StateRole};
 use raftstore::store::{
     util::{Lease, RegionReadProgress},
     Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-    ReadProgress, TxnExt,
+    ReadProgress, TxnExt, WriteTask,
 };
 use slog::Logger;
 
@@ -83,6 +83,11 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     // Trace which peers have not finished split.
     split_trace: Vec<(u64, HashSet<u64>)>,
 
+    /// Apply ralated State changes that needs to be persisted to raft engine.
+    ///
+    /// To make recovery correct, we need to persist all state changes before
+    /// advancing apply index.
+    state_changes: Option<Box<ER::LogBatch>>,
     flush_state: Arc<FlushState>,
 }
 
@@ -152,6 +157,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
             split_trace: vec![],
+            state_changes: None,
             flush_state,
         };
 
@@ -660,5 +666,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn reset_flush_state(&mut self) {
         self.flush_state = Arc::default();
+    }
+
+    #[inline]
+    pub fn state_changes_mut(&mut self) -> &mut ER::LogBatch {
+        if self.state_changes.is_none() {
+            self.state_changes = Some(Box::new(self.entry_storage().raft_engine().log_batch(0)));
+        }
+        self.state_changes.as_mut().unwrap()
+    }
+
+    #[inline]
+    pub fn merge_state_changes_to(&mut self, task: &mut WriteTask<EK, ER>) {
+        if self.state_changes.is_none() {
+            return;
+        }
+        task.extra_write
+            .merge_v2(Box::into_inner(self.state_changes.take().unwrap()));
     }
 }
