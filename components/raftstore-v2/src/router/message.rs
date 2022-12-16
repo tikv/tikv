@@ -139,10 +139,6 @@ pub enum PeerMsg {
         ready_number: u64,
     },
     QueryDebugInfo(DebugInfoChannel),
-    ManualFlush {
-        cfs: Vec<&'static str>,
-        ch: CmdResChannel,
-    },
     DataFlushed {
         cf: &'static str,
         tablet_index: u64,
@@ -200,7 +196,6 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::LogsFetched(fetched) => write!(fmt, "LogsFetched {:?}", fetched),
             PeerMsg::SnapshotGenerated(_) => write!(fmt, "SnapshotGenerated"),
             PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
-            PeerMsg::ManualFlush { cfs, .. } => write!(fmt, "ManualFlush {:?}", cfs),
             PeerMsg::DataFlushed {
                 cf,
                 tablet_index,

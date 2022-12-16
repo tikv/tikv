@@ -2,10 +2,10 @@
 
 use std::{path::Path, time::Duration};
 
-use engine_traits::{DbOptionsExt, Peekable, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine_traits::{DbOptionsExt, MiscExt, Peekable, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::executor::block_on;
 use raftstore::store::RAFT_INIT_LOG_INDEX;
-use raftstore_v2::router::{CmdResChannel, PeerMsg};
+use raftstore_v2::router::PeerMsg;
 
 use crate::cluster::{new_put_request, Cluster};
 
@@ -71,15 +71,9 @@ fn test_data_recovery() {
     let resp = block_on(sub.take().unwrap().result()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 
-    router
-        .send(
-            2,
-            PeerMsg::ManualFlush {
-                cfs: vec![CF_WRITE],
-                ch: CmdResChannel::pair().0,
-            },
-        )
-        .unwrap();
+    let mut cached = cluster.node(0).tablet_registry().get(2).unwrap();
+    cached.latest().unwrap().flush_cf(CF_WRITE, true).unwrap();
+    let router = &mut cluster.routers[0];
     for i in 50..100 {
         let mut put_req = new_put_request(format!("key{}", i), format!("value{}", i));
         put_req.mut_put().set_cf(CF_WRITE.to_owned());
@@ -103,16 +97,11 @@ fn test_data_recovery() {
     let resp = block_on(sub.take().unwrap().result()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 
-    let (ch, sub) = CmdResChannel::pair();
-    let manual_flush = PeerMsg::ManualFlush {
-        cfs: vec![CF_LOCK],
-        ch,
-    };
-    router.send(2, manual_flush).unwrap();
-    let res = block_on(sub.result()).unwrap();
-    assert!(!res.get_header().has_error(), "{:?}", res);
+    cached = cluster.node(0).tablet_registry().get(2).unwrap();
+    cached.latest().unwrap().flush_cf(CF_LOCK, true).unwrap();
 
     // Make sure all keys must be written.
+    let router = &mut cluster.routers[0];
     let snap = router.stale_snapshot(2);
     for cf in DATA_CFS {
         for i in 0..100 {
@@ -128,7 +117,7 @@ fn test_data_recovery() {
         }
     }
     let registry = cluster.node(0).tablet_registry();
-    let mut cached = registry.get(2).unwrap();
+    cached = registry.get(2).unwrap();
     cached
         .latest()
         .unwrap()
@@ -139,7 +128,7 @@ fn test_data_recovery() {
     cluster.restart(0);
 
     let registry = cluster.node(0).tablet_registry();
-    let mut cached = registry.get(2).unwrap();
+    cached = registry.get(2).unwrap();
     cached
         .latest()
         .unwrap()
@@ -180,14 +169,8 @@ fn test_data_recovery() {
     // so no additional flush will be triggered.
     assert_eq!(count_sst(&tablet_2_path), 2);
 
-    let (ch, sub) = CmdResChannel::pair();
-    let manual_flush = PeerMsg::ManualFlush {
-        cfs: DATA_CFS.to_vec(),
-        ch,
-    };
-    router.send(2, manual_flush).unwrap();
-    let res = block_on(sub.result()).unwrap();
-    assert!(!res.get_header().has_error(), "{:?}", res);
+    cached = cluster.node(0).tablet_registry().get(2).unwrap();
+    cached.latest().unwrap().flush_cfs(DATA_CFS, true).unwrap();
 
     // Although all CFs are triggered again, but recovery should only write:
     // 1. [0, 101) to CF_DEFAULT
@@ -220,14 +203,9 @@ fn test_data_recovery() {
         }
     }
     // Trigger flush again.
-    let (ch, sub) = CmdResChannel::pair();
-    let manual_flush = PeerMsg::ManualFlush {
-        cfs: DATA_CFS.to_vec(),
-        ch,
-    };
-    router.send(2, manual_flush).unwrap();
-    let res = block_on(sub.result()).unwrap();
-    assert!(!res.get_header().has_error(), "{:?}", res);
+    cached = cluster.node(0).tablet_registry().get(2).unwrap();
+    cached.latest().unwrap().flush_cfs(DATA_CFS, true).unwrap();
+
     // There is no recovery, so there should be nothing to flush.
     assert_eq!(count_sst(&tablet_2_path), 4);
 }

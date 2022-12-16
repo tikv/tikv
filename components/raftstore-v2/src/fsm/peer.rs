@@ -254,7 +254,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     self.fsm.peer_mut().on_snapshot_generated(snap_res)
                 }
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
-                PeerMsg::ManualFlush { cfs, ch } => self.fsm.peer_mut().on_manual_flush(cfs, ch),
                 PeerMsg::DataFlushed {
                     cf,
                     tablet_index,

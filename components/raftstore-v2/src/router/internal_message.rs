@@ -1,16 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::CmdResChannel;
 use crate::operation::{AdminCmdResult, CommittedEntries, DataTrace, GenSnapTask};
 
 #[derive(Debug)]
 pub enum ApplyTask {
     CommittedEntries(CommittedEntries),
     Snapshot(GenSnapTask),
-    ManualFlush {
-        cfs: Vec<&'static str>,
-        ch: CmdResChannel,
-    },
 }
 
 #[derive(Debug, Default)]

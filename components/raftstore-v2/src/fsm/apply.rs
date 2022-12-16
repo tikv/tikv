@@ -113,7 +113,6 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
                     ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
-                    ApplyTask::ManualFlush { cfs, ch } => self.apply.on_manual_flush(cfs, ch),
                 }
 
                 // TODO: yield after some time.

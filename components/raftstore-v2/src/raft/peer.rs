@@ -83,7 +83,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     // Trace which peers have not finished split.
     split_trace: Vec<(u64, HashSet<u64>)>,
 
-    /// Apply ralated State changes that needs to be persisted to raft engine.
+    /// Apply related State changes that needs to be persisted to raft engine.
     ///
     /// To make recovery correct, we need to persist all state changes before
     /// advancing apply index.

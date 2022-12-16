@@ -27,7 +27,7 @@
 //! All apply related states are associated with an apply index. During
 //! recovery states corresponding to the start index should be used.
 
-use std::sync::Mutex;
+use std::{cmp, sync::Mutex};
 
 use engine_traits::{
     FlushProgress, KvEngine, RaftEngine, RaftLogBatch, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
@@ -35,17 +35,15 @@ use engine_traits::{
 };
 use kvproto::{
     metapb::Region,
-    raft_cmdpb::RaftCmdResponse,
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
-use raftstore::store::{cmd_resp, ReadTask, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use raftstore::store::{ReadTask, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
 use slog::Logger;
 use tikv_util::{box_err, worker::Scheduler};
 
 use crate::{
-    fsm::ApplyResReporter,
-    raft::{Apply, Peer, Storage},
-    router::{ApplyTask, CmdResChannel, PeerMsg},
+    raft::{Peer, Storage},
+    router::PeerMsg,
     Result, StoreRouter,
 };
 
@@ -222,20 +220,21 @@ impl ApplyTrace {
         if self.admin.flushed < self.admin.last_modified {
             return;
         }
+        let min_flushed = self
+            .data_cfs
+            .iter()
+            // Only unflushed CFs are considered. Flushed CF always have uptodate changes
+            // persisted.
+            .filter_map(|pr| {
+                if pr.last_modified != pr.flushed {
+                    Some(pr.flushed)
+                } else {
+                    None
+                }
+            })
+            .min();
         // At best effort, we can only advance the index to `mem_index`.
-        let mut candidate = mem_index;
-        for pr in self.data_cfs.iter() {
-            // There is no change to the CF before `mem_index`, ignore it.
-            if pr.last_modified == pr.flushed {
-                continue;
-            }
-            // This CF already persists all required data, ignore it.
-            if pr.flushed >= candidate {
-                continue;
-            }
-            // No matter what `last_modified` is, `pr.flushed` is all the data we have.
-            candidate = pr.flushed;
-        }
+        let candidate = cmp::min(mem_index, min_flushed.unwrap_or(u64::MAX));
         if candidate > self.admin.flushed {
             self.admin.flushed = candidate;
             if candidate > self.persisted_applied + 100 {
@@ -248,10 +247,11 @@ impl ApplyTrace {
     /// Get the flushed indexes of all data CF that is needed when recoverying
     /// logs.
     ///
-    /// Logs may be replayed from the some apply index, but those data may have
-    /// been flushed in the past, so we need the flushed indexes to decide what
-    /// logs can be skipped for certain CFs. If all CFs are flushed before the
-    /// apply index, `None` is returned.
+    /// Logs may be replayed from the persisted apply index, but those data may
+    /// have been flushed in the past, so we need the flushed indexes to decide
+    /// what logs can be skipped for certain CFs. If all CFs are flushed before
+    /// the persisted apply index, then there is nothing to skipped, so
+    /// `None` is returned.
     #[inline]
     pub fn log_recovery(&self) -> Option<Box<DataTrace>> {
         let mut flushed_indexes = [0; DATA_CFS_LEN];
@@ -424,24 +424,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         apply_trace.maybe_advance_admin_flushed(apply_index);
-    }
-
-    pub fn on_manual_flush(&mut self, cfs: Vec<&'static str>, ch: CmdResChannel) {
-        if let Some(sched) = self.apply_scheduler() {
-            sched.send(ApplyTask::ManualFlush { cfs, ch });
-        }
-    }
-}
-
-impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
-    pub fn on_manual_flush(&mut self, cfs: Vec<&'static str>, ch: CmdResChannel) {
-        self.flush();
-        // TODO: make it async
-        let res = match self.tablet().flush_cfs(&cfs, true) {
-            Ok(()) => RaftCmdResponse::default(),
-            Err(e) => cmd_resp::new_error(e.into()),
-        };
-        ch.set_result(res);
     }
 }
 
