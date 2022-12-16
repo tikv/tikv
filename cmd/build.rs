@@ -32,6 +32,8 @@ fn link_sys_lib(lib: &str, tool: &cc::Tool) {
     }
     // remove lib prefix and .a postfix.
     let libname = &lib[3..lib.len() - 2];
+    // Get around the issue "the linking modifiers `+bundle` and `+whole-archive`
+    // are not compatible with each other when generating rlibs"
     println!("cargo:rustc-link-lib=static:-bundle,+whole-archive={}", &libname);
     println!(
         "cargo:rustc-link-search=native={}",
