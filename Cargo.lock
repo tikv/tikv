@@ -4359,6 +4359,7 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.15",
+ "itertools",
  "keys",
  "kvproto",
  "log_wrappers",
