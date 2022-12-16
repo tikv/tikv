@@ -914,6 +914,8 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
 #[derive(Default, Clone)]
 struct CfLevelStats {
     num_files: u64,
+    // sum(compression_ratio_i * num_files_i)
+    weighted_compression_ratio: f64,
     num_blob_files: u64,
 }
 
@@ -943,7 +945,7 @@ struct CfStats {
 struct DbStats {
     num_snapshots: u64,
     oldest_snapshot_time: u64,
-    block_cache_size: u64,
+    block_cache_size: Option<u64>,
     stall_num: Vec<u64>,
 }
 
@@ -972,7 +974,6 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             // It is important to monitor each cf's size, especially the "raft" and "lock"
             // column families.
             cf_stats.used_size += crate::util::get_engine_cf_used_size(db, handle);
-            // TODO: shared or not?
             cf_stats.blob_cache_size += db.get_blob_cache_usage_cf(handle);
 
             // TODO: find a better place to record these metrics.
@@ -1031,10 +1032,12 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                     .resize(opts.get_num_levels() + 1, CfLevelStats::default());
             }
             for level in 0..opts.get_num_levels() {
-                // TODO: crate::util::get_engine_compression_ratio_at_level(db, handle,
-                // level)
-                cf_stats.levels[level].num_files +=
+                let num_files =
                     crate::util::get_cf_num_files_at_level(db, handle, level).unwrap_or(0);
+                cf_stats.levels[level].num_files += num_files;
+                cf_stats.levels[level].weighted_compression_ratio += num_files as f64
+                    * crate::util::get_engine_compression_ratio_at_level(db, handle, level)
+                        .unwrap_or(0.0);
                 cf_stats.levels[level].num_blob_files +=
                     crate::util::get_cf_num_blob_files_at_level(db, handle, level).unwrap_or(0);
             }
@@ -1061,9 +1064,9 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
 
         // Since block cache is shared, getting cache size from any CF/DB is fine. Here
         // we get from default CF.
-        if self.db_stats.block_cache_size == 0 {
+        if self.db_stats.block_cache_size.is_none() {
             let handle = crate::util::get_cf_handle(db, CF_DEFAULT).unwrap();
-            self.db_stats.block_cache_size = db.get_block_cache_usage_cf(handle);
+            self.db_stats.block_cache_size = Some(db.get_block_cache_usage_cf(handle));
         }
     }
 
@@ -1081,7 +1084,6 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             STORE_ENGINE_MEMORY_GAUGE_VEC
                 .with_label_values(&[&self.name, cf, "mem-tables"])
                 .set(cf_stats.mem_tables as i64);
-            // TODO: add cache usage and pinned usage.
             STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC
                 .with_label_values(&[&self.name, cf])
                 .set(cf_stats.num_keys as i64);
@@ -1089,12 +1091,14 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                 .with_label_values(&[&self.name, cf])
                 .set(cf_stats.pending_compaction_bytes as i64);
             for (level, level_stats) in cf_stats.levels.iter().enumerate() {
-                // STORE_ENGINE_COMPRESSION_RATIO_VEC
-                //     .with_label_values(&[&self.name, cf, &level.to_string()])
-                //     .set(v);
                 STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
                     .with_label_values(&[&self.name, cf, &level.to_string()])
                     .set(level_stats.num_files as i64);
+                let normalized_compression_ratio =
+                    level_stats.weighted_compression_ratio / level_stats.num_files as f64;
+                STORE_ENGINE_COMPRESSION_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, &level.to_string()])
+                    .set(normalized_compression_ratio);
                 STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC
                     .with_label_values(&[&self.name, cf, &level.to_string()])
                     .set(level_stats.num_blob_files as i64);
@@ -1143,7 +1147,7 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             .set(self.db_stats.oldest_snapshot_time as i64);
         STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
             .with_label_values(&[&self.name, "all"])
-            .set(self.db_stats.block_cache_size as i64);
+            .set(self.db_stats.block_cache_size.unwrap_or(0) as i64);
         let stall_num = ROCKSDB_IOSTALL_KEY.len();
         for i in 0..stall_num {
             STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
