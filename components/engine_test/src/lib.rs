@@ -416,7 +416,7 @@ pub mod ctor {
                 rocks_db_opts.enable_multi_batch_write(false);
                 rocks_db_opts.allow_concurrent_memtable_write(false);
                 if let Some(storage) = db_opt.state_storage
-                && let Some(flush_state) = ctx.flush_state {
+                    && let Some(flush_state) = ctx.flush_state {
                     let listener = PersistenceListener::new(
                         ctx.id,
                         ctx.suffix.unwrap(),

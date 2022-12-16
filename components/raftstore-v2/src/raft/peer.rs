@@ -658,8 +658,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.flush_state
     }
 
-    pub fn reset_flush_state(&mut self) -> Arc<FlushState> {
+    pub fn reset_flush_state(&mut self) {
         self.flush_state = Arc::default();
-        self.flush_state.clone()
     }
 }

@@ -36,7 +36,7 @@ use raftstore::store::{
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
-    Bootstrap, StoreSystem,
+    Bootstrap, StateStorage, StoreSystem,
 };
 use slog::{debug, o, Logger};
 use tempfile::TempDir;
@@ -232,20 +232,29 @@ impl RunningState {
         let raft_engine =
             engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
                 .unwrap();
+
+        let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client.as_ref(), logger.clone());
+        let store_id = bootstrap.bootstrap_store().unwrap();
+        let mut store = Store::default();
+        store.set_id(store_id);
+
+        let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(
+            &cfg.value(),
+            store_id,
+            logger.clone(),
+        );
         let cf_opts = DATA_CFS
             .iter()
             .copied()
             .map(|cf| (cf, CfOptions::default()))
             .collect();
         let mut db_opt = DbOptions::default();
-        db_opt.set_state_storage(Arc::new(raft_engine.clone()));
+        db_opt.set_state_storage(Arc::new(StateStorage::new(
+            raft_engine.clone(),
+            router.clone(),
+        )));
         let factory = Box::new(TestTabletFactory::new(db_opt, cf_opts));
         let registry = TabletRegistry::new(factory, path.join("tablets")).unwrap();
-
-        let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client.as_ref(), logger.clone());
-        let store_id = bootstrap.bootstrap_store().unwrap();
-        let mut store = Store::default();
-        store.set_id(store_id);
         if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
             let factory = registry.tablet_factory();
             let path = registry.tablet_path(region.get_id(), RAFT_INIT_LOG_INDEX);
@@ -257,12 +266,6 @@ impl RunningState {
             // Create the tablet without loading it in cache.
             factory.open_tablet(ctx, &path).unwrap();
         }
-
-        let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(
-            &cfg.value(),
-            store_id,
-            logger.clone(),
-        );
 
         let router = RaftRouter::new(store_id, registry.clone(), router);
         let store_meta = router.store_meta().clone();

@@ -31,9 +31,15 @@ pub struct Apply<EK: KvEngine, R> {
     /// command.
     tombstone: bool,
     applied_term: u64,
+    /// The largest index that have modified each column family.
     modifications: DataTrace,
     admin_cmd_result: Vec<AdminCmdResult>,
     flush_state: Arc<FlushState>,
+    /// The flushed indexes of each column family before being restarted.
+    ///
+    /// If an apply index is less than the flushed index, the log can be
+    /// skipped. `None` means logs should apply to all required column
+    /// families.
     log_recovery: Option<Box<DataTrace>>,
 
     region_state: RegionLocalState,

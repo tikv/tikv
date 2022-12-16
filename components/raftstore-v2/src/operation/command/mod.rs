@@ -296,7 +296,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }) => {
                     self.storage_mut()
                         .apply_trace_mut()
-                        .record_admin_modify(tablet_index);
+                        .on_admin_modify(tablet_index);
                     self.on_apply_res_split(ctx, derived_index, tablet_index, regions)
                 }
                 AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),

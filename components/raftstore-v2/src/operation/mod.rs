@@ -12,6 +12,7 @@ pub use command::{
 pub use life::DestroyProgress;
 pub use ready::{
     cf_offset, write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, SnapState,
+    StateStorage,
 };
 
 pub(crate) use self::{command::SplitInit, query::LocalReader};

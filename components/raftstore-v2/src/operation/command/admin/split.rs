@@ -473,7 +473,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             assert_ne!(admin_flushed, 0);
             self.storage_mut()
                 .apply_trace_mut()
-                .record_admin_flush(admin_flushed);
+                .on_admin_flush(admin_flushed);
             // Persist admin flushed.
             self.set_has_extra_write();
         }

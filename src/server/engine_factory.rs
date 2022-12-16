@@ -192,7 +192,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
             db_opts.add_event_listener(listener.clone_with(ctx.id, suffix));
         }
         if let Some(storage) = &self.inner.state_storage
-        && let Some(flush_state) = ctx.flush_state {
+            && let Some(flush_state) = ctx.flush_state {
             let listener = PersistenceListener::new(
                 ctx.id,
                 ctx.suffix.unwrap(),

@@ -13,15 +13,16 @@
 //! index of all data CFs have advanced. So a special flushed index is
 //! introduced and stored with raft CF (only using the name, raft CF is
 //! dropped). It's the recommended recovery start point. How these two indexes
-//! interact with each other can be found in the `figure_applied_index`.
+//! interact with each other can be found in the `ApplyTrace::recover`.
 //!
 //! All apply related states are associated with an apply index. During
 //! recovery states corresponding to the start index should be used.
 
-use std::cmp;
+use std::{cmp, sync::Mutex};
 
 use engine_traits::{
-    KvEngine, RaftEngine, RaftLogBatch, ALL_CFS, CF_DEFAULT, CF_RAFT, DATA_CFS, DATA_CFS_LEN,
+    FlushProgress, KvEngine, RaftEngine, RaftLogBatch, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use kvproto::{
     metapb::Region,
@@ -35,8 +36,8 @@ use tikv_util::{box_err, worker::Scheduler};
 use crate::{
     fsm::ApplyResReporter,
     raft::{Apply, Peer, Storage},
-    router::{ApplyTask, CmdResChannel},
-    Result,
+    router::{ApplyTask, CmdResChannel, PeerMsg},
+    Result, StoreRouter,
 };
 
 /// Write states for the given region. The region is supposed to have all its
@@ -72,6 +73,47 @@ pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Resul
     Ok(())
 }
 
+fn to_static_cf(cf: &str) -> &'static str {
+    match cf {
+        CF_DEFAULT => CF_DEFAULT,
+        CF_RAFT => CF_RAFT,
+        CF_WRITE => CF_WRITE,
+        CF_LOCK => CF_LOCK,
+        _ => unreachable!("unexpected cf: {cf}"),
+    }
+}
+
+pub struct StateStorage<EK: KvEngine, ER: RaftEngine> {
+    raft_engine: ER,
+    router: Mutex<StoreRouter<EK, ER>>,
+}
+
+impl<EK: KvEngine, ER: RaftEngine> StateStorage<EK, ER> {
+    pub fn new(raft_engine: ER, router: StoreRouter<EK, ER>) -> Self {
+        Self {
+            raft_engine,
+            router: Mutex::new(router),
+        }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> engine_traits::StateStorage for StateStorage<EK, ER> {
+    fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: FlushProgress) {
+        let cf = to_static_cf(pr.cf());
+        let flushed_index = pr.applied_index();
+        self.raft_engine
+            .persist_progress(region_id, tablet_index, pr);
+        let _ = self.router.lock().unwrap().send(
+            region_id,
+            PeerMsg::DataFlushed {
+                cf,
+                tablet_index,
+                flushed_index,
+            },
+        );
+    }
+}
+
 /// An alias of frequent use type that each data cf has a u64.
 pub type DataTrace = [u64; DATA_CFS_LEN];
 
@@ -89,12 +131,31 @@ pub fn cf_offset(cf: &str) -> usize {
     DATA_CFS.iter().position(|c| *c == cf).expect(cf)
 }
 
+/// `ApplyTrace` is used to track the indexes of modifications and flushes.
+///
+/// It has 3 core functionalities:
+/// - recover from stopped state and figure out the correct log replay start
+///   point.
+/// - trace the admin flushed index and issue persistence once admin operation
+///   is considered finished. Note only those admin commands that needs to
+///   interact with other peers will be traced.
+/// - support query the flushed progress without actually scanning raft engine,
+///   which is useful for cleaning up stale flush records.
 #[derive(Default)]
 pub struct ApplyTrace {
+    /// The modified indexes and flushed index of each data CF.
     data_cfs: Box<[Progress; DATA_CFS_LEN]>,
+    /// The modified indexes and flushed index of raft CF.
+    ///
+    /// raft CF is a virtual CF that only used for recording apply index of
+    /// certain admin commands (like split/merge). So there is no flush at all.
+    /// The `flushed` field is advanced when the admin command doesn't need to
+    /// be replayed after restart. A write should be triggered to persist the
+    /// record.
     admin: Progress,
-    // Index that is issued to be written. It may not be truely persisted.
+    /// Index that is issued to be written. It may not be truely persisted.
     persisted_applied: u64,
+    /// `true` means the raft cf record should be persisted in next ready.
     try_persist: bool,
 }
 
@@ -121,7 +182,7 @@ impl ApplyTrace {
         // data to flush.
         if trace.admin.flushed < data_index {
             let region_state = engine.get_region_state(region_id, data_index)?.unwrap();
-            // If there is no admin change, it means `applied_index` is notadvanced in
+            // If there is no admin change, it means `applied_index` is not advanced in
             // time. Otherwise, it may be waiting for flush of other tablets in cases like
             // split.
             if applied_region_state
@@ -142,7 +203,7 @@ impl ApplyTrace {
         self.data_cfs.iter().map(|p| p.flushed).min().unwrap()
     }
 
-    fn record_flush(&mut self, cf: &str, index: u64) {
+    fn on_flush(&mut self, cf: &str, index: u64) {
         let off = cf_offset(cf);
         // Technically it should always be true.
         if index > self.data_cfs[off].flushed {
@@ -150,19 +211,19 @@ impl ApplyTrace {
         }
     }
 
-    fn record_modify(&mut self, cf: &str, index: u64) {
+    fn on_modify(&mut self, cf: &str, index: u64) {
         let off = cf_offset(cf);
         self.data_cfs[off].last_modified = index;
     }
 
-    pub fn record_admin_flush(&mut self, index: u64) {
+    pub fn on_admin_flush(&mut self, index: u64) {
         if index > self.admin.flushed {
             self.admin.flushed = index;
             self.try_persist = true;
         }
     }
 
-    pub fn record_admin_modify(&mut self, index: u64) {
+    pub fn on_admin_modify(&mut self, index: u64) {
         self.admin.last_modified = index;
     }
 
@@ -205,6 +266,13 @@ impl ApplyTrace {
         // TODO: persist admin.flushed every 10 minutes.
     }
 
+    /// Get the flushed indexes of all data CF that is needed when recoverying
+    /// logs.
+    ///
+    /// Logs may be replayed from the some apply index, but those data may have
+    /// been flushed in the past, so we need the flushed indexes to decide what
+    /// logs can be skipped for certain CFs. If all CFs are flushed before the
+    /// apply index, `None` is returned.
     #[inline]
     pub fn log_recovery(&self) -> Option<Box<DataTrace>> {
         let mut flushed_indexes = [0; DATA_CFS_LEN];
@@ -364,7 +432,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let apply_index = self.storage().entry_storage().applied_index();
         let apply_trace = self.storage_mut().apply_trace_mut();
-        apply_trace.record_flush(cf, index);
+        apply_trace.on_flush(cf, index);
         apply_trace.maybe_advance_admin_flushed(apply_index);
     }
 
@@ -373,7 +441,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let apply_trace = self.storage_mut().apply_trace_mut();
         for (cf, index) in DATA_CFS.iter().zip(modification) {
             if index != 0 {
-                apply_trace.record_modify(cf, index);
+                apply_trace.on_modify(cf, index);
             }
         }
         apply_trace.maybe_advance_admin_flushed(apply_index);
@@ -481,40 +549,40 @@ mod tests {
         trace.maybe_advance_admin_flushed(2);
         assert_eq!(2, trace.persisted_apply_index());
         for cf in DATA_CFS {
-            trace.record_modify(cf, 3);
+            trace.on_modify(cf, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // Modification is not flushed.
         assert_eq!(2, trace.persisted_apply_index());
         for cf in DATA_CFS {
-            trace.record_flush(cf, 3);
+            trace.on_flush(cf, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // No admin is recorded, index should be advanced.
         assert_eq!(3, trace.persisted_apply_index());
-        trace.record_admin_modify(4);
+        trace.on_admin_modify(4);
         for cf in DATA_CFS {
-            trace.record_flush(cf, 4);
+            trace.on_flush(cf, 4);
         }
         for cf in DATA_CFS {
-            trace.record_modify(cf, 4);
+            trace.on_modify(cf, 4);
         }
         trace.maybe_advance_admin_flushed(4);
         // Unflushed admin modification should hold index.
         assert_eq!(3, trace.persisted_apply_index());
-        trace.record_admin_flush(4);
+        trace.on_admin_flush(4);
         trace.maybe_advance_admin_flushed(4);
         // Admin is flushed, index should be advanced.
         assert_eq!(4, trace.persisted_apply_index());
         for cf in DATA_CFS {
-            trace.record_flush(cf, 5);
+            trace.on_flush(cf, 5);
         }
         trace.maybe_advance_admin_flushed(5);
         // Though all data CFs are flushed, but index should not be
         // advanced as we don't know whether there is admin modification.
         assert_eq!(4, trace.persisted_apply_index());
         for cf in DATA_CFS {
-            trace.record_modify(cf, 5);
+            trace.on_modify(cf, 5);
         }
         trace.maybe_advance_admin_flushed(5);
         // Because modify is recorded, so we know there should be no admin

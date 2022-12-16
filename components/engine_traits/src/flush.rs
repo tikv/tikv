@@ -58,6 +58,10 @@ impl FlushProgress {
     pub fn applied_index(&self) -> u64 {
         self.apply_index
     }
+
+    pub fn cf(&self) -> &str {
+        &self.cf
+    }
 }
 
 /// A share state between raftstore and underlying engine.
@@ -168,8 +172,7 @@ impl PersistenceListener {
 
     /// Called when memtable is frozen.
     ///
-    /// `id` should be unique between memtables, which is used to identify
-    /// memtable in the flushed event.
+    /// `earliest_seqno` should be the smallest seqno of the memtable.
     pub fn on_memtable_sealed(&self, cf: String, earliest_seqno: u64) {
         // The correctness relies on the assumption that there will be only one
         // thread writting to the DB and increasing apply index.
@@ -187,6 +190,8 @@ impl PersistenceListener {
     }
 
     /// Called a memtable finished flushing.
+    ///
+    /// `largest_seqno` should be the largest seqno of the generated file.
     pub fn on_flush_completed(&self, cf: &str, largest_seqno: u64) {
         // Maybe we should hook the compaction to avoid the file is compacted before
         // being recorded.

@@ -338,7 +338,7 @@ pd_client = { path = "components/pd_client" }
 profiler = { path = "components/profiler" }
 raft_log_engine = { path = "components/raft_log_engine" }
 raftstore = { path = "components/raftstore", default-features = false }
-raftstore_v2 = { path = "components/raftstore-v2", default-features = false }
+raftstore-v2 = { path = "components/raftstore-v2", default-features = false }
 resolved_ts = { path = "components/resolved_ts" }
 resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
