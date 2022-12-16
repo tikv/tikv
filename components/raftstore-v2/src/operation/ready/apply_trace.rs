@@ -18,7 +18,7 @@
 //!
 //! The correctness of raft cf index relies on the fact that:
 //! - apply is sequential, so if any apply index is updated to apply trace, all
-//!   modification index must be set.
+//!   modification events before that must be processed.
 //! - admin commands that marked by raft cf index must flush all data before
 //!   being executed. Note this contraint is not just for recovery, but also
 //!   necessary to guarantee safety of operations like split init or log gc.
