@@ -2,21 +2,18 @@
 
 //! This module implements the interactions with pd.
 
-use std::cmp;
-
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
 use raftstore::store::Transport;
 use slog::error;
-use tikv_util::time::InstantExt;
 
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsmDelegate, Store, StoreFsmDelegate},
     raft::Peer,
     router::{PeerTick, StoreTick},
-    worker::{PdRegionHeartbeatTask, PdTask},
+    worker::pd,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
@@ -41,7 +38,7 @@ impl Store {
         stats.set_store_id(self.store_id());
         {
             let meta = ctx.store_meta.lock().unwrap();
-            stats.set_region_count(meta.tablet_caches.len() as u32);
+            stats.set_region_count(meta.readers.len() as u32);
         }
 
         stats.set_sending_snap_count(0);
@@ -55,7 +52,7 @@ impl Store {
 
         // stats.set_query_stats(query_stats);
 
-        let task = PdTask::StoreHeartbeat { stats };
+        let task = pd::Task::StoreHeartbeat { stats };
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(self.logger(), "notify pd failed";
                 "store_id" => self.store_id(),
@@ -80,7 +77,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn region_heartbeat_pd<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        let task = PdTask::RegionHeartbeat(PdRegionHeartbeatTask {
+        let task = pd::Task::RegionHeartbeat(pd::RegionHeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
@@ -163,7 +160,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn destroy_peer_pd<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        let task = PdTask::DestroyPeer {
+        let task = pd::Task::DestroyPeer {
             region_id: self.region_id(),
         };
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
@@ -179,7 +176,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn ask_batch_split_pd<T>(&self, ctx: &StoreContext<EK, ER, T>, split_keys: Vec<Vec<u8>>) {
-        let task = PdTask::AskBatchSplit {
+        let task = pd::Task::AskBatchSplit {
             region: self.region().clone(),
             split_keys,
             peer: self.peer().clone(),
@@ -202,7 +199,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &StoreContext<EK, ER, T>,
         regions: Vec<metapb::Region>,
     ) {
-        let task = PdTask::ReportBatchSplit { regions };
+        let task = pd::Task::ReportBatchSplit { regions };
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
                 self.logger,
@@ -214,7 +211,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn update_max_timestamp_pd<T>(&self, ctx: &StoreContext<EK, ER, T>, initial_status: u64) {
-        let task = PdTask::UpdateMaxTimestamp {
+        let task = pd::Task::UpdateMaxTimestamp {
             region_id: self.region_id(),
             initial_status,
             txn_ext: self.txn_ext().clone(),

@@ -144,14 +144,26 @@ impl RaftEngineReadOnly for RocksEngine {
         self.get_msg_cf(CF_DEFAULT, keys::PREPARE_BOOTSTRAP_KEY)
     }
 
-    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
-        let key = keys::region_state_key(raft_group_id);
-        self.get_msg_cf(CF_DEFAULT, &key)
+    // Following methods are used by raftstore v2 only, which always use raft log
+    // engine.
+    fn get_region_state(
+        &self,
+        _raft_group_id: u64,
+        _apply_index: u64,
+    ) -> Result<Option<RegionLocalState>> {
+        panic!()
     }
 
-    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
-        let key = keys::apply_state_key(raft_group_id);
-        self.get_msg_cf(CF_DEFAULT, &key)
+    fn get_apply_state(
+        &self,
+        _raft_group_id: u64,
+        _apply_index: u64,
+    ) -> Result<Option<RaftApplyState>> {
+        panic!()
+    }
+
+    fn get_flushed_index(&self, _raft_group_id: u64, _cf: &str) -> Result<Option<u64>> {
+        panic!()
     }
 
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
@@ -405,12 +417,34 @@ impl RaftLogBatch for RocksWriteBatchVec {
         self.delete(keys::PREPARE_BOOTSTRAP_KEY)
     }
 
-    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
-        self.put_msg(&keys::region_state_key(raft_group_id), state)
+    // Following methods are used by raftstore v2 only, which always use raft log
+    // engine.
+    fn put_region_state(
+        &mut self,
+        _raft_group_id: u64,
+        _apply_index: u64,
+        _state: &RegionLocalState,
+    ) -> Result<()> {
+        panic!()
     }
 
-    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
-        self.put_msg(&keys::apply_state_key(raft_group_id), state)
+    fn put_apply_state(
+        &mut self,
+        _raft_group_id: u64,
+        _apply_index: u64,
+        _state: &RaftApplyState,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_flushed_index(
+        &mut self,
+        _raft_group_id: u64,
+        _cf: &str,
+        _tablet_index: u64,
+        _apply_index: u64,
+    ) -> Result<()> {
+        panic!()
     }
 
     fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {

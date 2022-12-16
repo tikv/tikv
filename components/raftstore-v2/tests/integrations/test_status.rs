@@ -8,7 +8,7 @@ use crate::cluster::Cluster;
 #[test]
 fn test_status() {
     let cluster = Cluster::default();
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     // When there is only one peer, it should campaign immediately.
     let mut req = RaftCmdRequest::default();
     req.mut_header().set_peer(new_peer(1, 3));

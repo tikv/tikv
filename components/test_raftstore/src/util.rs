@@ -16,8 +16,7 @@ use encryption_export::{
 use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
-    CF_DEFAULT, CF_RAFT,
+    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::executor::block_on;
@@ -596,15 +595,15 @@ pub fn create_test_engine(
 
     let raft_engine = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path(), cache)
-        .sst_recovery_sender(Some(scheduler));
+    let mut builder =
+        KvEngineFactoryBuilder::new(env, &cfg, cache).sst_recovery_sender(Some(scheduler));
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router),
         }));
     }
     let factory = builder.build();
-    let engine = factory.create_shared_db().unwrap();
+    let engine = factory.create_shared_db(dir.path()).unwrap();
     let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir, sst_worker)
 }

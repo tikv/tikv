@@ -8,38 +8,26 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
+use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletContext, TabletRegistry};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
+    coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
-        fsm::Proposal,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
-        TxnExt,
+        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
+        ReadProgress, TxnExt,
     },
-    Error,
 };
-use slog::{debug, error, info, o, warn, Logger};
-use tikv_util::{
-    box_err,
-    config::ReadableSize,
-    time::{monotonic_raw_now, Instant as TiInstant},
-    worker::Scheduler,
-    Either,
-};
-use time::Timespec;
+use slog::Logger;
 
-use super::{storage::Storage, Apply};
+use super::storage::Storage;
 use crate::{
     batch::StoreContext,
-    fsm::{ApplyFsm, ApplyScheduler, LockManagerNotifier},
+    fsm::{ApplyScheduler, LockManagerNotifier},
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
-    router::{CmdResChannel, QueryResChannel},
-    tablet::CachedTablet,
-    worker::PdTask,
+    router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
 };
 
@@ -89,6 +77,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 
+    pending_ticks: Vec<PeerTick>,
+
     /// Check whether this proposal can be proposed based on its epoch.
     proposal_control: ProposalControl,
 
@@ -102,7 +92,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// If peer is destroyed, `None` is returned.
     pub fn new(
         cfg: &Config,
-        tablet_factory: &dyn TabletFactory<EK>,
+        tablet_registry: &TabletRegistry<EK>,
         storage: Storage<EK, ER>,
     ) -> Result<Self> {
         let logger = storage.logger().clone();
@@ -113,33 +103,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
-        // Another option is always create tablet even if tablet index is 0. But this
-        // can introduce race when gc old tablet and create new peer.
-        let tablet = if tablet_index != 0 {
-            if !tablet_factory.exists(region_id, tablet_index) {
-                return Err(box_err!(
-                    "missing tablet {} for region {}",
-                    tablet_index,
-                    region_id
-                ));
-            }
-            // TODO: Perhaps we should stop create the tablet automatically.
-            Some(tablet_factory.open_tablet(
-                region_id,
-                Some(tablet_index),
-                OpenOptions::default().set_create(true),
-            )?)
-        } else {
-            None
-        };
-
-        let tablet = CachedTablet::new(tablet);
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
+
+        let cached_tablet = tablet_registry.get_or_default(region_id);
+        // We can't create tablet if tablet index is 0. It can introduce race when gc
+        // old tablet and create new peer. We also can't get the correct range of the
+        // region, which is required for kv data gc.
+        if tablet_index != 0 {
+            let ctx = TabletContext::new(&region, Some(tablet_index));
+            // TODO: Perhaps we should stop create the tablet automatically.
+            tablet_registry.load(ctx, false)?;
+        }
+
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
-            tablet,
+            tablet: cached_tablet,
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
@@ -168,6 +148,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             proposal_control: ProposalControl::new(0),
             lead_transferee: raft::INVALID_ID,
+            pending_ticks: Vec::new(),
             split_trace: vec![],
         };
 
@@ -513,11 +494,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub(crate) fn has_applied_to_current_term(&self) -> bool {
-        self.entry_storage().applied_term() == self.term()
-    }
-
-    #[inline]
     pub fn simple_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
         &mut self.raw_write_encoder
     }
@@ -549,6 +525,51 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn set_apply_scheduler(&mut self, apply_scheduler: ApplyScheduler) {
         self.apply_scheduler = Some(apply_scheduler);
+    }
+
+    #[inline]
+    pub fn clear_apply_scheduler(&mut self) {
+        self.apply_scheduler.take();
+    }
+
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
+    #[inline]
+    pub fn is_handling_snapshot(&self) -> bool {
+        // todo: This method may be unnecessary now?
+        false
+    }
+
+    /// Returns `true` if the raft group has replicated a snapshot but not
+    /// committed it yet.
+    #[inline]
+    pub fn has_pending_snapshot(&self) -> bool {
+        self.raft_group().snap().is_some()
+    }
+
+    #[inline]
+    pub fn add_pending_tick(&mut self, tick: PeerTick) {
+        self.pending_ticks.push(tick);
+    }
+
+    #[inline]
+    pub fn take_pending_ticks(&mut self) -> Vec<PeerTick> {
+        mem::take(&mut self.pending_ticks)
+    }
+
+    pub fn activate_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.status = LocksStatus::Normal;
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
+    }
+
+    pub fn clear_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.status = LocksStatus::NotLeader;
+        pessimistic_locks.clear();
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
     }
 
     #[inline]

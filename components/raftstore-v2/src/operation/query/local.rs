@@ -8,7 +8,7 @@ use std::{
 
 use batch_system::Router;
 use crossbeam::channel::TrySendError;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{
     errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
@@ -17,24 +17,18 @@ use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp, util::LeaseState, LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor,
-        ReadExecutorProvider, RegionSnapshot, RequestInspector, RequestPolicy,
-        TLS_LOCAL_READ_METRICS,
+        ReadExecutorProvider, RegionSnapshot, RequestPolicy, TLS_LOCAL_READ_METRICS,
     },
     Error, Result,
 };
 use slog::{debug, Logger};
-use tikv_util::{
-    box_err,
-    codec::number::decode_u64,
-    time::{monotonic_raw_now, ThreadReadId},
-};
+use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now};
 use time::Timespec;
 use txn_types::WriteBatchFlags;
 
 use crate::{
     fsm::StoreMeta,
     router::{PeerMsg, QueryResult},
-    tablet::CachedTablet,
     StoreRouter,
 };
 
@@ -69,15 +63,20 @@ where
     E: KvEngine,
     C: MsgRouter,
 {
-    pub fn new(store_meta: Arc<Mutex<StoreMeta<E>>>, router: C, logger: Logger) -> Self {
+    pub fn new(
+        store_meta: Arc<Mutex<StoreMeta>>,
+        reg: TabletRegistry<E>,
+        router: C,
+        logger: Logger,
+    ) -> Self {
         Self {
-            local_reader: LocalReaderCore::new(StoreMetaDelegate::new(store_meta)),
+            local_reader: LocalReaderCore::new(StoreMetaDelegate::new(store_meta, reg)),
             router,
             logger,
         }
     }
 
-    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta<E>>> {
+    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta>> {
         self.local_reader.store_meta()
     }
 
@@ -198,13 +197,13 @@ where
         let mut err = errorpb::Error::default();
         match MsgRouter::send(&self.router, region_id, msg) {
             Ok(()) => return Ok(sub.result().await),
-            Err(TrySendError::Full(c)) => {
+            Err(TrySendError::Full(_)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.channel_full.inc());
                 err.set_message(RAFTSTORE_IS_BUSY.to_owned());
                 err.mut_server_is_busy()
                     .set_reason(RAFTSTORE_IS_BUSY.to_owned());
             }
-            Err(TrySendError::Disconnected(c)) => {
+            Err(TrySendError::Disconnected(_)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
                 err.set_message(format!("region {} is missing", region_id));
                 err.mut_region_not_found().set_region_id(region_id);
@@ -231,7 +230,7 @@ where
         let region_id = req.header.get_ref().region_id;
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().renew_lease_advance.inc());
         // Send a read query which may renew the lease
-        let (msg, sub) = PeerMsg::raft_query(req.clone());
+        let msg = PeerMsg::raft_query(req.clone()).0;
         if let Err(e) = MsgRouter::send(&self.router, region_id, msg) {
             debug!(
                 self.logger,
@@ -300,15 +299,16 @@ struct StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
-    store_meta: Arc<Mutex<StoreMeta<E>>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
+    reg: TabletRegistry<E>,
 }
 
 impl<E> StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
-    pub fn new(store_meta: Arc<Mutex<StoreMeta<E>>>) -> StoreMetaDelegate<E> {
-        StoreMetaDelegate { store_meta }
+    pub fn new(store_meta: Arc<Mutex<StoreMeta>>, reg: TabletRegistry<E>) -> StoreMetaDelegate<E> {
+        StoreMetaDelegate { store_meta, reg }
     }
 }
 
@@ -317,7 +317,7 @@ where
     E: KvEngine,
 {
     type Executor = CachedReadDelegate<E>;
-    type StoreMeta = Arc<Mutex<StoreMeta<E>>>;
+    type StoreMeta = Arc<Mutex<StoreMeta>>;
 
     fn store_id(&self) -> Option<u64> {
         self.store_meta.as_ref().lock().unwrap().store_id
@@ -330,7 +330,7 @@ where
         let reader = meta.readers.get(&region_id).cloned();
         if let Some(reader) = reader {
             // If reader is not None, cache must not be None.
-            let cached_tablet = meta.tablet_caches.get(&region_id).cloned().unwrap();
+            let cached_tablet = self.reg.get(region_id).unwrap();
             return (
                 meta.readers.len(),
                 Some(CachedReadDelegate {
@@ -431,9 +431,9 @@ mod tests {
     use crossbeam::{atomic::AtomicCell, channel::TrySendError};
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::{KvTestEngine, TestTabletFactoryV2},
+        kv::{KvTestEngine, TestTabletFactory},
     };
-    use engine_traits::{MiscExt, OpenOptions, Peekable, SyncMutable, TabletFactory, ALL_CFS};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, TabletContext, DATA_CFS};
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use raftstore::store::{
@@ -470,7 +470,8 @@ mod tests {
     #[allow(clippy::type_complexity)]
     fn new_reader(
         store_id: u64,
-        store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        reg: TabletRegistry<KvTestEngine>,
     ) -> (
         LocalReader<KvTestEngine, MockRouter>,
         Receiver<(u64, PeerMsg)>,
@@ -478,6 +479,7 @@ mod tests {
         let (ch, rx) = MockRouter::new();
         let mut reader = LocalReader::new(
             store_meta,
+            reg,
             ch,
             Logger::root(slog::Discard, o!("key1" => "value1")),
         );
@@ -539,15 +541,16 @@ mod tests {
 
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test-local-reader")
             .tempdir()
             .unwrap();
-        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+        let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
+        let reg = TabletRegistry::new(factory, path.path()).unwrap();
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new()));
-        let (mut reader, mut rx) = new_reader(store_id, store_meta.clone());
+        let store_meta = Arc::new(Mutex::new(StoreMeta::default()));
+        let (mut reader, mut rx) = new_reader(store_id, store_meta.clone(), reg.clone());
         let (mix_tx, mix_rx) = sync_channel(1);
         let handler = mock_raftstore(mix_rx);
 
@@ -623,11 +626,8 @@ mod tests {
             };
             meta.readers.insert(1, read_delegate);
             // create tablet with region_id 1 and prepare some data
-            let tablet1 = factory
-                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-                .unwrap();
-            let cache = CachedTablet::new(Some(tablet1));
-            meta.tablet_caches.insert(1, cache);
+            let ctx = TabletContext::new(&region1, Some(10));
+            reg.load(ctx, true).unwrap();
         }
 
         let (ch_tx, ch_rx) = sync_channel(1);
@@ -680,7 +680,7 @@ mod tests {
                 ch_tx.clone(),
             ))
             .unwrap();
-        let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
+        block_on(reader.snapshot(cmd.clone())).unwrap();
         // Updating lease makes cache miss.
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
@@ -733,15 +733,16 @@ mod tests {
     fn test_read_delegate() {
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test-local-reader")
             .tempdir()
             .unwrap();
-        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+        let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
+        let reg = TabletRegistry::new(factory, path.path()).unwrap();
 
         let store_meta =
-            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new())));
+            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::default())), reg.clone());
 
         let tablet1;
         let tablet2;
@@ -753,24 +754,20 @@ mod tests {
             meta.readers.insert(1, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
-            tablet1 = factory
-                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-                .unwrap();
+            let mut ctx = TabletContext::with_infinite_region(1, Some(10));
+            reg.load(ctx, true).unwrap();
+            tablet1 = reg.get(1).unwrap().latest().unwrap().clone();
             tablet1.put(b"a1", b"val1").unwrap();
-            let cache = CachedTablet::new(Some(tablet1.clone()));
-            meta.tablet_caches.insert(1, cache);
 
             // Create read_delegate with region id 2
             let read_delegate = ReadDelegate::mock(2);
             meta.readers.insert(2, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
-            tablet2 = factory
-                .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
-                .unwrap();
+            ctx = TabletContext::with_infinite_region(2, Some(10));
+            reg.load(ctx, true).unwrap();
+            tablet2 = reg.get(2).unwrap().latest().unwrap().clone();
             tablet2.put(b"a2", b"val2").unwrap();
-            let cache = CachedTablet::new(Some(tablet2.clone()));
-            meta.tablet_caches.insert(2, cache);
         }
 
         let (_, delegate) = store_meta.get_executor_and_len(1);

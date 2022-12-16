@@ -340,7 +340,10 @@ impl WaitTable {
         Some(waiter)
     }
 
-    fn update_waiter(&mut self, update_event: &UpdateWaitForEvent) -> Option<KeyLockWaitInfo> {
+    fn update_waiter(
+        &mut self,
+        update_event: &UpdateWaitForEvent,
+    ) -> Option<(KeyLockWaitInfo, DiagnosticContext)> {
         let waiter = self.waiter_pool.get_mut(&update_event.token)?;
 
         assert_eq!(waiter.wait_info.key, update_event.wait_info.key);
@@ -351,9 +354,8 @@ impl WaitTable {
         }
 
         let result = std::mem::replace(&mut waiter.wait_info, update_event.wait_info.clone());
-        waiter.diag_ctx = update_event.diag_ctx.clone();
 
-        Some(result)
+        Some((result, waiter.diag_ctx.clone()))
     }
 
     fn take_waiter_by_lock_digest(
@@ -542,11 +544,11 @@ impl WaiterManager {
                 continue;
             }
 
-            if let Some(previous_wait_info) = previous_wait_info {
+            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info {
                 self.detector_scheduler
                     .clean_up_wait_for(event.start_ts, previous_wait_info);
                 self.detector_scheduler
-                    .detect(event.start_ts, event.wait_info, event.diag_ctx);
+                    .detect(event.start_ts, event.wait_info, diag_ctx);
             }
         }
     }

@@ -21,7 +21,6 @@
 // Functionalities like read, write, etc should be implemented in [`operation`]
 // using a standalone modules.
 
-#![allow(unused)]
 #![feature(let_chains)]
 #![feature(array_windows)]
 #![feature(div_duration)]
@@ -32,7 +31,6 @@ mod fsm;
 mod operation;
 mod raft;
 pub mod router;
-mod tablet;
 mod worker;
 
 pub(crate) use batch::StoreContext;
