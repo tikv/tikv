@@ -203,7 +203,6 @@ pub struct Config {
     pub store_batch_system: BatchSystemConfig,
 
     /// If it is 0, it means io tasks are handled in store threads.
-    #[online_config(skip)]
     pub store_io_pool_size: usize,
 
     #[online_config(skip)]
@@ -1046,6 +1045,12 @@ impl ConfigManager for RaftstoreConfigManager {
             change.get("apply_batch_system")
         {
             self.schedule_config_change(RaftStoreBatchComponent::Apply, apply_batch_system_change);
+        }
+        if let Some(ConfigValue::Usize(resized_io_size)) = change.get("store_io_pool_size") {
+            let resize_io_task = RefreshConfigTask::ScaleWriters(*resized_io_size);
+            if let Err(e) = self.scheduler.schedule(resize_io_task) {
+                error!("raftstore configuration manager schedule to resize store-io-pool-size work task failed"; "err"=> ?e);
+            }
         }
         info!(
             "raftstore config changed";

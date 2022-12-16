@@ -306,7 +306,8 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
         // To avoid losting several async messages when concurrently modifying the
         // shared senders by outer operators, such as refresh_config runner, it should
         // redirect the async messages to valid senders by `MOD self.capacity()`.
-        self._cached_senders[idx % self.capacity()].send(msg)
+        let valid_idx = idx % std::cmp::min(self.capacity(), self._cached_senders.len());
+        self._cached_senders[valid_idx].send(msg)
     }
 
     #[inline]
@@ -319,7 +320,8 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
         // should find a elegant way to initialize the sync_io after we release all
         // async-io threads and pipes.
         debug_assert!(!self._cached_senders.is_empty());
-        self._cached_senders[idx % self.capacity()].try_send(msg)
+        let valid_idx = idx % std::cmp::min(self.capacity(), self._cached_senders.len());
+        self._cached_senders[valid_idx].try_send(msg)
     }
 }
 
