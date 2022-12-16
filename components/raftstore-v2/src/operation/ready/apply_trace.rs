@@ -13,7 +13,8 @@
 //! index of all data CFs have advanced. So a special flushed index is
 //! introduced and stored with raft CF (only using the name, raft CF is
 //! dropped). It's the recommended recovery start point. How these two indexes
-//! interact with each other can be found in the `ApplyTrace::recover`.
+//! interact with each other can be found in the `ApplyTrace::recover` and
+//! `ApplyTrace::maybe_advance_admin_flushed`.
 //!
 //! The correctness of raft cf index relies on the fact that:
 //! - apply is sequential, so if any apply index is updated to apply trace, all
@@ -26,7 +27,7 @@
 //! All apply related states are associated with an apply index. During
 //! recovery states corresponding to the start index should be used.
 
-use std::{cmp, sync::Mutex};
+use std::sync::Mutex;
 
 use engine_traits::{
     FlushProgress, KvEngine, RaftEngine, RaftLogBatch, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
@@ -216,35 +217,30 @@ impl ApplyTrace {
         self.admin.flushed
     }
 
+    // All events before `mem_index` must be consumed before calling this function.
     fn maybe_advance_admin_flushed(&mut self, mem_index: u64) {
         if self.admin.flushed < self.admin.last_modified {
             return;
         }
-        let mut min_unflushed_index = u64::MAX;
+        // At best effort, we can only advance the index to `mem_index`.
+        let mut candidate = mem_index;
         for pr in self.data_cfs.iter() {
-            if pr.flushed == pr.last_modified {
+            // There is no change to the CF before `mem_index`, ignore it.
+            if pr.last_modified == pr.flushed {
                 continue;
-            } else {
-                if pr.flushed < min_unflushed_index {
-                    min_unflushed_index = pr.flushed;
-                }
-                if pr.last_modified < min_unflushed_index {
-                    // Flush may race with recording modified, using the min index to make
-                    // sure admin pr should also record all modification.
-                    min_unflushed_index = pr.last_modified;
-                }
             }
+            // This CF already persists all required data, ignore it.
+            if pr.flushed >= candidate {
+                continue;
+            }
+            // No matter what `last_modified` is, `pr.flushed` is all the data we have.
+            candidate = pr.flushed;
         }
-        if min_unflushed_index == u64::MAX {
-            // So all are flushed and there is no blocking admin command.
-            self.admin.flushed = mem_index;
-        } else if min_unflushed_index > self.admin.flushed {
-            // It means all modification must be received and there is no admin
-            // modification.
-            self.admin.flushed = min_unflushed_index;
-        }
-        if self.admin.flushed > self.persisted_applied + 100 {
-            self.try_persist = true;
+        if candidate > self.admin.flushed {
+            self.admin.flushed = candidate;
+            if candidate > self.persisted_applied + 100 {
+                self.try_persist = true;
+            }
         }
         // TODO: persist admin.flushed every 10 minutes.
     }
@@ -560,7 +556,7 @@ mod tests {
         for cf in DATA_CFS {
             trace.on_flush(cf, 5);
         }
-        trace.maybe_advance_admin_flushed(5);
+        trace.maybe_advance_admin_flushed(4);
         // Though all data CFs are flushed, but index should not be
         // advanced as we don't know whether there is admin modification.
         assert_eq!(4, trace.persisted_apply_index());
@@ -590,6 +586,7 @@ mod tests {
             ([(2, 2), (3, 3), (6, 5)], (2, 2), 5, 5),
             ([(8, 2), (9, 3), (7, 5)], (4, 4), 5, 5),
             ([(8, 2), (9, 3), (7, 5)], (5, 5), 5, 5),
+            ([(2, 3), (9, 3), (7, 5)], (2, 2), 5, 2),
         ];
         for (case, (data_cfs, admin, mem_index, exp)) in cases.iter().enumerate() {
             let mut trace = ApplyTrace::default();

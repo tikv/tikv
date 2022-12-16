@@ -27,7 +27,7 @@ use std::{
     },
 };
 
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, ALL_CFS};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
@@ -406,7 +406,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             .unwrap();
         lb.put_region_state(region_id, last_index, self.region_state())
             .unwrap();
-        lb.put_flushed_index(region_id, CF_RAFT, last_index, last_index);
+        lb.put_flushed_index(region_id, CF_RAFT, last_index, last_index)
+            .unwrap();
 
         let (path, clean_split) = match self.split_init_mut() {
             // If index not match, the peer may accept a newer snapshot after split.
