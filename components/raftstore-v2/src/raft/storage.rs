@@ -382,7 +382,7 @@ mod tests {
         // This index can't be set before load tablet.
         assert_ne!(10, s.entry_storage().applied_index());
         assert_ne!(1, s.entry_storage().applied_term());
-        assert_ne!(10, s.region_state().get_tablet_index());
+        assert_eq!(10, s.region_state().get_tablet_index());
         assert!(task.persisted_cb.is_some());
 
         s.on_applied_snapshot();
