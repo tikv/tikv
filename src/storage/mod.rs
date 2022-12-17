@@ -75,7 +75,9 @@ use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine_traits::{
+    raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+};
 use futures::prelude::*;
 use kvproto::{
     kvrpcpb::{
@@ -1538,7 +1540,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             [(Some(start_key.as_encoded()), Some(end_key.as_encoded()))],
         )?;
 
-        let mut modifies = Vec::with_capacity(DATA_CFS.len());
+        let mut modifies = Vec::with_capacity(DATA_CFS_LEN);
         for cf in DATA_CFS {
             modifies.push(Modify::DeleteRange(
                 cf,

@@ -17,12 +17,14 @@
 //!
 //! There two steps can be processed concurrently.
 
+mod apply_trace;
 mod async_writer;
 mod snapshot;
 
 use std::{cmp, time::Instant};
 
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
+pub use apply_trace::{cf_offset, write_initial_states, ApplyTrace, DataTrace, StateStorage};
+use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use protobuf::Message as _;
@@ -269,6 +271,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn handle_raft_ready<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let has_ready = self.reset_has_ready();
+        let has_extra_write = self.reset_has_extra_write();
         if !has_ready || self.destroy_progress().started() {
             #[cfg(feature = "testexport")]
             self.async_writer.notify_flush();
@@ -276,7 +279,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         ctx.has_ready = true;
 
-        if !self.raft_group().has_ready() && (self.serving() || self.postponed_destroy()) {
+        if !has_extra_write
+            && !self.raft_group().has_ready()
+            && (self.serving() || self.postponed_destroy())
+        {
             #[cfg(feature = "testexport")]
             self.async_writer.notify_flush();
             return;
@@ -328,11 +334,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Always sending snapshot task after apply task, so it gets latest
         // snapshot.
         if let Some(gen_task) = self.storage_mut().take_gen_snap_task() {
-            self.apply_scheduler().send(ApplyTask::Snapshot(gen_task));
+            self.apply_scheduler()
+                .unwrap()
+                .send(ApplyTask::Snapshot(gen_task));
         }
 
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
+        self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
         if !ready.persisted_messages().is_empty() {
@@ -554,17 +563,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         if !ever_persisted || prev_raft_state != *entry_storage.raft_state() {
             write_task.raft_state = Some(entry_storage.raft_state().clone());
         }
-        if !ever_persisted {
-            let region_id = self.region().get_id();
-            let raft_engine = self.entry_storage().raft_engine();
-            let lb = write_task
-                .extra_write
-                .ensure_v2(|| raft_engine.log_batch(3));
-            lb.put_apply_state(region_id, 0, self.apply_state())
-                .unwrap();
-            lb.put_region_state(region_id, 0, self.region_state())
-                .unwrap();
+        // If snapshot initializes the peer, we don't need to write apply trace again.
+        if !self.ever_persisted() {
+            self.init_apply_trace(write_task);
             self.set_ever_persisted();
+        }
+        if self.apply_trace().should_persist() {
+            self.record_apply_trace(write_task);
         }
     }
 }

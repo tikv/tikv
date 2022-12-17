@@ -14,6 +14,7 @@ use raftstore::{
 
 use crate::{
     batch::StoreContext,
+    operation::cf_offset,
     raft::{Apply, Peer},
     router::CmdResChannel,
 };
@@ -109,7 +110,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
-    pub fn apply_put(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    pub fn apply_put(&mut self, cf: &str, index: u64, key: &[u8], value: &[u8]) -> Result<()> {
+        let off = cf_offset(cf);
+        if self.should_skip(off, index) {
+            return Ok(());
+        }
         util::check_key_in_region(key, self.region_state().get_region())?;
         // Technically it's OK to remove prefix for raftstore v2. But rocksdb doesn't
         // support specifying infinite upper bound in various APIs.
@@ -140,11 +145,16 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         fail::fail_point!("APPLY_PUT", |_| Err(raftstore::Error::Other(
             "aborted by failpoint".into()
         )));
+        self.modifications_mut()[off] = index;
         Ok(())
     }
 
     #[inline]
-    pub fn apply_delete(&mut self, cf: &str, key: &[u8]) -> Result<()> {
+    pub fn apply_delete(&mut self, cf: &str, index: u64, key: &[u8]) -> Result<()> {
+        let off = cf_offset(cf);
+        if self.should_skip(off, index) {
+            return Ok(());
+        }
         util::check_key_in_region(key, self.region_state().get_region())?;
         keys::data_key_with_buffer(key, &mut self.key_buffer);
         let res = if cf.is_empty() || cf == CF_DEFAULT {
@@ -165,6 +175,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 e
             );
         });
+        self.modifications_mut()[off] = index;
         Ok(())
     }
 
@@ -172,6 +183,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn apply_delete_range(
         &mut self,
         _cf: &str,
+        _index: u64,
         _start_key: &[u8],
         _end_key: &[u8],
         _notify_only: bool,

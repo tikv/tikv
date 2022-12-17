@@ -119,9 +119,10 @@ pub mod kv {
     }
 
     impl TabletFactory<KvTestEngine> for TestTabletFactory {
-        fn open_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<KvTestEngine> {
-            KvTestEngine::new_kv_engine_opt(
+        fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<KvTestEngine> {
+            KvTestEngine::new_tablet(
                 path.to_str().unwrap(),
+                ctx,
                 self.db_opt.clone(),
                 self.cf_opts.clone(),
             )
@@ -155,7 +156,7 @@ pub mod ctor {
     use std::sync::Arc;
 
     use encryption::DataKeyManager;
-    use engine_traits::Result;
+    use engine_traits::{Result, StateStorage, TabletContext};
     use file_system::IoRateLimiter;
 
     /// Kv engine construction
@@ -188,6 +189,14 @@ pub mod ctor {
             db_opt: DbOptions,
             cf_opts: Vec<(&str, CfOptions)>,
         ) -> Result<Self>;
+
+        /// Create a new engine specific for multi rocks.
+        fn new_tablet(
+            path: &str,
+            ctx: TabletContext,
+            db_opt: DbOptions,
+            cf_opts: Vec<(&str, CfOptions)>,
+        ) -> Result<Self>;
     }
 
     /// Raft engine construction
@@ -200,6 +209,7 @@ pub mod ctor {
     pub struct DbOptions {
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IoRateLimiter>>,
+        state_storage: Option<Arc<dyn StateStorage>>,
         enable_multi_batch_write: bool,
     }
 
@@ -210,6 +220,10 @@ pub mod ctor {
 
         pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IoRateLimiter>>) {
             self.rate_limiter = rate_limiter;
+        }
+
+        pub fn set_state_storage(&mut self, state_storage: Arc<dyn StateStorage>) {
+            self.state_storage = Some(state_storage);
         }
 
         pub fn set_enable_multi_batch_write(&mut self, enable: bool) {
@@ -329,6 +343,15 @@ pub mod ctor {
             ) -> Result<Self> {
                 Ok(PanicEngine)
             }
+
+            fn new_tablet(
+                _path: &str,
+                _ctx: engine_traits::TabletContext,
+                _db_opt: DbOptions,
+                _cf_opts: Vec<(&str, CfOptions)>,
+            ) -> Result<Self> {
+                Ok(PanicEngine)
+            }
         }
 
         impl RaftEngineConstructorExt for engine_panic::PanicEngine {
@@ -343,9 +366,11 @@ pub mod ctor {
             get_env,
             properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
             util::new_engine_opt as rocks_new_engine_opt,
-            RocksCfOptions, RocksDbOptions,
+            RocksCfOptions, RocksDbOptions, RocksPersistenceListener,
         };
-        use engine_traits::{CfOptions as _, Result, CF_DEFAULT};
+        use engine_traits::{
+            CfOptions as _, PersistenceListener, Result, TabletContext, CF_DEFAULT,
+        };
 
         use super::{
             CfOptions, DbOptions, KvEngineConstructorExt, RaftDbOptions, RaftEngineConstructorExt,
@@ -371,6 +396,36 @@ pub mod ctor {
             ) -> Result<Self> {
                 let rocks_db_opts = get_rocks_db_opts(db_opt)?;
                 let rocks_cfs_opts = cfs_opts
+                    .iter()
+                    .map(|(name, opt)| (*name, get_rocks_cf_opts(opt)))
+                    .collect();
+                rocks_new_engine_opt(path, rocks_db_opts, rocks_cfs_opts)
+            }
+
+            fn new_tablet(
+                path: &str,
+                ctx: TabletContext,
+                db_opt: DbOptions,
+                cf_opts: Vec<(&str, CfOptions)>,
+            ) -> Result<Self> {
+                let mut rocks_db_opts = RocksDbOptions::default();
+                let env = get_env(db_opt.key_manager.clone(), db_opt.rate_limiter)?;
+                rocks_db_opts.set_env(env);
+                rocks_db_opts.enable_unordered_write(false);
+                rocks_db_opts.enable_pipelined_write(false);
+                rocks_db_opts.enable_multi_batch_write(false);
+                rocks_db_opts.allow_concurrent_memtable_write(false);
+                if let Some(storage) = db_opt.state_storage
+                    && let Some(flush_state) = ctx.flush_state {
+                    let listener = PersistenceListener::new(
+                        ctx.id,
+                        ctx.suffix.unwrap(),
+                        flush_state,
+                        storage,
+                    );
+                    rocks_db_opts.add_event_listener(RocksPersistenceListener::new(listener));
+                }
+                let rocks_cfs_opts = cf_opts
                     .iter()
                     .map(|(name, opt)| (*name, get_rocks_cf_opts(opt)))
                     .collect();

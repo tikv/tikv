@@ -5,50 +5,23 @@ use std::{
     fmt::{self, Debug, Formatter},
 };
 
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
+use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
-    metapb::{self, Region},
+    metapb,
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raft::{
     eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{util, EntryStorage, ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use raftstore::store::{util, EntryStorage, ReadTask};
 use slog::{o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
 use crate::{
-    operation::{GenSnapTask, SnapState, SplitInit},
+    operation::{ApplyTrace, GenSnapTask, SnapState, SplitInit},
     Result,
 };
-
-pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
-    let region_id = region.get_id();
-
-    let mut state = RegionLocalState::default();
-    state.set_region(region);
-    state.set_tablet_index(RAFT_INIT_LOG_INDEX);
-    wb.put_region_state(region_id, 0, &state)?;
-
-    let mut apply_state = RaftApplyState::default();
-    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
-    apply_state
-        .mut_truncated_state()
-        .set_index(RAFT_INIT_LOG_INDEX);
-    apply_state
-        .mut_truncated_state()
-        .set_term(RAFT_INIT_LOG_TERM);
-    wb.put_apply_state(region_id, 0, &apply_state)?;
-
-    let mut raft_state = RaftLocalState::default();
-    raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
-    raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
-    raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-    wb.put_raft_state(region_id, &raft_state)?;
-
-    Ok(())
-}
 
 /// A storage for raft.
 ///
@@ -67,6 +40,8 @@ pub struct Storage<EK: KvEngine, ER> {
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
     split_init: Option<Box<SplitInit>>,
+    /// The flushed index of all CFs.
+    apply_trace: ApplyTrace,
 }
 
 impl<EK: KvEngine, ER> Debug for Storage<EK, ER> {
@@ -120,87 +95,20 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     pub fn gen_snap_task_mut(&self) -> RefMut<'_, Box<Option<GenSnapTask>>> {
         self.gen_snap_task.borrow_mut()
     }
+
+    #[inline]
+    pub fn apply_trace_mut(&mut self) -> &mut ApplyTrace {
+        &mut self.apply_trace
+    }
+
+    #[inline]
+    pub fn apply_trace(&self) -> &ApplyTrace {
+        &self.apply_trace
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
-    /// Creates a new storage with uninit states.
-    ///
-    /// This should only be used for creating new peer from raft message.
-    pub fn uninit(
-        store_id: u64,
-        region: Region,
-        engine: ER,
-        read_scheduler: Scheduler<ReadTask<EK>>,
-        logger: &Logger,
-    ) -> Result<Self> {
-        let mut region_state = RegionLocalState::default();
-        region_state.set_region(region);
-        Self::create(
-            store_id,
-            region_state,
-            RaftLocalState::default(),
-            RaftApplyState::default(),
-            engine,
-            read_scheduler,
-            false,
-            logger,
-        )
-    }
-
-    /// Creates a new storage.
-    ///
-    /// All metadata should be initialized before calling this method. If the
-    /// region is destroyed, `None` will be returned.
-    pub fn new(
-        region_id: u64,
-        store_id: u64,
-        engine: ER,
-        read_scheduler: Scheduler<ReadTask<EK>>,
-        logger: &Logger,
-    ) -> Result<Option<Storage<EK, ER>>> {
-        let region_state = match engine.get_region_state(region_id, u64::MAX) {
-            Ok(Some(s)) => s,
-            res => {
-                return Err(box_err!(
-                    "failed to get region state for region {}: {:?}",
-                    region_id,
-                    res
-                ));
-            }
-        };
-
-        if region_state.get_state() == PeerState::Tombstone {
-            return Ok(None);
-        }
-
-        let raft_state = match engine.get_raft_state(region_id) {
-            Ok(Some(s)) => s,
-            res => {
-                return Err(box_err!("failed to get raft state: {:?}", res));
-            }
-        };
-
-        let apply_state = match engine.get_apply_state(region_id, u64::MAX) {
-            Ok(Some(s)) => s,
-            res => {
-                return Err(box_err!("failed to get apply state: {:?}", res));
-            }
-        };
-
-        Self::create(
-            store_id,
-            region_state,
-            raft_state,
-            apply_state,
-            engine,
-            read_scheduler,
-            true,
-            logger,
-        )
-        .map(Some)
-    }
-
-    fn create(
+    pub(crate) fn create(
         store_id: u64,
         region_state: RegionLocalState,
         raft_state: RaftLocalState,
@@ -208,6 +116,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         engine: ER,
         read_scheduler: Scheduler<ReadTask<EK>>,
         persisted: bool,
+        apply_trace: ApplyTrace,
         logger: &Logger,
     ) -> Result<Self> {
         let peer = find_peer(region_state.get_region(), store_id);
@@ -237,6 +146,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(Box::new(None)),
             split_init: None,
+            apply_trace,
         })
     }
 
@@ -265,6 +175,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         self.entry_storage.apply_state()
     }
 
+    /// Check if the storage is initialized.
+    ///
+    /// The storage is considered initialized when data is applied in memory.
     #[inline]
     pub fn is_initialized(&self) -> bool {
         self.region_state.get_tablet_index() != 0
@@ -363,7 +276,10 @@ impl<EK: KvEngine, ER: RaftEngine> raft::Storage for Storage<EK, ER> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::mpsc::{sync_channel, Receiver, SyncSender},
+        sync::{
+            mpsc::{sync_channel, Receiver, SyncSender},
+            Arc,
+        },
         time::Duration,
     };
 
@@ -371,9 +287,7 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::TestTabletFactory,
     };
-    use engine_traits::{
-        RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
-    };
+    use engine_traits::{RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS};
     use kvproto::{
         metapb::{Peer, Region},
         raft_serverpb::PeerState,
@@ -381,14 +295,16 @@ mod tests {
     use raft::{Error as RaftError, StorageError};
     use raftstore::store::{
         util::new_empty_snapshot, AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner,
-        TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        TabletSnapKey, TabletSnapManager, WriteTask,
     };
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::worker::Worker;
 
     use super::*;
-    use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes};
+    use crate::{
+        fsm::ApplyResReporter, operation::write_initial_states, raft::Apply, router::ApplyRes,
+    };
 
     #[derive(Clone)]
     pub struct TestRouter {
@@ -429,35 +345,6 @@ mod tests {
     }
 
     #[test]
-    fn test_write_initial_states() {
-        let region = new_region();
-        let path = TempDir::new().unwrap();
-        let engine = engine_test::new_temp_engine(&path);
-        let raft_engine = &engine.raft;
-        let mut wb = raft_engine.log_batch(10);
-        write_initial_states(&mut wb, region.clone()).unwrap();
-        assert!(!wb.is_empty());
-        raft_engine.consume(&mut wb, true).unwrap();
-
-        let local_state = raft_engine.get_region_state(4, 0).unwrap().unwrap();
-        assert_eq!(local_state.get_state(), PeerState::Normal);
-        assert_eq!(*local_state.get_region(), region);
-        assert_eq!(local_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
-
-        let raft_state = raft_engine.get_raft_state(4).unwrap().unwrap();
-        assert_eq!(raft_state.get_last_index(), RAFT_INIT_LOG_INDEX);
-        let hs = raft_state.get_hard_state();
-        assert_eq!(hs.get_term(), RAFT_INIT_LOG_TERM);
-        assert_eq!(hs.get_commit(), RAFT_INIT_LOG_INDEX);
-
-        let apply_state = raft_engine.get_apply_state(4, u64::MAX).unwrap().unwrap();
-        assert_eq!(apply_state.get_applied_index(), RAFT_INIT_LOG_INDEX);
-        let ts = apply_state.get_truncated_state();
-        assert_eq!(ts.get_index(), RAFT_INIT_LOG_INDEX);
-        assert_eq!(ts.get_term(), RAFT_INIT_LOG_TERM);
-    }
-
-    #[test]
     fn test_apply_snapshot() {
         let region = new_region();
         let path = TempDir::new().unwrap();
@@ -474,7 +361,7 @@ mod tests {
         let ops = DbOptions::default();
         let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
-        let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
+        let reg = TabletRegistry::new(factory, path.path().join("tablets")).unwrap();
         let worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
         let logger = slog_global::borrow_global().new(o!());
@@ -495,7 +382,7 @@ mod tests {
         // This index can't be set before load tablet.
         assert_ne!(10, s.entry_storage().applied_index());
         assert_ne!(1, s.entry_storage().applied_term());
-        assert_ne!(10, s.region_state().get_tablet_index());
+        assert_eq!(10, s.region_state().get_tablet_index());
         assert!(task.persisted_cb.is_some());
 
         s.on_applied_snapshot();
@@ -521,7 +408,7 @@ mod tests {
         let ops = DbOptions::default();
         let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
-        let reg = TabletRegistry::new(factory, path.path().join("tablet")).unwrap();
+        let reg = TabletRegistry::new(factory, path.path().join("tablets")).unwrap();
         let tablet_ctx = TabletContext::new(&region, Some(10));
         reg.load(tablet_ctx, true).unwrap();
         // setup read runner worker and peer storage
@@ -544,6 +431,8 @@ mod tests {
             router,
             reg,
             sched,
+            Arc::default(),
+            None,
             logger,
         );
 
