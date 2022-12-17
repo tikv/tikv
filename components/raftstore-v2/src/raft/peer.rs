@@ -8,14 +8,16 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletContext, TabletRegistry};
+use engine_traits::{
+    CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
+};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::store::{
     util::{Lease, RegionReadProgress},
     Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-    ReadProgress, TxnExt,
+    ReadProgress, TxnExt, WriteTask,
 };
 use slog::Logger;
 
@@ -53,6 +55,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// Set to true if any side effect needs to be handled.
     has_ready: bool,
+    /// Sometimes there is no ready at all, but we need to trigger async write.
+    has_extra_write: bool,
     /// Writer for persisting side effects asynchronously.
     pub(crate) async_writer: AsyncWriter<EK, ER>,
 
@@ -78,6 +82,13 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     // Trace which peers have not finished split.
     split_trace: Vec<(u64, HashSet<u64>)>,
+
+    /// Apply related State changes that needs to be persisted to raft engine.
+    ///
+    /// To make recovery correct, we need to persist all state changes before
+    /// advancing apply index.
+    state_changes: Option<Box<ER::LogBatch>>,
+    flush_state: Arc<FlushState>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -102,11 +113,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = raft_group.store().region_state().get_region().clone();
 
         let cached_tablet = tablet_registry.get_or_default(region_id);
+        let flush_state: Arc<FlushState> = Arc::default();
         // We can't create tablet if tablet index is 0. It can introduce race when gc
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.
         if tablet_index != 0 {
-            let ctx = TabletContext::new(&region, Some(tablet_index));
+            let mut ctx = TabletContext::new(&region, Some(tablet_index));
+            ctx.flush_state = Some(flush_state.clone());
             // TODO: Perhaps we should stop create the tablet automatically.
             tablet_registry.load(ctx, false)?;
         }
@@ -122,6 +135,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             async_writer: AsyncWriter::new(region_id, peer_id),
             apply_scheduler: None,
             has_ready: false,
+            has_extra_write: false,
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
@@ -143,6 +157,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
             split_trace: vec![],
+            state_changes: None,
+            flush_state,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -335,6 +351,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn set_has_extra_write(&mut self) {
+        self.set_has_ready();
+        self.has_extra_write = true;
+    }
+
+    #[inline]
+    pub fn reset_has_extra_write(&mut self) -> bool {
+        mem::take(&mut self.has_extra_write)
+    }
+
+    #[inline]
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         for p in self.raft_group.store().region().get_peers() {
             if p.get_id() == peer.get_id() {
@@ -499,8 +526,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.proposals
     }
 
-    pub fn apply_scheduler(&self) -> &ApplyScheduler {
-        self.apply_scheduler.as_ref().unwrap()
+    pub fn apply_scheduler(&self) -> Option<&ApplyScheduler> {
+        self.apply_scheduler.as_ref()
     }
 
     #[inline]
@@ -630,5 +657,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn split_trace_mut(&mut self) -> &mut Vec<(u64, HashSet<u64>)> {
         &mut self.split_trace
+    }
+
+    #[inline]
+    pub fn flush_state(&self) -> &Arc<FlushState> {
+        &self.flush_state
+    }
+
+    pub fn reset_flush_state(&mut self) {
+        self.flush_state = Arc::default();
+    }
+
+    #[inline]
+    pub fn state_changes_mut(&mut self) -> &mut ER::LogBatch {
+        if self.state_changes.is_none() {
+            self.state_changes = Some(Box::new(self.entry_storage().raft_engine().log_batch(0)));
+        }
+        self.state_changes.as_mut().unwrap()
+    }
+
+    #[inline]
+    pub fn merge_state_changes_to(&mut self, task: &mut WriteTask<EK, ER>) {
+        if self.state_changes.is_none() {
+            return;
+        }
+        task.extra_write
+            .merge_v2(Box::into_inner(self.state_changes.take().unwrap()));
     }
 }
