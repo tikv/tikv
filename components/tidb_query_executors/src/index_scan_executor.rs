@@ -713,11 +713,11 @@ impl IndexScanExecutorImpl {
             RestoreData::V5(rst) => {
                 // Extract the data from key, then use the restore data to get the original
                 // data.
+                let limit = self.columns_id_without_handle.len();
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
-                    &mut columns[..self.columns_id_without_handle.len()],
+                    &mut columns[..limit],
                 )?;
-                let limit = self.columns_id_without_handle.len();
                 self.restore_original_data(
                     rst,
                     izip!(
