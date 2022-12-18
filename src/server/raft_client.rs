@@ -664,6 +664,9 @@ where
         let len = self.queue.len();
         for _ in 0..len {
             let msg = self.queue.try_pop().unwrap();
+            info!("drop message"; 
+                  "region_id" => msg.get_region_id(),
+                  "message type" => ?msg.get_message().get_msg_type());
             report_unreachable(&self.builder.router, &msg)
         }
         REPORT_FAILURE_MSG_COUNTER
