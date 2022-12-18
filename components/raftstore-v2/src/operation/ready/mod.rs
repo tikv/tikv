@@ -31,7 +31,10 @@ use protobuf::Message as _;
 use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
 use raftstore::store::{util, FetchedLogs, ReadProgress, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
-use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use tikv_util::{
+    store::find_peer,
+    time::{duration_to_sec, monotonic_raw_now},
+};
 
 pub use self::{
     async_writer::AsyncWriter,
@@ -39,10 +42,24 @@ pub use self::{
 };
 use crate::{
     batch::StoreContext,
-    fsm::PeerFsmDelegate,
+    fsm::{PeerFsmDelegate, Store},
     raft::{Peer, Storage},
-    router::{ApplyTask, PeerTick},
+    router::{ApplyTask, PeerMsg, PeerTick},
 };
+
+impl Store {
+    pub fn on_store_unreachable<EK, ER, T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        to_store_id: u64,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        ctx.router
+            .broadcast_normal(|| PeerMsg::StoreUnreachable { to_store_id });
+    }
+}
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
@@ -59,6 +76,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     fn tick(&mut self) -> bool {
         self.raft_group_mut().tick()
+    }
+
+    pub fn on_peer_unreachable(&mut self, to_peer_id: u64) {
+        if self.is_leader() {
+            self.raft_group_mut().report_unreachable(to_peer_id);
+        }
+    }
+
+    pub fn on_store_unreachable(&mut self, to_store_id: u64) {
+        if self.is_leader() {
+            if let Some(peer_id) = find_peer(self.region(), to_store_id).map(|p| p.get_id()) {
+                self.raft_group_mut().report_unreachable(peer_id);
+            }
+        }
     }
 
     pub fn on_raft_message<T>(

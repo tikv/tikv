@@ -9,6 +9,7 @@ use std::{
 use batch_system::Router;
 use crossbeam::channel::TrySendError;
 use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletRegistry};
+use futures::Future;
 use kvproto::{
     errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
@@ -22,7 +23,7 @@ use raftstore::{
     Error, Result,
 };
 use slog::{debug, Logger};
-use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now};
+use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now, Either};
 use time::Timespec;
 use txn_types::WriteBatchFlags;
 
@@ -32,7 +33,7 @@ use crate::{
     StoreRouter,
 };
 
-pub trait MsgRouter: Send {
+pub trait MsgRouter: Clone + Send {
     fn send(&self, addr: u64, msg: PeerMsg) -> std::result::Result<(), TrySendError<PeerMsg>>;
 }
 
@@ -103,9 +104,9 @@ where
 
     fn try_get_snapshot(
         &mut self,
-        req: RaftCmdRequest,
+        req: &RaftCmdRequest,
     ) -> std::result::Result<Option<RegionSnapshot<E::Snapshot>>, RaftCmdResponse> {
-        match self.pre_propose_raft_command(&req) {
+        match self.pre_propose_raft_command(req) {
             Ok(Some((mut delegate, policy))) => match policy {
                 RequestPolicy::ReadLocal => {
                     let region = Arc::clone(&delegate.region);
@@ -121,7 +122,7 @@ where
                     TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
 
                     // Try renew lease in advance
-                    self.maybe_renew_lease_in_advance(&delegate, &req, snapshot_ts);
+                    self.maybe_renew_lease_in_advance(&delegate, req, snapshot_ts);
                     Ok(Some(snap))
                 }
                 RequestPolicy::StaleRead => {
@@ -156,63 +157,83 @@ where
         }
     }
 
-    pub async fn snapshot(
+    pub fn snapshot(
         &mut self,
         mut req: RaftCmdRequest,
-    ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>> + Send
+    {
         let region_id = req.header.get_ref().region_id;
-        if let Some(snap) = self.try_get_snapshot(req.clone())? {
-            return Ok(snap);
+        let mut res = Either::Left(self.try_get_snapshot(&req));
+        if let Either::Left(Ok(None)) = res {
+            res = Either::Right((self.try_to_renew_lease(region_id, &req), self.clone()));
         }
 
-        if let Some(query_res) = self.try_to_renew_lease(region_id, &req).await? {
-            // If query successful, try again.
-            if query_res.read().is_some() {
-                req.mut_header().set_read_quorum(false);
-                if let Some(snap) = self.try_get_snapshot(req)? {
-                    return Ok(snap);
+        async move {
+            match res {
+                Either::Left(Ok(Some(snap))) => return Ok(snap),
+                Either::Left(Err(e)) => return Err(e),
+                Either::Right((fut, mut reader)) => {
+                    if let Some(query_res) = fut.await?
+                        && query_res.read().is_some() {
+                        // If query successful, try again.
+                            req.mut_header().set_read_quorum(false);
+                            if let Some(snap) = reader.try_get_snapshot(&req)? {
+                                return Ok(snap);
+                            }
+                    }
                 }
+                Either::Left(Ok(None)) => unreachable!(),
             }
-        }
 
-        let mut err = errorpb::Error::default();
-        err.set_message(format!(
-            "Fail to get snapshot from LocalReader for region {}. \
-            Maybe due to `not leader`, `region not found` or `not applied to the current term`",
-            region_id
-        ));
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        Err(resp)
+            let mut err = errorpb::Error::default();
+            err.set_message(format!(
+                "Fail to get snapshot from LocalReader for region {}. \
+                Maybe due to `not leader`, `region not found` or `not applied to the current term`",
+                region_id
+            ));
+            let mut resp = RaftCmdResponse::default();
+            resp.mut_header().set_error(err);
+            Err(resp)
+        }
     }
 
     // try to renew the lease by sending read query where the reading process may
     // renew the lease
-    async fn try_to_renew_lease(
+    fn try_to_renew_lease(
         &self,
         region_id: u64,
         req: &RaftCmdRequest,
-    ) -> std::result::Result<Option<QueryResult>, RaftCmdResponse> {
+    ) -> impl Future<Output = std::result::Result<Option<QueryResult>, RaftCmdResponse>> {
         let (msg, sub) = PeerMsg::raft_query(req.clone());
-        let mut err = errorpb::Error::default();
-        match MsgRouter::send(&self.router, region_id, msg) {
-            Ok(()) => return Ok(sub.result().await),
+        let res = match MsgRouter::send(&self.router, region_id, msg) {
+            Ok(()) => Ok(sub),
             Err(TrySendError::Full(_)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.channel_full.inc());
+                let mut err = errorpb::Error::default();
                 err.set_message(RAFTSTORE_IS_BUSY.to_owned());
                 err.mut_server_is_busy()
                     .set_reason(RAFTSTORE_IS_BUSY.to_owned());
+                Err(err)
             }
             Err(TrySendError::Disconnected(_)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
+                let mut err = errorpb::Error::default();
                 err.set_message(format!("region {} is missing", region_id));
                 err.mut_region_not_found().set_region_id(region_id);
+                Err(err)
+            }
+        };
+
+        async move {
+            match res {
+                Ok(sub) => Ok(sub.result().await),
+                Err(e) => {
+                    let mut resp = RaftCmdResponse::default();
+                    resp.mut_header().set_error(e);
+                    Err(resp)
+                }
             }
         }
-
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        Err(resp)
     }
 
     // If the remote lease will be expired in near future send message
@@ -449,6 +470,7 @@ mod tests {
     use super::*;
     use crate::router::{QueryResult, ReadResponse};
 
+    #[derive(Clone)]
     struct MockRouter {
         p_router: SyncSender<(u64, PeerMsg)>,
     }

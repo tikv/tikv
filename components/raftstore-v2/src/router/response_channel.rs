@@ -24,7 +24,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::task::AtomicWaker;
+use futures::{task::AtomicWaker, FutureExt, Stream};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{
     local_metrics::TimeTracker, msg::ErrorCallback, region_meta::RegionMeta, ReadCallback,
@@ -48,6 +48,7 @@ struct EventCore<Res> {
     /// Other events should be defined within [1, 30].
     event: AtomicU64,
     res: UnsafeCell<Option<Res>>,
+    before_set: UnsafeCell<Option<Box<dyn FnOnce(&mut Res) + Send>>>,
     // Waker can be changed, need to use `AtomicWaker` to guarantee no data race.
     waker: AtomicWaker,
 }
@@ -73,6 +74,7 @@ impl<Res> Default for EventCore<Res> {
         Self {
             event: AtomicU64::new(0),
             res: UnsafeCell::new(None),
+            before_set: UnsafeCell::new(None),
             waker: AtomicWaker::new(),
         }
     }
@@ -91,8 +93,11 @@ impl<Res> EventCore<Res> {
     ///
     /// After this call, no events should be notified.
     #[inline]
-    fn set_result(&self, result: Res) {
+    fn set_result(&self, mut result: Res) {
         unsafe {
+            if let Some(cb) = (*self.before_set.get()).take() {
+                cb(&mut result);
+            }
             *self.res.get() = Some(result);
         }
         let previous = self.event.fetch_or(
@@ -173,7 +178,7 @@ impl<'a, Res> Future for WaitEvent<'a, Res> {
 }
 
 struct WaitResult<'a, Res> {
-    core: &'a EventCore<Res>,
+    sub: &'a BaseSubscriber<Res>,
 }
 
 impl<'a, Res> Future for WaitResult<'a, Res> {
@@ -181,16 +186,16 @@ impl<'a, Res> Future for WaitResult<'a, Res> {
 
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let event = &self.core.event;
+        let event = &self.sub.core.event;
         let fired_bit = fired_bit_of(PAYLOAD_EVENT);
         let mut e = event.load(Ordering::Relaxed);
         if check_bit(e, fired_bit).is_some() {
             unsafe {
-                return Poll::Ready((*self.core.res.get()).take());
+                return Poll::Ready((*self.sub.core.res.get()).take());
             }
         }
         let subscribed_bit = subscribed_bit_of(PAYLOAD_EVENT);
-        self.core.waker.register(cx.waker());
+        self.sub.core.waker.register(cx.waker());
         loop {
             match event.compare_exchange_weak(
                 e,
@@ -203,12 +208,15 @@ impl<'a, Res> Future for WaitResult<'a, Res> {
             };
             if check_bit(e, fired_bit).is_some() {
                 unsafe {
-                    return Poll::Ready((*self.core.res.get()).take());
+                    return Poll::Ready((*self.sub.core.res.get()).take());
                 }
             }
         }
     }
 }
+
+unsafe impl<'a, Res: Send> Send for WaitResult<'a, Res> {}
+unsafe impl<'a, Res: Send> Sync for WaitResult<'a, Res> {}
 
 /// A base subscriber that contains most common implementation of subscribers.
 pub struct BaseSubscriber<Res> {
@@ -219,7 +227,7 @@ impl<Res> BaseSubscriber<Res> {
     /// Wait for the result.
     #[inline]
     pub async fn result(self) -> Option<Res> {
-        WaitResult { core: &self.core }.await
+        WaitResult { sub: &self }.await
     }
 
     /// Test if the result is ready without any polling.
@@ -283,6 +291,92 @@ impl CmdResSubscriber {
     }
 }
 
+enum CmdResPollStage {
+    ExpectProposed,
+    ExpectCommitted,
+    ExpectResult,
+    Drained,
+}
+
+#[derive(Debug)]
+pub enum CmdResEvent {
+    Proposed,
+    Committed,
+    Finished(RaftCmdResponse),
+}
+
+pub struct CmdResStream {
+    sub: CmdResSubscriber,
+    stage: CmdResPollStage,
+}
+
+impl CmdResStream {
+    #[inline]
+    pub fn new(sub: CmdResSubscriber) -> Self {
+        Self {
+            sub,
+            stage: CmdResPollStage::ExpectProposed,
+        }
+    }
+}
+
+impl Stream for CmdResStream {
+    type Item = CmdResEvent;
+
+    #[inline]
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let stream = self.get_mut();
+        loop {
+            match stream.stage {
+                CmdResPollStage::ExpectProposed => {
+                    match (WaitEvent {
+                        event: CmdResChannel::PROPOSED_EVENT,
+                        core: &stream.sub.core,
+                    })
+                    .poll_unpin(cx)
+                    {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(b) => {
+                            stream.stage = CmdResPollStage::ExpectCommitted;
+                            if b {
+                                return Poll::Ready(Some(CmdResEvent::Proposed));
+                            }
+                        }
+                    }
+                }
+                CmdResPollStage::ExpectCommitted => {
+                    match (WaitEvent {
+                        event: CmdResChannel::COMMITTED_EVENT,
+                        core: &stream.sub.core,
+                    })
+                    .poll_unpin(cx)
+                    {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(b) => {
+                            stream.stage = CmdResPollStage::ExpectResult;
+                            if b {
+                                return Poll::Ready(Some(CmdResEvent::Committed));
+                            }
+                        }
+                    }
+                }
+                CmdResPollStage::ExpectResult => {
+                    match (WaitResult { sub: &stream.sub }).poll_unpin(cx) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(res) => {
+                            stream.stage = CmdResPollStage::Drained;
+                            if let Some(res) = res {
+                                return Poll::Ready(Some(CmdResEvent::Finished(res)));
+                            }
+                        }
+                    }
+                }
+                CmdResPollStage::Drained => return Poll::Ready(None),
+            }
+        }
+    }
+}
+
 pub type CmdResChannel = BaseChannel<RaftCmdResponse>;
 
 impl Debug for CmdResChannel {
@@ -295,6 +389,16 @@ impl CmdResChannel {
     // Valid range is [1, 30]
     const PROPOSED_EVENT: u64 = 1;
     const COMMITTED_EVENT: u64 = 2;
+
+    pub fn with_callback(
+        before_set: impl FnOnce(&mut RaftCmdResponse) + Send + 'static,
+    ) -> (Self, CmdResSubscriber) {
+        let (c, s) = CmdResChannel::pair();
+        unsafe {
+            *c.core.before_set.get() = Some(Box::new(before_set));
+        }
+        (c, s)
+    }
 }
 
 impl ErrorCallback for CmdResChannel {
@@ -424,14 +528,28 @@ impl fmt::Debug for QueryResChannel {
 pub type DebugInfoChannel = BaseChannel<RegionMeta>;
 pub type DebugInfoSubscriber = BaseSubscriber<RegionMeta>;
 
+impl Debug for DebugInfoChannel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "DebugInfoChannel")
+    }
+}
+
 #[cfg(feature = "testexport")]
 pub type FlushChannel = BaseChannel<()>;
 #[cfg(feature = "testexport")]
 pub type FlushSubscriber = BaseSubscriber<()>;
 
+impl Debug for FlushChannel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "FlushChannel")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
+    use std::assert_matches::assert_matches;
+
+    use futures::{executor::block_on, StreamExt};
 
     use super::*;
 
@@ -481,5 +599,25 @@ mod tests {
         });
         chan.set_result(read.clone());
         assert_eq!(block_on(sub.result()).unwrap(), read);
+    }
+
+    #[test]
+    fn test_cmd_res_stream() {
+        let (chan, sub) = CmdResChannel::with_callback(|res| {
+            res.mut_header().set_current_term(6);
+        });
+        let mut stream = CmdResStream::new(sub);
+        chan.set_result(RaftCmdResponse::default());
+        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Finished(res)) if res.get_header().get_current_term() == 6);
+
+        let (mut chan, sub) = CmdResChannel::pair();
+        let mut stream = CmdResStream::new(sub);
+        chan.notify_proposed();
+        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Proposed));
+        chan.notify_committed();
+        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Committed));
+        drop(chan);
+
+        assert_matches!(block_on(stream.next()), None);
     }
 }

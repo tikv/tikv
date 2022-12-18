@@ -2,10 +2,13 @@
 
 use std::{self, time::Duration};
 
-use engine_traits::Peekable;
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
+use engine_traits::{Peekable, CF_DEFAULT};
+use kvproto::raft_cmdpb::AdminCmdType;
 use raft::prelude::ConfChangeType;
-use raftstore_v2::router::{PeerMsg, PeerTick};
+use raftstore_v2::{
+    router::{PeerMsg, PeerTick},
+    SimpleWriteEncoder,
+};
 use tikv_util::store::new_learner_peer;
 
 use crate::cluster::{check_skip_wal, Cluster};
@@ -23,7 +26,7 @@ fn test_simple_change() {
     let store_id = cluster.node(1).id();
     let new_peer = new_learner_peer(store_id, 10);
     admin_req.mut_change_peer().set_peer(new_peer.clone());
-    let resp = cluster.routers[0].command(2, req.clone()).unwrap();
+    let resp = cluster.routers[0].admin_command(2, req.clone()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     let epoch = req.get_header().get_region_epoch();
     let new_conf_ver = epoch.get_conf_ver() + 1;
@@ -57,13 +60,10 @@ fn test_simple_change() {
 
     // write one kv after snapshot
     let (key, val) = (b"key", b"value");
-    let mut write_req = cluster.routers[0].new_request_for(region_id);
-    let mut put_req = Request::default();
-    put_req.set_cmd_type(CmdType::Put);
-    put_req.mut_put().set_key(key.to_vec());
-    put_req.mut_put().set_value(val.to_vec());
-    write_req.mut_requests().push(put_req);
-    let (msg, _) = PeerMsg::raft_command(write_req.clone());
+    let header = Box::new(cluster.routers[0].new_request_for(region_id).take_header());
+    let mut put = SimpleWriteEncoder::with_capacity(64);
+    put.put(CF_DEFAULT, key, val);
+    let (msg, _) = PeerMsg::simple_write(header, put.encode());
     cluster.routers[0].send(region_id, msg).unwrap();
     std::thread::sleep(Duration::from_millis(1000));
     cluster.dispatch(region_id, vec![]);
@@ -84,7 +84,7 @@ fn test_simple_change() {
     req.mut_admin_request()
         .mut_change_peer()
         .set_change_type(ConfChangeType::RemoveNode);
-    let resp = cluster.routers[0].command(2, req.clone()).unwrap();
+    let resp = cluster.routers[0].admin_command(2, req.clone()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     let epoch = req.get_header().get_region_epoch();
     let new_conf_ver = epoch.get_conf_ver() + 1;
