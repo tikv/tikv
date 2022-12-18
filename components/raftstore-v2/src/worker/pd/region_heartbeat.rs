@@ -3,18 +3,9 @@
 use std::time::Duration;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::{
-    metapb, pdpb,
-    raft_cmdpb::{
-        AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
-        SplitRequest,
-    },
-    raft_serverpb::RaftMessage,
-    replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
-};
+use kvproto::{metapb, pdpb};
 use pd_client::{metrics::PD_HEARTBEAT_COUNTER_VEC, PdClient, RegionStat};
-use raft::eraftpb::ConfChangeType;
-use slog::{debug, error, info};
+use slog::{debug, info};
 use tikv_util::{store::QueryStats, time::UnixSecs};
 
 use super::{requests::*, Runner};

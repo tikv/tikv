@@ -13,7 +13,7 @@ fn test_read_index() {
     let mut config = v2_default_config();
     config.raft_store_max_leader_lease = ReadableDuration::millis(150);
     let cluster = Cluster::with_config(config);
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
     let mut req = router.new_request_for(region_id);
@@ -58,7 +58,7 @@ fn test_read_index() {
 #[test]
 fn test_snap_without_read_index() {
     let cluster = Cluster::default();
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
     let mut req = router.new_request_for(region_id);
@@ -84,7 +84,7 @@ fn test_snap_without_read_index() {
 #[test]
 fn test_query_with_write_cmd() {
     let cluster = Cluster::default();
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
     let mut req = router.new_request_for(2);
@@ -111,7 +111,7 @@ fn test_query_with_write_cmd() {
 #[test]
 fn test_snap_with_invalid_parameter() {
     let cluster = Cluster::default();
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
     let mut req = router.new_request_for(region_id);
@@ -163,8 +163,8 @@ fn test_snap_with_invalid_parameter() {
 
 #[test]
 fn test_local_read() {
-    let cluster = Cluster::default();
-    let mut router = cluster.router(0);
+    let mut cluster = Cluster::default();
+    let router = &mut cluster.routers[0];
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
     let mut req = router.new_request_for(region_id);

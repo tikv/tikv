@@ -6,11 +6,7 @@ use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::{compat::Future01CompatExt, FutureExt};
-use kvproto::{metapb::Region, raft_serverpb::RaftMessage};
-use raftstore::{
-    coprocessor::RegionChangeReason,
-    store::{Config, ReadDelegate, RegionReadProgressRegistry},
-};
+use raftstore::store::{Config, ReadDelegate, RegionReadProgressRegistry};
 use slog::{info, o, Logger};
 use tikv_util::{
     future::poll_future_notify,
@@ -20,43 +16,18 @@ use tikv_util::{
 
 use crate::{
     batch::StoreContext,
-    raft::Peer,
     router::{StoreMsg, StoreTick},
-    tablet::CachedTablet,
 };
 
-pub struct StoreMeta<E>
-where
-    E: KvEngine,
-{
+#[derive(Default)]
+pub struct StoreMeta {
     pub store_id: Option<u64>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
-    /// region_id -> tablet cache
-    pub tablet_caches: HashMap<u64, CachedTablet<E>>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
 }
 
-impl<E> StoreMeta<E>
-where
-    E: KvEngine,
-{
-    pub fn new() -> StoreMeta<E> {
-        StoreMeta {
-            store_id: None,
-            readers: HashMap::default(),
-            tablet_caches: HashMap::default(),
-            region_read_progress: RegionReadProgressRegistry::new(),
-        }
-    }
-}
-
-impl<E: KvEngine> Default for StoreMeta<E> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 pub struct Store {
     id: u64,
     // Unix time when it's started.

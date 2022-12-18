@@ -1,13 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use raftstore::store::{
     can_amend_read, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
     msg::ReadCallback, propose_read_index, should_renew_lease, util::LeaseState, ReadDelegate,
-    ReadIndexRequest, ReadProgress, TrackVer, Transport,
+    ReadIndexRequest, ReadProgress, Transport,
 };
 use slog::debug;
 use tikv_util::time::monotonic_raw_now;
@@ -99,10 +99,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// awake the read tasks waiting in frontend (such as unified thread pool)
     /// In v1, it's named as response_read.
-    pub(crate) fn respond_read_index<T>(
+    pub(crate) fn respond_read_index(
         &self,
         read_index_req: &mut ReadIndexRequest<QueryResChannel>,
-        ctx: &mut StoreContext<EK, ER, T>,
     ) {
         debug!(
             self.logger,
@@ -111,7 +110,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
         let time = monotonic_raw_now();
-        for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
+        for (_, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
@@ -151,7 +150,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub(crate) fn maybe_renew_leader_lease(
         &mut self,
         ts: Timespec,
-        store_meta: &Mutex<StoreMeta<EK>>,
+        store_meta: &Mutex<StoreMeta>,
         progress: Option<ReadProgress>,
     ) {
         // A nonleader peer should never has leader lease.
@@ -175,42 +174,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.maybe_update_read_progress(reader, progress);
         }
         if let Some(progress) = read_progress {
-            // TODO: remove it
-            self.add_reader_if_necessary(store_meta);
-
             let mut meta = store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id()).unwrap();
             self.maybe_update_read_progress(reader, progress);
-        }
-    }
-
-    // TODO: remove this block of code when snapshot is done; add the logic into
-    // on_persist_snapshot.
-    pub(crate) fn add_reader_if_necessary(&mut self, store_meta: &Mutex<StoreMeta<EK>>) {
-        let mut meta = store_meta.lock().unwrap();
-        // TODO: remove this block of code when snapshot is done; add the logic into
-        // on_persist_snapshot.
-        let reader = meta.readers.get_mut(&self.region_id());
-        if reader.is_none() {
-            let region = self.region().clone();
-            let region_id = region.get_id();
-            let peer_id = self.peer_id();
-            let delegate = ReadDelegate {
-                region: Arc::new(region),
-                peer_id,
-                term: self.term(),
-                applied_term: self.entry_storage().applied_term(),
-                leader_lease: None,
-                last_valid_ts: Timespec::new(0, 0),
-                tag: format!("[region {}] {}", region_id, peer_id),
-                read_progress: self.read_progress().clone(),
-                pending_remove: false,
-                bucket_meta: None,
-                txn_extra_op: Default::default(),
-                txn_ext: Default::default(),
-                track_ver: TrackVer::new(),
-            };
-            meta.readers.insert(self.region_id(), delegate);
         }
     }
 

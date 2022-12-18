@@ -2,7 +2,7 @@
 
 use std::{assert_matches::assert_matches, time::Duration};
 
-use engine_traits::{OpenOptions, Peekable, TabletFactory};
+use engine_traits::Peekable;
 use futures::executor::block_on;
 use kvproto::{
     raft_cmdpb::{CmdType, Request},
@@ -12,13 +12,13 @@ use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use raftstore_v2::router::PeerMsg;
 use tikv_util::store::new_peer;
 
-use crate::cluster::Cluster;
+use crate::cluster::{check_skip_wal, Cluster};
 
 /// Test basic write flow.
 #[test]
 fn test_basic_write() {
     let cluster = Cluster::default();
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
     let mut req = router.new_request_for(2);
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
@@ -112,8 +112,8 @@ fn test_basic_write() {
 
 #[test]
 fn test_put_delete() {
-    let cluster = Cluster::default();
-    let router = cluster.router(0);
+    let mut cluster = Cluster::default();
+    let router = &mut cluster.routers[0];
     let mut req = router.new_request_for(2);
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
@@ -123,18 +123,16 @@ fn test_put_delete() {
 
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
 
-    let tablet_factory = cluster.node(0).tablet_factory();
-    let tablet = tablet_factory
-        .open_tablet(2, None, OpenOptions::default().set_cache_only(true))
-        .unwrap();
-    assert!(tablet.get_value(b"key").unwrap().is_none());
+    let snap = router.stale_snapshot(2);
+    assert!(snap.get_value(b"key").unwrap().is_none());
     let (msg, mut sub) = PeerMsg::raft_command(req.clone());
     router.send(2, msg).unwrap();
     assert!(block_on(sub.wait_proposed()));
     assert!(block_on(sub.wait_committed()));
     let resp = block_on(sub.result()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
-    assert_eq!(tablet.get_value(b"key").unwrap().unwrap(), b"value");
+    let snap = router.stale_snapshot(2);
+    assert_eq!(snap.get_value(b"key").unwrap().unwrap(), b"value");
 
     let mut delete_req = Request::default();
     delete_req.set_cmd_type(CmdType::Delete);
@@ -147,5 +145,10 @@ fn test_put_delete() {
     assert!(block_on(sub.wait_committed()));
     let resp = block_on(sub.result()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
-    assert_matches!(tablet.get_value(b"key"), Ok(None));
+    let snap = router.stale_snapshot(2);
+    assert_matches!(snap.get_value(b"key"), Ok(None));
+
+    // Check if WAL is skipped for basic writes.
+    let mut cached = cluster.node(0).tablet_registry().get(2).unwrap();
+    check_skip_wal(cached.latest().unwrap().as_inner().path());
 }

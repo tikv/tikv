@@ -2,35 +2,27 @@
 
 mod conf_change;
 mod split;
+mod transfer_leader;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
+use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::Message;
-use raft::prelude::ConfChangeV2;
-use raftstore::{
-    store::{
-        self, cmd_resp,
-        fsm::apply,
-        msg::ErrorCallback,
-        util::{ChangePeerI, ConfChangeKind},
-    },
-    Result,
-};
+use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
-pub use split::{SplitInit, SplitResult};
+pub use split::{SplitInit, SplitResult, SPLIT_PREFIX};
 use tikv_util::box_err;
+use txn_types::WriteBatchFlags;
 
 use self::conf_change::ConfChangeResult;
-use crate::{
-    batch::StoreContext,
-    raft::{Apply, Peer},
-    router::CmdResChannel,
-};
+use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
 
 #[derive(Debug)]
 pub enum AdminCmdResult {
+    // No side effect produced by the command
+    None,
     SplitRegion(SplitResult),
     ConfChange(ConfChangeResult),
+    TransferLeader(u64),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -38,7 +30,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_admin_command<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
         ch: CmdResChannel,
     ) {
         if !self.serving() {
@@ -81,6 +73,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "Split is deprecated. Please use BatchSplit instead."
                 )),
                 AdminCmdType::BatchSplit => self.propose_split(ctx, req),
+                AdminCmdType::TransferLeader => {
+                    // Containing TRANSFER_LEADER_PROPOSAL flag means the this transfer leader
+                    // request should be proposed to the raft group
+                    if WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+                        .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL)
+                    {
+                        let data = req.write_to_bytes().unwrap();
+                        self.propose_with_ctx(ctx, data, vec![])
+                    } else {
+                        if self.propose_transfer_leader(ctx, req, ch) {
+                            self.set_has_ready();
+                        }
+                        return;
+                    }
+                }
                 _ => unimplemented!(),
             }
         };

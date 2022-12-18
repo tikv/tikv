@@ -3,9 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
-use engine_traits::Snapshot;
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use tikv_util::time::Instant;
 
@@ -132,6 +130,7 @@ pub enum PeerMsg {
     Start,
     /// Messages from peer to peer in the same store
     SplitInit(Box<SplitInit>),
+    SplitInitFinish(u64),
     /// A message only used to notify a peer.
     Noop,
     /// A message that indicates an asynchronous write has finished.
@@ -140,6 +139,11 @@ pub enum PeerMsg {
         ready_number: u64,
     },
     QueryDebugInfo(DebugInfoChannel),
+    DataFlushed {
+        cf: &'static str,
+        tablet_index: u64,
+        flushed_index: u64,
+    },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
@@ -173,6 +177,13 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::SplitInit(_) => {
                 write!(fmt, "Split initialization")
             }
+            PeerMsg::SplitInitFinish(region_id) => {
+                write!(
+                    fmt,
+                    "Split initialization finished from region {}",
+                    region_id
+                )
+            }
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {
                 peer_id,
@@ -185,6 +196,15 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::LogsFetched(fetched) => write!(fmt, "LogsFetched {:?}", fetched),
             PeerMsg::SnapshotGenerated(_) => write!(fmt, "SnapshotGenerated"),
             PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
+            PeerMsg::DataFlushed {
+                cf,
+                tablet_index,
+                flushed_index,
+            } => write!(
+                fmt,
+                "DataFlushed cf {}, tablet_index {}, flushed_index {}",
+                cf, tablet_index, flushed_index
+            ),
             #[cfg(feature = "testexport")]
             PeerMsg::WaitFlush(_) => write!(fmt, "FlushMessages"),
         }

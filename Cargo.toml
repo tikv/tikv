@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.5.0"
+version = "6.6.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -153,7 +153,7 @@ smallvec = "1.4"
 sst_importer = { workspace = true }
 strum = { version = "0.20", features = ["derive"] }
 sync_wrapper = "0.1.1"
-sysinfo = "0.16"
+sysinfo = "0.26"
 tempfile = "3.0"
 thiserror = "1.0"
 tidb_query_aggr = { workspace = true }
@@ -338,7 +338,7 @@ pd_client = { path = "components/pd_client" }
 profiler = { path = "components/profiler" }
 raft_log_engine = { path = "components/raft_log_engine" }
 raftstore = { path = "components/raftstore", default-features = false }
-raftstore_v2 = { path = "components/raftstore-v2", default-features = false }
+raftstore-v2 = { path = "components/raftstore-v2", default-features = false }
 resolved_ts = { path = "components/resolved_ts" }
 resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }

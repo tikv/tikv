@@ -6,4 +6,4 @@ mod storage;
 
 pub use apply::Apply;
 pub use peer::Peer;
-pub use storage::{write_initial_states, Storage};
+pub use storage::Storage;
