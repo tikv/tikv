@@ -114,6 +114,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             pr,
             lock_info: vec![],
             released_locks: ReleasedLocks::new(),
+            new_acquired_locks: vec![],
             lock_guards,
             response_policy: ResponsePolicy::OnApplied,
         })

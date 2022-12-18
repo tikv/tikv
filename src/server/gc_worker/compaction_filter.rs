@@ -685,6 +685,15 @@ pub fn check_need_gc(
     context: &CompactionFilterContext,
 ) -> bool {
     let check_props = |props: &MvccProperties| -> (bool, bool /* skip_more_checks */) {
+        // Disable GC directly once the config is negative or +inf.
+        // Disabling GC is useful in some abnormal scenarios where the transaction model
+        // would be break (e.g. writes with higher commit TS would be written BEFORE
+        // writes with lower commit TS, or write data with TS lower than current GC safe
+        // point). Use this at your own risk.
+        if ratio_threshold.is_sign_negative() || ratio_threshold.is_infinite() {
+            return (false, false);
+        }
+
         if props.min_ts > safe_point {
             return (false, false);
         }
@@ -970,6 +979,13 @@ pub mod tests {
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
+
+        // If the ratio threshold is less than 0, GC would be skipped.
+        must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 210);
+        must_commit(&mut engine, b"zkey", 210, 220);
+        gc_runner.ratio_threshold = Some(-1.0);
+        gc_runner.safe_point(256).gc(&raw_engine);
+        must_get(&mut engine, b"zkey", 210, &value);
     }
 
     // Test dirty versions before a deletion mark can be handled correctly.

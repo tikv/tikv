@@ -9,7 +9,7 @@ use futures::{channel::oneshot, executor::block_on};
 use kvproto::{
     errorpb::FlashbackInProgress,
     metapb,
-    raft_cmdpb::{AdminCmdType, RaftCmdResponse, Request},
+    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdResponse, Request},
 };
 use raftstore::store::Callback;
 use test_raftstore::*;
@@ -17,6 +17,61 @@ use txn_types::WriteBatchFlags;
 
 const TEST_KEY: &[u8] = b"k1";
 const TEST_VALUE: &[u8] = b"v1";
+
+#[test]
+fn test_allow_read_only_request() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let mut region = cluster.get_region(TEST_KEY);
+    let mut snap_req = Request::default();
+    snap_req.set_cmd_type(CmdType::Snap);
+    // Get snapshot normally.
+    let snap_resp = request(&mut cluster, &mut region.clone(), snap_req.clone(), false);
+    assert!(!snap_resp.get_header().has_error());
+    // Get snapshot with flashback flag without in the flashback state.
+    let snap_resp = request(&mut cluster, &mut region.clone(), snap_req.clone(), true);
+    assert!(!snap_resp.get_header().has_error());
+    // Get snapshot with flashback flag with in the flashback state.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    let snap_resp = request(&mut cluster, &mut region.clone(), snap_req.clone(), true);
+    assert!(!snap_resp.get_header().has_error());
+    // Get snapshot without flashback flag with in the flashback state.
+    let snap_resp = request(&mut cluster, &mut region, snap_req, false);
+    assert!(
+        snap_resp
+            .get_header()
+            .get_error()
+            .has_flashback_in_progress(),
+        "{:?}",
+        snap_resp
+    );
+    // Finish flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn test_read_after_prepare_flashback() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let region = cluster.get_region(TEST_KEY);
+    fail::cfg("keep_peer_fsm_flashback_state_false", "return").unwrap();
+    // Prepare flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    // Read with flashback flag will succeed even the peer fsm does not updated its
+    // `is_in_flashback` flag.
+    must_request_with_flashback_flag(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
+    // Writing with flashback flag will succeed since the ApplyFSM owns the
+    // latest `is_in_flashback` flag.
+    must_request_with_flashback_flag(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
+    fail::remove("keep_peer_fsm_flashback_state_false");
+    // Finish flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+}
 
 #[test]
 fn test_prepare_flashback_after_split() {
@@ -281,8 +336,9 @@ fn test_flashback_for_local_read() {
     // Check the leader does a local read.
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index);
-    // A local read with flashback flag will also be blocked.
-    must_get_flashback_not_prepared_error(&mut cluster, &mut region, new_get_cmd(TEST_KEY));
+    // A local read with flashback flag will not be blocked since it won't have any
+    // side effects.
+    must_request_with_flashback_flag(&mut cluster, &mut region, new_get_cmd(TEST_KEY));
 }
 
 #[test]
@@ -336,30 +392,62 @@ fn test_flashback_for_apply_snapshot() {
 
     must_check_flashback_state(&mut cluster, 1, 1, false);
     must_check_flashback_state(&mut cluster, 1, 3, false);
-
     // Make store 3 isolated.
     cluster.add_send_filter(IsolationFilterFactory::new(3));
-
     // Write some data to trigger snapshot.
-    for i in 100..110 {
-        let key = format!("k{}", i);
-        let value = format!("v{}", i);
-        cluster.must_put_cf("write", key.as_bytes(), value.as_bytes());
+    let mut region = cluster.get_region(TEST_KEY);
+    for _ in 0..10 {
+        must_request_without_flashback_flag(
+            &mut cluster,
+            &mut region.clone(),
+            new_put_cf_cmd("write", TEST_KEY, TEST_VALUE),
+        )
     }
-
     // Prepare for flashback
     cluster.must_send_wait_flashback_msg(1, AdminCmdType::PrepareFlashback);
     must_check_flashback_state(&mut cluster, 1, 1, true);
     must_check_flashback_state(&mut cluster, 1, 3, false);
-
     // Add store 3 back.
     cluster.clear_send_filters();
     must_check_flashback_state(&mut cluster, 1, 1, true);
     must_check_flashback_state(&mut cluster, 1, 3, true);
-
     cluster.must_send_wait_flashback_msg(1, AdminCmdType::FinishFlashback);
     must_check_flashback_state(&mut cluster, 1, 1, false);
     must_check_flashback_state(&mut cluster, 1, 3, false);
+
+    // Prepare for flashback
+    cluster.must_send_wait_flashback_msg(1, AdminCmdType::PrepareFlashback);
+    must_check_flashback_state(&mut cluster, 1, 1, true);
+    must_check_flashback_state(&mut cluster, 1, 3, true);
+    // Make store 3 isolated.
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // Write some flashback data to trigger snapshot.
+    for _ in 0..10 {
+        must_request_with_flashback_flag(
+            &mut cluster,
+            &mut region.clone(),
+            new_put_cf_cmd("write", TEST_KEY, TEST_VALUE),
+        )
+    }
+    // Finish flashback.
+    cluster.must_send_wait_flashback_msg(1, AdminCmdType::FinishFlashback);
+    must_check_flashback_state(&mut cluster, 1, 1, false);
+    must_check_flashback_state(&mut cluster, 1, 3, true);
+    // Wait for a while before adding store 3 back to make sure only it does not
+    // receive the `FinishFlashback` message.
+    sleep(Duration::from_secs(1));
+    // Add store 3 back.
+    cluster.clear_send_filters();
+    must_check_flashback_state(&mut cluster, 1, 1, false);
+    must_check_flashback_state(&mut cluster, 1, 3, false);
+    // Make store 3 become leader.
+    cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
+    // Region should not in the flashback state.
+    must_request_without_flashback_flag(
+        &mut cluster,
+        &mut region,
+        new_put_cmd(TEST_KEY, TEST_VALUE),
+    );
 }
 
 fn must_check_flashback_state(
@@ -415,7 +503,7 @@ fn must_request_with_flashback_flag<T: Simulator>(
     req: Request,
 ) {
     let resp = request(cluster, region, req, true);
-    assert!(!resp.get_header().has_error());
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
 }
 
 fn must_get_flashback_not_prepared_error<T: Simulator>(
@@ -434,7 +522,7 @@ fn must_request_without_flashback_flag<T: Simulator>(
     req: Request,
 ) {
     let resp = request(cluster, region, req, false);
-    assert!(!resp.get_header().has_error());
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
 }
 
 fn must_get_flashback_in_progress_error<T: Simulator>(

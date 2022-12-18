@@ -126,10 +126,15 @@ impl RocksEngine {
 }
 
 impl MiscExt for RocksEngine {
-    fn flush_cfs(&self, wait: bool) -> Result<()> {
+    fn flush_cfs(&self, cfs: &[&str], wait: bool) -> Result<()> {
         let mut handles = vec![];
-        for cf in self.cf_names() {
+        for cf in cfs {
             handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+        }
+        if handles.is_empty() {
+            for cf in self.cf_names() {
+                handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+            }
         }
         self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
     }
