@@ -92,6 +92,12 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // disable resolve ts during the recovery
     config.resolved_ts.enable = false;
 
+    // ebs volume has very poor performance during restore, it easy to cause the
+    // raft client timeout, at the same time clean up all message included
+    // significant message. restore is not memory sensetive, we may keep
+    // messages as much as possible during the network disturbing in recovery mode
+    config.server.raft_client_max_backoff = ReadableDuration::secs(20);
+
     // Disable region split during recovering.
     config.coprocessor.region_max_size = Some(ReadableSize::gb(MAX_REGION_SIZE));
     config.coprocessor.region_split_size = ReadableSize::gb(MAX_REGION_SIZE);
