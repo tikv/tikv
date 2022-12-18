@@ -703,10 +703,11 @@ mod tests {
             ))
             .unwrap();
         block_on(reader.snapshot(cmd.clone())).unwrap();
-        // Updating lease makes cache miss.
+        // Updating lease makes cache miss. And because the cache is updated on cloned
+        // copy, so the old cache will still need to be updated again.
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
-            4
+            5
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
