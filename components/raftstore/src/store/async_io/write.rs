@@ -985,6 +985,9 @@ where
             warn!("SYNC mode, not allowed to resize the size of store writers.");
             return Ok(());
         }
+        // TODO: if capacity was reset to `0`, that is, no async-io, we should find a
+        // elegant way to initialize the sync_io after we release all async-io threads
+        // and mailboxes.
         match current_size.cmp(&size) {
             std::cmp::Ordering::Greater => self.decrease_by(current_size - size)?,
             std::cmp::Ordering::Less => self.increase_by(size - current_size, writer_meta)?,
@@ -1002,23 +1005,21 @@ where
         let mut joinable_handlers: Vec<JoinHandle<()>> = {
             let mut handlers = self.handlers.lock();
             let current_size = self.io_capacity.load(Ordering::Relaxed);
-            let mut decrease_size = size;
             assert_eq!(current_size, handlers.len());
-            if current_size == decrease_size {
-                warn!("too small size for store writers. Least count of store writers limits to 1");
-                decrease_size -= 1;
-            }
             // We modifity the capacity of writers to make the concurrent processing of
             // sending messages can be redirected to reserved mailboxes in advance.
             self.io_capacity
-                .store(current_size - decrease_size, Ordering::Relaxed);
+                .store(current_size - size, Ordering::Relaxed);
             // Clear obsolete mailboxes and collect stale handlers.
             self.writers.update(
                 move |writers: &mut Vec<Sender<WriteMsg<EK, ER>>>| -> Result<Vec<JoinHandle<()>>> {
+                    let mut decrease_size = size;
                     let mut release_handlers: Vec<JoinHandle<()>> = vec![];
                     while decrease_size > 0 {
                         if let Some(sender) = writers.pop() {
-                            sender.send(WriteMsg::Shutdown).unwrap();
+                            if sender.send(WriteMsg::Shutdown).is_err() {
+                                warn!("close stale mailbox failed, are we shutdown?");
+                            }
                             release_handlers.push(handlers.pop().unwrap());
                         }
                         decrease_size -= 1;

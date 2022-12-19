@@ -316,9 +316,6 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
         idx: usize,
         msg: WriteMsg<EK, ER>,
     ) -> Result<(), TrySendError<WriteMsg<EK, ER>>> {
-        // TODO: one problem -- if capacity was reset to `0`, that is, no async-io, we
-        // should find a elegant way to initialize the sync_io after we release all
-        // async-io threads and pipes.
         debug_assert!(!self._cached_senders.is_empty());
         let valid_idx = idx % std::cmp::min(self.capacity(), self._cached_senders.len());
         self._cached_senders[valid_idx].try_send(msg)

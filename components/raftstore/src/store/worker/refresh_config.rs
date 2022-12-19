@@ -258,8 +258,8 @@ where
         );
     }
 
+    /// Resizes the count of background threads in store_writers.
     fn resize_store_writers(&mut self, size: usize) {
-        // Resize the threads in store_writers.
         let writer_meta = self.writer_ctrl.writer_meta.clone();
         if let Err(e) = self.writer_ctrl.store_writers.resize(size, writer_meta) {
             error!("failed to resize store writers size, err_msg: {:?}", e);
