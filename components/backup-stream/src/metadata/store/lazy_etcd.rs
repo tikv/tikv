@@ -35,9 +35,10 @@ impl ConnectionConfig {
                 OpenSslClientConfig::default()
                     .ca_cert_pem(&tls.ca)
                     // Some of users may prefer using multi-level self-signed certs.
-                    // In this scenario, we must set this flag or openssl would probably complain it cannot found the root CA(!).
-                    // We haven't it configurable because it is enabled in gRPC by default too.
-                    // TODO: Perhaps implement grpc-io based etcd client?
+                    // In this scenario, we must set this flag or openssl would probably complain it cannot found the root CA.
+                    // (Because the flags we provide allows users providing exactly one CA cert.)
+                    // We haven't make it configurable because it is enabled in gRPC by default too.
+                    // TODO: Perhaps implement grpc-io based etcd client, fully remove the difference between gRPC TLS and our custom TLS?
                     .manually(|c| c.cert_store_mut().set_flags(X509VerifyFlags::PARTIAL_CHAIN))
                     .client_cert_pem_and_key(&tls.client_cert, &tls.client_key.0),
             )
