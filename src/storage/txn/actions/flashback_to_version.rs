@@ -14,11 +14,13 @@ pub fn flashback_to_version_read_lock(
     reader: &mut MvccReader<impl Snapshot>,
     next_lock_key: Key,
     end_key: Option<&Key>,
+    flashback_start_ts: TimeStamp,
 ) -> TxnResult<Vec<(Key, Lock)>> {
     let result = reader.scan_locks(
         Some(&next_lock_key),
         end_key,
-        |_| true,
+        // Skip the `prewrite_lock`. This lock will appear when retrying prepare
+        |lock| lock.ts != flashback_start_ts,
         FLASHBACK_BATCH_SIZE,
     );
     let (key_locks, _) = result?;
@@ -147,6 +149,9 @@ pub fn prewrite_flashback_key(
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<()> {
+    if reader.load_lock(key_to_lock)?.is_some() {
+        return Ok(());
+    }
     let old_write = reader.get_write(key_to_lock, flashback_version, None)?;
     // Flashback the value in `CF_DEFAULT` as well if the old write is a
     // `WriteType::Put` without the short value.
@@ -310,15 +315,17 @@ pub mod tests {
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
     ) -> usize {
+        let start_ts = start_ts.into();
         let next_key = Key::from_raw(keys::next_key(key).as_slice());
         let key = Key::from_raw(key);
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new_with_ctx(snapshot.clone(), Some(ScanMode::Forward), &ctx);
         let key_locks =
-            flashback_to_version_read_lock(&mut reader, key, Some(next_key).as_ref()).unwrap();
+            flashback_to_version_read_lock(&mut reader, key, Some(next_key).as_ref(), start_ts)
+                .unwrap();
         let cm = ConcurrencyManager::new(TimeStamp::zero());
-        let mut txn = MvccTxn::new(start_ts.into(), cm);
+        let mut txn = MvccTxn::new(start_ts, cm);
         rollback_locks(&mut txn, snapshot, key_locks).unwrap();
         let rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
@@ -578,20 +585,11 @@ pub mod tests {
             2
         );
         // Retry Prepare
-        // Unlock `k`, put rollback record and delete the value of `k`.
-        assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 3);
-        // Lock and write the value of `k`.
+        // Skip `k` no need to write again.
+        assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 0);
         assert_eq!(
             must_prewrite_flashback_key(&mut engine, k, 2, flashback_start_ts),
-            2
-        );
-        // Retry Prepare
-        // Only unlock `k` since there is an overlapped rollback record.
-        assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 1);
-        // Only lock `k` since the value of `k` has already existed.
-        assert_eq!(
-            must_prewrite_flashback_key(&mut engine, k, 2, flashback_start_ts),
-            1
+            0
         );
     }
 
