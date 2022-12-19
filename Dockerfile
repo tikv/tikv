@@ -109,8 +109,9 @@ FROM pingcap/alpine-glibc
 COPY --from=builder /tikv/target/release/tikv-server /tikv-server
 COPY --from=builder /tikv/target/release/tikv-ctl /tikv-ctl
 
+# FIXME: Figure out why libstdc++ is not staticly linked.
 RUN apk add --no-cache \
-    curl
+    curl libstdc++
 
 EXPOSE 20160 20180
 
