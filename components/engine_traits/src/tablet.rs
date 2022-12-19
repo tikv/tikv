@@ -13,7 +13,7 @@ use collections::HashMap;
 use kvproto::metapb::Region;
 use tikv_util::box_err;
 
-use crate::{Error, Result};
+use crate::{Error, FlushState, Result};
 
 #[derive(Debug)]
 struct LatestTablet<EK> {
@@ -91,6 +91,10 @@ pub struct TabletContext {
     /// Any key that is larger than or equal to this key can be considered
     /// obsolete.
     pub end_key: Box<[u8]>,
+    /// The states to be persisted when flush is triggered.
+    ///
+    /// If not set, apply may not be resumed correctly.
+    pub flush_state: Option<Arc<FlushState>>,
 }
 
 impl Debug for TabletContext {
@@ -111,6 +115,7 @@ impl TabletContext {
             suffix,
             start_key: keys::data_key(region.get_start_key()).into_boxed_slice(),
             end_key: keys::data_end_key(region.get_end_key()).into_boxed_slice(),
+            flush_state: None,
         }
     }
 
