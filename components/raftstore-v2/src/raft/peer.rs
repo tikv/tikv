@@ -25,7 +25,7 @@ use super::storage::Storage;
 use crate::{
     batch::StoreContext,
     fsm::ApplyScheduler,
-    operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
+    operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder},
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
 };
@@ -49,7 +49,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
-    raw_write_encoder: Option<SimpleWriteEncoder>,
+    raw_write_encoder: Option<SimpleWriteReqEncoder>,
     proposals: ProposalQueue<Vec<CmdResChannel>>,
     apply_scheduler: Option<ApplyScheduler>,
 
@@ -502,12 +502,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn simple_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
+    pub fn simple_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteReqEncoder> {
         &mut self.raw_write_encoder
     }
 
     #[inline]
-    pub fn simple_write_encoder(&self) -> &Option<SimpleWriteEncoder> {
+    pub fn simple_write_encoder(&self) -> &Option<SimpleWriteReqEncoder> {
         &self.raw_write_encoder
     }
 

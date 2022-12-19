@@ -4985,7 +4985,7 @@ where
         msg: &RaftCmdRequest,
     ) -> Result<Option<RaftCmdResponse>> {
         // Check store_id, make sure that the msg is dispatched to the right place.
-        if let Err(e) = util::check_store_id(msg, self.store_id()) {
+        if let Err(e) = util::check_store_id(msg.get_header(), self.store_id()) {
             self.ctx
                 .raft_metrics
                 .invalid_proposal
@@ -5004,7 +5004,7 @@ where
         let request = msg.get_requests();
 
         // peer_id must be the same as peer's.
-        if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
+        if let Err(e) = util::check_peer_id(msg.get_header(), self.fsm.peer.peer_id()) {
             self.ctx
                 .raft_metrics
                 .invalid_proposal
@@ -5084,12 +5084,12 @@ where
             )));
         }
         // Check whether the term is stale.
-        if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
+        if let Err(e) = util::check_term(msg.get_header(), self.fsm.peer.term()) {
             self.ctx.raft_metrics.invalid_proposal.stale_command.inc();
             return Err(e);
         }
 
-        match util::check_region_epoch(msg, self.fsm.peer.region(), true) {
+        match util::check_req_region_epoch(msg, self.fsm.peer.region(), true) {
             Err(Error::EpochNotMatch(m, mut new_regions)) => {
                 // Attach the region which might be split from the current region. But it
                 // doesn't matter if the region is not split from the current region. If the

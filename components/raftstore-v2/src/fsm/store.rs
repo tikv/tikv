@@ -157,6 +157,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => self.fsm.store.on_raft_message(self.store_ctx, msg),
                 StoreMsg::SplitInit(msg) => self.fsm.store.on_split_init(self.store_ctx, msg),
+                StoreMsg::StoreUnreachable { to_store_id } => self
+                    .fsm
+                    .store
+                    .on_store_unreachable(self.store_ctx, to_store_id),
             }
         }
     }

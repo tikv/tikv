@@ -2,16 +2,14 @@
 
 use std::{thread, time::Duration};
 
-use engine_traits::{RaftEngineReadOnly, CF_RAFT};
+use engine_traits::{RaftEngineReadOnly, CF_DEFAULT, CF_RAFT};
 use futures::executor::block_on;
 use kvproto::{
     metapb, pdpb,
-    raft_cmdpb::{
-        AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, Request, SplitRequest,
-    },
+    raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, SplitRequest},
 };
 use raftstore::store::{INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX};
-use raftstore_v2::router::PeerMsg;
+use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 use tikv_util::store::new_peer;
 
 use crate::cluster::{Cluster, TestRouter};
@@ -37,7 +35,7 @@ fn new_batch_split_region_request(
 }
 
 fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
-    let (msg, sub) = PeerMsg::raft_command(req);
+    let (msg, sub) = PeerMsg::admin_command(req);
     router.send(region_id, msg).unwrap();
     block_on(sub.result()).unwrap();
 
@@ -47,19 +45,10 @@ fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
 }
 
 fn put(router: &mut TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
-    let mut req = router.new_request_for(region_id);
-
-    let mut put_req = Request::default();
-    put_req.set_cmd_type(CmdType::Put);
-    put_req.mut_put().set_key(key.to_vec());
-    put_req.mut_put().set_value(b"v1".to_vec());
-    req.mut_requests().push(put_req);
-
-    let (msg, mut sub) = PeerMsg::raft_command(req.clone());
-    router.send(region_id, msg).unwrap();
-    assert!(block_on(sub.wait_proposed()));
-    assert!(block_on(sub.wait_committed()));
-    block_on(sub.result()).unwrap()
+    let header = Box::new(router.new_request_for(region_id).take_header());
+    let mut put = SimpleWriteEncoder::with_capacity(64);
+    put.put(CF_DEFAULT, key, b"v1");
+    router.simple_write(region_id, header, put).unwrap()
 }
 
 // Split the region according to the parameters
