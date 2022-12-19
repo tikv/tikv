@@ -16,6 +16,8 @@
 //! Please read the engine_trait crate docs before hacking.
 
 #![cfg_attr(test, feature(test))]
+#![feature(let_chains)]
+#![feature(option_get_or_insert_default)]
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;

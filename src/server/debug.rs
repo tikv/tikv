@@ -169,11 +169,11 @@ impl<ER: RaftEngine> Debugger<ER> {
         }
     }
 
-    pub fn kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
+    pub fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
         self.kv_statistics = s;
     }
 
-    pub fn raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
+    pub fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
         self.raft_statistics = s;
     }
 

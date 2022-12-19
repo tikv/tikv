@@ -1039,7 +1039,7 @@ pub struct DbConfig {
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    pub enable_statistics: Option<bool>,
+    pub enable_statistics: bool,
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
@@ -1112,7 +1112,7 @@ impl Default for DbConfig {
             max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
-            enable_statistics: None,
+            enable_statistics: true,
             stats_dump_period: ReadableDuration::minutes(10),
             compaction_readahead_size: ReadableSize::kb(0),
             info_log_max_size: ReadableSize::gb(1),
@@ -1295,8 +1295,8 @@ impl DbConfig {
             )
             .into());
         }
-        if self.enable_statistics == Some(false) {
-            warn!("raftdb: ignoring `enable_statistics`, statistics is always on.")
+        if !self.enable_statistics {
+            warn!("kvdb: ignoring `enable_statistics`, statistics is always on.")
         }
         Ok(())
     }
@@ -1415,7 +1415,7 @@ pub struct RaftDbConfig {
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    pub enable_statistics: Option<bool>,
+    pub enable_statistics: bool,
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
@@ -1465,7 +1465,7 @@ impl Default for RaftDbConfig {
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
-            enable_statistics: None,
+            enable_statistics: true,
             stats_dump_period: ReadableDuration::minutes(10),
             compaction_readahead_size: ReadableSize::kb(0),
             info_log_max_size: ReadableSize::gb(1),
@@ -1546,7 +1546,7 @@ impl RaftDbConfig {
                 );
             }
         }
-        if self.enable_statistics == Some(false) {
+        if !self.enable_statistics {
             warn!("raftdb: ignoring `enable_statistics`, statistics is always on.")
         }
         Ok(())

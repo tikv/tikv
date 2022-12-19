@@ -913,40 +913,40 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
 
 #[derive(Default, Clone)]
 struct CfLevelStats {
-    num_files: u64,
+    num_files: Option<u64>,
     // sum(compression_ratio_i * num_files_i)
-    weighted_compression_ratio: f64,
-    num_blob_files: u64,
+    weighted_compression_ratio: Option<f64>,
+    num_blob_files: Option<u64>,
 }
 
 #[derive(Default)]
 struct CfStats {
-    used_size: u64,
-    blob_cache_size: u64,
-    readers_mem: u64,
-    mem_tables: u64,
-    num_keys: u64,
-    pending_compaction_bytes: u64,
-    num_immutable_mem_table: u64,
-    live_blob_size: u64,
-    num_live_blob_file: u64,
-    num_obsolete_blob_file: u64,
-    live_blob_file_size: u64,
-    obsolete_blob_file_size: u64,
-    blob_file_discardable_ratio_le0: u64,
-    blob_file_discardable_ratio_le20: u64,
-    blob_file_discardable_ratio_le50: u64,
-    blob_file_discardable_ratio_le80: u64,
-    blob_file_discardable_ratio_le100: u64,
+    used_size: Option<u64>,
+    blob_cache_size: Option<u64>,
+    readers_mem: Option<u64>,
+    mem_tables: Option<u64>,
+    num_keys: Option<u64>,
+    pending_compaction_bytes: Option<u64>,
+    num_immutable_mem_table: Option<u64>,
+    live_blob_size: Option<u64>,
+    num_live_blob_file: Option<u64>,
+    num_obsolete_blob_file: Option<u64>,
+    live_blob_file_size: Option<u64>,
+    obsolete_blob_file_size: Option<u64>,
+    blob_file_discardable_ratio_le0: Option<u64>,
+    blob_file_discardable_ratio_le20: Option<u64>,
+    blob_file_discardable_ratio_le50: Option<u64>,
+    blob_file_discardable_ratio_le80: Option<u64>,
+    blob_file_discardable_ratio_le100: Option<u64>,
     levels: Vec<CfLevelStats>,
 }
 
 #[derive(Default)]
 struct DbStats {
-    num_snapshots: u64,
-    oldest_snapshot_time: u64,
+    num_snapshots: Option<u64>,
+    oldest_snapshot_time: Option<u64>,
     block_cache_size: Option<u64>,
-    stall_num: Vec<u64>,
+    stall_num: Vec<Option<u64>>,
 }
 
 pub struct RocksStatisticsReporter {
@@ -967,64 +967,88 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
     fn collect(&mut self, engine: &RocksEngine) {
         let db = engine.as_inner();
         let stall_num = ROCKSDB_IOSTALL_KEY.len();
-        self.db_stats.stall_num.resize(stall_num, 0);
+        self.db_stats.stall_num.resize(stall_num, None);
         for cf in db.cf_names() {
-            let mut cf_stats = self.cf_stats.entry(cf.to_owned()).or_default();
+            let cf_stats = self.cf_stats.entry(cf.to_owned()).or_default();
             let handle = crate::util::get_cf_handle(db, cf).unwrap();
             // It is important to monitor each cf's size, especially the "raft" and "lock"
             // column families.
-            cf_stats.used_size += crate::util::get_engine_cf_used_size(db, handle);
-            cf_stats.blob_cache_size += db.get_blob_cache_usage_cf(handle);
-
+            *cf_stats.used_size.get_or_insert_default() +=
+                crate::util::get_engine_cf_used_size(db, handle);
+            *cf_stats.blob_cache_size.get_or_insert_default() += db.get_blob_cache_usage_cf(handle);
             // TODO: find a better place to record these metrics.
             // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
             // For index and filter blocks memory
-            cf_stats.readers_mem += db
-                .get_property_int_cf(handle, ROCKSDB_TABLE_READERS_MEM)
-                .unwrap_or(0);
-            cf_stats.mem_tables += db
-                .get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
-                .unwrap_or(0);
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TABLE_READERS_MEM) {
+                *cf_stats.readers_mem.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
+                *cf_stats.mem_tables.get_or_insert_default() += v;
+            }
             // TODO: add cache usage and pinned usage.
-            cf_stats.num_keys += db
-                .get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS)
-                .unwrap_or(0);
-            cf_stats.pending_compaction_bytes +=
-                crate::util::get_cf_pending_compaction_bytes(db, handle).unwrap_or(0);
-            cf_stats.num_immutable_mem_table +=
-                crate::util::get_cf_num_immutable_mem_table(db, handle).unwrap_or(0);
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
+                *cf_stats.num_keys.get_or_insert_default() += v;
+            }
+            if let Some(v) = crate::util::get_cf_pending_compaction_bytes(db, handle) {
+                *cf_stats.pending_compaction_bytes.get_or_insert_default() += v;
+            }
+            if let Some(v) = crate::util::get_cf_num_immutable_mem_table(db, handle) {
+                *cf_stats.num_immutable_mem_table.get_or_insert_default() += v;
+            }
             // Titan.
-            cf_stats.live_blob_size += db
-                .get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_SIZE)
-                .unwrap_or(0);
-            cf_stats.num_live_blob_file += db
-                .get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE)
-                .unwrap_or(0);
-            cf_stats.num_obsolete_blob_file += db
-                .get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE)
-                .unwrap_or(0);
-            cf_stats.live_blob_file_size += db
-                .get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE)
-                .unwrap_or(0);
-            cf_stats.obsolete_blob_file_size += db
-                .get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
-                .unwrap_or(0);
-            cf_stats.blob_file_discardable_ratio_le0 += db
-                .get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE0_FILE)
-                .unwrap_or(0);
-            cf_stats.blob_file_discardable_ratio_le20 += db
-                .get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE20_FILE)
-                .unwrap_or(0);
-            cf_stats.blob_file_discardable_ratio_le50 += db
-                .get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE50_FILE)
-                .unwrap_or(0);
-            cf_stats.blob_file_discardable_ratio_le80 += db
-                .get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE)
-                .unwrap_or(0);
-            cf_stats.blob_file_discardable_ratio_le100 += db
-                .get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE)
-                .unwrap_or(0);
-
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_SIZE) {
+                *cf_stats.live_blob_size.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE) {
+                *cf_stats.num_live_blob_file.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE)
+            {
+                *cf_stats.num_obsolete_blob_file.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE) {
+                *cf_stats.live_blob_file_size.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
+            {
+                *cf_stats.obsolete_blob_file_size.get_or_insert_default() += v;
+            }
+            if let Some(v) =
+                db.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE0_FILE)
+            {
+                *cf_stats
+                    .blob_file_discardable_ratio_le0
+                    .get_or_insert_default() += v;
+            }
+            if let Some(v) =
+                db.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE20_FILE)
+            {
+                *cf_stats
+                    .blob_file_discardable_ratio_le20
+                    .get_or_insert_default() += v;
+            }
+            if let Some(v) =
+                db.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE50_FILE)
+            {
+                *cf_stats
+                    .blob_file_discardable_ratio_le50
+                    .get_or_insert_default() += v;
+            }
+            if let Some(v) =
+                db.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE)
+            {
+                *cf_stats
+                    .blob_file_discardable_ratio_le80
+                    .get_or_insert_default() += v;
+            }
+            if let Some(v) =
+                db.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE)
+            {
+                *cf_stats
+                    .blob_file_discardable_ratio_le100
+                    .get_or_insert_default() += v;
+            }
+            // Level stats.
             let opts = db.get_options_cf(handle);
             if cf_stats.levels.len() < opts.get_num_levels() {
                 cf_stats
@@ -1032,26 +1056,34 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                     .resize(opts.get_num_levels(), CfLevelStats::default());
             }
             for level in 0..opts.get_num_levels() {
-                let num_files =
-                    crate::util::get_cf_num_files_at_level(db, handle, level).unwrap_or(0);
-                cf_stats.levels[level].num_files += num_files;
-                cf_stats.levels[level].weighted_compression_ratio += num_files as f64
-                    * crate::util::get_engine_compression_ratio_at_level(db, handle, level)
-                        .unwrap_or(0.0);
-                cf_stats.levels[level].num_blob_files +=
-                    crate::util::get_cf_num_blob_files_at_level(db, handle, level).unwrap_or(0);
+                if let Some(num_files) = crate::util::get_cf_num_files_at_level(db, handle, level) {
+                    *cf_stats.levels[level].num_files.get_or_insert_default() += num_files;
+                    if let Some(ratio) =
+                        crate::util::get_engine_compression_ratio_at_level(db, handle, level)
+                    {
+                        *cf_stats.levels[level]
+                            .weighted_compression_ratio
+                            .get_or_insert_default() += num_files as f64 * ratio;
+                    }
+                }
+                if let Some(v) = crate::util::get_cf_num_blob_files_at_level(db, handle, level) {
+                    *cf_stats.levels[level]
+                        .num_blob_files
+                        .get_or_insert_default() += v;
+                }
             }
 
             if let Some(info) = db.get_map_property_cf(handle, ROCKSDB_CFSTATS) {
                 for i in 0..stall_num {
-                    self.db_stats.stall_num[i] +=
+                    *self.db_stats.stall_num[i].get_or_insert_default() +=
                         info.get_property_int_value(ROCKSDB_IOSTALL_KEY[i]);
                 }
             }
         }
 
         // For snapshot
-        self.db_stats.num_snapshots += db.get_property_int(ROCKSDB_NUM_SNAPSHOTS).unwrap_or(0);
+        *self.db_stats.num_snapshots.get_or_insert_default() +=
+            db.get_property_int(ROCKSDB_NUM_SNAPSHOTS).unwrap_or(0);
         let oldest_snapshot_time =
             db.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME)
                 .map_or(0, |t| {
@@ -1059,107 +1091,155 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                     // RocksDB returns 0 if no snapshots.
                     if t > 0 && now > t { now - t } else { 0 }
                 });
-        self.db_stats.oldest_snapshot_time =
-            std::cmp::max(self.db_stats.oldest_snapshot_time, oldest_snapshot_time);
+        if oldest_snapshot_time > self.db_stats.oldest_snapshot_time.unwrap_or(0) {
+            *self.db_stats.oldest_snapshot_time.get_or_insert_default() = oldest_snapshot_time;
+        }
 
         // Since block cache is shared, getting cache size from any CF/DB is fine. Here
         // we get from default CF.
         if self.db_stats.block_cache_size.is_none() {
             let handle = crate::util::get_cf_handle(db, CF_DEFAULT).unwrap();
-            self.db_stats.block_cache_size = Some(db.get_block_cache_usage_cf(handle));
+            *self.db_stats.block_cache_size.get_or_insert_default() =
+                db.get_block_cache_usage_cf(handle);
         }
     }
 
     fn flush(&mut self) {
         for (cf, cf_stats) in &self.cf_stats {
-            STORE_ENGINE_SIZE_GAUGE_VEC
-                .with_label_values(&[&self.name, cf])
-                .set(cf_stats.used_size as i64);
-            STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
-                .with_label_values(&[&self.name, cf])
-                .set(cf_stats.blob_cache_size as i64);
-            STORE_ENGINE_MEMORY_GAUGE_VEC
-                .with_label_values(&[&self.name, cf, "readers-mem"])
-                .set(cf_stats.readers_mem as i64);
-            STORE_ENGINE_MEMORY_GAUGE_VEC
-                .with_label_values(&[&self.name, cf, "mem-tables"])
-                .set(cf_stats.mem_tables as i64);
-            STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC
-                .with_label_values(&[&self.name, cf])
-                .set(cf_stats.num_keys as i64);
-            STORE_ENGINE_PENDING_COMPACTION_BYTES_VEC
-                .with_label_values(&[&self.name, cf])
-                .set(cf_stats.pending_compaction_bytes as i64);
+            if let Some(v) = cf_stats.used_size {
+                STORE_ENGINE_SIZE_GAUGE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_cache_size {
+                STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.readers_mem {
+                STORE_ENGINE_MEMORY_GAUGE_VEC
+                    .with_label_values(&[&self.name, cf, "readers-mem"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.mem_tables {
+                STORE_ENGINE_MEMORY_GAUGE_VEC
+                    .with_label_values(&[&self.name, cf, "mem-tables"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.num_keys {
+                STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.pending_compaction_bytes {
+                STORE_ENGINE_PENDING_COMPACTION_BYTES_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
             for (level, level_stats) in cf_stats.levels.iter().enumerate() {
-                STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
-                    .with_label_values(&[&self.name, cf, &level.to_string()])
-                    .set(level_stats.num_files as i64);
-                if level_stats.num_files > 0 {
-                    let normalized_compression_ratio =
-                        level_stats.weighted_compression_ratio / level_stats.num_files as f64;
-                    STORE_ENGINE_COMPRESSION_RATIO_VEC
+                if let Some(num_files) = level_stats.num_files {
+                    STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
                         .with_label_values(&[&self.name, cf, &level.to_string()])
-                        .set(normalized_compression_ratio);
+                        .set(num_files as i64);
+                    if num_files > 0 && let Some(ratio) = level_stats.weighted_compression_ratio {
+                        let normalized_compression_ratio =
+                        ratio / num_files as f64;
+                        STORE_ENGINE_COMPRESSION_RATIO_VEC
+                            .with_label_values(&[&self.name, cf, &level.to_string()])
+                            .set(normalized_compression_ratio);
+                    }
                 }
-                STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC
-                    .with_label_values(&[&self.name, cf, &level.to_string()])
-                    .set(level_stats.num_blob_files as i64);
+                if let Some(v) = level_stats.num_blob_files {
+                    STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC
+                        .with_label_values(&[&self.name, cf, &level.to_string()])
+                        .set(v as i64);
+                }
             }
 
-            STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
-                .with_label_values(&[&self.name, cf])
-                .set(cf_stats.num_immutable_mem_table as i64);
-            STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC
-                .with_label_values(&[&self.name, cf])
-                .set(cf_stats.live_blob_size as i64);
-            STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC
-                .with_label_values(&[&self.name, cf])
-                .set(cf_stats.num_live_blob_file as i64);
-            STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC
-                .with_label_values(&[&self.name, cf])
-                .set(cf_stats.num_obsolete_blob_file as i64);
-            STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC
-                .with_label_values(&[&self.name, cf])
-                .set(cf_stats.live_blob_file_size as i64);
-            STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC
-                .with_label_values(&[&self.name, cf])
-                .set(cf_stats.obsolete_blob_file_size as i64);
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
-                .with_label_values(&[&self.name, cf, "le0"])
-                .set(cf_stats.blob_file_discardable_ratio_le0 as i64);
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
-                .with_label_values(&[&self.name, cf, "le20"])
-                .set(cf_stats.blob_file_discardable_ratio_le20 as i64);
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
-                .with_label_values(&[&self.name, cf, "le50"])
-                .set(cf_stats.blob_file_discardable_ratio_le50 as i64);
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
-                .with_label_values(&[&self.name, cf, "le80"])
-                .set(cf_stats.blob_file_discardable_ratio_le80 as i64);
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
-                .with_label_values(&[&self.name, cf, "le100"])
-                .set(cf_stats.blob_file_discardable_ratio_le100 as i64);
+            if let Some(v) = cf_stats.num_immutable_mem_table {
+                STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.live_blob_size {
+                STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.num_live_blob_file {
+                STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.num_obsolete_blob_file {
+                STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.live_blob_file_size {
+                STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.obsolete_blob_file_size {
+                STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_file_discardable_ratio_le0 {
+                STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, "le0"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_file_discardable_ratio_le20 {
+                STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, "le20"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_file_discardable_ratio_le50 {
+                STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, "le50"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_file_discardable_ratio_le80 {
+                STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, "le80"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_file_discardable_ratio_le100 {
+                STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, "le100"])
+                    .set(v as i64);
+            }
         }
 
-        STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
-            .with_label_values(&[&self.name])
-            .set(self.db_stats.num_snapshots as i64);
-        STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC
-            .with_label_values(&[&self.name])
-            .set(self.db_stats.oldest_snapshot_time as i64);
-        STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
-            .with_label_values(&[&self.name, "all"])
-            .set(self.db_stats.block_cache_size.unwrap_or(0) as i64);
+        if let Some(v) = self.db_stats.num_snapshots {
+            STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
+                .with_label_values(&[&self.name])
+                .set(v as i64);
+        }
+        if let Some(v) = self.db_stats.oldest_snapshot_time {
+            STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC
+                .with_label_values(&[&self.name])
+                .set(v as i64);
+        }
+        if let Some(v) = self.db_stats.block_cache_size {
+            STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+                .with_label_values(&[&self.name, "all"])
+                .set(v as i64);
+        }
         let stall_num = ROCKSDB_IOSTALL_KEY.len();
         for i in 0..stall_num {
-            STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
-                .with_label_values(&[&self.name, ROCKSDB_IOSTALL_TYPE[i]])
-                .set(self.db_stats.stall_num[i] as i64);
+            if let Some(v) = self.db_stats.stall_num[i] {
+                STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
+                    .with_label_values(&[&self.name, ROCKSDB_IOSTALL_TYPE[i]])
+                    .set(v as i64);
+            }
         }
     }
 }
 
-pub fn flush_engine_statistics(statistics: &RocksStatistics, name: &str) {
+pub fn flush_engine_statistics(statistics: &RocksStatistics, name: &str, is_titan: bool) {
     for t in ENGINE_TICKER_TYPES {
         let v = statistics.get_and_reset_ticker_count(*t);
         flush_engine_ticker_metrics(*t, v, name);
@@ -1169,14 +1249,15 @@ pub fn flush_engine_statistics(statistics: &RocksStatistics, name: &str) {
             flush_engine_histogram_metrics(*t, v, name);
         }
     }
-    // TODO: check if it's titan.
-    for t in TITAN_ENGINE_TICKER_TYPES {
-        let v = statistics.get_and_reset_ticker_count(*t);
-        flush_engine_ticker_metrics(*t, v, name);
-    }
-    for t in TITAN_ENGINE_HIST_TYPES {
-        if let Some(v) = statistics.get_histogram(*t) {
-            flush_engine_histogram_metrics(*t, v, name);
+    if is_titan {
+        for t in TITAN_ENGINE_TICKER_TYPES {
+            let v = statistics.get_and_reset_ticker_count(*t);
+            flush_engine_ticker_metrics(*t, v, name);
+        }
+        for t in TITAN_ENGINE_HIST_TYPES {
+            if let Some(v) = statistics.get_histogram(*t) {
+                flush_engine_histogram_metrics(*t, v, name);
+            }
         }
     }
 }

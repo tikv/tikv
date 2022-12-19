@@ -63,8 +63,8 @@ impl<ER: RaftEngine, T: RaftExtension> Service<ER, T> {
         cfg_controller: ConfigController,
     ) -> Self {
         let mut debugger = Debugger::new(engines, cfg_controller);
-        debugger.kv_statistics(kv_statistics);
-        debugger.raft_statistics(raft_statistics);
+        debugger.set_kv_statistics(kv_statistics);
+        debugger.set_raft_statistics(raft_statistics);
         Service {
             pool,
             debugger,

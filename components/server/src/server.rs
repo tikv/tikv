@@ -1369,6 +1369,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
+            self.config.rocksdb.titan.enabled,
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.raft_statistics.clone(),
         );
@@ -1980,6 +1981,7 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
 pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
     tablet_registry: TabletRegistry<EK>,
     kv_statistics: Option<Arc<RocksStatistics>>,
+    kv_is_titan: bool,
     raft_engine: ER,
     raft_statistics: Option<Arc<RocksStatistics>>,
     last_reset: Instant,
@@ -1989,12 +1991,14 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
     pub fn new(
         tablet_registry: TabletRegistry<EK>,
         kv_statistics: Option<Arc<RocksStatistics>>,
+        kv_is_titan: bool,
         raft_engine: ER,
         raft_statistics: Option<Arc<RocksStatistics>>,
     ) -> Self {
         EngineMetricsManager {
             tablet_registry,
             kv_statistics,
+            kv_is_titan,
             raft_engine,
             raft_statistics,
             last_reset: Instant::now(),
@@ -2014,10 +2018,10 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
         self.raft_engine.flush_metrics("raft");
 
         if let Some(s) = self.kv_statistics.as_ref() {
-            flush_engine_statistics(s, "kv");
+            flush_engine_statistics(s, "kv", self.kv_is_titan);
         }
         if let Some(s) = self.raft_statistics.as_ref() {
-            flush_engine_statistics(s, "raft");
+            flush_engine_statistics(s, "raft", false);
         }
         if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             if let Some(s) = self.kv_statistics.as_ref() {
