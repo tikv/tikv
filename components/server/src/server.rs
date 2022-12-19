@@ -2162,7 +2162,7 @@ mod test {
         let cache = config.storage.block_cache.build_shared_cache();
 
         let factory = KvEngineFactoryBuilder::new(env, &config, cache).build();
-        let reg = TabletRegistry::new(Box::new(factory), path.path()).unwrap();
+        let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {
             let ctx = TabletContext::with_infinite_region(i, Some(10));

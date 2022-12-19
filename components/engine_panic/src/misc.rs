@@ -23,7 +23,7 @@ impl StatisticsReporter<PanicEngine> for PanicReporter {
 impl MiscExt for PanicEngine {
     type StatisticsReporter = PanicReporter;
 
-    fn flush_cfs(&self, wait: bool) -> Result<()> {
+    fn flush_cfs(&self, cfs: &[&str], wait: bool) -> Result<()> {
         panic!()
     }
 

@@ -57,7 +57,10 @@ pub trait StatisticsReporter<T: ?Sized> {
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     type StatisticsReporter: StatisticsReporter<Self>;
 
-    fn flush_cfs(&self, wait: bool) -> Result<()>;
+    /// Flush all specified column families at once.
+    ///
+    /// If `cfs` is empty, it will try to flush all available column families.
+    fn flush_cfs(&self, cfs: &[&str], wait: bool) -> Result<()>;
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;
 

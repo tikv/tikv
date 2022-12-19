@@ -15,7 +15,7 @@ use raftstore::store::initial_region;
 use slog::{debug, error, info, warn, Logger};
 use tikv_util::{box_err, box_try};
 
-use crate::{raft::write_initial_states, Result};
+use crate::{operation::write_initial_states, Result};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
