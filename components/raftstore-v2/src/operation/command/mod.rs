@@ -16,13 +16,9 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::cmp;
-
-use batch_system::{Fsm, FsmScheduler, Mailbox};
 use engine_traits::{KvEngine, RaftEngine, WriteBatch, WriteOptions};
-use kvproto::{
-    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader},
-    raft_serverpb::RegionLocalState,
+use kvproto::raft_cmdpb::{
+    AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
@@ -31,16 +27,12 @@ use raftstore::{
     store::{
         cmd_resp,
         fsm::{
-            apply::{
-                self, APPLY_WB_SHRINK_SIZE, DEFAULT_APPLY_WB_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP,
-            },
+            apply::{self, APPLY_WB_SHRINK_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP},
             Proposal,
         },
         local_metrics::RaftMetrics,
-        metrics::*,
         msg::ErrorCallback,
-        util::{self, admin_cmd_epoch_lookup},
-        WriteCallback,
+        util, WriteCallback,
     },
     Error, Result,
 };
@@ -50,9 +42,8 @@ use tikv_util::{box_err, time::monotonic_raw_now};
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
-    operation::GenSnapTask,
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, PeerMsg},
+    router::{ApplyRes, ApplyTask, CmdResChannel},
 };
 
 mod admin;
@@ -122,7 +113,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn schedule_apply_fsm<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let region_state = self.storage().region_state().clone();
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
-        let tablet = self.tablet().clone();
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
@@ -131,6 +121,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             mailbox,
             store_ctx.tablet_registry.clone(),
             read_scheduler,
+            self.flush_state().clone(),
+            self.storage().apply_trace().log_recovery(),
             logger,
         );
 
@@ -165,7 +157,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return Err(e);
         }
         if let Err(mut e) = util::check_region_epoch(req, self.region(), true) {
-            if let Error::EpochNotMatch(_, new_regions) = &mut e {
+            if let Error::EpochNotMatch(_, _new_regions) = &mut e {
                 // TODO: query sibling regions.
                 metrics.invalid_proposal.epoch_not_match.inc();
             }
@@ -247,15 +239,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn schedule_apply_committed_entries<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        committed_entries: Vec<Entry>,
-    ) {
-        let last_entry = match committed_entries.last() {
-            Some(e) => e,
-            None => return,
-        };
+    pub fn schedule_apply_committed_entries(&mut self, committed_entries: Vec<Entry>) {
+        if committed_entries.is_empty() {
+            return;
+        }
         let current_term = self.term();
         let mut entry_and_proposals = vec![];
         let queue = self.proposals_mut();
@@ -281,6 +268,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             entry_and_proposals,
         };
         self.apply_scheduler()
+            .unwrap()
             .send(ApplyTask::CommittedEntries(apply));
     }
 
@@ -295,8 +283,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        for admin_res in apply_res.admin_result {
+        for admin_res in Vec::from(apply_res.admin_result) {
             match admin_res {
+                AdminCmdResult::None => unreachable!(),
                 AdminCmdResult::ConfChange(conf_change) => {
                     self.on_apply_res_conf_change(ctx, conf_change)
                 }
@@ -304,7 +293,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     regions,
                     derived_index,
                     tablet_index,
-                }) => self.on_apply_res_split(ctx, derived_index, tablet_index, regions),
+                }) => {
+                    self.storage_mut()
+                        .apply_trace_mut()
+                        .on_admin_modify(tablet_index);
+                    self.on_apply_res_split(ctx, derived_index, tablet_index, regions)
+                }
+                AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
             }
         }
 
@@ -321,12 +316,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !is_leader {
             entry_storage.compact_entry_cache(apply_res.applied_index + 1);
         }
+        self.on_data_modified(apply_res.modifications);
         self.handle_read_on_apply(
             ctx,
             apply_res.applied_term,
             apply_res.applied_index,
             progress_to_be_updated,
         );
+    }
+}
+
+impl<EK: KvEngine, R> Apply<EK, R> {
+    #[inline]
+    fn should_skip(&self, off: usize, index: u64) -> bool {
+        let log_recovery = self.log_recovery();
+        if log_recovery.is_none() {
+            return false;
+        }
+        log_recovery.as_ref().unwrap()[off] >= index
     }
 }
 
@@ -370,11 +377,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     async fn apply_entry(&mut self, entry: &Entry) -> Result<RaftCmdResponse> {
         let mut conf_change = None;
+        let log_index = entry.get_index();
         let req = match entry.get_entry_type() {
             EntryType::EntryNormal => match SimpleWriteDecoder::new(
                 &self.logger,
                 entry.get_data(),
-                entry.get_index(),
+                log_index,
                 entry.get_term(),
             ) {
                 Ok(decoder) => {
@@ -388,16 +396,21 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     let res = Ok(new_response(decoder.header()));
                     for req in decoder {
                         match req {
-                            SimpleWrite::Put(put) => self.apply_put(put.cf, put.key, put.value)?,
-                            SimpleWrite::Delete(delete) => {
-                                self.apply_delete(delete.cf, delete.key)?
+                            SimpleWrite::Put(put) => {
+                                self.apply_put(put.cf, log_index, put.key, put.value)?;
                             }
-                            SimpleWrite::DeleteRange(dr) => self.apply_delete_range(
-                                dr.cf,
-                                dr.start_key,
-                                dr.end_key,
-                                dr.notify_only,
-                            )?,
+                            SimpleWrite::Delete(delete) => {
+                                self.apply_delete(delete.cf, log_index, delete.key)?;
+                            }
+                            SimpleWrite::DeleteRange(dr) => {
+                                self.apply_delete_range(
+                                    dr.cf,
+                                    log_index,
+                                    dr.start_key,
+                                    dr.end_key,
+                                    dr.notify_only,
+                                )?;
+                            }
                         }
                     }
                     return res;
@@ -405,34 +418,18 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 Err(req) => req,
             },
             EntryType::EntryConfChange => {
-                let cc: ConfChange = parse_at(
-                    &self.logger,
-                    entry.get_data(),
-                    entry.get_index(),
-                    entry.get_term(),
-                );
-                let req: RaftCmdRequest = parse_at(
-                    &self.logger,
-                    cc.get_context(),
-                    entry.get_index(),
-                    entry.get_term(),
-                );
+                let cc: ConfChange =
+                    parse_at(&self.logger, entry.get_data(), log_index, entry.get_term());
+                let req: RaftCmdRequest =
+                    parse_at(&self.logger, cc.get_context(), log_index, entry.get_term());
                 conf_change = Some(cc.into_v2());
                 req
             }
             EntryType::EntryConfChangeV2 => {
-                let cc: ConfChangeV2 = parse_at(
-                    &self.logger,
-                    entry.get_data(),
-                    entry.get_index(),
-                    entry.get_term(),
-                );
-                let req: RaftCmdRequest = parse_at(
-                    &self.logger,
-                    cc.get_context(),
-                    entry.get_index(),
-                    entry.get_term(),
-                );
+                let cc: ConfChangeV2 =
+                    parse_at(&self.logger, entry.get_data(), log_index, entry.get_term());
+                let req: RaftCmdRequest =
+                    parse_at(&self.logger, cc.get_context(), log_index, entry.get_term());
                 conf_change = Some(cc);
                 req
             }
@@ -443,17 +440,19 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog => unimplemented!(),
-                AdminCmdType::Split => self.apply_split(admin_req, entry.index)?,
-                AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, entry.index)?,
+                AdminCmdType::Split => self.apply_split(admin_req, log_index)?,
+                AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index)?,
                 AdminCmdType::PrepareMerge => unimplemented!(),
                 AdminCmdType::CommitMerge => unimplemented!(),
                 AdminCmdType::RollbackMerge => unimplemented!(),
-                AdminCmdType::TransferLeader => unreachable!(),
+                AdminCmdType::TransferLeader => {
+                    self.apply_transfer_leader(admin_req, entry.term)?
+                }
                 AdminCmdType::ChangePeer => {
-                    self.apply_conf_change(entry.get_index(), admin_req, conf_change.unwrap())?
+                    self.apply_conf_change(log_index, admin_req, conf_change.unwrap())?
                 }
                 AdminCmdType::ChangePeerV2 => {
-                    self.apply_conf_change_v2(entry.get_index(), admin_req, conf_change.unwrap())?
+                    self.apply_conf_change_v2(log_index, admin_req, conf_change.unwrap())?
                 }
                 AdminCmdType::ComputeHash => unimplemented!(),
                 AdminCmdType::VerifyHash => unimplemented!(),
@@ -465,7 +464,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
             };
 
-            self.push_admin_result(admin_result);
+            match admin_result {
+                AdminCmdResult::None => (),
+                _ => self.push_admin_result(admin_result),
+            }
             let mut resp = new_response(req.get_header());
             resp.set_admin_response(admin_resp);
             Ok(resp)
@@ -476,16 +478,17 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     // backward compatibility.
                     CmdType::Put => {
                         let put = r.get_put();
-                        self.apply_put(put.get_cf(), put.get_key(), put.get_value())?;
+                        self.apply_put(put.get_cf(), log_index, put.get_key(), put.get_value())?;
                     }
                     CmdType::Delete => {
                         let delete = r.get_delete();
-                        self.apply_delete(delete.get_cf(), delete.get_key())?;
+                        self.apply_delete(delete.get_cf(), log_index, delete.get_key())?;
                     }
                     CmdType::DeleteRange => {
                         let dr = r.get_delete_range();
                         self.apply_delete_range(
                             dr.get_cf(),
+                            log_index,
                             dr.get_start_key(),
                             dr.get_end_key(),
                             dr.get_notify_only(),
@@ -504,7 +507,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);
             if let Err(e) = wb.write_opt(&write_opt) {
-                panic!("failed to write data: {:?}", self.logger.list());
+                panic!("failed to write data: {:?}: {:?}", self.logger.list(), e);
             }
             if wb.data_size() <= APPLY_WB_SHRINK_SIZE {
                 wb.clear();
@@ -523,7 +526,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let (index, term) = self.apply_progress();
         apply_res.applied_index = index;
         apply_res.applied_term = term;
-        apply_res.admin_result = self.take_admin_result();
+        apply_res.admin_result = self.take_admin_result().into_boxed_slice();
+        apply_res.modifications = *self.modifications_mut();
         self.res_reporter().report(apply_res);
     }
 }

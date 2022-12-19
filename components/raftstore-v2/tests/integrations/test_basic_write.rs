@@ -12,7 +12,7 @@ use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use raftstore_v2::router::PeerMsg;
 use tikv_util::store::new_peer;
 
-use crate::cluster::Cluster;
+use crate::cluster::{check_skip_wal, Cluster};
 
 /// Test basic write flow.
 #[test]
@@ -147,4 +147,8 @@ fn test_put_delete() {
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     let snap = router.stale_snapshot(2);
     assert_matches!(snap.get_value(b"key"), Ok(None));
+
+    // Check if WAL is skipped for basic writes.
+    let mut cached = cluster.node(0).tablet_registry().get(2).unwrap();
+    check_skip_wal(cached.latest().unwrap().as_inner().path());
 }

@@ -75,7 +75,9 @@ use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine_traits::{
+    raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+};
 use futures::prelude::*;
 use kvproto::{
     kvrpcpb::{
@@ -1538,7 +1540,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             [(Some(start_key.as_encoded()), Some(end_key.as_encoded()))],
         )?;
 
-        let mut modifies = Vec::with_capacity(DATA_CFS.len());
+        let mut modifies = Vec::with_capacity(DATA_CFS_LEN);
         for cf in DATA_CFS {
             modifies.push(Modify::DeleteRange(
                 cf,
@@ -3593,6 +3595,7 @@ mod tests {
     use txn_types::{Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::{
+        config::EngineType,
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
         txn::{
@@ -4137,12 +4140,23 @@ mod tests {
             let cfs_opts = vec![
                 (
                     CF_DEFAULT,
-                    cfg_rocksdb
-                        .defaultcf
-                        .build_opt(&cache, None, ApiVersion::V1),
+                    cfg_rocksdb.defaultcf.build_opt(
+                        &cache,
+                        None,
+                        ApiVersion::V1,
+                        EngineType::RaftKv,
+                    ),
                 ),
-                (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                (
+                    CF_LOCK,
+                    cfg_rocksdb.lockcf.build_opt(&cache, EngineType::RaftKv),
+                ),
+                (
+                    CF_WRITE,
+                    cfg_rocksdb
+                        .writecf
+                        .build_opt(&cache, None, EngineType::RaftKv),
+                ),
                 (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
             RocksEngine::new(

@@ -31,10 +31,7 @@ pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
         read::{AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask},
-        write::{
-            ExtraStates, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
-            WriteTask,
-        },
+        write::{PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg, WriteTask},
         write_router::{WriteRouter, WriteRouterContext, WriteSenders},
     },
     bootstrap::{
@@ -54,9 +51,10 @@ pub use self::{
         StoreMsg, StoreTick, WriteCallback, WriteResponse,
     },
     peer::{
-        can_amend_read, get_sync_log_from_request, propose_read_index, should_renew_lease, Peer,
-        PeerStat, ProposalContext, ProposalQueue, RequestInspector, RequestPolicy,
-        SnapshotRecoveryWaitApplySyncer,
+        can_amend_read, get_sync_log_from_request, make_transfer_leader_response,
+        propose_read_index, should_renew_lease, Peer, PeerStat, ProposalContext, ProposalQueue,
+        RequestInspector, RequestPolicy, SnapshotRecoveryWaitApplySyncer,
+        TRANSFER_LEADER_COMMAND_REPLY_CTX,
     },
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,

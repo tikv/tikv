@@ -31,6 +31,7 @@ use engine_rocks::{
     raw::{
         BlockBasedOptions, Cache, ChecksumType, CompactionPriority, DBCompactionStyle,
         DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env, PrepopulateBlockCache,
+        Statistics,
     },
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
     RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
@@ -80,7 +81,7 @@ use crate::{
         ttl::TtlCompactionFilterFactory,
         Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
-    storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR},
+    storage::config::{Config as StorageConfig, EngineType, DEFAULT_DATA_DIR},
 };
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
@@ -106,6 +107,15 @@ const RAFT_MAX_MEM: usize = 2 * GIB as usize;
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MIB as usize;
+
+fn bloom_filter_ratio(et: EngineType) -> f64 {
+    match et {
+        EngineType::RaftKv => 0.1,
+        // In v2, every peer has its own tablet. The data scale is about tens of
+        // GiBs. We only need a small portion for those key.
+        EngineType::RaftKv2 => 0.005,
+    }
+}
 
 fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSize {
     let (ratio, min, max) = match (is_raft_db, cf) {
@@ -663,8 +673,10 @@ impl DefaultCfConfig {
         cache: &Cache,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
+        for_engine: EngineType,
     ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
+        cf_opts.set_memtable_prefix_bloom_size_ratio(bloom_filter_ratio(for_engine));
         let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
@@ -778,6 +790,7 @@ impl WriteCfConfig {
         &self,
         cache: &Cache,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        for_engine: EngineType,
     ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_WRITE, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
@@ -788,7 +801,7 @@ impl WriteCfConfig {
             )
             .unwrap();
         // Create prefix bloom filter for memtable.
-        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        cf_opts.set_memtable_prefix_bloom_size_ratio(bloom_filter_ratio(for_engine));
         // Collects user defined properties.
         cf_opts.add_table_properties_collector_factory(
             "tikv.mvcc-properties-collector",
@@ -872,7 +885,7 @@ impl Default for LockCfConfig {
 }
 
 impl LockCfConfig {
-    pub fn build_opt(&self, cache: &Cache) -> RocksCfOptions {
+    pub fn build_opt(&self, cache: &Cache, for_engine: EngineType) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_LOCK, cache, no_region_info_accessor);
         cf_opts
@@ -883,7 +896,7 @@ impl LockCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        cf_opts.set_memtable_prefix_bloom_size_ratio(bloom_filter_ratio(for_engine));
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
@@ -1058,14 +1071,16 @@ pub struct DbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     #[online_config(skip)]
     pub enable_pipelined_write: bool,
-    // deprecated. TiKV will use a new write mode when set `enable_pipelined_write` false and fall
-    // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of
-    // multi-batch-write in RocksDB has been removed.
     #[online_config(skip)]
-    #[serde(skip_serializing)]
-    pub enable_multi_batch_write: bool,
+    pub enable_multi_batch_write: Option<bool>,
     #[online_config(skip)]
     pub enable_unordered_write: bool,
+    #[online_config(skip)]
+    pub allow_concurrent_memtable_write: Option<bool>,
+    // Dangerous option only for programming use.
+    #[online_config(skip)]
+    #[serde(skip)]
+    pub paranoid_checks: Option<bool>,
     #[online_config(submodule)]
     pub defaultcf: DefaultCfConfig,
     #[online_config(submodule)]
@@ -1115,8 +1130,10 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: false,
-            enable_multi_batch_write: true, // deprecated
+            enable_multi_batch_write: None, // deprecated
             enable_unordered_write: false,
+            allow_concurrent_memtable_write: None,
+            paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -1127,7 +1144,19 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-    pub fn build_opt(&self) -> RocksDbOptions {
+    pub fn optimize_for(&mut self, engine: EngineType) {
+        match engine {
+            EngineType::RaftKv => {
+                self.allow_concurrent_memtable_write.get_or_insert(true);
+            }
+            EngineType::RaftKv2 => {
+                self.enable_multi_batch_write.get_or_insert(false);
+                self.allow_concurrent_memtable_write.get_or_insert(false);
+            }
+        }
+    }
+
+    pub fn build_opt(&self, stats: Option<&Statistics>) -> RocksDbOptions {
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -1143,7 +1172,12 @@ impl DbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        opts.enable_statistics(self.enable_statistics);
+        if self.enable_statistics {
+            match stats {
+                Some(stats) => opts.set_statistics(stats),
+                None => opts.set_statistics(&Statistics::new_titan()),
+            }
+        }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
@@ -1175,9 +1209,19 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
-        let enable_multi_batch_write = !self.enable_pipelined_write && !self.enable_unordered_write;
+        let mut enable_multi_batch_write =
+            !self.enable_pipelined_write && !self.enable_unordered_write;
+        if self.allow_concurrent_memtable_write == Some(false)
+            && self.enable_multi_batch_write == Some(false)
+        {
+            enable_multi_batch_write = false
+        }
         opts.enable_multi_batch_write(enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
+        opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write.unwrap_or(true));
+        if let Some(b) = self.paranoid_checks {
+            opts.set_paranoid_checks(b);
+        }
         opts.set_info_log(RocksdbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
@@ -1191,21 +1235,24 @@ impl DbConfig {
         cache: &Cache,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
+        for_engine: EngineType,
     ) -> Vec<(&'static str, RocksCfOptions)> {
-        vec![
-            (
-                CF_DEFAULT,
-                self.defaultcf
-                    .build_opt(cache, region_info_accessor, api_version),
-            ),
-            (CF_LOCK, self.lockcf.build_opt(cache)),
-            (
-                CF_WRITE,
-                self.writecf.build_opt(cache, region_info_accessor),
-            ),
-            // TODO: remove CF_RAFT.
-            (CF_RAFT, self.raftcf.build_opt(cache)),
-        ]
+        let mut cf_opts = Vec::with_capacity(4);
+        cf_opts.push((
+            CF_DEFAULT,
+            self.defaultcf
+                .build_opt(cache, region_info_accessor, api_version, for_engine),
+        ));
+        cf_opts.push((CF_LOCK, self.lockcf.build_opt(cache, for_engine)));
+        cf_opts.push((
+            CF_WRITE,
+            self.writecf
+                .build_opt(cache, region_info_accessor, for_engine),
+        ));
+        if for_engine == EngineType::RaftKv {
+            cf_opts.push((CF_RAFT, self.raftcf.build_opt(cache)));
+        }
+        cf_opts
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
@@ -1452,7 +1499,9 @@ impl RaftDbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        opts.enable_statistics(self.enable_statistics);
+        if self.enable_statistics {
+            opts.set_statistics(&Statistics::new_titan());
+        }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
@@ -3010,6 +3059,8 @@ impl TikvConfig {
                 config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-temp")?;
         }
 
+        self.rocksdb.optimize_for(self.storage.engine);
+
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
         self.raft_engine.validate()?;
@@ -4367,11 +4418,12 @@ mod tests {
         assert_eq!(F::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
-            Some(cfg.rocksdb.build_opt()),
+            Some(cfg.rocksdb.build_opt(None)),
             cfg.rocksdb.build_cf_opts(
                 &cfg.storage.block_cache.build_shared_cache(),
                 None,
                 cfg.storage.api_version(),
+                cfg.storage.engine,
             ),
             None,
         )

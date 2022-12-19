@@ -1630,6 +1630,7 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
+ "keys",
  "kvproto",
  "log_wrappers",
  "protobuf",
@@ -2875,7 +2876,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f94fdd30dd94f6fd22c8052edfd2c4039d9f2fbd"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2894,7 +2895,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f94fdd30dd94f6fd22c8052edfd2c4039d9f2fbd"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4250,6 +4251,7 @@ dependencies = [
 name = "raft_log_engine"
 version = "0.0.1"
 dependencies = [
+ "codec",
  "encryption",
  "engine_traits",
  "file_system",
@@ -4264,6 +4266,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv_util",
  "time",
  "tracker",
@@ -4344,6 +4347,7 @@ name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
  "batch-system",
+ "bytes",
  "causal_ts",
  "collections",
  "concurrency_manager",
@@ -4355,15 +4359,18 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.15",
+ "itertools",
  "keys",
  "kvproto",
  "log_wrappers",
+ "parking_lot 0.12.0",
  "pd_client",
  "prometheus",
  "protobuf",
  "raft",
  "raft-proto",
  "raftstore",
+ "rand 0.8.5",
  "resource_metering",
  "slog",
  "slog-global",
@@ -4754,7 +4761,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f94fdd30dd94f6fd22c8052edfd2c4039d9f2fbd"
 dependencies = [
  "libc 0.2.132",
  "librocksdb_sys",
@@ -6220,7 +6227,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.5.0-alpha"
+version = "6.6.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",

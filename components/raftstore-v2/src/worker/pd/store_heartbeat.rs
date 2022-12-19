@@ -247,7 +247,6 @@ where
 
         // TODO: slow score
 
-        let router = self.router.clone();
         let resp = self.pd_client.store_heartbeat(stats, None, None);
         let logger = self.logger.clone();
         let f = async move {

@@ -19,17 +19,16 @@
 //!   peer fsm, then Raft will get the snapshot.
 
 use std::{
-    borrow::BorrowMut,
     fmt::{self, Debug},
     fs, mem,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc, Arc,
+        Arc,
     },
 };
 
-use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, CF_RAFT};
+use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
 use raftstore::store::{
@@ -37,13 +36,12 @@ use raftstore::store::{
     TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
 };
 use slog::{error, info, warn};
-use tikv_util::{box_err, box_try, worker::Scheduler};
+use tikv_util::box_err;
 
 use crate::{
     fsm::ApplyResReporter,
     operation::command::SPLIT_PREFIX,
     raft::{Apply, Peer, Storage},
-    router::{ApplyTask, PeerTick},
     Result, StoreContext,
 };
 
@@ -60,11 +58,9 @@ pub enum SnapState {
 impl PartialEq for SnapState {
     fn eq(&self, other: &SnapState) -> bool {
         match (self, other) {
-            (&SnapState::Relax, &SnapState::Relax)
-            | (&SnapState::Generating { .. }, &SnapState::Generating { .. }) => true,
-            (&SnapState::Generated(ref snap1), &SnapState::Generated(ref snap2)) => {
-                *snap1 == *snap2
-            }
+            (SnapState::Relax, SnapState::Relax)
+            | (SnapState::Generating { .. }, SnapState::Generating { .. }) => true,
+            (SnapState::Generated(snap1), SnapState::Generated(snap2)) => *snap1 == *snap2,
             _ => false,
         }
     }
@@ -125,9 +121,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let first_index = self.storage().entry_storage().first_index();
         if first_index == persisted_index + 1 {
             let region_id = self.region_id();
-            ctx.tablet_registry
-                .load(region_id, persisted_index, false)
-                .unwrap();
+            self.reset_flush_state();
+            let flush_state = self.flush_state().clone();
+            let mut tablet_ctx = TabletContext::new(self.region(), Some(persisted_index));
+            // Use a new FlushState to avoid conflicts with the old one.
+            tablet_ctx.flush_state = Some(flush_state);
+            ctx.tablet_registry.load(tablet_ctx, false).unwrap();
             self.schedule_apply_fsm(ctx);
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);
@@ -204,8 +203,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state_mut();
-        match *snap_state {
-            SnapState::Generating { ref canceled, .. } => {
+        match &*snap_state {
+            SnapState::Generating { canceled, .. } => {
                 if canceled.load(Ordering::SeqCst) {
                     self.cancel_generating_snap(None);
                 } else {
@@ -214,7 +213,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                     ));
                 }
             }
-            SnapState::Generated(ref s) => {
+            SnapState::Generated(_) => {
                 // TODO: `to` may not be equal to the generated snapshot.
                 let SnapState::Generated(snap) = mem::replace(&mut *snap_state, SnapState::Relax) else { unreachable!() };
                 if self.validate_snap(&snap, request_index) {
@@ -332,9 +331,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let snap = res.unwrap();
         let mut snap_state = self.snap_state_mut();
         let SnapState::Generating {
-            ref canceled,
-            ref index,
-         } = *snap_state else { return false };
+            index,
+            ..
+         } = &*snap_state else { return false };
 
         if snap.get_metadata().get_index() < index.load(Ordering::SeqCst) {
             warn!(
@@ -353,12 +352,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     }
 
     pub fn on_applied_snapshot(&mut self) {
-        let mut entry = self.entry_storage_mut();
+        let entry = self.entry_storage_mut();
         let term = entry.truncated_term();
         let index = entry.truncated_index();
         entry.set_applied_term(term);
         entry.apply_state_mut().set_applied_index(index);
-        self.region_state_mut().set_tablet_index(index);
+        self.apply_trace_mut().reset_snapshot(index);
     }
 
     pub fn apply_snapshot(
@@ -388,14 +387,27 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
         let last_index = snap.get_metadata().get_index();
         let last_term = snap.get_metadata().get_term();
-        self.region_state_mut().set_state(PeerState::Normal);
-        self.region_state_mut().set_region(region);
-        self.entry_storage_mut()
-            .raft_state_mut()
-            .set_last_index(last_index);
-        self.entry_storage_mut().set_truncated_index(last_index);
-        self.entry_storage_mut().set_truncated_term(last_term);
-        self.entry_storage_mut().set_last_term(last_term);
+        let region_state = self.region_state_mut();
+        region_state.set_state(PeerState::Normal);
+        region_state.set_region(region);
+        region_state.set_tablet_index(last_index);
+        let entry_storage = self.entry_storage_mut();
+        entry_storage.raft_state_mut().set_last_index(last_index);
+        entry_storage.set_truncated_index(last_index);
+        entry_storage.set_truncated_term(last_term);
+        entry_storage.set_last_term(last_term);
+
+        self.apply_trace_mut().reset_should_persist();
+        self.set_ever_persisted();
+        let lb = task
+            .extra_write
+            .ensure_v2(|| self.entry_storage().raft_engine().log_batch(3));
+        lb.put_apply_state(region_id, last_index, self.apply_state())
+            .unwrap();
+        lb.put_region_state(region_id, last_index, self.region_state())
+            .unwrap();
+        lb.put_flushed_index(region_id, CF_RAFT, last_index, last_index)
+            .unwrap();
 
         let (path, clean_split) = match self.split_init_mut() {
             // If index not match, the peer may accept a newer snapshot after split.
@@ -429,7 +441,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 let _ = fs::remove_dir_all(path);
             }
         };
-        task.persisted_cb = (Some(Box::new(hook)));
+        task.persisted_cb = Some(Box::new(hook));
         task.has_snapshot = true;
         Ok(())
     }

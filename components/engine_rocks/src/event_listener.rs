@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::PersistenceListener;
 use file_system::{get_io_type, set_io_type, IoType};
 use regex::Regex;
 use rocksdb::{
-    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MutableStatus,
-    SubcompactionJobInfo, WriteStallInfo,
+    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MemTableInfo,
+    MutableStatus, SubcompactionJobInfo, WriteStallInfo,
 };
 use tikv_util::{error, metrics::CRITICAL_ERROR, set_panic_mark, warn, worker::Scheduler};
 
@@ -178,14 +179,180 @@ fn resolve_sst_filename_from_err(err: &str) -> Option<String> {
     Some(filename)
 }
 
+pub struct RocksPersistenceListener(PersistenceListener);
+
+impl RocksPersistenceListener {
+    pub fn new(listener: PersistenceListener) -> RocksPersistenceListener {
+        RocksPersistenceListener(listener)
+    }
+}
+
+impl rocksdb::EventListener for RocksPersistenceListener {
+    fn on_memtable_sealed(&self, info: &MemTableInfo) {
+        self.0
+            .on_memtable_sealed(info.cf_name().to_string(), info.earliest_seqno());
+    }
+
+    fn on_flush_completed(&self, job: &FlushJobInfo) {
+        self.0
+            .on_flush_completed(job.cf_name(), job.largest_seqno());
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        mpsc::{self, Sender},
+        Arc, Mutex,
+    };
+
+    use engine_traits::{
+        FlushProgress, FlushState, MiscExt, StateStorage, SyncMutable, CF_DEFAULT, DATA_CFS,
+    };
+    use tempfile::Builder;
+
     use super::*;
+    use crate::{util, RocksCfOptions, RocksDbOptions};
 
     #[test]
     fn test_resolve_sst_filename() {
         let err = "Corruption: Sst file size mismatch: /qps/data/tikv-10014/db/000398.sst. Size recorded in manifest 6975, actual size 6959";
         let filename = resolve_sst_filename_from_err(err).unwrap();
         assert_eq!(filename, "/000398.sst");
+    }
+
+    type Record = (u64, u64, FlushProgress);
+
+    #[derive(Default)]
+    struct MemStorage {
+        records: Mutex<Vec<Record>>,
+    }
+
+    impl StateStorage for MemStorage {
+        fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: FlushProgress) {
+            self.records
+                .lock()
+                .unwrap()
+                .push((region_id, tablet_index, pr));
+        }
+    }
+
+    struct FlushTrack {
+        sealed: Mutex<Sender<()>>,
+        block_flush: Arc<Mutex<()>>,
+    }
+
+    impl rocksdb::EventListener for FlushTrack {
+        fn on_memtable_sealed(&self, _: &MemTableInfo) {
+            let _ = self.sealed.lock().unwrap().send(());
+        }
+
+        fn on_flush_begin(&self, _: &FlushJobInfo) {
+            drop(self.block_flush.lock().unwrap())
+        }
+    }
+
+    #[test]
+    fn test_persistence_listener() {
+        let temp_dir = Builder::new()
+            .prefix("test_persistence_listener")
+            .tempdir()
+            .unwrap();
+        let (region_id, tablet_index) = (2, 3);
+
+        let storage = Arc::new(MemStorage::default());
+        let state = Arc::new(FlushState::default());
+        let listener =
+            PersistenceListener::new(region_id, tablet_index, state.clone(), storage.clone());
+        let mut db_opt = RocksDbOptions::default();
+        db_opt.add_event_listener(RocksPersistenceListener::new(listener));
+        let (tx, rx) = mpsc::channel();
+        let block_flush = Arc::new(Mutex::new(()));
+        db_opt.add_event_listener(FlushTrack {
+            sealed: Mutex::new(tx),
+            block_flush: block_flush.clone(),
+        });
+
+        let mut cf_opts: Vec<_> = DATA_CFS
+            .iter()
+            .map(|cf| (*cf, RocksCfOptions::default()))
+            .collect();
+        cf_opts[0].1.set_max_write_buffer_number(4);
+        cf_opts[0].1.set_min_write_buffer_number_to_merge(2);
+        cf_opts[0].1.set_write_buffer_size(1024);
+        cf_opts[0].1.set_disable_auto_compactions(true);
+        let db = util::new_engine_opt(temp_dir.path().to_str().unwrap(), db_opt, cf_opts).unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        let sst_count = || {
+            std::fs::read_dir(temp_dir.path())
+                .unwrap()
+                .filter(|p| {
+                    let p = match p {
+                        Ok(p) => p,
+                        Err(_) => return false,
+                    };
+                    p.path().extension().map_or(false, |ext| ext == "sst")
+                })
+                .count()
+        };
+        // Although flush is triggered, but there is nothing to flush.
+        assert_eq!(sst_count(), 0);
+        assert_eq!(storage.records.lock().unwrap().len(), 0);
+
+        // Flush one key should work.
+        state.set_applied_index(2);
+        db.put_cf(CF_DEFAULT, b"k0", b"v0").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        assert_eq!(sst_count(), 1);
+        let record = storage.records.lock().unwrap().pop().unwrap();
+        assert_eq!(storage.records.lock().unwrap().len(), 0);
+        assert_eq!(record.0, region_id);
+        assert_eq!(record.1, tablet_index);
+        assert_eq!(record.2.applied_index(), 2);
+
+        // When puts and deletes are mixed, the puts may be deleted during flush.
+        state.set_applied_index(3);
+        db.put_cf(CF_DEFAULT, b"k0", b"v0").unwrap();
+        db.delete_cf(CF_DEFAULT, b"k0").unwrap();
+        db.delete_cf(CF_DEFAULT, b"k1").unwrap();
+        db.put_cf(CF_DEFAULT, b"k1", b"v1").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        assert_eq!(sst_count(), 2);
+        let record = storage.records.lock().unwrap().pop().unwrap();
+        assert_eq!(storage.records.lock().unwrap().len(), 0);
+        assert_eq!(record.0, region_id);
+        assert_eq!(record.1, tablet_index);
+        assert_eq!(record.2.applied_index(), 3);
+        // Detail check of `FlushProgress` will be done in raftstore-v2 tests.
+
+        // Drain all the events.
+        while rx.try_recv().is_ok() {}
+        state.set_applied_index(4);
+        let block = block_flush.lock();
+        // Seal twice to trigger flush. Seal third to make a seqno conflict, in
+        // which case flush largest seqno will be equal to seal earliest seqno.
+        let mut key_count = 2;
+        for i in 0..3 {
+            while rx.try_recv().is_err() {
+                db.put(format!("k{key_count}").as_bytes(), &[0; 512])
+                    .unwrap();
+                key_count += 1;
+            }
+            state.set_applied_index(5 + i);
+        }
+        drop(block);
+        // Memtable is seal before put, so there must be still one KV in memtable.
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        rx.try_recv().unwrap();
+        // There is 2 sst before this round, and then 4 are merged into 2, so there
+        // should be 4 ssts.
+        assert_eq!(sst_count(), 4);
+        let records = storage.records.lock().unwrap();
+        // Although it seals 4 times, but only create 2 SSTs, so only 2 records.
+        assert_eq!(records.len(), 2);
+        // The indexes of two merged flush state are 4 and 5, so merged value is 5.
+        assert_eq!(records[0].2.applied_index(), 5);
+        // The last two flush state is 6 and 7.
+        assert_eq!(records[1].2.applied_index(), 7);
     }
 }

@@ -251,6 +251,8 @@
 #![cfg_attr(test, feature(test))]
 #![feature(min_specialization)]
 #![feature(assert_matches)]
+#![feature(linked_list_cursors)]
+#![feature(let_chains)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -277,6 +279,8 @@ mod engine;
 pub use crate::engine::*;
 mod file_system;
 pub use crate::file_system::*;
+mod flush;
+pub use flush::*;
 mod import;
 pub use import::*;
 mod misc;

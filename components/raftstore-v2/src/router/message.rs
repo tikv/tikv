@@ -3,9 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
-use engine_traits::Snapshot;
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use tikv_util::time::Instant;
 
@@ -141,6 +139,11 @@ pub enum PeerMsg {
         ready_number: u64,
     },
     QueryDebugInfo(DebugInfoChannel),
+    DataFlushed {
+        cf: &'static str,
+        tablet_index: u64,
+        flushed_index: u64,
+    },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
@@ -193,6 +196,15 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::LogsFetched(fetched) => write!(fmt, "LogsFetched {:?}", fetched),
             PeerMsg::SnapshotGenerated(_) => write!(fmt, "SnapshotGenerated"),
             PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
+            PeerMsg::DataFlushed {
+                cf,
+                tablet_index,
+                flushed_index,
+            } => write!(
+                fmt,
+                "DataFlushed cf {}, tablet_index {}, flushed_index {}",
+                cf, tablet_index, flushed_index
+            ),
             #[cfg(feature = "testexport")]
             PeerMsg::WaitFlush(_) => write!(fmt, "FlushMessages"),
         }

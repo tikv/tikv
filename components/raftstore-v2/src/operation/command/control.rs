@@ -1,11 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::LinkedList, mem, num::NonZeroU64};
+use std::{collections::LinkedList, mem};
 
-use kvproto::{
-    metapb,
-    raft_cmdpb::{AdminCmdType, RaftCmdRequest},
-};
+use kvproto::{metapb, raft_cmdpb::AdminCmdType};
 use raftstore::{
     store::{
         cmd_resp,
@@ -262,12 +259,6 @@ impl Drop for ProposalControl {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
-        let mut request = RaftCmdRequest::default();
-        request.mut_admin_request().set_cmd_type(cmd_type);
-        request
-    }
 
     #[test]
     fn test_proposal_control() {

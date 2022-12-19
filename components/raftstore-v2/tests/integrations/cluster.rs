@@ -20,7 +20,7 @@ use engine_test::{
     kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::{TabletRegistry, ALL_CFS};
+use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
     metapb::{self, RegionEpoch, Store},
@@ -36,7 +36,7 @@ use raftstore::store::{
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
-    Bootstrap, StoreSystem,
+    Bootstrap, StateStorage, StoreSystem,
 };
 use slog::{debug, o, Logger};
 use tempfile::TempDir;
@@ -47,6 +47,25 @@ use tikv_util::{
 };
 use txn_types::WriteBatchFlags;
 
+pub fn check_skip_wal(path: &str) {
+    let mut found = false;
+    for f in std::fs::read_dir(path).unwrap() {
+        let e = f.unwrap();
+        if e.path().extension().map_or(false, |ext| ext == "log") {
+            found = true;
+            assert_eq!(e.metadata().unwrap().len(), 0, "{}", e.path().display());
+        }
+    }
+    assert!(found, "no WAL found in {}", path);
+}
+
+pub fn new_put_request(key: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Request {
+    let mut req = Request::default();
+    req.set_cmd_type(CmdType::Put);
+    req.mut_put().set_key(key.into());
+    req.mut_put().set_value(value.into());
+    req
+}
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
@@ -197,6 +216,7 @@ pub struct RunningState {
     pub system: StoreSystem<KvTestEngine, RaftTestEngine>,
     pub cfg: Arc<VersionTrack<Config>>,
     pub transport: TestTransport,
+    snap_mgr: TabletSnapManager,
 }
 
 impl RunningState {
@@ -208,41 +228,44 @@ impl RunningState {
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
-    ) -> (TestRouter, TabletSnapManager, Self) {
-        let cf_opts = ALL_CFS
-            .iter()
-            .copied()
-            .map(|cf| (cf, CfOptions::default()))
-            .collect();
-        let factory = Box::new(TestTabletFactory::new(DbOptions::default(), cf_opts));
-        let registry = TabletRegistry::new(factory, path).unwrap();
+    ) -> (TestRouter, Self) {
         let raft_engine =
             engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
                 .unwrap();
+
         let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client.as_ref(), logger.clone());
         let store_id = bootstrap.bootstrap_store().unwrap();
         let mut store = Store::default();
         store.set_id(store_id);
-        if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
-            let factory = registry.tablet_factory();
-            let path = registry.tablet_path(region.get_id(), RAFT_INIT_LOG_INDEX);
-            if factory.exists(&path) {
-                registry.remove(region.get_id());
-                factory
-                    .destroy_tablet(region.get_id(), Some(RAFT_INIT_LOG_INDEX), &path)
-                    .unwrap();
-            }
-            // Create the tablet without loading it in cache.
-            factory
-                .open_tablet(region.get_id(), Some(RAFT_INIT_LOG_INDEX), &path)
-                .unwrap();
-        }
 
         let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(
             &cfg.value(),
             store_id,
             logger.clone(),
         );
+        let cf_opts = DATA_CFS
+            .iter()
+            .copied()
+            .map(|cf| (cf, CfOptions::default()))
+            .collect();
+        let mut db_opt = DbOptions::default();
+        db_opt.set_state_storage(Arc::new(StateStorage::new(
+            raft_engine.clone(),
+            router.clone(),
+        )));
+        let factory = Box::new(TestTabletFactory::new(db_opt, cf_opts));
+        let registry = TabletRegistry::new(factory, path.join("tablets")).unwrap();
+        if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
+            let factory = registry.tablet_factory();
+            let path = registry.tablet_path(region.get_id(), RAFT_INIT_LOG_INDEX);
+            let ctx = TabletContext::new(&region, Some(RAFT_INIT_LOG_INDEX));
+            if factory.exists(&path) {
+                registry.remove(region.get_id());
+                factory.destroy_tablet(ctx.clone(), &path).unwrap();
+            }
+            // Create the tablet without loading it in cache.
+            factory.open_tablet(ctx, &path).unwrap();
+        }
 
         let router = RaftRouter::new(store_id, registry.clone(), router);
         let store_meta = router.store_meta().clone();
@@ -271,8 +294,9 @@ impl RunningState {
             system,
             cfg,
             transport,
+            snap_mgr,
         };
-        (TestRouter(router), snap_mgr, state)
+        (TestRouter(router), state)
     }
 }
 
@@ -287,7 +311,6 @@ pub struct TestNode {
     path: TempDir,
     running_state: Option<RunningState>,
     logger: Logger,
-    snap_mgr: Option<TabletSnapManager>,
 }
 
 impl TestNode {
@@ -299,12 +322,11 @@ impl TestNode {
             path,
             running_state: None,
             logger,
-            snap_mgr: None,
         }
     }
 
     fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
-        let (router, snap_mgr, state) = RunningState::new(
+        let (router, state) = RunningState::new(
             &self.pd_client,
             self.path.path(),
             cfg,
@@ -314,7 +336,6 @@ impl TestNode {
             &self.logger,
         );
         self.running_state = Some(state);
-        self.snap_mgr = Some(snap_mgr);
         router
     }
 
@@ -341,10 +362,6 @@ impl TestNode {
 
     pub fn running_state(&self) -> Option<&RunningState> {
         self.running_state.as_ref()
-    }
-
-    pub fn snap_mgr(&self) -> Option<&TabletSnapManager> {
-        self.snap_mgr.as_ref()
     }
 
     pub fn id(&self) -> u64 {
@@ -512,8 +529,8 @@ impl Cluster {
                         msg.get_message().get_snapshot().get_metadata().get_term(),
                         msg.get_message().get_snapshot().get_metadata().get_index(),
                     );
-                    let from_snap_mgr = self.node(from_offset).snap_mgr().unwrap();
-                    let to_snap_mgr = self.node(offset).snap_mgr().unwrap();
+                    let from_snap_mgr = &self.node(from_offset).running_state().unwrap().snap_mgr;
+                    let to_snap_mgr = &self.node(offset).running_state().unwrap().snap_mgr;
                     let gen_path = from_snap_mgr.tablet_gen_path(&key);
                     let recv_path = to_snap_mgr.final_recv_path(&key);
                     assert!(gen_path.exists());
@@ -537,6 +554,15 @@ impl Cluster {
             if msgs.is_empty() {
                 return;
             }
+        }
+    }
+}
+
+impl Drop for Cluster {
+    fn drop(&mut self) {
+        self.routers.clear();
+        for node in &mut self.nodes {
+            node.stop();
         }
     }
 }
