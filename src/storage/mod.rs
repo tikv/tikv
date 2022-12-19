@@ -5203,6 +5203,74 @@ mod tests {
     }
 
     #[test]
+    fn test_mvcc_flashback_retry_prepare() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let mut ts = TimeStamp::zero();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"k"), b"v@1".to_vec())],
+                    b"k".to_vec(),
+                    *ts.incr(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k")],
+                    ts,
+                    *ts.incr(),
+                    Context::default(),
+                ),
+                expect_value_callback(tx.clone(), 1, TxnStatus::committed(ts)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_value(
+            b"v@1".to_vec(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), ts))
+                .unwrap()
+                .0,
+        );
+        // Try to prepare flashback first.
+        let flashback_start_ts = *ts.incr();
+        let flashback_commit_ts = *ts.incr();
+        storage
+            .sched_txn_command(
+                new_flashback_rollback_lock_cmd(
+                    flashback_start_ts,
+                    TimeStamp::zero(),
+                    Key::from_raw(b"k"),
+                    Some(Key::from_raw(b"z")),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Mock the prepare flashback retry.
+        run_flashback_to_version(
+            &storage,
+            flashback_start_ts,
+            flashback_commit_ts,
+            TimeStamp::zero(),
+            Key::from_raw(b"k"),
+            Some(Key::from_raw(b"z")),
+        );
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), flashback_commit_ts))
+                .unwrap()
+                .0,
+        );
+    }
+
+    #[test]
     fn test_high_priority_get_put() {
         let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
