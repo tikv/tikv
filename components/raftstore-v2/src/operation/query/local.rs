@@ -163,10 +163,10 @@ where
     ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>> + Send
     {
         let region_id = req.header.get_ref().region_id;
-        let mut res = Either::Left(self.try_get_snapshot(&req));
-        if let Either::Left(Ok(None)) = res {
-            res = Either::Right((self.try_to_renew_lease(region_id, &req), self.clone()));
-        }
+        let res = match self.try_get_snapshot(&req) {
+            res @ (Ok(Some(_)) | Err(_)) => Either::Left(res),
+            Ok(None) => Either::Right((self.try_to_renew_lease(region_id, &req), self.clone())),
+        };
 
         async move {
             match res {
@@ -174,7 +174,8 @@ where
                 Either::Left(Err(e)) => return Err(e),
                 Either::Right((fut, mut reader)) => {
                     if let Some(query_res) = fut.await?
-                        && query_res.read().is_some() {
+                        && query_res.read().is_some()
+                    {
                         // If query successful, try again.
                             req.mut_header().set_read_quorum(false);
                             if let Some(snap) = reader.try_get_snapshot(&req)? {
