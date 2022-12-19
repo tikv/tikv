@@ -811,6 +811,34 @@ fn test_mvcc_flashback_unprepared() {
 }
 
 #[test]
+fn test_mvcc_flashback_retry_prepare() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let mut ts = 0;
+    write_and_read_key(&client, &ctx, &mut ts, k.clone(), v);
+    // Try to prepare flashback first.
+    let mut prepare_req = PrepareFlashbackToVersionRequest::default();
+    prepare_req.set_context(ctx.clone());
+    prepare_req.set_start_ts(4);
+    prepare_req.set_version(0);
+    prepare_req.set_start_key(b"a".to_vec());
+    prepare_req.set_end_key(b"z".to_vec());
+    client
+        .kv_prepare_flashback_to_version(&prepare_req)
+        .unwrap();
+    // Mock the prepare flashback retry.
+    must_flashback_to_version(&client, ctx.clone(), 0, 4, 5);
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k;
+    get_req.version = 6;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(!get_resp.has_error());
+    assert_eq!(get_resp.value, b"".to_vec());
+}
+
+#[test]
 fn test_mvcc_flashback_with_unlimit_range() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
