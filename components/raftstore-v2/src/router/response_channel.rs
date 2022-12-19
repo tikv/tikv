@@ -295,11 +295,41 @@ impl CmdResSubscriber {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 enum CmdResPollStage {
     ExpectProposed,
     ExpectCommitted,
     ExpectResult,
     Drained,
+}
+
+impl CmdResPollStage {
+    #[inline]
+    fn init(event_mask: u32) -> CmdResPollStage {
+        if event_mask & event_mask_bit_of(CmdResChannel::PROPOSED_EVENT) != 0 {
+            CmdResPollStage::ExpectProposed
+        } else if event_mask & event_mask_bit_of(CmdResChannel::COMMITTED_EVENT) != 0 {
+            CmdResPollStage::ExpectCommitted
+        } else {
+            CmdResPollStage::ExpectResult
+        }
+    }
+
+    #[inline]
+    fn next(&mut self, event_mask: u32) {
+        *self = match self {
+            CmdResPollStage::ExpectProposed => {
+                if event_mask & event_mask_bit_of(CmdResChannel::COMMITTED_EVENT) == 0 {
+                    CmdResPollStage::ExpectResult
+                } else {
+                    CmdResPollStage::ExpectCommitted
+                }
+            }
+            CmdResPollStage::ExpectCommitted => CmdResPollStage::ExpectResult,
+            CmdResPollStage::ExpectResult => CmdResPollStage::Drained,
+            CmdResPollStage::Drained => CmdResPollStage::Drained,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -318,8 +348,8 @@ impl CmdResStream {
     #[inline]
     pub fn new(sub: CmdResSubscriber) -> Self {
         Self {
+            stage: CmdResPollStage::init(sub.core.event_mask),
             sub,
-            stage: CmdResPollStage::ExpectProposed,
         }
     }
 }
@@ -341,7 +371,7 @@ impl Stream for CmdResStream {
                     {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(b) => {
-                            stream.stage = CmdResPollStage::ExpectCommitted;
+                            stream.stage.next(stream.sub.core.event_mask);
                             if b {
                                 return Poll::Ready(Some(CmdResEvent::Proposed));
                             }
@@ -357,7 +387,7 @@ impl Stream for CmdResStream {
                     {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(b) => {
-                            stream.stage = CmdResPollStage::ExpectResult;
+                            stream.stage.next(stream.sub.core.event_mask);
                             if b {
                                 return Poll::Ready(Some(CmdResEvent::Committed));
                             }
@@ -368,7 +398,7 @@ impl Stream for CmdResStream {
                     match (WaitResult { sub: &stream.sub }).poll_unpin(cx) {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(res) => {
-                            stream.stage = CmdResPollStage::Drained;
+                            stream.stage.next(stream.sub.core.event_mask);
                             if let Some(res) = res {
                                 return Poll::Ready(Some(CmdResEvent::Finished(res)));
                             }
@@ -660,8 +690,18 @@ mod tests {
         let mut stream = CmdResStream::new(sub);
         chan.notify_proposed();
         chan.notify_committed();
-        drop(chan);
         assert_matches!(block_on(stream.next()), Some(CmdResEvent::Proposed));
+        drop(chan);
+        assert_matches!(block_on(stream.next()), None);
+
+        let mut builder = CmdResChannelBuilder::default();
+        builder.subscribe_committed();
+        let (mut chan, sub) = builder.build();
+        let mut stream = CmdResStream::new(sub);
+        chan.notify_proposed();
+        chan.notify_committed();
+        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Committed));
+        drop(chan);
         assert_matches!(block_on(stream.next()), None);
     }
 }
