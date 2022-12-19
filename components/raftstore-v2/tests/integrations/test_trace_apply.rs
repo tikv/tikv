@@ -2,12 +2,12 @@
 
 use std::{path::Path, time::Duration};
 
-use engine_traits::{DbOptionsExt, MiscExt, Peekable, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine_traits::{DbOptionsExt, MiscExt, Peekable, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::executor::block_on;
 use raftstore::store::RAFT_INIT_LOG_INDEX;
-use raftstore_v2::router::PeerMsg;
+use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 
-use crate::cluster::{new_put_request, Cluster};
+use crate::cluster::Cluster;
 
 fn count_file(path: &Path, pat: impl Fn(&Path) -> bool) -> usize {
     let mut count = 0;
@@ -47,25 +47,30 @@ fn test_data_recovery() {
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
 
     // Write 100 keys to default CF and not flush.
-    let mut req = router.new_request_for(2);
+    let header = Box::new(router.new_request_for(2).take_header());
     for i in 0..100 {
-        let put_req = new_put_request(format!("key{}", i), format!("value{}", i));
-        req.clear_requests();
-        req.mut_requests().push(put_req);
+        let mut put = SimpleWriteEncoder::with_capacity(64);
+        put.put(
+            CF_DEFAULT,
+            format!("key{}", i).as_bytes(),
+            format!("value{}", i).as_bytes(),
+        );
         router
-            .send(2, PeerMsg::raft_command(req.clone()).0)
+            .send(2, PeerMsg::simple_write(header.clone(), put.encode()).0)
             .unwrap();
     }
 
     // Write 100 keys to write CF and flush half.
     let mut sub = None;
     for i in 0..50 {
-        let mut put_req = new_put_request(format!("key{}", i), format!("value{}", i));
-        put_req.mut_put().set_cf(CF_WRITE.to_owned());
-        req.clear_requests();
-        req.mut_requests().push(put_req);
-        let (ch, s) = PeerMsg::raft_command(req.clone());
-        router.send(2, ch).unwrap();
+        let mut put = SimpleWriteEncoder::with_capacity(64);
+        put.put(
+            CF_WRITE,
+            format!("key{}", i).as_bytes(),
+            format!("value{}", i).as_bytes(),
+        );
+        let (msg, s) = PeerMsg::simple_write(header.clone(), put.encode());
+        router.send(2, msg).unwrap();
         sub = Some(s);
     }
     let resp = block_on(sub.take().unwrap().result()).unwrap();
@@ -75,23 +80,27 @@ fn test_data_recovery() {
     cached.latest().unwrap().flush_cf(CF_WRITE, true).unwrap();
     let router = &mut cluster.routers[0];
     for i in 50..100 {
-        let mut put_req = new_put_request(format!("key{}", i), format!("value{}", i));
-        put_req.mut_put().set_cf(CF_WRITE.to_owned());
-        req.clear_requests();
-        req.mut_requests().push(put_req);
+        let mut put = SimpleWriteEncoder::with_capacity(64);
+        put.put(
+            CF_WRITE,
+            format!("key{}", i).as_bytes(),
+            format!("value{}", i).as_bytes(),
+        );
         router
-            .send(2, PeerMsg::raft_command(req.clone()).0)
+            .send(2, PeerMsg::simple_write(header.clone(), put.encode()).0)
             .unwrap();
     }
 
     // Write 100 keys to lock CF and flush all.
     for i in 0..100 {
-        let mut put_req = new_put_request(format!("key{}", i), format!("value{}", i));
-        put_req.mut_put().set_cf(CF_LOCK.to_owned());
-        req.clear_requests();
-        req.mut_requests().push(put_req);
-        let (ch, s) = PeerMsg::raft_command(req.clone());
-        router.send(2, ch).unwrap();
+        let mut put = SimpleWriteEncoder::with_capacity(64);
+        put.put(
+            CF_LOCK,
+            format!("key{}", i).as_bytes(),
+            format!("value{}", i).as_bytes(),
+        );
+        let (msg, s) = PeerMsg::simple_write(header.clone(), put.encode());
+        router.send(2, msg).unwrap();
         sub = Some(s);
     }
     let resp = block_on(sub.take().unwrap().result()).unwrap();
@@ -137,12 +146,9 @@ fn test_data_recovery() {
     let router = &mut cluster.routers[0];
 
     // Write another key to ensure all data are recovered.
-    let put_req = new_put_request("key101", "value101");
-    req.clear_requests();
-    req.mut_requests().push(put_req);
-    let (msg, sub) = PeerMsg::raft_command(req.clone());
-    router.send(2, msg).unwrap();
-    let resp = block_on(sub.result()).unwrap();
+    let mut put = SimpleWriteEncoder::with_capacity(64);
+    put.put(CF_DEFAULT, b"key101", b"value101");
+    let resp = router.simple_write(2, header, put).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 
     // After being restarted, all unflushed logs should be applied again. So there

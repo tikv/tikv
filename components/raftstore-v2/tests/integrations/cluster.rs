@@ -24,7 +24,7 @@ use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
     metapb::{self, RegionEpoch, Store},
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request},
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
@@ -36,7 +36,7 @@ use raftstore::store::{
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
-    Bootstrap, StateStorage, StoreSystem,
+    Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
 use slog::{debug, o, Logger};
 use tempfile::TempDir;
@@ -59,13 +59,6 @@ pub fn check_skip_wal(path: &str) {
     assert!(found, "no WAL found in {}", path);
 }
 
-pub fn new_put_request(key: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Request {
-    let mut req = Request::default();
-    req.set_cmd_type(CmdType::Put);
-    req.mut_put().set_key(key.into());
-    req.mut_put().set_value(value.into());
-    req
-}
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
@@ -104,8 +97,19 @@ impl TestRouter {
         None
     }
 
-    pub fn command(&self, region_id: u64, req: RaftCmdRequest) -> Option<RaftCmdResponse> {
-        let (msg, sub) = PeerMsg::raft_command(req);
+    pub fn simple_write(
+        &self,
+        region_id: u64,
+        header: Box<RaftRequestHeader>,
+        write: SimpleWriteEncoder,
+    ) -> Option<RaftCmdResponse> {
+        let (msg, sub) = PeerMsg::simple_write(header, write.encode());
+        self.send(region_id, msg).unwrap();
+        block_on(sub.result())
+    }
+
+    pub fn admin_command(&self, region_id: u64, req: RaftCmdRequest) -> Option<RaftCmdResponse> {
+        let (msg, sub) = PeerMsg::admin_command(req);
         self.send(region_id, msg).unwrap();
         block_on(sub.result())
     }
@@ -179,7 +183,7 @@ impl TestRouter {
         let mut snap_req = Request::default();
         snap_req.set_cmd_type(CmdType::Snap);
         req.mut_requests().push(snap_req);
-        block_on(self.get_snapshot(req)).unwrap()
+        block_on(self.snapshot(req)).unwrap()
     }
 
     pub fn region_detail(&self, region_id: u64) -> metapb::Region {

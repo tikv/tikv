@@ -128,7 +128,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Check store_id, make sure that the msg is dispatched to the right place.
-        if let Err(e) = util::check_store_id(msg, self.peer().get_store_id()) {
+        if let Err(e) = util::check_store_id(msg.get_header(), self.peer().get_store_id()) {
             raft_metrics.invalid_proposal.mismatch_store_id.inc();
             return Err(e);
         }
@@ -158,7 +158,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // peer_id must be the same as peer's.
-        if let Err(e) = util::check_peer_id(msg, self.peer_id()) {
+        if let Err(e) = util::check_peer_id(msg.get_header(), self.peer_id()) {
             raft_metrics.invalid_proposal.mismatch_peer_id.inc();
             return Err(e);
         }
@@ -166,13 +166,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // TODO: check applying snapshot
 
         // Check whether the term is stale.
-        if let Err(e) = util::check_term(msg, self.term()) {
+        if let Err(e) = util::check_term(msg.get_header(), self.term()) {
             raft_metrics.invalid_proposal.stale_command.inc();
             return Err(e);
         }
 
         // TODO: add check of sibling region for split
-        util::check_region_epoch(msg, self.region(), true)
+        util::check_req_region_epoch(msg, self.region(), true)
     }
 
     // For these cases it won't be proposed:
@@ -340,7 +340,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn query_status(&mut self, req: &RaftCmdRequest, resp: &mut RaftCmdResponse) -> Result<()> {
-        util::check_store_id(req, self.peer().get_store_id())?;
+        util::check_store_id(req.get_header(), self.peer().get_store_id())?;
         let cmd_type = req.get_status_request().get_cmd_type();
         let status_resp = resp.mut_status_response();
         status_resp.set_cmd_type(cmd_type);
