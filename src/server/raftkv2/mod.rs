@@ -10,7 +10,9 @@ use kvproto::{
 };
 use raftstore::store::RegionSnapshot;
 use raftstore_v2::{
-    router::{message::SimpleWrite, CmdResChannel, CmdResEvent, CmdResStream, PeerMsg, RaftRouter},
+    router::{
+        message::SimpleWrite, CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter,
+    },
     SimpleWriteEncoder, StoreRouter,
 };
 use tikv_kv::{Modify, RaftExtension, WriteEvent};
@@ -219,7 +221,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         &self,
         ctx: &kvproto::kvrpcpb::Context,
         batch: tikv_kv::WriteData,
-        _subscribed: u8,
+        subscribed: u8,
         on_applied: Option<tikv_kv::OnAppliedCb>,
     ) -> Self::WriteRes {
         let region_id = ctx.region_id;
@@ -253,20 +255,24 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             }
         }
         let data = encoder.encode();
-        let (ch, sub) = match on_applied {
-            Some(cb) => {
-                let (ch, sub) = CmdResChannel::with_callback(move |resp| {
-                    let mut res = if !resp.get_header().has_error() {
-                        Ok(())
-                    } else {
-                        Err(tikv_kv::Error::from(resp.get_header().get_error().clone()))
-                    };
-                    cb(&mut res);
-                });
-                (ch, sub)
-            }
-            None => CmdResChannel::pair(),
-        };
+        let mut builder = CmdResChannelBuilder::default();
+        if WriteEvent::subscribed_proposed(subscribed) {
+            builder.subscribe_proposed();
+        }
+        if WriteEvent::subscribed_committed(subscribed) {
+            builder.subscribe_committed();
+        }
+        if let Some(cb) = on_applied {
+            builder.before_set(move |resp| {
+                let mut res = if !resp.get_header().has_error() {
+                    Ok(())
+                } else {
+                    Err(tikv_kv::Error::from(resp.get_header().get_error().clone()))
+                };
+                cb(&mut res);
+            });
+        }
+        let (ch, sub) = builder.build();
         let msg = PeerMsg::SimpleWrite(SimpleWrite {
             header,
             data,

@@ -47,6 +47,9 @@ struct EventCore<Res> {
     /// Event 0 and Event 31 is reserved as payload and cancel respectively.
     /// Other events should be defined within [1, 30].
     event: AtomicU64,
+    /// Even a channel supports multiple events, it's not necessary to trigger
+    /// all of them. `event_mask` is used to filter unnecessary events.
+    event_mask: u32,
     res: UnsafeCell<Option<Res>>,
     before_set: UnsafeCell<Option<Box<dyn FnOnce(&mut Res) + Send>>>,
     // Waker can be changed, need to use `AtomicWaker` to guarantee no data race.
@@ -58,6 +61,10 @@ unsafe impl<Res: Send> Send for EventCore<Res> {}
 const PAYLOAD_EVENT: u64 = 0;
 const CANCEL_EVENT: u64 = 31;
 
+const fn event_mask_bit_of(event: u64) -> u32 {
+    1 << event
+}
+
 #[inline]
 const fn subscribed_bit_of(event: u64) -> u64 {
     1 << (event * 2)
@@ -68,24 +75,14 @@ const fn fired_bit_of(event: u64) -> u64 {
     1 << (event * 2 + 1)
 }
 
-impl<Res> Default for EventCore<Res> {
-    #[inline]
-    fn default() -> Self {
-        Self {
-            event: AtomicU64::new(0),
-            res: UnsafeCell::new(None),
-            before_set: UnsafeCell::new(None),
-            waker: AtomicWaker::new(),
-        }
-    }
-}
-
 impl<Res> EventCore<Res> {
     #[inline]
     fn notify_event(&self, event: u64) {
-        let previous = self.event.fetch_or(fired_bit_of(event), Ordering::AcqRel);
-        if previous & subscribed_bit_of(event) != 0 {
-            self.waker.wake()
+        if self.event_mask & event_mask_bit_of(event) != 0 {
+            let previous = self.event.fetch_or(fired_bit_of(event), Ordering::AcqRel);
+            if previous & subscribed_bit_of(event) != 0 {
+                self.waker.wake()
+            }
         }
     }
 
@@ -215,9 +212,6 @@ impl<'a, Res> Future for WaitResult<'a, Res> {
     }
 }
 
-unsafe impl<'a, Res: Send> Send for WaitResult<'a, Res> {}
-unsafe impl<'a, Res: Send> Sync for WaitResult<'a, Res> {}
-
 /// A base subscriber that contains most common implementation of subscribers.
 pub struct BaseSubscriber<Res> {
     core: Arc<EventCore<Res>>,
@@ -250,7 +244,17 @@ impl<Res> BaseChannel<Res> {
     /// Creates a pair of channel and subscriber.
     #[inline]
     pub fn pair() -> (Self, BaseSubscriber<Res>) {
-        let core: Arc<EventCore<Res>> = Arc::default();
+        Self::with_mask(u32::MAX)
+    }
+
+    fn with_mask(mask: u32) -> (Self, BaseSubscriber<Res>) {
+        let core: Arc<EventCore<Res>> = Arc::new(EventCore {
+            event: AtomicU64::new(0),
+            res: UnsafeCell::new(None),
+            event_mask: mask,
+            before_set: UnsafeCell::new(None),
+            waker: AtomicWaker::new(),
+        });
         (Self { core: core.clone() }, BaseSubscriber { core })
     }
 
@@ -385,20 +389,50 @@ impl Debug for CmdResChannel {
     }
 }
 
+#[derive(Default)]
+pub struct CmdResChannelBuilder {
+    event_mask: u32,
+    before_set: Option<Box<dyn FnOnce(&mut RaftCmdResponse) + Send>>,
+}
+
+impl CmdResChannelBuilder {
+    #[inline]
+    pub fn subscribe_proposed(&mut self) -> &mut Self {
+        self.event_mask |= event_mask_bit_of(CmdResChannel::PROPOSED_EVENT);
+        self
+    }
+
+    #[inline]
+    pub fn subscribe_committed(&mut self) -> &mut Self {
+        self.event_mask |= event_mask_bit_of(CmdResChannel::COMMITTED_EVENT);
+        self
+    }
+
+    #[inline]
+    pub fn before_set(
+        &mut self,
+        f: impl FnOnce(&mut RaftCmdResponse) + Send + 'static,
+    ) -> &mut Self {
+        self.before_set = Some(Box::new(f));
+        self
+    }
+
+    #[inline]
+    pub fn build(self) -> (CmdResChannel, CmdResSubscriber) {
+        let (c, s) = CmdResChannel::with_mask(self.event_mask);
+        if let Some(f) = self.before_set {
+            unsafe {
+                *c.core.before_set.get() = Some(f);
+            }
+        }
+        (c, s)
+    }
+}
+
 impl CmdResChannel {
     // Valid range is [1, 30]
     const PROPOSED_EVENT: u64 = 1;
     const COMMITTED_EVENT: u64 = 2;
-
-    pub fn with_callback(
-        before_set: impl FnOnce(&mut RaftCmdResponse) + Send + 'static,
-    ) -> (Self, CmdResSubscriber) {
-        let (c, s) = CmdResChannel::pair();
-        unsafe {
-            *c.core.before_set.get() = Some(Box::new(before_set));
-        }
-        (c, s)
-    }
 }
 
 impl ErrorCallback for CmdResChannel {
@@ -603,21 +637,31 @@ mod tests {
 
     #[test]
     fn test_cmd_res_stream() {
-        let (chan, sub) = CmdResChannel::with_callback(|res| {
+        let mut builder = CmdResChannelBuilder::default();
+        builder.before_set(|res| {
             res.mut_header().set_current_term(6);
         });
+        let (chan, sub) = builder.build();
         let mut stream = CmdResStream::new(sub);
         chan.set_result(RaftCmdResponse::default());
         assert_matches!(block_on(stream.next()), Some(CmdResEvent::Finished(res)) if res.get_header().get_current_term() == 6);
 
-        let (mut chan, sub) = CmdResChannel::pair();
+        // When using builder, no event is subscribed by default.
+        let (mut chan, sub) = CmdResChannelBuilder::default().build();
         let mut stream = CmdResStream::new(sub);
         chan.notify_proposed();
-        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Proposed));
         chan.notify_committed();
-        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Committed));
         drop(chan);
+        assert_matches!(block_on(stream.next()), None);
 
+        let mut builder = CmdResChannelBuilder::default();
+        builder.subscribe_proposed();
+        let (mut chan, sub) = builder.build();
+        let mut stream = CmdResStream::new(sub);
+        chan.notify_proposed();
+        chan.notify_committed();
+        drop(chan);
+        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Proposed));
         assert_matches!(block_on(stream.next()), None);
     }
 }
