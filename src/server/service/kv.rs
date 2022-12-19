@@ -201,6 +201,7 @@ macro_rules! handle_request {
             GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_group_name])
                     .inc();
+            info!("handle request of resource group {}", resource_group_name);
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
