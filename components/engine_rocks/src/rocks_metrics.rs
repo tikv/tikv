@@ -1026,10 +1026,10 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                 .unwrap_or(0);
 
             let opts = db.get_options_cf(handle);
-            if cf_stats.levels.len() < opts.get_num_levels() + 1 {
+            if cf_stats.levels.len() < opts.get_num_levels() {
                 cf_stats
                     .levels
-                    .resize(opts.get_num_levels() + 1, CfLevelStats::default());
+                    .resize(opts.get_num_levels(), CfLevelStats::default());
             }
             for level in 0..opts.get_num_levels() {
                 let num_files =
@@ -1094,11 +1094,13 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                 STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
                     .with_label_values(&[&self.name, cf, &level.to_string()])
                     .set(level_stats.num_files as i64);
-                let normalized_compression_ratio =
-                    level_stats.weighted_compression_ratio / level_stats.num_files as f64;
-                STORE_ENGINE_COMPRESSION_RATIO_VEC
-                    .with_label_values(&[&self.name, cf, &level.to_string()])
-                    .set(normalized_compression_ratio);
+                if level_stats.num_files > 0 {
+                    let normalized_compression_ratio =
+                        level_stats.weighted_compression_ratio / level_stats.num_files as f64;
+                    STORE_ENGINE_COMPRESSION_RATIO_VEC
+                        .with_label_values(&[&self.name, cf, &level.to_string()])
+                        .set(normalized_compression_ratio);
+                }
                 STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC
                     .with_label_values(&[&self.name, cf, &level.to_string()])
                     .set(level_stats.num_blob_files as i64);
