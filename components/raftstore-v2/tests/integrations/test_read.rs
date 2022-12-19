@@ -1,8 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::CF_DEFAULT;
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{CmdType, Request};
-use raftstore_v2::router::PeerMsg;
+use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 use tikv_util::{config::ReadableDuration, store::new_peer};
 use txn_types::WriteBatchFlags;
 
@@ -39,14 +40,11 @@ fn test_read_index() {
     std::thread::sleep(std::time::Duration::from_millis(200));
     let read_req = req.clone();
     // the read lease should be expired and renewed by write
-    let mut req = router.new_request_for(region_id);
-    let mut put_req = Request::default();
-    put_req.set_cmd_type(CmdType::Put);
-    put_req.mut_put().set_key(b"key".to_vec());
-    put_req.mut_put().set_value(b"value".to_vec());
-    req.mut_requests().push(put_req);
+    let header = Box::new(router.new_request_for(region_id).take_header());
+    let mut put = SimpleWriteEncoder::with_capacity(64);
+    put.put(CF_DEFAULT, b"key", b"value");
 
-    let (msg, sub) = PeerMsg::raft_command(req.clone());
+    let (msg, sub) = PeerMsg::simple_write(header, put.encode());
     router.send(region_id, msg).unwrap();
     block_on(sub.result()).unwrap();
 
@@ -172,7 +170,7 @@ fn test_local_read() {
     request_inner.set_cmd_type(CmdType::Snap);
     req.mut_requests().push(request_inner);
 
-    block_on(async { router.get_snapshot(req.clone()).await.unwrap() });
+    block_on(async { router.snapshot(req.clone()).await.unwrap() });
     let res = router.query(region_id, req.clone()).unwrap();
     let resp = res.read().unwrap();
     // The read index will be 0 as the retry process in the `get_snapshot` will

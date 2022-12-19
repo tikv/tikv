@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, Mutable, RaftEngine, CF_DEFAULT};
-use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
     store::{
         cmd_resp,
@@ -21,16 +21,19 @@ use crate::{
 
 mod simple_write;
 
-pub use simple_write::{SimpleWriteDecoder, SimpleWriteEncoder};
+pub use simple_write::{
+    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
+};
 
 pub use self::simple_write::SimpleWrite;
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
-    pub fn on_write_command<T>(
+    pub fn on_simple_write<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        header: Box<RaftRequestHeader>,
+        data: SimpleWriteBinary,
         ch: CmdResChannel,
     ) {
         if !self.serving() {
@@ -38,16 +41,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         if let Some(encoder) = self.simple_write_encoder_mut() {
-            match encoder.amend(req) {
-                Ok(()) => {
-                    encoder.add_response_channel(ch);
-                    self.set_has_ready();
-                    return;
-                }
-                Err(r) => req = r,
+            if encoder.amend(&header, &data) {
+                encoder.add_response_channel(ch);
+                self.set_has_ready();
+                return;
             }
         }
-        if let Err(e) = self.validate_command(&req, &mut ctx.raft_metrics) {
+        if let Err(e) = self.validate_command(&header, None, &mut ctx.raft_metrics) {
             let resp = cmd_resp::new_error(e);
             ch.report_error(resp);
             return;
@@ -60,21 +60,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // ProposalControl is reliable only when applied to current term.
         let call_proposed_on_success = self.applied_to_current_term();
-        match SimpleWriteEncoder::new(
-            req,
+        let mut encoder = SimpleWriteReqEncoder::new(
+            header,
+            data,
             (ctx.cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as usize,
             call_proposed_on_success,
-        ) {
-            Ok(mut encoder) => {
-                encoder.add_response_channel(ch);
-                self.set_has_ready();
-                self.simple_write_encoder_mut().replace(encoder);
-            }
-            Err(req) => {
-                let res = self.propose_command(ctx, req);
-                self.post_propose_command(ctx, res, vec![ch], call_proposed_on_success);
-            }
-        }
+        );
+        encoder.add_response_channel(ch);
+        self.set_has_ready();
+        self.simple_write_encoder_mut().replace(encoder);
     }
 
     pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {

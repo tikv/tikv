@@ -228,7 +228,7 @@ mod requests {
         req.mut_header().set_peer(peer);
         req.set_admin_request(request);
 
-        let (msg, _) = PeerMsg::raft_command(req);
+        let (msg, _) = PeerMsg::admin_command(req);
         if let Err(e) = router.send(region_id, msg) {
             error!(
                 logger,

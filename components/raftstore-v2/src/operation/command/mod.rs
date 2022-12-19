@@ -36,12 +36,11 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::error;
 use tikv_util::{box_err, time::monotonic_raw_now};
 
 use crate::{
     batch::StoreContext,
-    fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
+    fsm::{ApplyFsm, ApplyResReporter},
     raft::{Apply, Peer},
     router::{ApplyRes, ApplyTask, CmdResChannel},
 };
@@ -52,7 +51,9 @@ mod write;
 
 pub use admin::{AdminCmdResult, SplitInit, SplitResult, SPLIT_PREFIX};
 pub use control::ProposalControl;
-pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
+pub use write::{
+    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
+};
 
 use self::write::SimpleWrite;
 
@@ -86,23 +87,6 @@ fn new_response(header: &RaftRequestHeader) -> RaftCmdResponse {
     resp
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T> PeerFsmDelegate<'a, EK, ER, T> {
-    #[inline]
-    pub fn on_command(&mut self, req: RaftCmdRequest, ch: CmdResChannel) {
-        if !req.get_requests().is_empty() {
-            self.fsm
-                .peer_mut()
-                .on_write_command(self.store_ctx, req, ch)
-        } else if req.has_admin_request() {
-            self.fsm
-                .peer_mut()
-                .on_admin_command(self.store_ctx, req, ch)
-        } else if req.has_status_request() {
-            error!(self.fsm.logger(), "status command should be sent by Query");
-        }
-    }
-}
-
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Schedule an apply fsm to apply logs in the background.
     ///
@@ -134,17 +118,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn validate_command(&self, req: &RaftCmdRequest, metrics: &mut RaftMetrics) -> Result<()> {
-        if let Err(e) = util::check_store_id(req, self.peer().get_store_id()) {
+    fn validate_command(
+        &self,
+        header: &RaftRequestHeader,
+        admin_type: Option<AdminCmdType>,
+        metrics: &mut RaftMetrics,
+    ) -> Result<()> {
+        if let Err(e) = util::check_store_id(header, self.peer().get_store_id()) {
             metrics.invalid_proposal.mismatch_store_id.inc();
             return Err(e);
         }
-        for r in req.get_requests() {
-            if let CmdType::Get | CmdType::Snap | CmdType::ReadIndex = r.get_cmd_type() {
-                return Err(box_err!("internal error: query can't be sent as command"));
-            }
-        }
-        if let Err(e) = util::check_peer_id(req, self.peer().get_id()) {
+        if let Err(e) = util::check_peer_id(header, self.peer().get_id()) {
             metrics.invalid_proposal.mismatch_peer_id.inc();
             return Err(e);
         }
@@ -152,11 +136,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             metrics.invalid_proposal.not_leader.inc();
             return Err(Error::NotLeader(self.region_id(), self.leader()));
         }
-        if let Err(e) = util::check_term(req, self.term()) {
+        if let Err(e) = util::check_term(header, self.term()) {
             metrics.invalid_proposal.stale_command.inc();
             return Err(e);
         }
-        if let Err(mut e) = util::check_region_epoch(req, self.region(), true) {
+        if let Err(mut e) = util::check_region_epoch(header, admin_type, self.region(), true) {
             if let Error::EpochNotMatch(_, _new_regions) = &mut e {
                 // TODO: query sibling regions.
                 metrics.invalid_proposal.epoch_not_match.inc();
@@ -164,16 +148,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return Err(e);
         }
         Ok(())
-    }
-
-    #[inline]
-    fn propose_command<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        req: RaftCmdRequest,
-    ) -> Result<u64> {
-        let data = req.write_to_bytes().unwrap();
-        self.propose(ctx, data)
     }
 
     #[inline]
@@ -379,7 +353,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let mut conf_change = None;
         let log_index = entry.get_index();
         let req = match entry.get_entry_type() {
-            EntryType::EntryNormal => match SimpleWriteDecoder::new(
+            EntryType::EntryNormal => match SimpleWriteReqDecoder::new(
                 &self.logger,
                 entry.get_data(),
                 log_index,
@@ -435,7 +409,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
         };
 
-        util::check_region_epoch(&req, self.region_state().get_region(), true)?;
+        util::check_req_region_epoch(&req, self.region_state().get_region(), true)?;
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
