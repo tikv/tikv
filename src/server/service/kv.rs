@@ -201,7 +201,6 @@ macro_rules! handle_request {
             GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_group_name])
                     .inc();
-            info!("handle request of resource group {}", resource_group_name);
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
@@ -1352,6 +1351,10 @@ fn handle_batch_commands_request<
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default());
                 },
                 Some(batch_commands_request::request::Cmd::Get(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
@@ -1366,6 +1369,10 @@ fn handle_batch_commands_request<
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
@@ -1380,6 +1387,10 @@ fn handle_batch_commands_request<
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
@@ -1407,6 +1418,10 @@ fn handle_batch_commands_request<
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
                     let resp = $future_fn($($arg,)* req)
