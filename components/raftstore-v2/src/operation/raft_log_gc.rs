@@ -78,14 +78,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
-            if let Some(last_heartbeat) = self.peer_heartbeats.get(peer_id) {
-                if *last_heartbeat > cache_alive_limit {
-                    if alive_cache_idx > p.matched && p.matched >= truncated_idx {
-                        alive_cache_idx = p.matched;
-                    } else if p.matched == 0 {
-                        // the new peer is still applying snapshot, do not compact cache now
-                        alive_cache_idx = 0;
-                    }
+            if self.peer_heartbeat_is_fresh(*peer_id, &cache_alive_limit) {
+                if alive_cache_idx > p.matched && p.matched >= truncated_idx {
+                    alive_cache_idx = p.matched;
+                } else if p.matched == 0 {
+                    // the new peer is still applying snapshot, do not compact cache now
+                    alive_cache_idx = 0;
                 }
             }
         }

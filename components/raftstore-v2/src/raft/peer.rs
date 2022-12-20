@@ -45,7 +45,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// messages with unknown peers after recovery.
     peer_cache: Vec<metapb::Peer>,
     /// Statistics for other peers, only maintained when self is the leader.
-    pub(crate) peer_heartbeats: HashMap<u64, Instant>,
+    peer_heartbeats: HashMap<u64, Instant>,
 
     /// For gc.
     pub last_compacted_index: u64,
@@ -431,6 +431,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn remove_peer_heartbeat(&mut self, peer_id: u64) {
         self.peer_heartbeats.remove(&peer_id);
+    }
+
+    /// Returns whether or not the peer sent heartbeat after the provided
+    /// deadline time.
+    #[inline]
+    pub fn peer_heartbeat_is_fresh(&self, peer_id: u64, deadline: &Instant) -> bool {
+        if let Some(last_heartbeat) = self.peer_heartbeats.get(&peer_id)
+            && *last_heartbeat >= *deadline
+        {
+            return true;
+        }
+        false
     }
 
     pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
