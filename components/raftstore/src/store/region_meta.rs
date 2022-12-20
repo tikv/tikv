@@ -60,7 +60,7 @@ pub struct RaftHardState {
     pub commit: u64,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub enum RaftStateRole {
     Follower,
     Candidate,
@@ -178,12 +178,27 @@ pub struct RegionPeer {
     pub id: u64,
     pub store_id: u64,
     pub role: RaftPeerRole,
+    pub is_witness: bool,
 }
 
 impl PartialEq<metapb::Peer> for RegionPeer {
     #[inline]
     fn eq(&self, other: &metapb::Peer) -> bool {
-        self.id == other.id && self.store_id == other.store_id && self.role == other.role
+        // May not be sufficent, but always correct.
+        let s: metapb::Peer = (*self).into();
+        s == *other
+    }
+}
+
+impl From<RegionPeer> for metapb::Peer {
+    fn from(p: RegionPeer) -> Self {
+        metapb::Peer {
+            id: p.id,
+            store_id: p.store_id,
+            role: p.role.into(),
+            is_witness: p.is_witness,
+            ..Default::default()
+        }
     }
 }
 
@@ -247,6 +262,7 @@ impl RegionMeta {
                 id: peer.get_id(),
                 store_id: peer.get_store_id(),
                 role: peer.get_role().into(),
+                is_witness: peer.is_witness,
             });
         }
         let merge_state = if local_state.has_merge_state() {

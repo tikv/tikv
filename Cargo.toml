@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.5.0-alpha"
+version = "6.6.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -97,8 +97,8 @@ futures-timer = "3.0"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 fxhash = "0.2.1"
 getset = "0.1"
-grpcio = { version = "0.10.3", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
-grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
+grpcio = { workspace = true }
+grpcio-health = { workspace = true }
 hex = "0.4"
 http = "0"
 hyper = { version = "0.14", features = ["full"] }
@@ -107,7 +107,7 @@ into_other = { workspace = true }
 itertools = "0.10"
 keyed_priority_queue = "0.4"
 keys = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
@@ -136,6 +136,7 @@ protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
+raftstore-v2 = { workspace = true }
 rand = "0.7.3"
 regex = "1.3"
 resource_metering = { workspace = true }
@@ -153,7 +154,7 @@ smallvec = "1.4"
 sst_importer = { workspace = true }
 strum = { version = "0.20", features = ["derive"] }
 sync_wrapper = "0.1.1"
-sysinfo = "0.16"
+sysinfo = "0.26"
 tempfile = "3.0"
 thiserror = "1.0"
 tidb_query_aggr = { workspace = true }
@@ -165,17 +166,17 @@ tikv_alloc = { workspace = true }
 tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
 time = "0.1"
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { workspace = true }
 tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
-tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tokio-timer = { workspace = true }
 toml = "0.5"
 tracker = { workspace = true }
 txn_types = { workspace = true }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { workspace = true }
 
 [dev-dependencies]
 api_version = { workspace = true, features = ["testexport"] }
@@ -221,7 +222,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 # [patch.'https://github.com/pingcap/kvproto']
-# kvproto = { git = "https://github.com/your_github_id/kvproto", branch="your_branch" }
+# kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
@@ -338,7 +339,7 @@ pd_client = { path = "components/pd_client" }
 profiler = { path = "components/profiler" }
 raft_log_engine = { path = "components/raft_log_engine" }
 raftstore = { path = "components/raftstore", default-features = false }
-raftstore_v2 = { path = "components/raftstore-v2", default-features = false }
+raftstore-v2 = { path = "components/raftstore-v2", default-features = false }
 resolved_ts = { path = "components/resolved_ts" }
 resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
@@ -368,7 +369,12 @@ tipb_helper = { path = "components/tipb_helper" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
+grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
+tipb = { git = "https://github.com/pingcap/tipb.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 
 [profile.dev.package.grpcio-sys]
 debug = false

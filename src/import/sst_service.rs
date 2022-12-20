@@ -5,18 +5,14 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use collections::HashSet;
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
-use futures::{
-    executor::{ThreadPool, ThreadPoolBuilder},
-    future::join_all,
-    sink::SinkExt,
-    stream::TryStreamExt,
-    TryFutureExt,
-};
+use futures::{future::join_all, sink::SinkExt, stream::TryStreamExt, TryFutureExt};
+use futures_executor::{ThreadPool, ThreadPoolBuilder};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -32,13 +28,17 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
 };
-use sst_importer::{error_inc, metrics::*, sst_meta_to_path, Config, Error, Result, SstImporter};
+use sst_importer::{
+    error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, Error, Result,
+    SstImporter,
+};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
 };
+use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::make_rpc_error;
@@ -56,7 +56,13 @@ where
     cfg: Config,
     engine: E,
     router: Router,
-    threads: ThreadPool,
+    threads: Arc<Runtime>,
+    // For now, PiTR cannot be executed in the tokio runtime because it is synchronous and may
+    // blocks. (tokio is so strict... it panics if we do insane things like blocking in an async
+    // context.)
+    // We need to execute these code in a context which allows blocking.
+    // FIXME: Make PiTR restore asynchronous. Get rid of this pool.
+    block_threads: Arc<ThreadPool>,
     importer: Arc<SstImporter>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
@@ -81,7 +87,20 @@ where
         importer: Arc<SstImporter>,
     ) -> ImportSstService<E, Router> {
         let props = tikv_util::thread_group::current_properties();
-        let threads = ThreadPoolBuilder::new()
+        let threads = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(cfg.num_threads)
+            .enable_all()
+            .thread_name("sst-importer")
+            .after_start_wrapper(move || {
+                tikv_util::thread_group::set_properties(props.clone());
+                tikv_alloc::add_thread_memory_accessor();
+                set_io_type(IoType::Import);
+            })
+            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
+            .build()
+            .unwrap();
+        let props = tikv_util::thread_group::current_properties();
+        let block_threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
             .name_prefix("sst-importer")
             .after_start_wrapper(move || {
@@ -92,16 +111,26 @@ where
             .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        importer.start_switch_mode_check(&threads, engine.clone());
+        importer.start_switch_mode_check(threads.handle(), engine.clone());
+        threads.spawn(Self::tick(importer.clone()));
+
         ImportSstService {
             cfg,
             engine,
-            threads,
+            threads: Arc::new(threads),
+            block_threads: Arc::new(block_threads),
             router,
             importer,
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+        }
+    }
+
+    async fn tick(importer: Arc<SstImporter>) {
+        loop {
+            sleep(Duration::from_secs(10)).await;
+            importer.shrink_by_tick();
         }
     }
 
@@ -299,8 +328,8 @@ macro_rules! impl_write {
                 $crate::send_rpc_response!(res, sink, label, timer);
             };
 
-            self.threads.spawn_ok(buf_driver);
-            self.threads.spawn_ok(handle_task);
+            self.threads.spawn(buf_driver);
+            self.threads.spawn(handle_task);
         }
     };
 }
@@ -383,8 +412,8 @@ where
             crate::send_rpc_response!(res, sink, label, timer);
         };
 
-        self.threads.spawn_ok(buf_driver);
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(buf_driver);
+        self.threads.spawn(handle_task);
     }
 
     // clear_files the KV files after apply finished.
@@ -419,7 +448,7 @@ where
             let resp = Ok(resp);
             crate::send_rpc_response!(resp, sink, label, timer);
         };
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     // Downloads KV file and performs key-rewrite then apply kv into this tikv
@@ -462,6 +491,16 @@ where
                 let mut req_default_size = 0_u64;
                 let mut req_write_size = 0_u64;
                 let mut range: Option<Range> = None;
+                let ext_storage = {
+                    let inner = importer.wrap_kms(
+                        importer.external_storage_or_cache(
+                            req.get_storage_backend(),
+                            req.get_storage_cache_id(),
+                        )?,
+                        false,
+                    );
+                    inner
+                };
 
                 for (i, meta) in metas.iter().enumerate() {
                     let (reqs, req_size) = if meta.get_cf() == CF_DEFAULT {
@@ -480,14 +519,19 @@ where
                         context.clone(),
                     );
 
-                    let temp_file =
-                        importer.do_download_kv_file(meta, req.get_storage_backend(), &limiter)?;
+                    let buff = importer.read_from_kv_file(
+                        meta,
+                        &rules[i],
+                        Arc::clone(&ext_storage),
+                        req.get_storage_backend(),
+                        &limiter,
+                    )?;
                     let r: Option<Range> = importer.do_apply_kv_file(
                         meta.get_start_key(),
                         meta.get_end_key(),
+                        meta.get_start_ts(),
                         meta.get_restore_ts(),
-                        temp_file,
-                        &rules[i],
+                        buff,
                         &mut build_req_fn,
                     )?;
 
@@ -572,7 +616,7 @@ where
             debug!("finished apply kv file with {:?}", resp);
             crate::send_rpc_response!(resp, sink, label, timer);
         };
-        self.threads.spawn_ok(handle_task);
+        self.block_threads.spawn_ok(handle_task);
     }
 
     /// Downloads the file and performs key-rewrite for later ingesting.
@@ -605,7 +649,7 @@ where
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
-            let res = importer.download::<E>(
+            let res = importer.download_ext::<E>(
                 req.get_sst(),
                 req.get_storage_backend(),
                 req.get_name(),
@@ -613,9 +657,10 @@ where
                 cipher,
                 limiter,
                 engine,
+                DownloadExt::default().cache_key(req.get_storage_cache_id()),
             );
             let mut resp = DownloadResponse::default();
-            match res {
+            match res.await {
                 Ok(range) => match range {
                     Some(r) => resp.set_range(r),
                     None => resp.set_is_empty(true),
@@ -626,7 +671,7 @@ where
             crate::send_rpc_response!(resp, sink, label, timer);
         };
 
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Ingest the file by sending a raft command to raftstore.
@@ -672,7 +717,7 @@ where
             Self::release_lock(&task_slots, &meta).unwrap();
             crate::send_rpc_response!(res, sink, label, timer);
         };
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Ingest multiple files by sending a raft command to raftstore.
@@ -723,7 +768,7 @@ where
             }
             crate::send_rpc_response!(res, sink, label, timer);
         };
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     fn compact(
@@ -772,7 +817,7 @@ where
             crate::send_rpc_response!(res, sink, label, timer);
         };
 
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     fn set_download_speed_limit(
@@ -863,7 +908,7 @@ where
             }
             let _ = sink.close().await;
         };
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     impl_write!(write, WriteRequest, WriteResponse, Chunk, new_txn_writer);
@@ -1017,8 +1062,13 @@ where
 {
     // use callback to collect kv data.
     Box::new(move |k: Vec<u8>, v: Vec<u8>| {
-        let mut req = Request::default();
+        // Need to skip the empty key/value that could break the transaction or cause
+        // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
+        if k.is_empty() || (!is_delete && v.is_empty()) {
+            return;
+        }
 
+        let mut req = Request::default();
         if is_delete {
             let mut del = DeleteRequest::default();
             del.set_key(k);
@@ -1201,6 +1251,7 @@ mod test {
                     write(b"bar", Put, 38, 37),
                     write(b"baz", Put, 34, 31),
                     write(b"bar", Put, 28, 17),
+                    (Vec::default(), Vec::default()),
                 ],
                 expected_reqs: vec![
                     write_req(b"foo", Put, 40, 39),
@@ -1235,6 +1286,7 @@ mod test {
                     ),
                     default(b"beyond", b"Calling your name.", 278),
                     default(b"beyond", b"Calling your name.", 278),
+                    default(b"PingCap", b"", 300),
                 ],
                 expected_reqs: vec![
                     default_req(b"aria", b"The planet where flowers bloom.", 123),

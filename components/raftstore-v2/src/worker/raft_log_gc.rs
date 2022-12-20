@@ -9,7 +9,6 @@ use std::{
 
 use engine_traits::{RaftEngine, RaftLogGcTask};
 use file_system::{IoType, WithIoType};
-use raftstore::store::worker::metrics::*;
 use slog::{error, Logger};
 use thiserror::Error;
 use tikv_util::{
@@ -133,7 +132,7 @@ where
 mod tests {
     use std::sync::mpsc;
 
-    use engine_traits::{RaftEngine, RaftLogBatch, ALL_CFS};
+    use engine_traits::{RaftEngine, RaftLogBatch};
     use raft::eraftpb::Entry;
     use slog::o;
     use tempfile::Builder;
@@ -144,8 +143,7 @@ mod tests {
     fn test_gc_raft_log() {
         let dir = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
         let path_raft = dir.path().join("raft");
-        let path_kv = dir.path().join("kv");
-        let raft_db = engine_test::raft::new_engine(path_kv.to_str().unwrap(), None).unwrap();
+        let raft_db = engine_test::raft::new_engine(path_raft.to_str().unwrap(), None).unwrap();
 
         let (tx, rx) = mpsc::channel();
         let mut runner = Runner {

@@ -20,6 +20,7 @@ mod test_memory_usage_limit;
 mod test_merge;
 mod test_metrics_overflow;
 mod test_pd_client;
+mod test_pd_client_legacy;
 mod test_pending_peers;
 mod test_rawkv;
 mod test_read_execution_tracker;

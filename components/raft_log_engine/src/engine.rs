@@ -7,11 +7,12 @@ use std::{
     sync::Arc,
 };
 
+use codec::number::NumberCodec;
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
     CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGcTask, Result,
+    RaftLogGcTask, Result, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
@@ -290,6 +291,36 @@ impl FileSystem for ManagedFileSystem {
     }
 }
 
+/// Convert a cf to id for encoding.
+fn cf_to_id(cf: &str) -> u8 {
+    match cf {
+        CF_DEFAULT => 0,
+        CF_LOCK => 1,
+        CF_WRITE => 2,
+        CF_RAFT => 3,
+        _ => panic!("unrecognized cf {}", cf),
+    }
+}
+
+/// Encode a key in the format `{prefix}{num}`.
+fn encode_key(prefix: &'static [u8], num: u64) -> [u8; 9] {
+    debug_assert_eq!(prefix.len(), 1);
+    let mut buf = [0; 9];
+    buf[..prefix.len()].copy_from_slice(prefix);
+    NumberCodec::encode_u64(&mut buf[prefix.len()..], num);
+    buf
+}
+
+/// Encode a flush key in the format `{flush key prefix}{cf_id}{tablet_index}`.
+fn encode_flushed_key(cf: &str, tablet_index: u64) -> [u8; 10] {
+    debug_assert_eq!(FLUSH_STATE_KEY.len(), 1);
+    let mut buf = [0; 10];
+    buf[..FLUSH_STATE_KEY.len()].copy_from_slice(FLUSH_STATE_KEY);
+    buf[FLUSH_STATE_KEY.len()] = cf_to_id(cf);
+    NumberCodec::encode_u64(&mut buf[FLUSH_STATE_KEY.len() + 1..], tablet_index);
+    buf
+}
+
 #[derive(Clone)]
 pub struct RaftLogEngine(Arc<RawRaftEngine<ManagedFileSystem>>);
 
@@ -348,6 +379,7 @@ const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
 const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
 const RECOVER_STATE_KEY: &[u8] = &[0x05];
+const FLUSH_STATE_KEY: &[u8] = &[0x06];
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -401,15 +433,47 @@ impl RaftLogBatchTrait for RaftLogBatch {
         Ok(())
     }
 
-    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+    fn put_region_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_index: u64,
+        state: &RegionLocalState,
+    ) -> Result<()> {
+        let key = encode_key(REGION_STATE_KEY, apply_index);
         self.0
-            .put_message(raft_group_id, REGION_STATE_KEY.to_vec(), state)
+            .put_message(raft_group_id, key.to_vec(), state)
             .map_err(transfer_error)
     }
 
-    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+    fn put_apply_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_index: u64,
+        state: &RaftApplyState,
+    ) -> Result<()> {
+        let key = encode_key(APPLY_STATE_KEY, apply_index);
         self.0
-            .put_message(raft_group_id, APPLY_STATE_KEY.to_vec(), state)
+            .put_message(raft_group_id, key.to_vec(), state)
+            .map_err(transfer_error)
+    }
+
+    fn put_flushed_index(
+        &mut self,
+        raft_group_id: u64,
+        cf: &str,
+        tablet_index: u64,
+        apply_index: u64,
+    ) -> Result<()> {
+        let key = encode_flushed_key(cf, tablet_index);
+        let mut value = vec![0; 8];
+        NumberCodec::encode_u64(&mut value, apply_index);
+        self.0.put(raft_group_id, key.to_vec(), value);
+        Ok(())
+    }
+
+    fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {
+        self.0
+            .put_message(STORE_STATE_ID, RECOVER_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)
     }
 }
@@ -465,16 +529,72 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .map_err(transfer_error)
     }
 
-    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+    fn get_region_state(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<RegionLocalState>> {
+        let mut state = None;
         self.0
-            .get_message(raft_group_id, REGION_STATE_KEY)
-            .map_err(transfer_error)
+            .scan_messages(
+                raft_group_id,
+                Some(REGION_STATE_KEY),
+                Some(APPLY_STATE_KEY),
+                true,
+                |key, value| {
+                    let index = NumberCodec::decode_u64(&key[REGION_STATE_KEY.len()..]);
+                    if index > apply_index {
+                        true
+                    } else {
+                        state = Some(value);
+                        false
+                    }
+                },
+            )
+            .map_err(transfer_error)?;
+        Ok(state)
     }
 
-    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+    fn get_apply_state(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<RaftApplyState>> {
+        let mut state = None;
         self.0
-            .get_message(raft_group_id, APPLY_STATE_KEY)
-            .map_err(transfer_error)
+            .scan_messages(
+                raft_group_id,
+                Some(APPLY_STATE_KEY),
+                Some(RECOVER_STATE_KEY),
+                true,
+                |key, value| {
+                    let index = NumberCodec::decode_u64(&key[REGION_STATE_KEY.len()..]);
+                    if index > apply_index {
+                        true
+                    } else {
+                        state = Some(value);
+                        false
+                    }
+                },
+            )
+            .map_err(transfer_error)?;
+        Ok(state)
+    }
+
+    fn get_flushed_index(&self, raft_group_id: u64, cf: &str) -> Result<Option<u64>> {
+        let mut start = [0; 2];
+        start[..FLUSH_STATE_KEY.len()].copy_from_slice(FLUSH_STATE_KEY);
+        start[FLUSH_STATE_KEY.len()] = cf_to_id(cf);
+        let mut end = start;
+        end[FLUSH_STATE_KEY.len()] += 1;
+        let mut index = None;
+        self.0
+            .scan_raw_messages(raft_group_id, Some(&start), Some(&end), true, |_, v| {
+                index = Some(NumberCodec::decode_u64(v));
+                false
+            })
+            .map_err(transfer_error)?;
+        Ok(index)
     }
 
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
@@ -538,35 +658,6 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
-        let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .add_entries::<MessageExtTyped>(raft_group_id, &entries)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)
-    }
-
-    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
-        let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .put_message(STORE_STATE_ID, STORE_IDENT_KEY.to_vec(), ident)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
-        Ok(())
-    }
-
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
-        Ok(())
-    }
-
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
         self.batch_gc(vec![RaftLogGcTask {
             raft_group_id,
@@ -585,7 +676,7 @@ impl RaftEngine for RaftLogEngine {
             old_first_index.push(self.0.first_index(task.raft_group_id));
         }
 
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        self.consume(&mut batch, false)?;
 
         let mut total = 0;
         for (old_first_index, task) in old_first_index.iter().zip(tasks) {
@@ -635,16 +726,6 @@ impl RaftEngine for RaftLogEngine {
         }
         Ok(())
     }
-
-    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
-        let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .put_message(STORE_STATE_ID, RECOVER_STATE_KEY.to_vec(), state)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
-        Ok(())
-    }
 }
 
 fn transfer_error(e: RaftEngineError) -> engine_traits::Error {
@@ -654,6 +735,70 @@ fn transfer_error(e: RaftEngineError) -> engine_traits::Error {
         e => {
             let e = box_err!(e);
             engine_traits::Error::Other(e)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::assert_matches::assert_matches;
+
+    use engine_traits::ALL_CFS;
+
+    use super::*;
+
+    #[test]
+    fn test_apply_related_states() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = RaftEngineConfig {
+            dir: dir.path().to_str().unwrap().to_owned(),
+            ..Default::default()
+        };
+        let engine = RaftLogEngine::new(cfg, None, None).unwrap();
+        assert_matches!(engine.get_region_state(2, u64::MAX), Ok(None));
+        assert_matches!(engine.get_apply_state(2, u64::MAX), Ok(None));
+        for cf in ALL_CFS {
+            assert_matches!(engine.get_flushed_index(2, cf), Ok(None));
+        }
+
+        let mut wb = engine.log_batch(10);
+        let mut region_state = RegionLocalState::default();
+        region_state.mut_region().set_id(3);
+        wb.put_region_state(2, 1, &region_state).unwrap();
+        let mut apply_state = RaftApplyState::default();
+        apply_state.set_applied_index(3);
+        wb.put_apply_state(2, 3, &apply_state).unwrap();
+        for cf in ALL_CFS.iter().take(2) {
+            wb.put_flushed_index(2, cf, 5, 4).unwrap();
+        }
+        engine.consume(&mut wb, false).unwrap();
+
+        for cf in ALL_CFS.iter().take(2) {
+            assert_matches!(engine.get_flushed_index(2, cf), Ok(Some(4)));
+        }
+        for cf in ALL_CFS.iter().skip(2) {
+            assert_matches!(engine.get_flushed_index(2, cf), Ok(None));
+        }
+
+        let mut region_state2 = region_state.clone();
+        region_state2.mut_region().set_id(5);
+        wb.put_region_state(2, 4, &region_state2).unwrap();
+        let mut apply_state2 = apply_state.clone();
+        apply_state2.set_applied_index(5);
+        wb.put_apply_state(2, 5, &apply_state2).unwrap();
+        for cf in ALL_CFS {
+            wb.put_flushed_index(2, cf, 6, 5).unwrap();
+        }
+        engine.consume(&mut wb, false).unwrap();
+
+        assert_matches!(engine.get_region_state(2, 0), Ok(None));
+        assert_matches!(engine.get_region_state(2, 1), Ok(Some(s)) if s == region_state);
+        assert_matches!(engine.get_region_state(2, 4), Ok(Some(s)) if s == region_state2);
+        assert_matches!(engine.get_apply_state(2, 0), Ok(None));
+        assert_matches!(engine.get_apply_state(2, 3), Ok(Some(s)) if s == apply_state);
+        assert_matches!(engine.get_apply_state(2, 5), Ok(Some(s)) if s == apply_state2);
+        for cf in ALL_CFS {
+            assert_matches!(engine.get_flushed_index(2, cf), Ok(Some(5)));
         }
     }
 }

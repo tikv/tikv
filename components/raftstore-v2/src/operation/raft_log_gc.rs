@@ -4,13 +4,9 @@
 //! Raft engine.
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::{
-    metapb,
-    raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest},
-};
-use raftstore::store::{needs_evict_entry_cache, Transport};
-use slog::{debug, error, info};
-use tikv_util::sys::memory_usage_reaches_high_water;
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
+use raftstore::store::{fsm::new_admin_request, needs_evict_entry_cache, Transport};
+use slog::error;
 
 use crate::{
     batch::StoreContext,
@@ -131,23 +127,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Create a compact log request and notify directly.
-        let region_id = self.region().get_id();
-        let peer = self.peer().clone();
         // TODO: move this into a function
         let term = self.raft_group().raft.raft_log.term(compact_idx).unwrap();
 
-        let mut req = self.new_admin_request();
+        let mut req = new_admin_request(self.region_id(), self.peer().clone());
         let mut admin = AdminRequest::default();
         admin.set_cmd_type(AdminCmdType::CompactLog);
         admin.mut_compact_log().set_compact_index(compact_idx);
         admin.mut_compact_log().set_compact_term(term);
         req.set_admin_request(admin);
 
-        let (msg, _) = PeerMsg::raft_command(req);
+        let (msg, _) = PeerMsg::admin_command(req);
         if let Err(e) = store_ctx.router.send(self.region_id(), msg) {
-            error!(self.logger, "send compact log request failed");
+            error!(self.logger, "send compact log request failed"; "err" => ?e);
         }
-        // self.propose_command(store_ctx, req);
 
         self.skip_gc_raft_log_ticks = 0;
     }

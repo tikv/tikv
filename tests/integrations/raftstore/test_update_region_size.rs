@@ -9,7 +9,7 @@ use tikv_util::config::*;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {
-        engines.kv.flush_cfs(true).unwrap();
+        engines.kv.flush_cfs(&[], true).unwrap();
     }
 }
 

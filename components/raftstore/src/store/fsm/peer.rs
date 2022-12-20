@@ -1330,8 +1330,15 @@ where
     ) {
         fail_point!("raft_on_capture_change");
         let region_id = self.region_id();
-        let msg =
+        let mut msg =
             new_read_index_request(region_id, region_epoch.clone(), self.fsm.peer.peer.clone());
+        // Allow to capture change even is in flashback state.
+        // TODO: add a test case for this kind of situation.
+        if self.region().is_in_flashback {
+            let mut flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
+            flags.insert(WriteBatchFlags::FLASHBACK);
+            msg.mut_header().set_flags(flags.bits());
+        }
         let apply_router = self.ctx.apply_router.clone();
         self.propose_raft_command_internal(
             msg,
@@ -4887,9 +4894,7 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
-                ExecResult::SetFlashbackState { region } => {
-                    self.on_set_flashback_state(region.get_is_in_flashback())
-                }
+                ExecResult::SetFlashbackState { region } => self.on_set_flashback_state(region),
             }
         }
 
@@ -4980,7 +4985,7 @@ where
         msg: &RaftCmdRequest,
     ) -> Result<Option<RaftCmdResponse>> {
         // Check store_id, make sure that the msg is dispatched to the right place.
-        if let Err(e) = util::check_store_id(msg, self.store_id()) {
+        if let Err(e) = util::check_store_id(msg.get_header(), self.store_id()) {
             self.ctx
                 .raft_metrics
                 .invalid_proposal
@@ -4999,7 +5004,7 @@ where
         let request = msg.get_requests();
 
         // peer_id must be the same as peer's.
-        if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
+        if let Err(e) = util::check_peer_id(msg.get_header(), self.fsm.peer.peer_id()) {
             self.ctx
                 .raft_metrics
                 .invalid_proposal
@@ -5023,13 +5028,12 @@ where
         // ReadIndex can be processed on the replicas.
         let is_read_index_request =
             request.len() == 1 && request[0].get_cmd_type() == CmdType::ReadIndex;
-        let mut read_only = true;
-        for r in msg.get_requests() {
-            match r.get_cmd_type() {
-                CmdType::Get | CmdType::Snap | CmdType::ReadIndex => (),
-                _ => read_only = false,
-            }
-        }
+        let read_only = msg.get_requests().iter().all(|r| {
+            matches!(
+                r.get_cmd_type(),
+                CmdType::Get | CmdType::Snap | CmdType::ReadIndex,
+            )
+        });
         let region_id = self.region_id();
         let allow_replica_read = read_only && msg.get_header().get_replica_read();
         let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
@@ -5080,12 +5084,12 @@ where
             )));
         }
         // Check whether the term is stale.
-        if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
+        if let Err(e) = util::check_term(msg.get_header(), self.fsm.peer.term()) {
             self.ctx.raft_metrics.invalid_proposal.stale_command.inc();
             return Err(e);
         }
 
-        match util::check_region_epoch(msg, self.fsm.peer.region(), true) {
+        match util::check_req_region_epoch(msg, self.fsm.peer.region(), true) {
             Err(Error::EpochNotMatch(m, mut new_regions)) => {
                 // Attach the region which might be split from the current region. But it
                 // doesn't matter if the region is not split from the current region. If the
@@ -5100,8 +5104,15 @@ where
             _ => {}
         };
         // Check whether the region is in the flashback state and the request could be
-        // proposed.
-        if let Err(e) = util::check_flashback_state(self.fsm.peer.is_in_flashback, msg, region_id) {
+        // proposed. Skip the not prepared error because the
+        // `self.region().is_in_flashback` may not be the latest right after applying
+        // the `PrepareFlashback` admin command, we will let it pass here and check in
+        // the apply phase and because a read-only request doesn't need to be applied,
+        // so it will be allowed during the flashback progress, for example, a snapshot
+        // request.
+        if let Err(e) =
+            util::check_flashback_state(self.region().is_in_flashback, msg, region_id, true)
+        {
             match e {
                 Error::FlashbackInProgress(_) => self
                     .ctx
@@ -6266,9 +6277,17 @@ where
         self.fsm.has_ready = true;
     }
 
-    fn on_set_flashback_state(&mut self, is_in_flashback: bool) {
-        // Set flashback memory
-        self.fsm.peer.is_in_flashback = is_in_flashback;
+    fn on_set_flashback_state(&mut self, region: metapb::Region) {
+        // Update the region meta.
+        self.update_region((|| {
+            #[cfg(feature = "failpoints")]
+            fail_point!("keep_peer_fsm_flashback_state_false", |_| {
+                let mut region = region.clone();
+                region.is_in_flashback = false;
+                region
+            });
+            region
+        })());
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
     }

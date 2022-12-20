@@ -11,11 +11,10 @@ use tikv_util::box_err;
 
 use crate::{
     batch::StoreContext,
-    fsm::{ApplyResReporter, PeerFsmDelegate},
+    fsm::ApplyResReporter,
     operation::AdminCmdResult,
-    raft::{write_initial_states, Apply, Peer, Storage},
-    router::{ApplyRes, PeerMsg, StoreMsg},
-    worker::RaftLogGcTask,
+    raft::{Apply, Peer},
+    worker::raft_log_gc,
 };
 
 #[derive(Debug)]
@@ -97,7 +96,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         compact_index: u64,
     ) {
-        let task = RaftLogGcTask::gc(self.region_id(), self.last_compacted_index, compact_index);
+        let task =
+            raft_log_gc::Task::gc(self.region_id(), self.last_compacted_index, compact_index);
         debug!(
             self.logger,
             "scheduling raft log gc task";
@@ -129,7 +129,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_compact_log(
         &mut self,
         req: &AdminRequest,
-        log_index: u64,
+        _log_index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         Ok((
             AdminResponse::default(),

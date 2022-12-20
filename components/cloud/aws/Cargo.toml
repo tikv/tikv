@@ -22,7 +22,7 @@ grpcio = { workspace = true }
 http = "0.2.0"
 hyper = "0.14"
 hyper-tls = "0.5"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 lazy_static = "1.3"
 md5 = "0.7.0"
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
@@ -38,7 +38,7 @@ tikv_util = { workspace = true }
 # better to not use slog-global, but pass in the logger
 tokio = { version = "1.5", features = ["time"] }
 url = "2.0"
-uuid = "0.8"
+uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]
 futures = "0.3"

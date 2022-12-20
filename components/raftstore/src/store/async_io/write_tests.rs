@@ -6,7 +6,7 @@ use collections::HashSet;
 use crossbeam::channel::unbounded;
 use engine_test::{kv::KvTestEngine, new_temp_engine, raft::RaftTestEngine};
 use engine_traits::{Engines, Mutable, Peekable, RaftEngineReadOnly, WriteBatchExt};
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RegionLocalState};
 use tempfile::Builder;
 
 use super::*;
@@ -273,7 +273,7 @@ fn test_worker() {
     task_1.raft_state = Some(new_raft_state(5, 123, 6, 8));
     task_1.messages.append(&mut vec![RaftMessage::default()]);
 
-    t.worker.batch.add_write_task(task_1);
+    t.worker.batch.add_write_task(&engines.raft, task_1);
 
     let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_2, 2, 15);
     init_write_batch(&engines, &mut task_2);
@@ -287,7 +287,7 @@ fn test_worker() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.worker.batch.add_write_task(task_2);
+    t.worker.batch.add_write_task(&engines.raft, task_2);
 
     let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 11);
     init_write_batch(&engines, &mut task_3);
@@ -303,7 +303,7 @@ fn test_worker() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.worker.batch.add_write_task(task_3);
+    t.worker.batch.add_write_task(&engines.raft, task_3);
 
     t.worker.write_to_db(true);
 
@@ -335,6 +335,124 @@ fn test_worker() {
     );
 
     must_have_same_count_msg(5, &t.msg_rx);
+}
+
+#[test]
+fn test_worker_split_raft_wb() {
+    let path = Builder::new().prefix("async-io-worker").tempdir().unwrap();
+    let engines = new_temp_engine(&path);
+    let mut t = TestWorker::new(&Config::default(), &engines);
+
+    let mut run_test = |region_1: u64, region_2: u64, split: (bool, bool)| {
+        let raft_key_1 = 17 + region_1;
+        let raft_key_2 = 27 + region_1;
+        let raft_key_3 = 37 + region_1;
+        let mut expected_wbs = 1;
+
+        let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
+        task_1.raft_wb = Some(engines.raft.log_batch(0));
+        let mut apply_state_1 = RaftApplyState::default();
+        apply_state_1.set_applied_index(10);
+        let lb = task_1.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+        lb.put_apply_state(region_1, 10, &apply_state_1).unwrap();
+        put_raft_kv(task_1.raft_wb.as_mut(), raft_key_1);
+        task_1.entries.append(&mut vec![
+            new_entry(5, 5),
+            new_entry(6, 5),
+            new_entry(7, 5),
+            new_entry(8, 5),
+        ]);
+        task_1.raft_state = Some(new_raft_state(5, 123, 6, 8));
+        t.worker.batch.add_write_task(&engines.raft, task_1);
+
+        let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_2, 2, 15);
+        task_2.raft_wb = Some(engines.raft.log_batch(0));
+        let mut apply_state_2 = RaftApplyState::default();
+        apply_state_2.set_applied_index(16);
+        let lb = task_2.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+        lb.put_apply_state(region_2, 16, &apply_state_2).unwrap();
+        put_raft_kv(task_2.raft_wb.as_mut(), raft_key_2);
+        task_2
+            .entries
+            .append(&mut vec![new_entry(20, 15), new_entry(21, 15)]);
+        task_2.raft_state = Some(new_raft_state(15, 234, 20, 21));
+        if split.0 {
+            expected_wbs += 1;
+            t.worker.batch.raft_wb_split_size = 1;
+        } else {
+            t.worker.batch.raft_wb_split_size = 0;
+        }
+        t.worker.batch.add_write_task(&engines.raft, task_2);
+
+        let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 11);
+        task_3.raft_wb = Some(engines.raft.log_batch(0));
+        let mut apply_state_3 = RaftApplyState::default();
+        apply_state_3.set_applied_index(25);
+        let lb = task_3.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+        lb.put_apply_state(region_1, 25, &apply_state_3).unwrap();
+        put_raft_kv(task_3.raft_wb.as_mut(), raft_key_3);
+        delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), raft_key_1);
+        task_3
+            .entries
+            .append(&mut vec![new_entry(6, 6), new_entry(7, 7)]);
+        task_3.cut_logs = Some((8, 9));
+        task_3.raft_state = Some(new_raft_state(7, 124, 6, 7));
+        if split.1 {
+            expected_wbs += 1;
+            t.worker.batch.raft_wb_split_size = 1;
+        } else {
+            t.worker.batch.raft_wb_split_size = 0;
+        }
+        t.worker.batch.add_write_task(&engines.raft, task_3);
+
+        assert_eq!(t.worker.batch.raft_wbs.len(), expected_wbs);
+        t.worker.write_to_db(true);
+        assert_eq!(t.worker.batch.raft_wbs.len(), 1);
+
+        must_have_same_notifies(vec![(region_1, (1, 11)), (region_2, (2, 15))], &t.notify_rx);
+
+        assert_eq!(test_raft_kv(&engines.raft, raft_key_1), false);
+        assert_eq!(test_raft_kv(&engines.raft, raft_key_2), true);
+        assert_eq!(test_raft_kv(&engines.raft, raft_key_3), true);
+
+        must_have_entries_and_state(
+            &engines.raft,
+            vec![
+                (
+                    region_1,
+                    vec![new_entry(5, 5), new_entry(6, 6), new_entry(7, 7)],
+                    new_raft_state(7, 124, 6, 7),
+                ),
+                (
+                    region_2,
+                    vec![new_entry(20, 15), new_entry(21, 15)],
+                    new_raft_state(15, 234, 20, 21),
+                ),
+            ],
+        );
+        assert_eq!(
+            engines.raft.get_apply_state(region_1, 25).unwrap(),
+            Some(RaftApplyState {
+                applied_index: 25,
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            engines.raft.get_apply_state(region_2, 16).unwrap(),
+            Some(RaftApplyState {
+                applied_index: 16,
+                ..Default::default()
+            })
+        );
+    };
+
+    let mut first_region = 1;
+    for a in [true, false] {
+        for b in [true, false] {
+            run_test(first_region, first_region + 1, (a, b));
+            first_region += 10;
+        }
+    }
 }
 
 #[test]
@@ -441,14 +559,14 @@ fn test_basic_flow_with_states() {
     task_1.raft_wb = Some(engines.raft.log_batch(0));
     let mut apply_state_1 = RaftApplyState::default();
     apply_state_1.applied_index = 2;
-    let mut extra_state = ExtraStates::new(apply_state_1);
     let mut region_state_1 = RegionLocalState::default();
     region_state_1
         .mut_region()
         .mut_region_epoch()
         .set_version(3);
-    extra_state.region_state = Some(region_state_1.clone());
-    task_1.extra_write.set_v2(extra_state);
+    let lb = task_1.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+    lb.put_apply_state(region_1, 2, &apply_state_1).unwrap();
+    lb.put_region_state(region_1, 2, &region_state_1).unwrap();
     put_raft_kv(task_1.raft_wb.as_mut(), 17);
     task_1
         .entries
@@ -464,8 +582,8 @@ fn test_basic_flow_with_states() {
     task_2.raft_wb = Some(engines.raft.log_batch(0));
     let mut apply_state_2 = RaftApplyState::default();
     apply_state_2.applied_index = 30;
-    let extra_state = ExtraStates::new(apply_state_2.clone());
-    task_2.extra_write.set_v2(extra_state);
+    let lb = task_2.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+    lb.put_apply_state(2, 30, &apply_state_2).unwrap();
     put_raft_kv(task_2.raft_wb.as_mut(), 27);
     task_2
         .entries
@@ -481,8 +599,8 @@ fn test_basic_flow_with_states() {
     task_3.raft_wb = Some(engines.raft.log_batch(0));
     let mut apply_state_3 = RaftApplyState::default();
     apply_state_3.applied_index = 5;
-    let extra_state = ExtraStates::new(apply_state_3.clone());
-    task_3.extra_write.set_v2(extra_state);
+    let lb = task_3.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+    lb.put_apply_state(region_1, 5, &apply_state_3).unwrap();
     put_raft_kv(task_3.raft_wb.as_mut(), 37);
     delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), 17);
     task_3.entries.append(&mut vec![new_entry(6, 6)]);
@@ -516,18 +634,18 @@ fn test_basic_flow_with_states() {
         ],
     );
     assert_eq!(
-        engines.raft.get_apply_state(region_1).unwrap().unwrap(),
+        engines.raft.get_apply_state(region_1, 5).unwrap().unwrap(),
         apply_state_3
     );
     assert_eq!(
-        engines.raft.get_apply_state(region_2).unwrap().unwrap(),
+        engines.raft.get_apply_state(region_2, 30).unwrap().unwrap(),
         apply_state_2
     );
     assert_eq!(
-        engines.raft.get_region_state(region_1).unwrap().unwrap(),
+        engines.raft.get_region_state(region_1, 2).unwrap().unwrap(),
         region_state_1
     );
-    assert_eq!(engines.raft.get_region_state(region_2).unwrap(), None);
+    assert_eq!(engines.raft.get_region_state(region_2, 1).unwrap(), None);
 
     must_have_same_count_msg(6, &t.msg_rx);
 
