@@ -2,6 +2,7 @@
 
 #![allow(incomplete_features)]
 #![feature(specialization)]
+#![feature(let_chains)]
 
 #[macro_use]
 extern crate tikv_util;

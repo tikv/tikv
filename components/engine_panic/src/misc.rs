@@ -1,10 +1,28 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DeleteStrategy, MiscExt, Range, Result};
+use engine_traits::{DeleteStrategy, MiscExt, Range, Result, StatisticsReporter};
 
 use crate::engine::PanicEngine;
 
+pub struct PanicReporter;
+
+impl StatisticsReporter<PanicEngine> for PanicReporter {
+    fn new(name: &str) -> Self {
+        panic!()
+    }
+
+    fn collect(&mut self, engine: &PanicEngine) {
+        panic!()
+    }
+
+    fn flush(&mut self) {
+        panic!()
+    }
+}
+
 impl MiscExt for PanicEngine {
+    type StatisticsReporter = PanicReporter;
+
     fn flush_cfs(&self, cfs: &[&str], wait: bool) -> Result<()> {
         panic!()
     }
