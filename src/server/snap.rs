@@ -3,7 +3,6 @@
 use std::{
     fmt::{self, Display, Formatter},
     io::{Read, Write},
-    marker::PhantomData,
     pin::Pin,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -12,7 +11,6 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::KvEngine;
 use file_system::{IoType, WithIoType};
 use futures::{
     future::{Future, TryFutureExt},
@@ -29,11 +27,9 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use protobuf::Message;
-use raftstore::{
-    router::RaftStoreRouter,
-    store::{SnapEntry, SnapKey, SnapManager, Snapshot},
-};
+use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
+use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::Instant,
@@ -47,7 +43,7 @@ use crate::tikv_util::sys::thread::ThreadBuildWrapper;
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
-const DEFAULT_POOL_SIZE: usize = 4;
+pub const DEFAULT_POOL_SIZE: usize = 4;
 
 /// A task for either receiving Snapshot or sending Snapshot
 pub enum Task {
@@ -83,7 +79,7 @@ struct SnapChunk {
     remain_bytes: usize,
 }
 
-const SNAP_CHUNK_LEN: usize = 1024 * 1024;
+pub const SNAP_CHUNK_LEN: usize = 1024 * 1024;
 
 impl Stream for SnapChunk {
     type Item = Result<(SnapshotChunk, WriteFlags)>;
@@ -260,7 +256,7 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter<impl KvEngine>>(self, raft_router: R) -> Result<()> {
+    fn finish<R: RaftExtension>(self, raft_router: R) -> Result<()> {
         let _with_io_type = WithIoType::new(self.io_type);
         let key = self.key;
         if let Some(mut file) = self.file {
@@ -271,15 +267,13 @@ impl RecvSnapContext {
                 return Err(e);
             }
         }
-        if let Err(e) = raft_router.send_raft_msg(self.raft_msg) {
-            return Err(box_err!("{} failed to send snapshot to raft: {}", key, e));
-        }
+        raft_router.feed(self.raft_msg, true);
         info!("saving all snapshot files"; "snap_key" => %key, "takes" => ?self.start.saturating_elapsed());
         Ok(())
     }
 }
 
-fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
+fn recv_snap<R: RaftExtension + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager,
@@ -331,11 +325,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
     }
 }
 
-pub struct Runner<E, R>
-where
-    E: KvEngine,
-    R: RaftStoreRouter<E> + 'static,
-{
+pub struct Runner<R: RaftExtension> {
     env: Arc<Environment>,
     snap_mgr: SnapManager,
     pool: Runtime,
@@ -345,21 +335,16 @@ where
     cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
-    engine: PhantomData<E>,
 }
 
-impl<E, R> Runner<E, R>
-where
-    E: KvEngine,
-    R: RaftStoreRouter<E> + 'static,
-{
+impl<R: RaftExtension + 'static> Runner<R> {
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
-    ) -> Runner<E, R> {
+    ) -> Self {
         let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
         let snap_worker = Runner {
             env,
@@ -377,7 +362,6 @@ where
             cfg: cfg.value().clone(),
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
-            engine: PhantomData,
         };
         snap_worker
     }
@@ -404,11 +388,7 @@ where
     }
 }
 
-impl<E, R> Runnable for Runner<E, R>
-where
-    E: KvEngine,
-    R: RaftStoreRouter<E> + 'static,
-{
+impl<R: RaftExtension + 'static> Runnable for Runner<R> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {

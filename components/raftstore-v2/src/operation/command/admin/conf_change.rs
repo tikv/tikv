@@ -7,7 +7,8 @@
 //! - Apply after conf change is committed
 //! - Update raft state using the result of conf change
 
-use collections::HashSet;
+use std::time::Instant;
+
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb::{self, PeerRole},
@@ -16,7 +17,6 @@ use kvproto::{
 };
 use protobuf::Message;
 use raft::prelude::*;
-use raft_proto::ConfChangeI;
 use raftstore::{
     store::{
         metrics::{PEER_ADMIN_CMD_COUNTER_VEC, PEER_PROPOSE_LOG_SIZE_HISTOGRAM},
@@ -32,19 +32,18 @@ use super::AdminCmdResult;
 use crate::{
     batch::StoreContext,
     raft::{Apply, Peer},
-    router::ApplyRes,
 };
 
 /// The apply result of conf change.
 #[derive(Default, Debug)]
 pub struct ConfChangeResult {
     pub index: u64,
-    // The proposed ConfChangeV2 or (legacy) ConfChange
-    // ConfChange (if it is) will convert to ConfChangeV2
+    // The proposed ConfChangeV2 or (legacy) ConfChange.
+    // ConfChange (if it is) will be converted to ConfChangeV2.
     pub conf_change: ConfChangeV2,
     // The change peer requests come along with ConfChangeV2
-    // or (legacy) ConfChange, for ConfChange, it only contains
-    // one element
+    // or (legacy) ConfChange. For ConfChange, it only contains
+    // one element.
     pub changes: Vec<ChangePeerRequest>,
     pub region_state: RegionLocalState,
 }
@@ -54,7 +53,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn propose_conf_change<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
     ) -> Result<u64> {
         if self.has_pending_merge_state() {
             return Err(Error::ProposalInMergingMode(self.region_id()));
@@ -68,7 +67,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let data = req.write_to_bytes()?;
         let admin = req.get_admin_request();
-        let leader_role = self.peer().get_role();
         if admin.has_change_peer() {
             self.propose_conf_change_imp(ctx, admin.get_change_peer(), data)
         } else if admin.has_change_peer_v2() {
@@ -130,7 +128,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(proposal_index)
     }
 
-    pub fn on_apply_res_conf_change(&mut self, conf_change: ConfChangeResult) {
+    pub fn on_apply_res_conf_change<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        conf_change: ConfChangeResult,
+    ) {
         // TODO: cancel generating snapshot.
 
         // Snapshot is applied in memory without waiting for all entries being
@@ -153,6 +155,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "notify pd with change peer region";
                 "region" => ?self.region(),
             );
+            self.region_heartbeat_pd(ctx);
             let demote_self = tikv_util::store::is_learner(self.peer());
             if remove_self || demote_self {
                 warn!(self.logger, "removing or demoting leader"; "remove" => remove_self, "demote" => demote_self);
@@ -160,12 +163,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.raft_group_mut()
                     .raft
                     .become_follower(term, raft::INVALID_ID);
-            } else if conf_change.changes.iter().any(|c| {
-                matches!(
-                    c.get_change_type(),
-                    ConfChangeType::AddNode | ConfChangeType::AddLearnerNode
-                )
-            }) {
+            }
+            let mut has_new_peer = None;
+            for c in conf_change.changes {
+                let peer_id = c.get_peer().get_id();
+                match c.get_change_type() {
+                    ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
+                        if has_new_peer.is_none() {
+                            has_new_peer = Some(Instant::now());
+                        }
+                        self.add_peer_heartbeat(peer_id, has_new_peer.unwrap());
+                    }
+                    ConfChangeType::RemoveNode => {
+                        self.remove_peer_heartbeat(peer_id);
+                    }
+                }
+            }
+            if has_new_peer.is_some() {
                 // Speed up snapshot instead of waiting another heartbeat.
                 self.raft_group_mut().ping();
                 self.set_has_ready();
@@ -214,7 +228,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         legacy: bool,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         let region = self.region_state().get_region();
-        let peer_id = self.peer().get_id();
         let change_kind = ConfChangeKind::confchange_kind(changes.len());
         info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch());
         let mut new_region = region.clone();
@@ -269,7 +282,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         }
         let mut resp = AdminResponse::default();
         resp.mut_change_peer().set_region(new_region);
-        let mut conf_change = ConfChangeResult {
+        let conf_change = ConfChangeResult {
             index,
             conf_change: cc,
             changes: changes.to_vec(),

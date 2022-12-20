@@ -39,11 +39,10 @@ use parking_lot::RwLockUpgradableReadGuard;
 use protobuf::Message;
 use raft::{eraftpb::EntryType, GetEntriesContext, ProgressState, INVALID_INDEX, NO_LIMIT};
 use raftstore::{
-    coprocessor::RegionChangeReason,
-    store::{entry_storage, metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext},
+    store::{metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext},
     Error, Result,
 };
-use slog::{debug, info, warn, Logger};
+use slog::{debug, info, warn};
 use tikv_util::{box_err, store::region_on_same_stores};
 
 use crate::{
@@ -51,7 +50,6 @@ use crate::{
     fsm::ApplyResReporter,
     operation::AdminCmdResult,
     raft::{Apply, Peer},
-    router::ApplyRes,
 };
 
 #[derive(Debug)]
@@ -64,7 +62,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn propose_prepare_merge<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
     ) -> Result<u64> {
         self.validate_prepare_merge_command(
             store_ctx,
@@ -153,7 +151,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 info!(
                     self.logger,
                     "reject PrepareMerge because applied_index has not reached prepare_merge_fence";
-                    "region_id" => self.region_id(),
                     "applied_index" => applied_index,
                     "prepare_merge_fence" => *idx
                 );
@@ -243,7 +240,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 info!(
                     self.logger,
                     "start rejecting new proposals before prepare merge";
-                    "region_id" => self.region_id(),
                     "prepare_merge_fence" => last_index
                 );
                 return Err(Error::PendingPrepareMerge);
@@ -314,9 +310,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pessimistic_locks.status = LocksStatus::MergingRegion;
         }
         debug!(
-            self.logger,"propose {} pessimistic locks before prepare merge", cmd.get_requests().len();
-            "region_id" => self.region_id());
-        self.propose_command(store_ctx, cmd)?;
+            self.logger,
+            "propose {} pessimistic locks before prepare merge",
+            cmd.get_requests().len();
+        );
+        self.propose(store_ctx, cmd.write_to_bytes().unwrap())?;
         Ok(())
     }
 
@@ -350,8 +348,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             warn!(
                 self.logger,
                 "min_matched < min_committed, raft progress is inaccurate";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer().get_id(),
                 "min_matched" => min_m,
                 "min_committed" => min_c,
             );
@@ -370,9 +366,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         applied_index: u64,
     ) {
-        if let Some(idx) = self.prepare_merge_fence.as_ref().map(|f| f.0) && idx <= applied_index {
-            let cmd = self.prepare_merge_fence.take().unwrap().1;
-            self.propose_command(store_ctx, cmd);
+        if let Some((idx, cmd)) = self.prepare_merge_fence.as_ref()
+            && *idx <= applied_index
+            && self.propose(store_ctx, cmd.write_to_bytes().unwrap()).is_ok()
+        {
+            self.prepare_merge_fence.take();
         }
     }
 
@@ -384,7 +382,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.set_region(
             &mut store_ctx.store_meta.lock().unwrap(),
             res.region.clone(),
-            RegionChangeReason::PrepareMerge,
             res.state.get_commit(),
         );
 

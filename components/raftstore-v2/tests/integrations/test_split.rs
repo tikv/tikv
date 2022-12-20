@@ -2,14 +2,14 @@
 
 use std::{thread, time::Duration};
 
+use engine_traits::{RaftEngineReadOnly, CF_DEFAULT, CF_RAFT};
 use futures::executor::block_on;
 use kvproto::{
     metapb, pdpb,
-    raft_cmdpb::{
-        AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, Request, SplitRequest,
-    },
+    raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, SplitRequest},
 };
-use raftstore_v2::router::PeerMsg;
+use raftstore::store::{INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX};
+use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 use tikv_util::store::new_peer;
 
 use crate::cluster::{Cluster, TestRouter};
@@ -35,29 +35,20 @@ fn new_batch_split_region_request(
 }
 
 fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
-    let (msg, sub) = PeerMsg::raft_command(req);
+    let (msg, sub) = PeerMsg::admin_command(req);
     router.send(region_id, msg).unwrap();
     block_on(sub.result()).unwrap();
 
-    // todo: when persistent implementation is ready, we can use tablet index of
+    // TODO: when persistent implementation is ready, we can use tablet index of
     // the parent to check whether the split is done. Now, just sleep a second.
     thread::sleep(Duration::from_secs(1));
 }
 
 fn put(router: &mut TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
-    let mut req = router.new_request_for(region_id);
-
-    let mut put_req = Request::default();
-    put_req.set_cmd_type(CmdType::Put);
-    put_req.mut_put().set_key(key.to_vec());
-    put_req.mut_put().set_value(b"v1".to_vec());
-    req.mut_requests().push(put_req);
-
-    let (msg, mut sub) = PeerMsg::raft_command(req.clone());
-    router.send(region_id, msg).unwrap();
-    assert!(block_on(sub.wait_proposed()));
-    assert!(block_on(sub.wait_committed()));
-    block_on(sub.result()).unwrap()
+    let header = Box::new(router.new_request_for(region_id).take_header());
+    let mut put = SimpleWriteEncoder::with_capacity(64);
+    put.put(CF_DEFAULT, key, b"v1");
+    router.simple_write(region_id, header, put).unwrap()
 }
 
 // Split the region according to the parameters
@@ -126,9 +117,10 @@ fn split_region(
 
 #[test]
 fn test_split() {
-    let cluster = Cluster::default();
+    let mut cluster = Cluster::default();
     let store_id = cluster.node(0).id();
-    let mut router = cluster.router(0);
+    let raft_engine = cluster.node(0).running_state().unwrap().raft_engine.clone();
+    let router = &mut cluster.routers[0];
     // let factory = cluster.node(0).tablet_factory();
 
     let region_id = 2;
@@ -139,8 +131,10 @@ fn test_split() {
     // Region 2 ["", ""] peer(1, 3)
     //   -> Region 2    ["", "k22"] peer(1, 3)
     //      Region 1000 ["k22", ""] peer(1, 10)
+    let region_state = raft_engine.get_region_state(2, u64::MAX).unwrap().unwrap();
+    assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
     let (left, right) = split_region(
-        &mut router,
+        router,
         region,
         peer.clone(),
         1000,
@@ -150,12 +144,29 @@ fn test_split() {
         b"k22",
         false,
     );
+    let region_state = raft_engine.get_region_state(2, u64::MAX).unwrap().unwrap();
+    assert_ne!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
+    assert_eq!(
+        region_state.get_region().get_region_epoch().get_version(),
+        INIT_EPOCH_VER + 1
+    );
+    let region_state0 = raft_engine
+        .get_region_state(2, region_state.get_tablet_index())
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state, region_state0);
+    let flushed_index = raft_engine.get_flushed_index(2, CF_RAFT).unwrap().unwrap();
+    assert!(
+        flushed_index >= region_state.get_tablet_index(),
+        "{flushed_index} >= {}",
+        region_state.get_tablet_index()
+    );
 
     // Region 2 ["", "k22"] peer(1, 3)
     //   -> Region 2    ["", "k11"]    peer(1, 3)
     //      Region 1001 ["k11", "k22"] peer(1, 11)
     let _ = split_region(
-        &mut router,
+        router,
         left,
         peer,
         1001,
@@ -165,12 +176,37 @@ fn test_split() {
         b"k11",
         false,
     );
+    let region_state = raft_engine.get_region_state(2, u64::MAX).unwrap().unwrap();
+    assert_ne!(
+        region_state.get_tablet_index(),
+        region_state0.get_tablet_index()
+    );
+    assert_eq!(
+        region_state.get_region().get_region_epoch().get_version(),
+        INIT_EPOCH_VER + 2
+    );
+    let region_state1 = raft_engine
+        .get_region_state(2, region_state.get_tablet_index())
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state, region_state1);
+    let flushed_index = raft_engine.get_flushed_index(2, CF_RAFT).unwrap().unwrap();
+    assert!(
+        flushed_index >= region_state.get_tablet_index(),
+        "{flushed_index} >= {}",
+        region_state.get_tablet_index()
+    );
 
     // Region 1000 ["k22", ""] peer(1, 10)
     //   -> Region 1000 ["k22", "k33"] peer(1, 10)
     //      Region 1002 ["k33", ""]    peer(1, 12)
+    let region_state = raft_engine
+        .get_region_state(1000, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
     let _ = split_region(
-        &mut router,
+        router,
         right,
         new_peer(store_id, 10),
         1002,
@@ -180,4 +216,30 @@ fn test_split() {
         b"k33",
         false,
     );
+    let region_state = raft_engine
+        .get_region_state(1000, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_ne!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
+    assert_eq!(
+        region_state.get_region().get_region_epoch().get_version(),
+        INIT_EPOCH_VER + 2
+    );
+    let region_state2 = raft_engine
+        .get_region_state(1000, region_state.get_tablet_index())
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state, region_state2);
+    let flushed_index = raft_engine.get_flushed_index(2, CF_RAFT).unwrap().unwrap();
+    assert!(
+        flushed_index >= region_state.get_tablet_index(),
+        "{flushed_index} >= {}",
+        region_state.get_tablet_index()
+    );
 }
+
+// TODO: test split race with
+// - created peer
+// - created peer with pending snapshot
+// - created peer with persisting snapshot
+// - created peer with persisted snapshot

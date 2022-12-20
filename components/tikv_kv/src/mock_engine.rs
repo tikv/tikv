@@ -9,7 +9,7 @@ use collections::HashMap;
 use kvproto::kvrpcpb::Context;
 
 use super::Result;
-use crate::{Callback, Engine, ExtCallback, Modify, RocksEngine, SnapContext, WriteData};
+use crate::{Engine, Modify, OnAppliedCb, RocksEngine, SnapContext, WriteData, WriteEvent};
 
 /// A mock engine is a simple wrapper around RocksEngine
 /// but with the ability to assert the modifies,
@@ -153,39 +153,40 @@ impl Engine for MockEngine {
         self.base.kv_engine()
     }
 
+    type RaftExtension = <RocksEngine as Engine>::RaftExtension;
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        self.base.raft_extension()
+    }
+
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
         self.base.modify_on_kv_engine(region_modifies)
     }
 
-    fn async_snapshot(&mut self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
-        self.base.async_snapshot(ctx, cb)
+    type SnapshotRes = <RocksEngine as Engine>::SnapshotRes;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        self.base.async_snapshot(ctx)
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None, None)
-    }
-
-    fn async_write_ext(
+    type WriteRes = <RocksEngine as Engine>::WriteRes;
+    fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: Callback<()>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
+        subscribed: u8,
+        on_applied: Option<OnAppliedCb>,
+    ) -> Self::WriteRes {
         if let Some(expected_modifies) = self.expected_modifies.as_ref() {
             let mut expected_writes = expected_modifies.0.lock().unwrap();
             check_expected_write(
                 &mut expected_writes,
                 &batch.modifies,
-                proposed_cb.is_some(),
-                committed_cb.is_some(),
+                WriteEvent::subscribed_proposed(subscribed),
+                WriteEvent::subscribed_committed(subscribed),
             );
         }
         let mut last_modifies = self.last_modifies.lock().unwrap();
         last_modifies.push(batch.modifies.clone());
-        self.base
-            .async_write_ext(ctx, batch, write_cb, proposed_cb, committed_cb)
+        self.base.async_write(ctx, batch, subscribed, on_applied)
     }
 }
 

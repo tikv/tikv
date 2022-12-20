@@ -37,10 +37,10 @@ use crate::{
     },
     storage::{
         lock_manager::{
-            DiagnosticContext, KeyLockWaitInfo, LockManager as LockManagerTrait, LockWaitToken,
-            UpdateWaitForEvent, WaitTimeout,
+            CancellationCallback, DiagnosticContext, KeyLockWaitInfo,
+            LockManager as LockManagerTrait, LockWaitToken, UpdateWaitForEvent, WaitTimeout,
         },
-        DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
+        DynamicConfigs as StorageDynamicConfigs,
     },
 };
 
@@ -248,7 +248,7 @@ impl LockManagerTrait for LockManager {
         wait_info: KeyLockWaitInfo,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
-        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
+        cancel_callback: CancellationCallback,
         diag_ctx: DiagnosticContext,
     ) {
         let timeout = match timeout {

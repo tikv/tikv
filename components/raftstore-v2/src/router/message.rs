@@ -1,11 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::fmt;
 
-use engine_traits::Snapshot;
-use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
-use raft::eraftpb::Snapshot as RaftSnapshot;
+use kvproto::{
+    raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
+    raft_serverpb::RaftMessage,
+};
 use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use tikv_util::time::Instant;
 
@@ -15,7 +15,7 @@ use super::{
     },
     ApplyRes,
 };
-use crate::operation::SplitInit;
+use crate::operation::{SimpleWriteBinary, SplitInit};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -93,6 +93,7 @@ impl StoreTick {
 }
 
 /// Command that can be handled by raftstore.
+#[derive(Debug)]
 pub struct RaftRequest<C> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
@@ -109,7 +110,16 @@ impl<C> RaftRequest<C> {
     }
 }
 
+#[derive(Debug)]
+pub struct SimpleWrite {
+    pub send_time: Instant,
+    pub header: Box<RaftRequestHeader>,
+    pub data: SimpleWriteBinary,
+    pub ch: CmdResChannel,
+}
+
 /// Message that can be sent to a peer.
+#[derive(Debug)]
 pub enum PeerMsg {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
@@ -120,7 +130,9 @@ pub enum PeerMsg {
     RaftQuery(RaftRequest<QueryResChannel>),
     /// Command changes the inernal states. It will be transformed into logs and
     /// applied on all replicas.
-    RaftCommand(RaftRequest<CmdResChannel>),
+    SimpleWrite(SimpleWrite),
+    /// Command that contains admin requests.
+    AdminCommand(RaftRequest<CmdResChannel>),
     /// Tick is periodical task. If target peer doesn't exist there is a
     /// potential that the raft node will not work anymore.
     Tick(PeerTick),
@@ -132,6 +144,7 @@ pub enum PeerMsg {
     Start,
     /// Messages from peer to peer in the same store
     SplitInit(Box<SplitInit>),
+    SplitInitFinish(u64),
     /// A message only used to notify a peer.
     Noop,
     /// A message that indicates an asynchronous write has finished.
@@ -140,6 +153,17 @@ pub enum PeerMsg {
         ready_number: u64,
     },
     QueryDebugInfo(DebugInfoChannel),
+    DataFlushed {
+        cf: &'static str,
+        tablet_index: u64,
+        flushed_index: u64,
+    },
+    PeerUnreachable {
+        to_peer_id: u64,
+    },
+    StoreUnreachable {
+        to_store_id: u64,
+    },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
@@ -151,60 +175,33 @@ impl PeerMsg {
         (PeerMsg::RaftQuery(RaftRequest::new(req, ch)), sub)
     }
 
-    pub fn raft_command(req: RaftCmdRequest) -> (Self, CmdResSubscriber) {
+    pub fn admin_command(req: RaftCmdRequest) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
-        (PeerMsg::RaftCommand(RaftRequest::new(req, ch)), sub)
+        (PeerMsg::AdminCommand(RaftRequest::new(req, ch)), sub)
+    }
+
+    pub fn simple_write(
+        header: Box<RaftRequestHeader>,
+        data: SimpleWriteBinary,
+    ) -> (Self, CmdResSubscriber) {
+        let (ch, sub) = CmdResChannel::pair();
+        (
+            PeerMsg::SimpleWrite(SimpleWrite {
+                send_time: Instant::now(),
+                header,
+                data,
+                ch,
+            }),
+            sub,
+        )
     }
 }
 
-impl fmt::Debug for PeerMsg {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            PeerMsg::RaftQuery(_) => write!(fmt, "Raft Query"),
-            PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
-            PeerMsg::Tick(tick) => write! {
-                fmt,
-                "{:?}",
-                tick
-            },
-            PeerMsg::ApplyRes(res) => write!(fmt, "ApplyRes {:?}", res),
-            PeerMsg::Start => write!(fmt, "Startup"),
-            PeerMsg::SplitInit(_) => {
-                write!(fmt, "Split initialization")
-            }
-            PeerMsg::Noop => write!(fmt, "Noop"),
-            PeerMsg::Persisted {
-                peer_id,
-                ready_number,
-            } => write!(
-                fmt,
-                "Persisted peer_id {}, ready_number {}",
-                peer_id, ready_number
-            ),
-            PeerMsg::LogsFetched(fetched) => write!(fmt, "LogsFetched {:?}", fetched),
-            PeerMsg::SnapshotGenerated(_) => write!(fmt, "SnapshotGenerated"),
-            PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
-            #[cfg(feature = "testexport")]
-            PeerMsg::WaitFlush(_) => write!(fmt, "FlushMessages"),
-        }
-    }
-}
-
+#[derive(Debug)]
 pub enum StoreMsg {
     RaftMessage(Box<RaftMessage>),
     SplitInit(Box<SplitInit>),
     Tick(StoreTick),
     Start,
-}
-
-impl fmt::Debug for StoreMsg {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            StoreMsg::SplitInit(_) => write!(fmt, "Split initialization"),
-            StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
-            StoreMsg::Start => write!(fmt, "Start store"),
-        }
-    }
+    StoreUnreachable { to_store_id: u64 },
 }
