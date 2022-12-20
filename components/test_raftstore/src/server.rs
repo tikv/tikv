@@ -483,6 +483,8 @@ impl ServerCluster {
         let debug_thread_handle = debug_thread_pool.handle().clone();
         let debug_service = DebugService::new(
             engines.clone(),
+            None,
+            None,
             debug_thread_handle,
             extension,
             ConfigController::default(),

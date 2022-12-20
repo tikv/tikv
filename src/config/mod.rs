@@ -31,13 +31,12 @@ use engine_rocks::{
     raw::{
         BlockBasedOptions, Cache, ChecksumType, CompactionPriority, DBCompactionStyle,
         DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env, PrepopulateBlockCache,
-        Statistics,
     },
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
     RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
-    RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksTitanDbOptions,
-    RocksdbLogger, TtlPropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics,
+    RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
     CfOptions as _, DbOptions as _, MiscExt, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT,
@@ -1038,6 +1037,8 @@ pub struct DbConfig {
     pub create_if_missing: bool,
     pub max_open_files: i32,
     #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub enable_statistics: bool,
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
@@ -1156,7 +1157,7 @@ impl DbConfig {
         }
     }
 
-    pub fn build_opt(&self, stats: Option<&Statistics>) -> RocksDbOptions {
+    pub fn build_opt(&self, stats: Option<&RocksStatistics>) -> RocksDbOptions {
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -1172,11 +1173,9 @@ impl DbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        if self.enable_statistics {
-            match stats {
-                Some(stats) => opts.set_statistics(stats),
-                None => opts.set_statistics(&Statistics::new_titan()),
-            }
+        match stats {
+            Some(stats) => opts.set_statistics(stats),
+            None => opts.set_statistics(&RocksStatistics::new_titan()),
         }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
@@ -1296,6 +1295,9 @@ impl DbConfig {
             )
             .into());
         }
+        if !self.enable_statistics {
+            warn!("kvdb: ignoring `enable_statistics`, statistics is always on.")
+        }
         Ok(())
     }
 
@@ -1411,6 +1413,8 @@ pub struct RaftDbConfig {
     pub create_if_missing: bool,
     pub max_open_files: i32,
     #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub enable_statistics: bool,
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
@@ -1499,9 +1503,7 @@ impl RaftDbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        if self.enable_statistics {
-            opts.set_statistics(&Statistics::new_titan());
-        }
+        opts.set_statistics(&RocksStatistics::new_titan());
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
@@ -1543,6 +1545,9 @@ impl RaftDbConfig {
                     "raftdb: pipelined_write is not compatible with unordered_write".into(),
                 );
             }
+        }
+        if !self.enable_statistics {
+            warn!("raftdb: ignoring `enable_statistics`, statistics is always on.")
         }
         Ok(())
     }

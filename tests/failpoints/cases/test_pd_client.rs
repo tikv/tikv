@@ -257,10 +257,17 @@ fn test_retry() {
         F: FnMut(&mut RpcClientV2) -> pd_client::Result<R>,
         R: std::fmt::Debug,
     {
-        run_on_bad_connection(client, |c| {
-            f(c).unwrap_err();
-            f(c).unwrap();
-        });
+        let mut success = false;
+        for _ in 0..3 {
+            run_on_bad_connection(client, |c| {
+                f(c).unwrap_err();
+                success = f(c).is_ok();
+            });
+            if success {
+                return;
+            }
+        }
+        panic!("failed to retry after three attempts");
     }
 
     test_retry_success(&mut client, |c| {

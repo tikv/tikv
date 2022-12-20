@@ -325,10 +325,6 @@ impl RaftEngine for RocksEngine {
         KvEngine::flush_metrics(self, instance)
     }
 
-    fn reset_statistics(&self) {
-        KvEngine::reset_statistics(self)
-    }
-
     fn dump_stats(&self) -> Result<String> {
         MiscExt::dump_stats(self)
     }
