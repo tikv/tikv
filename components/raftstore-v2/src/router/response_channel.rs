@@ -603,6 +603,7 @@ pub type FlushChannel = BaseChannel<()>;
 #[cfg(feature = "testexport")]
 pub type FlushSubscriber = BaseSubscriber<()>;
 
+#[cfg(feature = "testexport")]
 impl Debug for FlushChannel {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "FlushChannel")

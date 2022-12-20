@@ -91,7 +91,6 @@ use tikv::{
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
-        create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
@@ -107,7 +106,7 @@ use tikv::{
         config_manager::StorageConfigManger,
         mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{EngineFlowController, FlowController},
-        Engine,
+        Engine, Storage,
     },
 };
 use tikv_util::{
@@ -788,7 +787,7 @@ where
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage::<_, _, _, F, _>(
+        let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -816,7 +815,7 @@ where
         let (resolver, state) = resolve::new_resolver(
             self.pd_client.clone(),
             &self.background_worker,
-            storage.get_engine().raft_extension().clone(),
+            storage.get_engine().raft_extension(),
         );
         self.resolver = Some(resolver);
 
@@ -1205,7 +1204,7 @@ where
         let debug_service = DebugService::new(
             engines.engines.clone(),
             servers.server.get_debug_thread_pool().clone(),
-            engines.engine.raft_extension().clone(),
+            engines.engine.raft_extension(),
             self.cfg_controller.as_ref().unwrap().clone(),
         );
         if servers
