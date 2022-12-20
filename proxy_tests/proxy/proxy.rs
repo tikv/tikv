@@ -1,6 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::RangeBounds;
 pub use std::{
     collections::HashMap,
     io::Write,
@@ -36,6 +35,7 @@ pub use new_mock_engine_store::{
     },
     write_kv_in_mem, Cluster, ProxyConfig, RegionStats, Simulator, TestPdClient,
 };
+pub use pd_client::PdClient;
 pub use raft::eraftpb::{ConfChangeType, MessageType};
 pub use raftstore::coprocessor::ConsistencyCheckMethod;
 pub use test_raftstore::{new_learner_peer, new_peer};
@@ -98,14 +98,26 @@ pub fn maybe_collect_states(
                     Ok(Some(i)) => i,
                     _ => unreachable!(),
                 };
+                let apply_state = get_apply_state(&engine, region_id);
+                let region_state = get_region_local_state(&engine, region_id);
+                let raft_state = get_raft_local_state(raft_engine, region_id);
+                if apply_state.is_none() {
+                    return;
+                }
+                if region_state.is_none() {
+                    return;
+                }
+                if raft_state.is_none() {
+                    return;
+                }
                 prev_state.insert(
                     id,
                     States {
                         in_memory_apply_state: region.apply_state.clone(),
                         in_memory_applied_term: region.applied_term,
-                        in_disk_apply_state: get_apply_state(&engine, region_id).unwrap(),
-                        in_disk_region_state: get_region_local_state(&engine, region_id).unwrap(),
-                        in_disk_raft_state: get_raft_local_state(raft_engine, region_id).unwrap(),
+                        in_disk_apply_state: apply_state.unwrap(),
+                        in_disk_region_state: region_state.unwrap(),
+                        in_disk_raft_state: raft_state.unwrap(),
                         ident,
                     },
                 );
@@ -570,6 +582,43 @@ pub fn must_wait_until_cond_states(
     }
 }
 
+// Must wait until some node satisfy cond given by `pref`.
+pub fn must_wait_until_cond_node(
+    cluster: &Cluster<NodeCluster>,
+    region_id: u64,
+    store_ids: Option<Vec<u64>>,
+    pred: &dyn Fn(&States) -> bool,
+) -> HashMap<u64, States> {
+    let mut retry = 0;
+    loop {
+        let new_states = maybe_collect_states(&cluster, region_id, store_ids.clone());
+        let mut ok = true;
+        if let Some(ref e) = store_ids {
+            if e.len() == new_states.len() {
+                for i in new_states.keys() {
+                    if let Some(new) = new_states.get(i) {
+                        if !pred(new) {
+                            ok = false;
+                            break;
+                        }
+                    } else {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if ok {
+            break new_states;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        retry += 1;
+        if retry >= 30 {
+            panic!("states not as expect after timeout")
+        }
+    }
+}
+
 pub fn force_compact_log(
     cluster: &mut Cluster<NodeCluster>,
     key: &[u8],
@@ -618,4 +667,19 @@ pub fn restart_tiflash_node(cluster: &mut Cluster<NodeCluster>, node_id: u64) {
         );
     }
     cluster.run_node(node_id).unwrap();
+}
+
+pub fn must_not_merged(pd_client: Arc<TestPdClient>, from: u64, duration: Duration) {
+    let timer = tikv_util::time::Instant::now();
+    loop {
+        let region = futures::executor::block_on(pd_client.get_region_by_id(from)).unwrap();
+        if let Some(r) = region {
+            if timer.saturating_elapsed() > duration {
+                return;
+            }
+        } else {
+            panic!("region {} is merged.", from);
+        }
+        std::thread::sleep_ms(10);
+    }
 }

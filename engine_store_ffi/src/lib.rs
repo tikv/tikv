@@ -4,13 +4,16 @@
 #[allow(dead_code)]
 pub mod interfaces;
 
+pub mod basic_ffi_impls;
+pub mod domain_impls;
+pub mod encryption_impls;
 mod lock_cf_reader;
 pub mod observer;
 mod read_index_helper;
+pub mod sst_reader_impls;
 mod utils;
 
 use std::{
-    cell::RefCell,
     pin::Pin,
     sync::{
         atomic::{AtomicU8, Ordering},
@@ -19,16 +22,16 @@ use std::{
     time,
 };
 
+pub use basic_ffi_impls::*;
+pub use domain_impls::*;
 use encryption::DataKeyManager;
-use engine_rocks::{get_env, RocksSstIterator, RocksSstReader};
-use engine_traits::{
-    EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo, IterOptions, Iterator, Peekable,
-    RefIterable, SstReader, CF_DEFAULT, CF_LOCK, CF_WRITE,
-};
+pub use encryption_impls::*;
+use engine_traits::{Peekable, CF_LOCK};
 use kvproto::{kvrpcpb, metapb, raft_cmdpb};
 use lazy_static::lazy_static;
 use protobuf::Message;
 pub use read_index_helper::ReadIndexClient;
+pub use sst_reader_impls::*;
 
 pub use self::interfaces::root::DB::{
     BaseBuffView, ColumnFamilyType, CppStrVecView, EngineStoreApplyRes, EngineStoreServerHelper,
@@ -37,23 +40,12 @@ pub use self::interfaces::root::DB::{
     RawCppStringPtr, RawVoidPtr, SSTReaderPtr, StoreStats, WriteCmdType, WriteCmdsView,
 };
 use self::interfaces::root::DB::{
-    ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawRustPtr,
-    SSTReaderInterfaces, SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER,
-    RAFT_STORE_PROXY_VERSION,
+    ConstRawVoidPtr, RaftStoreProxyPtr, RawCppPtrType, RawRustPtr, SSTReaderInterfaces, SSTView,
+    SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER, RAFT_STORE_PROXY_VERSION,
 };
 use crate::lock_cf_reader::LockCFFileReader;
 
 pub type TiFlashEngine = engine_tiflash::RocksEngine;
-
-impl From<&[u8]> for BaseBuffView {
-    fn from(s: &[u8]) -> Self {
-        let ptr = s.as_ptr() as *const _;
-        Self {
-            data: ptr,
-            len: s.len() as u64,
-        }
-    }
-}
 
 #[allow(clippy::wrong_self_convention)]
 pub trait UnwrapExternCFunc<T> {
@@ -194,23 +186,6 @@ pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: RaftStoreProxyPtr) -> R
     }
 }
 
-pub extern "C" fn ffi_is_encryption_enabled(proxy_ptr: RaftStoreProxyPtr) -> u8 {
-    unsafe { proxy_ptr.as_ref().key_manager.is_some().into() }
-}
-
-pub extern "C" fn ffi_encryption_method(
-    proxy_ptr: RaftStoreProxyPtr,
-) -> interfaces::root::DB::EncryptionMethod {
-    unsafe {
-        proxy_ptr
-            .as_ref()
-            .key_manager
-            .as_ref()
-            .map_or(EncryptionMethod::Plaintext, |x| x.encryption_method())
-            .into()
-    }
-}
-
 pub extern "C" fn ffi_batch_read_index(
     proxy_ptr: RaftStoreProxyPtr,
     view: CppStrVecView,
@@ -249,66 +224,6 @@ pub extern "C" fn ffi_batch_read_index(
             let r = ProtoMsgBaseBuff::new(r);
             (fn_insert_batch_read_index_resp.into_inner())(res, Pin::new(&r).into(), *region_id)
         }
-    }
-}
-
-#[repr(u32)]
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum RawRustPtrType {
-    None = 0,
-    ReadIndexTask = 1,
-    ArcFutureWaker = 2,
-    TimerTask = 3,
-}
-
-impl From<u32> for RawRustPtrType {
-    fn from(x: u32) -> Self {
-        unsafe { std::mem::transmute(x) }
-    }
-}
-
-// TODO remove this warn.
-#[allow(clippy::from_over_into)]
-impl Into<u32> for RawRustPtrType {
-    fn into(self) -> u32 {
-        unsafe { std::mem::transmute(self) }
-    }
-}
-
-pub extern "C" fn ffi_gc_rust_ptr(
-    data: RawVoidPtr,
-    type_: self::interfaces::root::DB::RawRustPtrType,
-) {
-    if data.is_null() {
-        return;
-    }
-    let type_: RawRustPtrType = type_.into();
-    match type_ {
-        RawRustPtrType::ReadIndexTask => unsafe {
-            drop(Box::from_raw(data as *mut read_index_helper::ReadIndexTask));
-        },
-        RawRustPtrType::ArcFutureWaker => unsafe {
-            drop(Box::from_raw(data as *mut utils::ArcNotifyWaker));
-        },
-        RawRustPtrType::TimerTask => unsafe {
-            drop(Box::from_raw(data as *mut utils::TimerTask));
-        },
-        _ => unreachable!(),
-    }
-}
-
-impl Default for RawRustPtr {
-    fn default() -> Self {
-        Self {
-            ptr: std::ptr::null_mut(),
-            type_: RawRustPtrType::None.into(),
-        }
-    }
-}
-
-impl RawRustPtr {
-    pub fn is_null(&self) -> bool {
-        self.ptr.is_null()
     }
 }
 
@@ -402,223 +317,6 @@ pub extern "C" fn ffi_poll_read_index_task(
     }
 }
 
-impl From<EncryptionMethod> for interfaces::root::DB::EncryptionMethod {
-    fn from(o: EncryptionMethod) -> Self {
-        unsafe { std::mem::transmute(o) }
-    }
-}
-
-impl FileEncryptionInfoRaw {
-    fn new(res: FileEncryptionRes) -> Self {
-        FileEncryptionInfoRaw {
-            res,
-            method: EncryptionMethod::Unknown.into(),
-            key: std::ptr::null_mut(),
-            iv: std::ptr::null_mut(),
-            error_msg: std::ptr::null_mut(),
-        }
-    }
-
-    fn error(error_msg: RawCppStringPtr) -> Self {
-        FileEncryptionInfoRaw {
-            res: FileEncryptionRes::Error,
-            method: EncryptionMethod::Unknown.into(),
-            key: std::ptr::null_mut(),
-            iv: std::ptr::null_mut(),
-            error_msg,
-        }
-    }
-
-    fn from(f: FileEncryptionInfo) -> Self {
-        FileEncryptionInfoRaw {
-            res: FileEncryptionRes::Ok,
-            method: f.method.into(),
-            key: get_engine_store_server_helper().gen_cpp_string(&f.key),
-            iv: get_engine_store_server_helper().gen_cpp_string(&f.iv),
-            error_msg: std::ptr::null_mut(),
-        }
-    }
-}
-
-pub extern "C" fn ffi_handle_get_file(
-    proxy_ptr: RaftStoreProxyPtr,
-    name: BaseBuffView,
-) -> FileEncryptionInfoRaw {
-    unsafe {
-        proxy_ptr.as_ref().key_manager.as_ref().map_or(
-            FileEncryptionInfoRaw::new(FileEncryptionRes::Disabled),
-            |key_manager| {
-                let p = key_manager.get_file(std::str::from_utf8_unchecked(name.to_slice()));
-                p.map_or_else(
-                    |e| {
-                        FileEncryptionInfoRaw::error(
-                            get_engine_store_server_helper().gen_cpp_string(
-                                format!("Encryption key manager get file failure: {}", e).as_ref(),
-                            ),
-                        )
-                    },
-                    FileEncryptionInfoRaw::from,
-                )
-            },
-        )
-    }
-}
-
-pub extern "C" fn ffi_handle_new_file(
-    proxy_ptr: RaftStoreProxyPtr,
-    name: BaseBuffView,
-) -> FileEncryptionInfoRaw {
-    unsafe {
-        proxy_ptr.as_ref().key_manager.as_ref().map_or(
-            FileEncryptionInfoRaw::new(FileEncryptionRes::Disabled),
-            |key_manager| {
-                let p = key_manager.new_file(std::str::from_utf8_unchecked(name.to_slice()));
-                p.map_or_else(
-                    |e| {
-                        FileEncryptionInfoRaw::error(
-                            get_engine_store_server_helper().gen_cpp_string(
-                                format!("Encryption key manager new file failure: {}", e).as_ref(),
-                            ),
-                        )
-                    },
-                    FileEncryptionInfoRaw::from,
-                )
-            },
-        )
-    }
-}
-
-pub extern "C" fn ffi_handle_delete_file(
-    proxy_ptr: RaftStoreProxyPtr,
-    name: BaseBuffView,
-) -> FileEncryptionInfoRaw {
-    unsafe {
-        proxy_ptr.as_ref().key_manager.as_ref().map_or(
-            FileEncryptionInfoRaw::new(FileEncryptionRes::Disabled),
-            |key_manager| {
-                let p = key_manager.delete_file(std::str::from_utf8_unchecked(name.to_slice()));
-                p.map_or_else(
-                    |e| {
-                        FileEncryptionInfoRaw::error(
-                            get_engine_store_server_helper().gen_cpp_string(
-                                format!("Encryption key manager delete file failure: {}", e)
-                                    .as_ref(),
-                            ),
-                        )
-                    },
-                    |_| FileEncryptionInfoRaw::new(FileEncryptionRes::Ok),
-                )
-            },
-        )
-    }
-}
-
-pub extern "C" fn ffi_handle_link_file(
-    proxy_ptr: RaftStoreProxyPtr,
-    src: BaseBuffView,
-    dst: BaseBuffView,
-) -> FileEncryptionInfoRaw {
-    unsafe {
-        proxy_ptr.as_ref().key_manager.as_ref().map_or(
-            FileEncryptionInfoRaw::new(FileEncryptionRes::Disabled),
-            |key_manager| {
-                let p = key_manager.link_file(
-                    std::str::from_utf8_unchecked(src.to_slice()),
-                    std::str::from_utf8_unchecked(dst.to_slice()),
-                );
-                p.map_or_else(
-                    |e| {
-                        FileEncryptionInfoRaw::error(
-                            get_engine_store_server_helper().gen_cpp_string(
-                                format!("Encryption key manager link file failure: {}", e).as_ref(),
-                            ),
-                        )
-                    },
-                    |_| FileEncryptionInfoRaw::new(FileEncryptionRes::Ok),
-                )
-            },
-        )
-    }
-}
-
-impl SSTReaderPtr {
-    unsafe fn as_mut_lock(&mut self) -> &mut LockCFFileReader {
-        &mut *(self.inner as *mut LockCFFileReader)
-    }
-
-    unsafe fn as_mut(&mut self) -> &mut SSTFileReader {
-        &mut *(self.inner as *mut SSTFileReader)
-    }
-}
-
-impl From<RawVoidPtr> for SSTReaderPtr {
-    fn from(pre: RawVoidPtr) -> Self {
-        Self { inner: pre }
-    }
-}
-
-unsafe extern "C" fn ffi_make_sst_reader(
-    view: SSTView,
-    proxy_ptr: RaftStoreProxyPtr,
-) -> SSTReaderPtr {
-    let path = std::str::from_utf8_unchecked(view.path.to_slice());
-    let key_manager = &proxy_ptr.as_ref().key_manager;
-    match view.type_ {
-        ColumnFamilyType::Lock => {
-            LockCFFileReader::ffi_get_cf_file_reader(path, key_manager.as_ref()).into()
-        }
-        _ => SSTFileReader::ffi_get_cf_file_reader(path, key_manager.clone()).into(),
-    }
-}
-
-unsafe extern "C" fn ffi_sst_reader_remained(
-    mut reader: SSTReaderPtr,
-    type_: ColumnFamilyType,
-) -> u8 {
-    match type_ {
-        ColumnFamilyType::Lock => reader.as_mut_lock().ffi_remained(),
-        _ => reader.as_mut().ffi_remained(),
-    }
-}
-
-unsafe extern "C" fn ffi_sst_reader_key(
-    mut reader: SSTReaderPtr,
-    type_: ColumnFamilyType,
-) -> BaseBuffView {
-    match type_ {
-        ColumnFamilyType::Lock => reader.as_mut_lock().ffi_key(),
-        _ => reader.as_mut().ffi_key(),
-    }
-}
-
-unsafe extern "C" fn ffi_sst_reader_val(
-    mut reader: SSTReaderPtr,
-    type_: ColumnFamilyType,
-) -> BaseBuffView {
-    match type_ {
-        ColumnFamilyType::Lock => reader.as_mut_lock().ffi_val(),
-        _ => reader.as_mut().ffi_val(),
-    }
-}
-
-unsafe extern "C" fn ffi_sst_reader_next(mut reader: SSTReaderPtr, type_: ColumnFamilyType) {
-    match type_ {
-        ColumnFamilyType::Lock => reader.as_mut_lock().ffi_next(),
-        _ => reader.as_mut().ffi_next(),
-    }
-}
-
-unsafe extern "C" fn ffi_gc_sst_reader(reader: SSTReaderPtr, type_: ColumnFamilyType) {
-    match type_ {
-        ColumnFamilyType::Lock => {
-            drop(Box::from_raw(reader.inner as *mut LockCFFileReader));
-        }
-        _ => {
-            drop(Box::from_raw(reader.inner as *mut SSTFileReader));
-        }
-    }
-}
-
 impl RaftStoreProxyFFIHelper {
     pub fn new(proxy: &RaftStoreProxy) -> Self {
         RaftStoreProxyFFIHelper {
@@ -647,185 +345,6 @@ impl RaftStoreProxyFFIHelper {
             fn_make_timer_task: Some(ffi_make_timer_task),
             fn_poll_timer_task: Some(ffi_poll_timer_task),
             fn_get_region_local_state: Some(ffi_get_region_local_state),
-        }
-    }
-}
-
-pub struct SSTFileReader<'a> {
-    iter: RefCell<Option<RocksSstIterator<'a>>>,
-    remained: RefCell<bool>,
-    inner: RocksSstReader,
-}
-
-impl<'a> SSTFileReader<'a> {
-    fn ffi_get_cf_file_reader(path: &str, key_manager: Option<Arc<DataKeyManager>>) -> RawVoidPtr {
-        let env = get_env(key_manager, None).unwrap();
-        let sst_reader_res = RocksSstReader::open_with_env(path, Some(env));
-        if let Err(ref e) = sst_reader_res {
-            tikv_util::error!("Can not open sst file {:?}", e);
-        }
-        let sst_reader = sst_reader_res.unwrap();
-        sst_reader.verify_checksum().unwrap();
-        if let Err(e) = sst_reader.verify_checksum() {
-            tikv_util::error!("verify_checksum sst file error {:?}", e);
-            panic!("verify_checksum sst file error {:?}", e);
-        }
-        let b = Box::new(SSTFileReader {
-            iter: RefCell::new(None),
-            remained: RefCell::new(false),
-            inner: sst_reader,
-        });
-        // Can't call `create_iter` due to self-referencing.
-        Box::into_raw(b) as *mut _
-    }
-
-    pub fn create_iter(&'a self) {
-        let _ = self.iter.borrow_mut().insert(
-            self.inner
-                .iter(IterOptions::default())
-                .expect("fail gen iter"),
-        );
-        *self.remained.borrow_mut() = self
-            .iter
-            .borrow_mut()
-            .as_mut()
-            .expect("fail get iter")
-            .seek_to_first()
-            .unwrap();
-    }
-
-    pub fn ffi_remained(&'a self) -> u8 {
-        if self.iter.borrow().is_none() {
-            self.create_iter();
-        }
-        *self.remained.borrow() as u8
-    }
-
-    pub fn ffi_key(&'a self) -> BaseBuffView {
-        if self.iter.borrow().is_none() {
-            self.create_iter();
-        }
-        let b = self.iter.borrow();
-        let iter = b.as_ref().unwrap();
-        let ori_key = keys::origin_key(iter.key());
-        ori_key.into()
-    }
-
-    pub fn ffi_val(&'a self) -> BaseBuffView {
-        if self.iter.borrow().is_none() {
-            self.create_iter();
-        }
-        let b = self.iter.borrow();
-        let iter = b.as_ref().unwrap();
-        let val = iter.value();
-        val.into()
-    }
-
-    pub fn ffi_next(&'a mut self) {
-        if self.iter.borrow().is_none() {
-            self.create_iter();
-        }
-        let mut b = self.iter.borrow_mut();
-        let iter = b.as_mut().unwrap();
-        *self.remained.borrow_mut() = iter.next().unwrap();
-    }
-}
-
-pub fn name_to_cf(cf: &str) -> ColumnFamilyType {
-    if cf.is_empty() {
-        return ColumnFamilyType::Default;
-    }
-    if cf == CF_LOCK {
-        ColumnFamilyType::Lock
-    } else if cf == CF_WRITE {
-        ColumnFamilyType::Write
-    } else if cf == CF_DEFAULT {
-        ColumnFamilyType::Default
-    } else {
-        unreachable!()
-    }
-}
-
-#[derive(Default)]
-pub struct WriteCmds {
-    keys: Vec<BaseBuffView>,
-    vals: Vec<BaseBuffView>,
-    cmd_type: Vec<WriteCmdType>,
-    cf: Vec<ColumnFamilyType>,
-}
-
-impl WriteCmds {
-    pub fn with_capacity(cap: usize) -> WriteCmds {
-        WriteCmds {
-            keys: Vec::<BaseBuffView>::with_capacity(cap),
-            vals: Vec::<BaseBuffView>::with_capacity(cap),
-            cmd_type: Vec::<WriteCmdType>::with_capacity(cap),
-            cf: Vec::<ColumnFamilyType>::with_capacity(cap),
-        }
-    }
-
-    pub fn new() -> WriteCmds {
-        WriteCmds::default()
-    }
-
-    pub fn push(&mut self, key: &[u8], val: &[u8], cmd_type: WriteCmdType, cf: ColumnFamilyType) {
-        self.keys.push(key.into());
-        self.vals.push(val.into());
-        self.cmd_type.push(cmd_type);
-        self.cf.push(cf);
-    }
-
-    pub fn len(&self) -> usize {
-        self.cmd_type.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    fn gen_view(&self) -> WriteCmdsView {
-        WriteCmdsView {
-            keys: self.keys.as_ptr(),
-            vals: self.vals.as_ptr(),
-            cmd_types: self.cmd_type.as_ptr(),
-            cmd_cf: self.cf.as_ptr(),
-            len: self.cmd_type.len() as u64,
-        }
-    }
-}
-
-impl BaseBuffView {
-    pub fn to_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.data as *const _, self.len as usize) }
-    }
-}
-
-impl RaftCmdHeader {
-    pub fn new(region_id: u64, index: u64, term: u64) -> Self {
-        RaftCmdHeader {
-            region_id,
-            index,
-            term,
-        }
-    }
-}
-
-pub struct ProtoMsgBaseBuff {
-    data: Vec<u8>,
-}
-
-impl ProtoMsgBaseBuff {
-    pub fn new<T: protobuf::Message>(msg: &T) -> Self {
-        ProtoMsgBaseBuff {
-            data: msg.write_to_bytes().unwrap(),
-        }
-    }
-}
-
-impl From<Pin<&ProtoMsgBaseBuff>> for BaseBuffView {
-    fn from(p: Pin<&ProtoMsgBaseBuff>) -> Self {
-        Self {
-            data: p.data.as_ptr() as *const _,
-            len: p.data.len() as u64,
         }
     }
 }
@@ -879,26 +398,6 @@ pub fn gen_engine_store_server_helper(
 pub unsafe fn init_engine_store_server_helper(engine_store_server_helper: *const u8) {
     let ptr = &ENGINE_STORE_SERVER_HELPER_PTR as *const _ as *mut _;
     *ptr = engine_store_server_helper;
-}
-
-fn into_sst_views(snaps: Vec<(&[u8], ColumnFamilyType)>) -> Vec<SSTView> {
-    let mut snaps_view = vec![];
-    for (path, cf) in snaps {
-        snaps_view.push(SSTView {
-            type_: cf,
-            path: path.into(),
-        })
-    }
-    snaps_view
-}
-
-impl From<Pin<&Vec<SSTView>>> for SSTViewVec {
-    fn from(snaps_view: Pin<&Vec<SSTView>>) -> Self {
-        Self {
-            views: snaps_view.as_ptr(),
-            len: snaps_view.len() as u64,
-        }
-    }
 }
 
 unsafe impl Sync for EngineStoreServerHelper {}
@@ -1156,49 +655,6 @@ impl EngineStoreServerHelper {
                 self_safe_ts,
                 leader_safe_ts,
             )
-        }
-    }
-}
-
-#[allow(clippy::clone_on_copy)]
-impl Clone for SSTReaderPtr {
-    fn clone(&self) -> SSTReaderPtr {
-        SSTReaderPtr {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-#[allow(clippy::clone_on_copy)]
-impl Clone for BaseBuffView {
-    fn clone(&self) -> BaseBuffView {
-        BaseBuffView {
-            data: self.data.clone(),
-            len: self.len.clone(),
-        }
-    }
-}
-
-#[allow(clippy::clone_on_copy)]
-impl Clone for SSTView {
-    fn clone(&self) -> SSTView {
-        SSTView {
-            type_: self.type_.clone(),
-            path: self.path.clone(),
-        }
-    }
-}
-
-#[allow(clippy::clone_on_copy)]
-impl Clone for SSTReaderInterfaces {
-    fn clone(&self) -> SSTReaderInterfaces {
-        SSTReaderInterfaces {
-            fn_get_sst_reader: self.fn_get_sst_reader.clone(),
-            fn_remained: self.fn_remained.clone(),
-            fn_key: self.fn_key.clone(),
-            fn_value: self.fn_value.clone(),
-            fn_next: self.fn_next.clone(),
-            fn_gc: self.fn_gc.clone(),
         }
     }
 }

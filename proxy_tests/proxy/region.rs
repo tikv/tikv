@@ -2,7 +2,6 @@
 use std::iter::FromIterator;
 
 use collections::HashSet;
-use raft::eraftpb::Entry;
 
 use crate::proxy::*;
 
@@ -228,7 +227,7 @@ fn test_add_absent_learner_peer_by_joint() {
 }
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
-use raftstore::store::{write_initial_apply_state, write_initial_raft_state, RAFT_INIT_LOG_INDEX};
+use raftstore::store::{write_initial_apply_state, write_initial_raft_state};
 
 pub fn prepare_bootstrap_cluster_with(
     engines: &Engines<impl KvEngine, impl RaftEngine>,

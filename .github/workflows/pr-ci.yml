@@ -30,6 +30,7 @@ jobs:
         uses: arduino/setup-protoc@v1
         with:
           version: '3.8.0'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: install rust
         if: steps.cache-cargo.outputs.cache-hit != 'true'
         run: |

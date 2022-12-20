@@ -1,7 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::DerefMut;
-
 use futures::executor::block_on;
 use tikv_util::time::Duration;
 use txn_types::WriteBatchFlags;
