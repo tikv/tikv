@@ -1045,7 +1045,7 @@ impl ConfigManager for RaftstoreConfigManager {
                         );
                     } else if cfg.store_io_pool_size > 0 && *resized_io_size == 0 {
                         return Err(
-                            "ASYNC mode, not allowed to resize the size of store-io-pool-size"
+                            "ASYNC mode, not allowed to be set to SYNC mode by resizing store-io-pool-size to 0"
                                 .into(),
                         );
                     }

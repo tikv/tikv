@@ -162,11 +162,13 @@ where
             return false;
         }
         let async_io_pool_size = ctx.write_senders().capacity();
-        if async_io_pool_size <= 1 {
-            self.writer_id = 0;
-            return true;
-        }
         if last_unpersisted.is_none() {
+            // Only when there exists no unpersisted messages, can we directly send
+            // messages to the only writer.
+            if async_io_pool_size <= 1 {
+                self.writer_id = 0;
+                return true;
+            }
             // If no previous pending ready, we can randomly select a new writer worker.
             self.writer_id = rand::random::<usize>() % async_io_pool_size;
             self.next_retry_time =

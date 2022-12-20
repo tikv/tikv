@@ -920,10 +920,6 @@ where
         writer_meta: StoreWritersMeta<EK, ER, T, N>,
     ) -> Result<()> {
         let current_size = self.io_capacity.load(Ordering::Relaxed);
-        if current_size == 0 {
-            warn!("SYNC mode, not allowed to resize the size of store writers.");
-            return Ok(());
-        }
         // TODO: if capacity was reset to `0`, that is, no async-io, we should find a
         // elegant way to initialize the sync_io after we release all async-io threads
         // and mailboxes.
