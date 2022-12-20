@@ -7,8 +7,8 @@
 //! Checks for these requirements:
 //!
 //! - Validate the request. (`Peer::validate_prepare_merge_command`)
-//! - Log gap between source region leader and peers is not too large. We need
-//!   to catch up these logs before starting the merge.
+//! - Log gap between source region leader and peers is not too large. This is
+//!   because these logs need to be embeded in the later `CommitMerge` command.
 //! - Logs that aren't fully committed (to all peers) does not contains
 //!   `CompactLog` or certain admin commands.
 //!
@@ -320,7 +320,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(())
     }
 
-    /// Returns (minimal matched, minimal committed_index)
+    /// Returns (minimal matched, minimal committed)
     fn get_min_progress(&self) -> Result<(u64, u64)> {
         let (mut min_m, mut min_c) = (None, None);
         if let Some(progress) = self.raft_group().status().progress {
@@ -389,7 +389,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
 
         self.pending_merge_state = Some(res.state);
-        let state = self.pending_merge_state.as_ref().unwrap();
 
         self.update_merge_progress_on_ready_prepare_merge();
         self.on_merge_check_tick();

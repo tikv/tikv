@@ -4,21 +4,22 @@
 //!
 //! ## Propose
 //!
-//! The proposal is initiated by the source region peer. It periodically checks
-//! for the freshness of local target region peer (`Peer::on_check_merge`). Once
-//! the target peer is up-to-date, it sends a `CommitMerge` command to local
-//! target region peer. (For simplicity, we send this message regardless of
-//! whether the target peer is leader.) The command will also carry some source
-//! region logs that are potentially not yet committed by certain peers.
+//! The proposal is initiated by the source region. Each source peer
+//! periodically checks for the freshness of local target region peer
+//! (`Peer::on_merge_check_tick`). The source peer will send a `CommitMerge`
+//! command to the target peer once it is up-to-date. (For simplicity, we send
+//! this message regardless of whether the target peer is leader.) The command
+//! will also carry some source region logs that may not be committed by some
+//! peers.
 //!
 //! ## Apply (`Apply::apply_commit_merge`)
 //!
-//! Firstly, target region applies the `CommitMerge` command without
-//! changing region states. Instead it redirects the log entries from source
-//! region, as a `CatchUpLogs` message, to the local source region peer. When
-//! the source region peer has applied all logs up to the prior `PrepareMerge`
-//! command, it will notify its [`Apply`] FSM to destroy itself and wake up
-//! target peer (`Peer::update_merge_progress_on_ready_prepare_merge`,
+//! Firstly, target region applies the `CommitMerge` command without changing
+//! region states. Instead it redirects the log entries in it, as a
+//! `CatchUpLogs` message, to the local source region peer. When the source
+//! region peer has applied all logs up to the prior `PrepareMerge` command, it
+//! will notify its [`Apply`] FSM to destroy itself and wake up target peer
+//! (`Peer::update_merge_progress_on_ready_prepare_merge`,
 //! `Apply::logs_up_to_date_for_merge`).
 //!
 //! The target [`Apply`] FSM is able to confirm that the local source region
