@@ -3053,6 +3053,11 @@ where
         // index should be queued. If witness receives a voter_replicated_index
         // that is larger than the pending compact index, logs can be deleted.
         if self.peer.is_witness && voter_replicated_index < compact_index {
+            self.pending_cmds.push_compact(PendingCmd::new(
+                compact_index,
+                compact_term,
+                Callback::None,
+            ));
             match self.pending_cmds.pop_compact(voter_replicated_index) {
                 Some(cmd) => {
                     compact_index = cmd.index;
@@ -3065,11 +3070,6 @@ where
                         "peer_id" => self.id(),
                         "command" => ?req.get_compact_log()
                     );
-                    self.pending_cmds.push_compact(PendingCmd::new(
-                        compact_index,
-                        compact_term,
-                        Callback::None,
-                    ));
                     return Ok((resp, ApplyResult::Res(ExecResult::PendingCompactCmd)));
                 }
             }
@@ -4063,8 +4063,9 @@ where
         match res {
             Ok(res) => {
                 if let Some(res) = res {
+                    ctx.prepare_for(&mut self.delegate);
                     self.delegate.write_apply_state(ctx.kv_wb_mut());
-                    ctx.commit(&mut self.delegate);
+                    ctx.commit_opt(&mut self.delegate, true);
                     ctx.notifier
                         .notify_one(self.delegate.region_id(), PeerMsg::ApplyRes { res });
                 }
