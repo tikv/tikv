@@ -270,7 +270,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.on_apply_res_split(ctx, res)
                 }
                 AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
-                AdminCmdResult::CompactLog(res) => self.on_ready_compact_log(ctx, res),
+                AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
             }
         }
 

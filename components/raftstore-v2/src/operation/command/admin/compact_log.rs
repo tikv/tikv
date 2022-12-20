@@ -49,48 +49,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.propose_with_ctx(store_ctx, data, vec![])
     }
 
-    pub fn on_ready_compact_log<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        res: CompactLogResult,
-    ) {
-        let first_index = self.entry_storage().first_index();
-        if res.compact_index <= first_index {
-            debug!(
-                self.logger,
-                "compact index <= first index, no need to compact";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
-                "compact_index" => res.compact_index,
-                "first_index" => first_index,
-            );
-            return;
-        }
-        // TODO: check is_merging
-        // compact failure is safe to be omitted, no need to assert.
-        if res.compact_index <= self.entry_storage().truncated_index()
-            || res.compact_index > self.entry_storage().applied_index()
-        {
-            return;
-        }
-
-        // TODO: check entry_cache_warmup_state
-        self.schedule_raft_log_gc(store_ctx, res.compact_index);
-        self.entry_storage_mut()
-            .compact_entry_cache(res.compact_index);
-        self.storage_mut()
-            .cancel_generating_snap(Some(res.compact_index));
-
-        self.entry_storage_mut()
-            .apply_state_mut()
-            .mut_truncated_state()
-            .set_index(res.compact_index);
-        self.entry_storage_mut()
-            .apply_state_mut()
-            .mut_truncated_state()
-            .set_term(res.compact_term);
-    }
-
     pub fn schedule_raft_log_gc<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -138,5 +96,49 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 compact_term: req.get_compact_log().get_compact_term(),
             }),
         ))
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn on_apply_res_compact_log<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        res: CompactLogResult,
+    ) {
+        let first_index = self.entry_storage().first_index();
+        if res.compact_index <= first_index {
+            debug!(
+                self.logger,
+                "compact index <= first index, no need to compact";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+                "compact_index" => res.compact_index,
+                "first_index" => first_index,
+            );
+            return;
+        }
+        // TODO: check is_merging
+        // compact failure is safe to be omitted, no need to assert.
+        if res.compact_index <= self.entry_storage().truncated_index()
+            || res.compact_index > self.entry_storage().applied_index()
+        {
+            return;
+        }
+
+        // TODO: check entry_cache_warmup_state
+        self.schedule_raft_log_gc(store_ctx, res.compact_index);
+        self.entry_storage_mut()
+            .compact_entry_cache(res.compact_index);
+        self.storage_mut()
+            .cancel_generating_snap(Some(res.compact_index));
+
+        self.entry_storage_mut()
+            .apply_state_mut()
+            .mut_truncated_state()
+            .set_index(res.compact_index);
+        self.entry_storage_mut()
+            .apply_state_mut()
+            .mut_truncated_state()
+            .set_term(res.compact_term);
     }
 }

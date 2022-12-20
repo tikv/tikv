@@ -44,6 +44,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    // Mirrors v1::on_raft_gc_log_tick.
     fn raft_log_gc_imp<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         // As leader, we would not keep caches for the peers that didn't response
         // heartbeat in the last few seconds. That happens probably because
