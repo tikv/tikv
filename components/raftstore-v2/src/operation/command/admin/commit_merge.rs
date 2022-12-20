@@ -41,7 +41,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn update_merge_progress_on_ready_prepare_merge(&mut self) {
-        assert!(self.pending_merge_state.is_some());
+        assert!(self.has_pending_merge_state());
         // TODO
     }
 }

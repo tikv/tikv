@@ -148,7 +148,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return Err(e);
         }
         if self.has_pending_merge_state() && admin_type != Some(AdminCmdType::RollbackMerge)
-            || self.prepare_merge_fence.is_some() && admin_type != Some(AdminCmdType::PrepareMerge)
+            || self.has_prepare_merge_fence() && admin_type != Some(AdminCmdType::PrepareMerge)
         {
             return Err(Error::ProposalInMergingMode(self.region_id()));
         }

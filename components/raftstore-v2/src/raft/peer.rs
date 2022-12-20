@@ -19,6 +19,7 @@ use kvproto::{
     raft_serverpb::{MergeState, RegionLocalState},
 };
 use pd_client::BucketStat;
+use protobuf::Message;
 use raft::{RawNode, StateRole};
 use raftstore::store::{
     util::{Lease, RegionReadProgress},
@@ -90,8 +91,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Thanks to the fence, we can ensure at the time of lock transfer, locks
     /// are either removed (when applying logs) or won't be removed before
     /// merge (the proposals to remove them are rejected).
-    pub prepare_merge_fence: Option<(u64, RaftCmdRequest)>,
-    pub pending_merge_state: Option<MergeState>,
+    prepare_merge_fence: Option<(u64, Vec<u8>)>,
+    pending_merge_state: Option<MergeState>,
 
     pending_ticks: Vec<PeerTick>,
 
@@ -504,13 +505,45 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn has_prepare_merge_fence(&self) -> bool {
+        self.prepare_merge_fence.is_some()
+    }
+
+    #[inline]
+    pub fn install_prepare_merge_fence(&mut self, index: u64, req: &RaftCmdRequest) {
+        self.prepare_merge_fence = Some((index, req.write_to_bytes().unwrap()));
+    }
+
+    /// On success, returns the pending command as bytes (if there's one). On
+    /// failure, returns the offending fence index.
+    #[inline]
+    pub fn release_or_refresh_prepare_merge_fence(
+        &mut self,
+        applied: u64,
+        req: Option<&RaftCmdRequest>,
+    ) -> std::result::Result<Option<Vec<u8>>, u64> {
+        if let Some((idx, cmd)) = self.prepare_merge_fence.as_mut() {
+            if *idx >= applied {
+                Ok(self.prepare_merge_fence.take().map(|f| f.1))
+            } else {
+                if let Some(req) = req {
+                    *cmd = req.write_to_bytes().unwrap();
+                }
+                Err(*idx)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
     pub fn has_pending_merge_state(&self) -> bool {
         self.pending_merge_state.is_some()
     }
 
     #[inline]
-    pub fn set_pending_merge_state(&mut self, s: MergeState) {
-        self.pending_merge_state = Some(s);
+    pub fn set_pending_merge_state(&mut self, s: Option<MergeState>) {
+        self.pending_merge_state = s;
     }
 
     pub fn serving(&self) -> bool {

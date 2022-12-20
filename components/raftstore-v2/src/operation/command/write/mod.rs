@@ -52,11 +52,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        if self.has_pending_merge_state() || self.prepare_merge_fence.is_some() {
-            let resp = cmd_resp::new_error(crate::Error::ProposalInMergingMode(self.region_id()));
-            ch.report_error(resp);
-            return;
-        }
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_writes(ctx);
         if let Some(conflict) = self.proposal_control_mut().check_conflict(None) {
