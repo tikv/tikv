@@ -254,6 +254,7 @@ fn test_serde_custom_tikv_config() {
         max_snapshot_file_raw_size: ReadableSize::gb(10),
         unreachable_backoff: ReadableDuration::secs(111),
         check_peers_availability_interval: ReadableDuration::secs(30),
+        check_request_snapshot_interval: ReadableDuration::minutes(1),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
