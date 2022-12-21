@@ -98,6 +98,8 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     /// Check whether a database exists at a given path
     fn exists(path: &str) -> bool;
 
+    fn locked(path: &str) -> Result<bool>;
+
     /// Dump stats about the database into a string.
     ///
     /// For debugging. The format and content is unspecified.

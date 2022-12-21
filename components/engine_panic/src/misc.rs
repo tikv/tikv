@@ -64,6 +64,10 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn locked(path: &str) -> Result<bool> {
+        panic!()
+    }
+
     fn dump_stats(&self) -> Result<String> {
         panic!()
     }

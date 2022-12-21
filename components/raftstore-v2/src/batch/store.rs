@@ -42,7 +42,7 @@ use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::pd,
+    worker::{pd, tablet_gc},
     Error, Result,
 };
 
@@ -76,6 +76,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
 
     pub snap_mgr: TabletSnapManager,
     pub pd_scheduler: Scheduler<pd::Task>,
+    pub tablet_gc_scheduler: Scheduler<tablet_gc::Task>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -224,6 +225,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     router: StoreRouter<EK, ER>,
     read_scheduler: Scheduler<ReadTask<EK>>,
     pd_scheduler: Scheduler<pd::Task>,
+    tablet_gc_scheduler: Scheduler<tablet_gc::Task>,
     write_senders: WriteSenders<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
@@ -241,6 +243,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         router: StoreRouter<EK, ER>,
         read_scheduler: Scheduler<ReadTask<EK>>,
         pd_scheduler: Scheduler<pd::Task>,
+        tablet_gc_scheduler: Scheduler<tablet_gc::Task>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta>>,
@@ -265,6 +268,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             router,
             read_scheduler,
             pd_scheduler,
+            tablet_gc_scheduler,
             apply_pool,
             logger,
             write_senders: store_writers.senders(),
@@ -345,6 +349,7 @@ where
             self_disk_usage: DiskUsage::Normal,
             snap_mgr: self.snap_mgr.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
+            tablet_gc_scheduler: self.tablet_gc_scheduler.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -357,6 +362,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
     async_read_worker: Worker,
     pd_worker: Worker,
+    tablet_gc_worker: Worker,
     store_writers: StoreWriters<EK, ER>,
 }
 
@@ -365,6 +371,7 @@ impl<EK: KvEngine, ER: RaftEngine> Default for Workers<EK, ER> {
         Self {
             async_read_worker: Worker::new("async-read-worker"),
             pd_worker: Worker::new("pd-worker"),
+            tablet_gc_worker: Worker::new("tablet-gc-worker"),
             store_writers: StoreWriters::default(),
         }
     }
@@ -432,6 +439,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
+        let tablet_gc_scheduler = workers.tablet_gc_worker.start(
+            "tablet-gc-worker",
+            tablet_gc::Runner::new(tablet_registry.clone(), self.logger.clone()),
+        );
+
         let builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
@@ -441,6 +453,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             router.clone(),
             read_scheduler,
             pd_scheduler,
+            tablet_gc_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
             store_meta.clone(),

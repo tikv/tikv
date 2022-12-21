@@ -44,13 +44,12 @@ impl<EK: Clone> CachedTablet<EK> {
         }
     }
 
-    pub fn set(&mut self, data: EK) {
-        self.version = {
-            let mut latest_data = self.latest.data.lock().unwrap();
-            *latest_data = Some(data.clone());
-            self.latest.version.fetch_add(1, Ordering::Relaxed) + 1
-        };
-        self.cache = Some(data);
+    /// Returns the old tablet.
+    pub fn set(&mut self, data: EK) -> Option<EK> {
+        self.cache = Some(data.clone());
+        let mut latest_data = self.latest.data.lock().unwrap();
+        self.version = self.latest.version.fetch_add(1, Ordering::Relaxed) + 1;
+        latest_data.replace(data)
     }
 
     /// Get the tablet from cache without checking if it's up to date.
@@ -178,7 +177,7 @@ impl<EK: Clone + Send + Sync> TabletFactory<EK> for SingletonFactory<EK> {
 struct TabletRegistryInner<EK> {
     // region_id, suffix -> tablet
     tablets: Mutex<HashMap<u64, CachedTablet<EK>>>,
-    tombstone: Mutex<Vec<(u64, u64)>>,
+    tombstone: Mutex<Vec<EK>>,
     factory: Box<dyn TabletFactory<EK>>,
     root: PathBuf,
 }
@@ -196,9 +195,6 @@ impl<EK> Clone for TabletRegistry<EK> {
         }
     }
 }
-
-unsafe impl<EK: Send> Send for TabletRegistry<EK> {}
-unsafe impl<EK: Send> Sync for TabletRegistry<EK> {}
 
 impl<EK> TabletRegistry<EK> {
     pub fn new(factory: Box<dyn TabletFactory<EK>>, path: impl Into<PathBuf>) -> Result<Self> {
@@ -275,13 +271,16 @@ impl<EK> TabletRegistry<EK> {
         }
         let tablet = self.tablets.factory.open_tablet(ctx, &path)?;
         let mut cached = self.get_or_default(id);
-        cached.set(tablet);
+        let old_tablet = cached.set(tablet);
+        if let Some(t) = old_tablet {
+            self.tablets.tombstone.lock().unwrap().push(t);
+        }
         Ok(cached)
     }
 
-    /// Destroy the tablet and its data
-    pub fn mark_tombstone(&self, id: u64, suffix: u64) {
-        self.tablets.tombstone.lock().unwrap().push((id, suffix));
+    #[inline]
+    pub fn take_tombstone_tablets(&self) -> Vec<EK> {
+        std::mem::take(&mut self.tablets.tombstone.lock().unwrap())
     }
 
     /// Loop over all opened tablets. Note, it's possible that the visited

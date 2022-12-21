@@ -259,6 +259,11 @@ impl MiscExt for RocksEngine {
         crate::util::db_exist(path)
     }
 
+    fn locked(path: &str) -> Result<bool> {
+        let env = rocksdb::Env::default();
+        env.is_db_locked(path).map_err(r2e)
+    }
+
     fn dump_stats(&self) -> Result<String> {
         const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
         const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
