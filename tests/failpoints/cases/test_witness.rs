@@ -167,3 +167,76 @@ fn test_pull_non_witness_availability() {
 fn test_push_non_witness_availability() {
     test_non_witness_availability("ignore schedule check non-witness availability tick");
 }
+
+// Test the case non-witness hasn't finish applying snapshot when receives read
+// request.
+#[test]
+fn test_non_witness_replica_read() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k0", b"v0");
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    // nonwitness -> witness
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
+
+    // witness -> nonwitness
+    fail::cfg("ignore request snapshot", "return").unwrap();
+    cluster
+        .pd_client
+        .switch_witnesses(region.get_id(), vec![peer_on_store3.get_id()], vec![false]);
+    std::thread::sleep(Duration::from_millis(100));
+    // as we ignore request snapshot, so snapshot should still not applied yet
+
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k0")],
+        false,
+    );
+    request.mut_header().set_peer(peer_on_store3.clone());
+    request.mut_header().set_replica_read(true);
+
+    let resp = cluster
+        .read(None, request, Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(
+        resp.get_header().get_error().get_recovery_in_progress(),
+        &kvproto::errorpb::RecoveryInProgress {
+            region_id: region.get_id(),
+            ..Default::default()
+        }
+    );
+
+    // start requesting snapshot and give enough time for applying snapshot to
+    // complete
+    fail::remove("ignore request snapshot");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k0")],
+        false,
+    );
+    request.mut_header().set_peer(peer_on_store3);
+    request.mut_header().set_replica_read(true);
+
+    let resp = cluster
+        .read(None, request, Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(resp.get_header().has_error(), false);
+}

@@ -894,6 +894,9 @@ where
     /// the same time period.
     pub wait_data: bool,
 
+    /// When the witness becomes non-witness, it need to actively request a
+    /// snapshot from the leader, but the request may fail, so we need to save
+    /// the request index for retrying.
     pub request_index: u64,
 
     /// Force leader state is only used in online recovery when the majority of
@@ -2563,6 +2566,7 @@ where
                 // i.e. call `RawNode::advance_apply_to`.
                 self.post_pending_read_index_on_replica(ctx);
                 // Resume `read_progress`
+                self.update_read_progress(ctx, ReadProgress::WaitData(false));
                 self.read_progress.resume();
                 // Update apply index to `last_applying_idx`
                 self.read_progress
@@ -2575,7 +2579,7 @@ where
                             self.last_applying_idx + 1,
                             self.get_store().commit_index() + 1,
                             NO_LIMIT,
-                            GetEntriesContext::empty(true),
+                            GetEntriesContext::empty(false),
                         ) {
                             Ok(entries) => {
                                 let commit_term =
@@ -3612,6 +3616,16 @@ where
             "progress" => ?progress,
         );
         reader.update(progress);
+    }
+
+    pub fn update_read_progress<T>(
+        &self,
+        ctx: &mut PollContext<EK, ER, T>,
+        progress: ReadProgress,
+    ) {
+        let mut meta = ctx.store_meta.lock().unwrap();
+        let reader = meta.readers.get_mut(&self.region_id).unwrap();
+        self.maybe_update_read_progress(reader, progress);
     }
 
     pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {

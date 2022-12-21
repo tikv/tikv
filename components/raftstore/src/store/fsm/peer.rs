@@ -6358,6 +6358,9 @@ where
                     let _ = self.fsm.peer.get_store().clear_data();
                     self.fsm.peer.raft_group.set_priority(-1);
                 } else {
+                    self.fsm
+                        .peer
+                        .update_read_progress(self.ctx, ReadProgress::WaitData(true));
                     self.fsm.peer.wait_data = true;
                     self.fsm.peer.request_index = sw.index;
                     self.on_request_snapshot_tick();

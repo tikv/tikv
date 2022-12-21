@@ -506,6 +506,9 @@ impl ReadDelegate {
             Progress::RegionBuckets(bucket_meta) => {
                 self.bucket_meta = Some(bucket_meta);
             }
+            Progress::WaitData(wait_data) => {
+                self.wait_data = wait_data;
+            }
         }
     }
 
@@ -631,6 +634,7 @@ pub enum Progress {
     AppliedTerm(u64),
     LeaderLease(RemoteLease),
     RegionBuckets(Arc<BucketMeta>),
+    WaitData(bool),
 }
 
 impl Progress {
@@ -652,6 +656,10 @@ impl Progress {
 
     pub fn region_buckets(bucket_meta: Arc<BucketMeta>) -> Progress {
         Progress::RegionBuckets(bucket_meta)
+    }
+
+    pub fn wait_data(wait_data: bool) -> Progress {
+        Progress::WaitData(wait_data)
     }
 }
 
