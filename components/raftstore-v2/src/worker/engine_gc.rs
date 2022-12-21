@@ -11,36 +11,41 @@ use engine_traits::{RaftEngine, RaftLogGcTask};
 use file_system::{IoType, WithIoType};
 use slog::{error, Logger};
 use thiserror::Error;
-use tikv_util::{
-    box_try,
-    worker::{Runnable, RunnableWithTimer},
-};
+use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 const MAX_GC_REGION_BATCH: usize = 512;
 
-pub struct Task {
-    region_id: u64,
-    start_idx: u64,
-    end_idx: u64,
+pub enum Task {
+    RaftLogGc {
+        region_id: u64,
+        start_idx: u64,
+        end_idx: u64,
+    },
 }
 
 impl Task {
-    pub fn gc(region_id: u64, start: u64, end: u64) -> Self {
-        Task {
+    pub fn raft_log_gc(region_id: u64, start_idx: u64, end_idx: u64) -> Self {
+        Task::RaftLogGc {
             region_id,
-            start_idx: start,
-            end_idx: end,
+            start_idx,
+            end_idx,
         }
     }
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "GC Raft Logs [region: {}, from: {}, to: {}]",
-            self.region_id, self.start_idx, self.end_idx,
-        )
+        match self {
+            Task::RaftLogGc {
+                region_id,
+                start_idx,
+                end_idx,
+            } => write!(
+                f,
+                "RaftLogGc [region: {}, from: {}, to: {}]",
+                region_id, start_idx, end_idx,
+            ),
+        }
     }
 }
 
@@ -52,7 +57,7 @@ enum Error {
 
 pub struct Runner<ER: RaftEngine> {
     raft_engine: ER,
-    tasks: Vec<Task>,
+    raft_log_gc_tasks: Vec<RaftLogGcTask>,
     gc_entries: Option<Sender<usize>>,
     logger: Logger,
 }
@@ -61,36 +66,19 @@ impl<ER: RaftEngine> Runner<ER> {
     pub fn new(raft_engine: ER, logger: Logger) -> Self {
         Self {
             raft_engine,
-            tasks: vec![],
+            raft_log_gc_tasks: vec![],
             gc_entries: None,
             logger,
         }
     }
 
     fn flush(&mut self) {
-        let tasks = self
-            .tasks
-            .drain(..)
-            .map(|task| RaftLogGcTask {
-                raft_group_id: task.region_id,
-                from: task.start_idx,
-                to: task.end_idx,
-            })
-            .collect();
-        match self.gc_raft_log(tasks) {
-            Ok(n) => self.report_collected(n),
+        let tasks = std::mem::take(&mut self.raft_log_gc_tasks);
+        match self.raft_engine.batch_gc(tasks) {
+            Ok(deleted) => self.report_collected(deleted),
             Err(e) => error!(self.logger, "failed to gc raft log"; "err" => ?e),
         }
-    }
-
-    /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log(&mut self, regions: Vec<RaftLogGcTask>) -> Result<usize, Error> {
-        fail::fail_point!("worker_gc_raft_log", |s| {
-            Ok(s.and_then(|s| s.parse().ok()).unwrap_or(0))
-        });
-        let deleted = box_try!(self.raft_engine.batch_gc(regions));
-        fail::fail_point!("worker_gc_raft_log_finished", |_| { Ok(deleted) });
-        Ok(deleted)
+        // TODO: clean up raft states.
     }
 
     fn report_collected(&self, collected: usize) {
@@ -108,9 +96,21 @@ where
 
     fn run(&mut self, task: Task) {
         let _io_type_guard = WithIoType::new(IoType::ForegroundWrite);
-        self.tasks.push(task);
-        if self.tasks.len() > MAX_GC_REGION_BATCH {
-            self.flush();
+        match task {
+            Task::RaftLogGc {
+                region_id,
+                start_idx,
+                end_idx,
+            } => {
+                self.raft_log_gc_tasks.push(RaftLogGcTask {
+                    raft_group_id: region_id,
+                    from: start_idx,
+                    to: end_idx,
+                });
+                if self.raft_log_gc_tasks.len() > MAX_GC_REGION_BATCH {
+                    self.flush();
+                }
+            }
         }
     }
 }
@@ -148,7 +148,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut runner = Runner {
             raft_engine: raft_db.clone(),
-            tasks: vec![],
+            raft_log_gc_tasks: vec![],
             gc_entries: Some(tx),
             logger: slog_global::borrow_global().new(o!()),
         };
@@ -164,10 +164,10 @@ mod tests {
         raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
 
         let tbls = vec![
-            (Task::gc(region_id, 0, 10), 10, (0, 10), (10, 100)),
-            (Task::gc(region_id, 0, 50), 40, (0, 50), (50, 100)),
-            (Task::gc(region_id, 50, 50), 0, (0, 50), (50, 100)),
-            (Task::gc(region_id, 50, 60), 10, (0, 60), (60, 100)),
+            (Task::raft_log_gc(region_id, 0, 10), 10, (0, 10), (10, 100)),
+            (Task::raft_log_gc(region_id, 0, 50), 40, (0, 50), (50, 100)),
+            (Task::raft_log_gc(region_id, 50, 50), 0, (0, 50), (50, 100)),
+            (Task::raft_log_gc(region_id, 50, 60), 10, (0, 60), (60, 100)),
         ];
 
         for (task, expected_collectd, not_exist_range, exist_range) in tbls {

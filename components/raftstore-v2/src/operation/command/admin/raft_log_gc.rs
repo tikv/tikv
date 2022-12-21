@@ -29,7 +29,7 @@ use crate::{
     operation::AdminCmdResult,
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerTick},
-    worker::raft_log_gc,
+    worker::engine_gc,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
@@ -255,13 +255,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         compact_index: u64,
     ) {
         // For raft-engine there's no need to set a meaningful first_index.
-        let task = raft_log_gc::Task::gc(self.region_id(), 0, compact_index);
+        let task = engine_gc::Task::raft_log_gc(self.region_id(), 0, compact_index);
         debug!(
             self.logger,
             "scheduling raft log gc task";
             "task" => %task,
         );
-        if let Err(e) = store_ctx.raft_log_gc_scheduler.schedule(task) {
+        if let Err(e) = store_ctx.engine_gc_scheduler.schedule(task) {
             error!(
                 self.logger,
                 "failed to schedule raft log gc task";
