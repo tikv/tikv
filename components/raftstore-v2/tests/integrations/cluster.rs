@@ -28,9 +28,9 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
-use raft::{eraftpb::MessageType, StateRole};
+use raft::eraftpb::MessageType;
 use raftstore::{
-    coprocessor::{RegionChangeEvent, RoleChange},
+    coprocessor::CoprocessorHost,
     store::{
         region_meta::{RegionLocalState, RegionMeta},
         Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
@@ -39,7 +39,7 @@ use raftstore::{
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
-    Bootstrap, LockManagerNotifier, SimpleWriteEncoder, StateStorage, StoreSystem,
+    Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
 use slog::{debug, o, Logger};
 use tempfile::TempDir;
@@ -47,6 +47,7 @@ use test_pd::mocker::Service;
 use tikv_util::{
     config::{ReadableDuration, VersionTrack},
     store::new_peer,
+    worker::Worker,
 };
 use txn_types::WriteBatchFlags;
 
@@ -224,6 +225,7 @@ pub struct RunningState {
     pub cfg: Arc<VersionTrack<Config>>,
     pub transport: TestTransport,
     snap_mgr: TabletSnapManager,
+    background: Worker,
 }
 
 impl RunningState {
@@ -278,6 +280,12 @@ impl RunningState {
         let store_meta = router.store_meta().clone();
         let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap());
         snap_mgr.init().unwrap();
+
+        let coprocessor_host = CoprocessorHost::new(
+            router.store_router().clone(),
+            raftstore::coprocessor::Config::default(),
+        );
+        let background = Worker::new("background");
         system
             .start(
                 store_id,
@@ -291,7 +299,8 @@ impl RunningState {
                 snap_mgr.clone(),
                 concurrency_manager,
                 causal_ts_provider,
-                Arc::new(DummyLockManagerObserver {}),
+                coprocessor_host,
+                background.clone(),
             )
             .unwrap();
 
@@ -303,6 +312,7 @@ impl RunningState {
             cfg,
             transport,
             snap_mgr,
+            background,
         };
         (TestRouter(router), state)
     }
@@ -311,6 +321,7 @@ impl RunningState {
 impl Drop for RunningState {
     fn drop(&mut self) {
         self.system.shutdown();
+        self.background.stop();
     }
 }
 
@@ -573,12 +584,4 @@ impl Drop for Cluster {
             node.stop();
         }
     }
-}
-
-struct DummyLockManagerObserver {}
-
-impl LockManagerNotifier for DummyLockManagerObserver {
-    fn on_region_changed(&self, _: &metapb::Region, _: RegionChangeEvent, _: StateRole) {}
-
-    fn on_role_change(&self, _: &metapb::Region, _: RoleChange) {}
 }

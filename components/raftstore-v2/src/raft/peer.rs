@@ -14,21 +14,21 @@ use engine_traits::{
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
-use raftstore::{
-    coprocessor::{RegionChangeEvent, RegionChangeReason},
-    store::{
-        util::{Lease, RegionReadProgress},
-        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-        ReadProgress, TxnExt, WriteTask,
-    },
+use raftstore::store::{
+    fsm::ApplyMetrics,
+    util::{Lease, RegionReadProgress},
+    Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
+    ReadProgress, TxnExt, WriteTask,
 };
 use slog::Logger;
 
 use super::storage::Storage;
 use crate::{
     batch::StoreContext,
-    fsm::{ApplyScheduler, LockManagerNotifier},
-    operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder},
+    fsm::ApplyScheduler,
+    operation::{
+        AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
+    },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
 };
@@ -70,9 +70,6 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
 
-    /// lead_transferee if this peer(leader) is in a leadership transferring.
-    lead_transferee: u64,
-
     /// region buckets.
     region_buckets: Option<BucketStat>,
     last_region_buckets: Option<BucketStat>,
@@ -88,6 +85,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     // Trace which peers have not finished split.
     split_trace: Vec<(u64, HashSet<u64>)>,
+    split_flow_control: SplitFlowControl,
 
     /// Apply related State changes that needs to be persisted to raft engine.
     ///
@@ -161,11 +159,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             proposal_control: ProposalControl::new(0),
-            lead_transferee: raft::INVALID_ID,
             pending_ticks: Vec::new(),
             split_trace: vec![],
             state_changes: None,
             flush_state,
+            split_flow_control: SplitFlowControl::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -199,10 +197,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
-        lock_manager_observer: &Arc<dyn LockManagerNotifier>,
+        // host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
-        reason: RegionChangeReason,
         tablet_index: u64,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -247,13 +244,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pessimistic_locks.version = self.region().get_region_epoch().get_version();
         }
 
-        if self.serving() {
-            lock_manager_observer.on_region_changed(
-                self.region(),
-                RegionChangeEvent::Update(reason),
-                self.get_role(),
-            );
-        }
+        // TODO: CoprocessorHost
     }
 
     #[inline]
@@ -351,6 +342,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.self_stat
     }
 
+    #[inline]
+    pub fn update_stat(&mut self, metrics: &ApplyMetrics) {
+        self.self_stat.written_bytes += metrics.written_bytes;
+        self.self_stat.written_keys += metrics.written_keys;
+    }
+
     /// Mark the peer has a ready so it will be checked at the end of every
     /// processing round.
     #[inline]
@@ -407,11 +404,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .iter()
             .find(|p| p.get_id() == peer_id)
             .cloned()
-    }
-
-    #[inline]
-    pub fn get_role(&self) -> StateRole {
-        self.raft_group.raft.state
     }
 
     #[inline]
@@ -660,16 +652,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .advance_apply(apply_index, term, region);
     }
 
-    #[inline]
-    pub fn lead_transferee(&self) -> u64 {
-        self.lead_transferee
-    }
-
-    #[inline]
-    pub fn refresh_lead_transferee(&mut self) {
-        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
-    }
-
     // TODO: find a better place to put all txn related stuff.
     pub fn require_updating_max_ts<T>(&self, ctx: &StoreContext<EK, ER, T>) {
         let epoch = self.region().get_region_epoch();
@@ -712,5 +694,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         task.extra_write
             .merge_v2(Box::into_inner(self.state_changes.take().unwrap()));
+    }
+
+    #[inline]
+    pub fn split_flow_control_mut(&mut self) -> &mut SplitFlowControl {
+        &mut self.split_flow_control
     }
 }

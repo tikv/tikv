@@ -4,7 +4,10 @@ use std::{mem, sync::Arc};
 
 use engine_traits::{CachedTablet, FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_LEN};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
-use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
+use raftstore::store::{
+    fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
+    ReadTask,
+};
 use slog::Logger;
 use tikv_util::worker::Scheduler;
 
@@ -46,6 +49,7 @@ pub struct Apply<EK: KvEngine, R> {
 
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
+    pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
 }
 
@@ -81,6 +85,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             res_reporter,
             flush_state,
             log_recovery,
+            metrics: ApplyMetrics::default(),
             logger,
         }
     }
