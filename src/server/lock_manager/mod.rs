@@ -206,7 +206,7 @@ impl LockManager {
     }
 
     /// Creates a `RoleChangeNotifier` of the deadlock detector worker
-    pub fn generate_notifier(&self) -> RoleChangeNotifier {
+    pub fn new_notifier(&self) -> RoleChangeNotifier {
         RoleChangeNotifier::new(self.detector_scheduler.clone())
     }
 
