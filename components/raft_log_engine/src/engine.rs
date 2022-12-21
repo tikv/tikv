@@ -688,6 +688,42 @@ impl RaftEngine for RaftLogEngine {
         Ok(total as usize)
     }
 
+    fn delete_all_states_before(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()> {
+        // Makes sure REGION_STATE_KEY is the smallest of all.
+        debug_assert!(REGION_STATE_KEY < APPLY_STATE_KEY);
+        debug_assert!(REGION_STATE_KEY < FLUSH_STATE_KEY);
+        // And they all have the same length.
+        debug_assert!(REGION_STATE_KEY.len() == APPLY_STATE_KEY.len());
+        debug_assert!(REGION_STATE_KEY.len() == FLUSH_STATE_KEY.len());
+
+        let key_len = REGION_STATE_KEY.len();
+        self.0
+            .scan_raw_messages(
+                raft_group_id,
+                Some(REGION_STATE_KEY),
+                None,
+                false,
+                |key, _| {
+                    match &key[..key_len] {
+                        REGION_STATE_KEY | APPLY_STATE_KEY | FLUSH_STATE_KEY
+                            if NumberCodec::decode_u64(&key[key_len..]) < apply_index =>
+                        {
+                            batch.0.delete(raft_group_id, key.to_vec());
+                        }
+                        _ => {}
+                    }
+                    true
+                },
+            )
+            .map_err(transfer_error)?;
+        Ok(())
+    }
+
     fn need_manual_purge(&self) -> bool {
         true
     }

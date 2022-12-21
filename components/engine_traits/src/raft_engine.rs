@@ -122,6 +122,14 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
         Ok(total)
     }
 
+    /// Delete all states that are associated with smaller apply_index.
+    fn delete_all_states_before(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()>;
+
     fn need_manual_purge(&self) -> bool {
         false
     }
