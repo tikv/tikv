@@ -5550,7 +5550,34 @@ where
             "split_keys" => %KeysInfoFormatter(split_keys.iter()),
             "source" => source,
         );
-        if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
+
+        if !self.fsm.peer.is_leader() {
+            // region on this store is no longer leader, skipped.
+            info!(
+                "not leader, skip proposing split";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            cb.invoke_with_response(new_error(Error::NotLeader(
+                self.region_id(),
+                self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
+            )));
+            return;
+        }
+        if let Err(e) = util::validate_split_region(
+            self.fsm.region_id(),
+            self.fsm.peer_id(),
+            self.region(),
+            &region_epoch,
+            &split_keys,
+        ) {
+            info!(
+                "invalid split request";
+                "err" => ?e,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "source" => %source
+            );
             cb.invoke_with_response(new_error(e));
             return;
         }
@@ -5578,70 +5605,6 @@ where
                 _ => unreachable!(),
             }
         }
-    }
-
-    fn validate_split_region(
-        &mut self,
-        epoch: &metapb::RegionEpoch,
-        split_keys: &[Vec<u8>],
-    ) -> Result<()> {
-        if split_keys.is_empty() {
-            error!(
-                "no split key is specified.";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            return Err(box_err!("{} no split key is specified.", self.fsm.peer.tag));
-        }
-        for key in split_keys {
-            if key.is_empty() {
-                error!(
-                    "split key should not be empty!!!";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                );
-                return Err(box_err!(
-                    "{} split key should not be empty",
-                    self.fsm.peer.tag
-                ));
-            }
-        }
-        if !self.fsm.peer.is_leader() {
-            // region on this store is no longer leader, skipped.
-            info!(
-                "not leader, skip.";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            return Err(Error::NotLeader(
-                self.region_id(),
-                self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
-            ));
-        }
-
-        let region = self.fsm.peer.region();
-        let latest_epoch = region.get_region_epoch();
-
-        // This is a little difference for `check_region_epoch` in region split case.
-        // Here we just need to check `version` because `conf_ver` will be update
-        // to the latest value of the peer, and then send to PD.
-        if latest_epoch.get_version() != epoch.get_version() {
-            info!(
-                "epoch changed, retry later";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "prev_epoch" => ?region.get_region_epoch(),
-                "epoch" => ?epoch,
-            );
-            return Err(Error::EpochNotMatch(
-                format!(
-                    "{} epoch changed {:?} != {:?}, retry later",
-                    self.fsm.peer.tag, latest_epoch, epoch
-                ),
-                vec![region.to_owned()],
-            ));
-        }
-        Ok(())
     }
 
     fn on_approximate_region_size(&mut self, size: u64) {

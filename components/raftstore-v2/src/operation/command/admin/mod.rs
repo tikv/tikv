@@ -13,7 +13,7 @@ use raft_log_gc::CompactLogResult;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
 use split::SplitResult;
-pub use split::{SplitInit, SPLIT_PREFIX};
+pub use split::{RequestSplit, SplitInit, SPLIT_PREFIX};
 use tikv_util::box_err;
 use txn_types::WriteBatchFlags;
 

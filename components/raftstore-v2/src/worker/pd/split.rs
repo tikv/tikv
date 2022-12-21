@@ -9,6 +9,7 @@ use pd_client::PdClient;
 use slog::{info, warn};
 
 use super::{requests::*, Runner};
+use crate::router::CmdResChannel;
 
 fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
@@ -42,6 +43,7 @@ where
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+        ch: CmdResChannel,
     ) {
         if split_keys.is_empty() {
             info!(self.logger, "empty split key, skip ask batch split";
@@ -71,7 +73,7 @@ where
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(&logger, &router, region_id, epoch, peer, req);
+                    send_admin_request(&logger, &router, region_id, epoch, peer, req, Some(ch));
                 }
                 Err(e) => {
                     warn!(

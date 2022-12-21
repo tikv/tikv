@@ -364,8 +364,8 @@ where
 
     type RaftExtension = RaftRouterWrap<S, E>;
     #[inline]
-    fn raft_extension(&self) -> &Self::RaftExtension {
-        &self.router
+    fn raft_extension(&self) -> Self::RaftExtension {
+        self.router.clone()
     }
 
     fn modify_on_kv_engine(

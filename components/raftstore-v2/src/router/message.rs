@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 
 use kvproto::{
+    metapb,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
@@ -15,7 +16,7 @@ use super::{
     },
     ApplyRes,
 };
-use crate::operation::{SimpleWriteBinary, SplitInit};
+use crate::operation::{RequestSplit, SimpleWriteBinary, SplitInit};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -164,6 +165,15 @@ pub enum PeerMsg {
     StoreUnreachable {
         to_store_id: u64,
     },
+    /// Reports whether the snapshot sending is successful or not.
+    SnapshotSent {
+        to_peer_id: u64,
+        status: raft::SnapshotStatus,
+    },
+    RequestSplit {
+        request: RequestSplit,
+        ch: CmdResChannel,
+    },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
@@ -192,6 +202,25 @@ impl PeerMsg {
                 data,
                 ch,
             }),
+            sub,
+        )
+    }
+
+    pub fn request_split(
+        epoch: metapb::RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: String,
+    ) -> (Self, CmdResSubscriber) {
+        let (ch, sub) = CmdResChannel::pair();
+        (
+            PeerMsg::RequestSplit {
+                request: RequestSplit {
+                    epoch,
+                    split_keys,
+                    source: source.into_boxed_str(),
+                },
+                ch,
+            },
             sub,
         )
     }

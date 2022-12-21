@@ -282,6 +282,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::StoreUnreachable { to_store_id } => {
                     self.fsm.peer_mut().on_store_unreachable(to_store_id)
                 }
+                PeerMsg::SnapshotSent { to_peer_id, status } => {
+                    self.fsm.peer_mut().on_snapshot_sent(to_peer_id, status)
+                }
+                PeerMsg::RequestSplit { request, ch } => {
+                    self.fsm
+                        .peer_mut()
+                        .on_request_split(self.store_ctx, request, ch)
+                }
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }

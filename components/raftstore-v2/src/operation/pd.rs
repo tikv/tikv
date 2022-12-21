@@ -12,7 +12,7 @@ use crate::{
     batch::StoreContext,
     fsm::{PeerFsmDelegate, Store, StoreFsmDelegate},
     raft::Peer,
-    router::{PeerTick, StoreTick},
+    router::{CmdResChannel, PeerTick, StoreTick},
     worker::pd,
 };
 
@@ -169,12 +169,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn ask_batch_split_pd<T>(&self, ctx: &StoreContext<EK, ER, T>, split_keys: Vec<Vec<u8>>) {
+    pub fn ask_batch_split_pd<T>(
+        &self,
+        ctx: &StoreContext<EK, ER, T>,
+        split_keys: Vec<Vec<u8>>,
+        ch: CmdResChannel,
+    ) {
         let task = pd::Task::AskBatchSplit {
             region: self.region().clone(),
             split_keys,
             peer: self.peer().clone(),
             right_derive: ctx.cfg.right_derive_when_split,
+            ch,
         };
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(

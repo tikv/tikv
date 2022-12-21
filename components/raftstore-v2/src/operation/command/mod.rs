@@ -49,7 +49,7 @@ mod admin;
 mod control;
 mod write;
 
-pub use admin::{AdminCmdResult, SplitInit, SPLIT_PREFIX};
+pub use admin::{AdminCmdResult, RequestSplit, SplitInit, SPLIT_PREFIX};
 pub use control::ProposalControl;
 pub use write::{
     SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
