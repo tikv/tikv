@@ -93,8 +93,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(
                 self.logger,
                 "failed to notify pd";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
                 "err" => ?e,
             );
             return;
@@ -148,8 +146,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     error!(
                         self.logger,
                         "failed to get peer from cache";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.peer_id(),
                         "get_peer_id" => id,
                     );
                 }
@@ -167,8 +163,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(
                 self.logger,
                 "failed to notify pd with DestroyPeer";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
                 "err" => %e,
             );
         }
@@ -186,8 +180,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(
                 self.logger,
                 "failed to notify pd with AskBatchSplit";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
                 "err" => %e,
             );
         }

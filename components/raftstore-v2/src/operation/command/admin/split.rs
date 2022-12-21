@@ -380,8 +380,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             info!(
                 self.logger,
                 "notify pd with split";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
                 "split_count" => res.regions.len(),
             );
             // Now pd only uses ReportBatchSplit for history operation show,

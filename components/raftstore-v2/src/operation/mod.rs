@@ -4,7 +4,6 @@ mod command;
 mod life;
 mod pd;
 mod query;
-mod raft_log_gc;
 mod ready;
 
 pub use command::{
