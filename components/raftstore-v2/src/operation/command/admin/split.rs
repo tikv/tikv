@@ -40,7 +40,10 @@ use kvproto::{
 use protobuf::Message;
 use raft::{prelude::Snapshot, INVALID_ID};
 use raftstore::{
-    coprocessor::split_observer::{is_valid_split_key, strip_timestamp_if_exists},
+    coprocessor::{
+        split_observer::{is_valid_split_key, strip_timestamp_if_exists},
+        RegionChangeReason,
+    },
     store::{
         cmd_resp,
         fsm::apply::validate_batch_split,
@@ -415,7 +418,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
-            self.set_region(reader, derived.clone(), tablet_index);
+            self.set_region(
+                &store_ctx.lock_manager_notifier,
+                reader,
+                derived.clone(),
+                RegionChangeReason::Split,
+                tablet_index,
+            );
         }
 
         self.post_split();

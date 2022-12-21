@@ -14,17 +14,20 @@ use engine_traits::{
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
-use raftstore::store::{
-    util::{Lease, RegionReadProgress},
-    Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-    ReadProgress, TxnExt, WriteTask,
+use raftstore::{
+    coprocessor::{RegionChangeEvent, RegionChangeReason},
+    store::{
+        util::{Lease, RegionReadProgress},
+        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
+        ReadProgress, TxnExt, WriteTask,
+    },
 };
 use slog::Logger;
 
 use super::storage::Storage;
 use crate::{
     batch::StoreContext,
-    fsm::ApplyScheduler,
+    fsm::{ApplyScheduler, LockManagerNotifier},
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder},
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -66,6 +69,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
+
+    /// lead_transferee if this peer(leader) is in a leadership transferring.
+    lead_transferee: u64,
 
     /// region buckets.
     region_buckets: Option<BucketStat>,
@@ -155,6 +161,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             proposal_control: ProposalControl::new(0),
+            lead_transferee: raft::INVALID_ID,
             pending_ticks: Vec::new(),
             split_trace: vec![],
             state_changes: None,
@@ -192,9 +199,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
-        // host: &CoprocessorHost<impl KvEngine>,
+        lock_manager_observer: &Arc<dyn LockManagerNotifier>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
+        reason: RegionChangeReason,
         tablet_index: u64,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -239,7 +247,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pessimistic_locks.version = self.region().get_region_epoch().get_version();
         }
 
-        // TODO: CoprocessorHost
+        if self.serving() {
+            lock_manager_observer.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Update(reason),
+                self.get_role(),
+            );
+        }
     }
 
     #[inline]
@@ -393,6 +407,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .iter()
             .find(|p| p.get_id() == peer_id)
             .cloned()
+    }
+
+    #[inline]
+    pub fn get_role(&self) -> StateRole {
+        self.raft_group.raft.state
     }
 
     #[inline]
@@ -639,6 +658,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let term = self.term();
         self.proposal_control
             .advance_apply(apply_index, term, region);
+    }
+
+    #[inline]
+    pub fn lead_transferee(&self) -> u64 {
+        self.lead_transferee
+    }
+
+    #[inline]
+    pub fn refresh_lead_transferee(&mut self) {
+        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 
     // TODO: find a better place to put all txn related stuff.

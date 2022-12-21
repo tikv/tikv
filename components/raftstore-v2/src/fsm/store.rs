@@ -6,7 +6,12 @@ use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::{compat::Future01CompatExt, FutureExt};
-use raftstore::store::{Config, ReadDelegate, RegionReadProgressRegistry};
+use kvproto::metapb::Region;
+use raft::StateRole;
+use raftstore::{
+    coprocessor::{RegionChangeEvent, RoleChange},
+    store::{Config, ReadDelegate, RegionReadProgressRegistry},
+};
 use slog::{info, o, Logger};
 use tikv_util::{
     future::poll_future_notify,
@@ -164,4 +169,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             }
         }
     }
+}
+
+// A simplified version of CoprocessorHost used to convey information to
+// LockManager only.
+// It is replaced by CoprocessorHost in the future.
+pub trait LockManagerNotifier: Send + Sync {
+    fn on_role_change(&self, region: &Region, role_change: RoleChange);
+
+    fn on_region_changed(&self, region: &Region, event: RegionChangeEvent, role: StateRole);
 }
