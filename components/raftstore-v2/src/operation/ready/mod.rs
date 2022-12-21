@@ -71,7 +71,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         if self.fsm.peer_mut().tick() {
             self.fsm.peer_mut().set_has_ready();
         }
-        self.fsm.peer_mut().post_raft_group_tick();
+        self.fsm.peer_mut().refresh_lead_transferee();
 
         self.schedule_tick(PeerTick::Raft);
     }
@@ -533,7 +533,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             self.proposal_control_mut().maybe_update_term(term);
         }
-        self.set_lead_transferee(self.raft_group().raft.lead_transferee.unwrap_or_default());
+        self.refresh_lead_transferee();
     }
 
     /// If leader commits new admin commands, it may break lease assumption. So

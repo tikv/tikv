@@ -31,9 +31,12 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletReg
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
-use raftstore::store::{
-    metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
-    TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
+use raftstore::{
+    coprocessor::RegionChangeEvent,
+    store::{
+        metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
+        TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
+    },
 };
 use slog::{error, info, warn};
 use tikv_util::box_err;
@@ -150,7 +153,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Use a new FlushState to avoid conflicts with the old one.
             tablet_ctx.flush_state = Some(flush_state);
             ctx.tablet_registry.load(tablet_ctx, false).unwrap();
-            self.activate(ctx);
+
+            self.schedule_apply_fsm(ctx);
+            ctx.lock_manager_notifier.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Create,
+                self.get_role(),
+            );
+
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);
             {

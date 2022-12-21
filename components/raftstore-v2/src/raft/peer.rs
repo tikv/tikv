@@ -660,31 +660,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .advance_apply(apply_index, term, region);
     }
 
-    /// Register self to apply_scheduler so that the peer is then usable.
-    /// Also trigger `RegionChangeEvent::Create` here.
-    pub fn activate<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
-        self.schedule_apply_fsm(ctx);
-
-        ctx.lock_manager_notifier.on_region_changed(
-            self.region(),
-            RegionChangeEvent::Create,
-            self.get_role(),
-        );
-    }
-
     #[inline]
     pub fn lead_transferee(&self) -> u64 {
         self.lead_transferee
     }
 
     #[inline]
-    pub fn set_lead_transferee(&mut self, lead_transferee: u64) {
-        self.lead_transferee = lead_transferee;
-    }
-
-    /// Update states of the peer which can be changed in the previous raft
-    /// tick.
-    pub fn post_raft_group_tick(&mut self) {
+    pub fn refresh_lead_transferee(&mut self) {
         self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 
