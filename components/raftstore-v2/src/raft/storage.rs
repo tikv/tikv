@@ -6,6 +6,7 @@ use std::{
     sync::{mpsc::Receiver, Arc},
 };
 
+use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
     metapb::{self, Region},
@@ -68,6 +69,7 @@ pub struct Storage<EK: KvEngine, ER> {
 
     /// Snapshot part.
     snap_state: RefCell<SnapState>,
+    pub snap_states: RefCell<HashMap<u64, SnapState>>,
     gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
     split_init: Option<Box<SplitInit>>,
 }
@@ -238,6 +240,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             ever_persisted: persisted,
             logger,
             snap_state: RefCell::new(SnapState::Relax),
+            snap_states: RefCell::new(HashMap::default()),
             gen_snap_task: RefCell::new(Box::new(None)),
             split_init: None,
         })
@@ -559,7 +562,7 @@ mod tests {
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.on_snapshot_generated(res);
         assert_eq!(s.snapshot(0, 8).unwrap_err(), unavailable);
-        let (snap, to_peer_id) = match *s.snap_state.borrow() {
+        let (snap, to_peer_id) = match *s.snap_states.borrow().get(&7).unwrap() {
             SnapState::Generated(ref snap) => *snap.clone(),
             ref s => panic!("unexpected state: {:?}", s),
         };
@@ -578,7 +581,7 @@ mod tests {
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        s.cancel_generating_snap(None);
+        s.cancel_generating_snap(None, None);
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
 
         // Test get twice snapshot and cancel once.
@@ -589,7 +592,7 @@ mod tests {
         apply.set_apply_progress(1, 5);
         apply.schedule_gen_snapshot(gen_task_a);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        s.cancel_generating_snap(None);
+        s.cancel_generating_snap(None, None);
         // cancel get snapshot a, try get snaphsot b
         let snap = s.snapshot(0, 0);
         assert_eq!(snap.unwrap_err(), unavailable);

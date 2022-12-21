@@ -200,14 +200,60 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
+    pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
+        if let Some(state) = self.snap_states.borrow_mut().get_mut(&to) {
+            match state {
+                SnapState::Generating { ref canceled, .. } => {
+                    if canceled.load(Ordering::SeqCst) {
+                        self.cancel_generating_snap(Some(to), None);
+                    } else {
+                        return Err(raft::Error::Store(
+                            raft::StorageError::SnapshotTemporarilyUnavailable,
+                        ));
+                    }
+                }
+                SnapState::Generated(s) => {
+                    let snap = s.0.clone();
+                    *state = SnapState::Relax;
+                    if self.validate_snap(&snap, request_index) {
+                        return Ok(snap);
+                    }
+                }
+                _ => {}
+            };
+        }
+        let canceled = Arc::new(AtomicBool::new(false));
+        let index = Arc::new(AtomicU64::new(0));
+        {
+            {}
+        }
+
+        let mut gen_snap_task = self.gen_snap_task_mut();
+        if gen_snap_task.is_none() {
+            // self.snap_states.borrow_mut().insert(to, snap);
+            self.snap_states.borrow_mut().insert(
+                to,
+                SnapState::Generating {
+                    canceled: canceled.clone(),
+                    index: index.clone(),
+                },
+            );
+            let task = GenSnapTask::new(self.region().get_id(), to, index, canceled);
+            *gen_snap_task = Box::new(Some(task));
+        }
+        Err(raft::Error::Store(
+            raft::StorageError::SnapshotTemporarilyUnavailable,
+        ))
+    }
+
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// unavailable snapshot.
-    pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
+    pub fn snapshot_1(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state_mut();
         match *snap_state {
             SnapState::Generating { ref canceled, .. } => {
                 if canceled.load(Ordering::SeqCst) {
-                    self.cancel_generating_snap(None);
+                    self.cancel_generating_snap_1(None);
                 } else {
                     return Err(raft::Error::Store(
                         raft::StorageError::SnapshotTemporarilyUnavailable,
@@ -305,8 +351,36 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         true
     }
 
+    pub fn cancel_generating_snap(&self, to: Option<u64>, compact_to: Option<u64>) {
+        if let Some(id) = to {
+            let mut states = self.snap_states.borrow_mut();
+            if let Some(state) = states.get(&id) {
+                let SnapState::Generating {
+                    ref canceled,
+                    ref index,
+                } = *state else { return };
+                if let Some(idx) = compact_to {
+                    let snap_index = index.load(Ordering::SeqCst);
+                    if snap_index == 0 || idx <= snap_index + 1 {
+                        return;
+                    }
+                }
+                states.remove(&id);
+                info!(
+                    self.logger(),
+                    "snapshot is canceled";
+                    "compact_to" => compact_to,
+                );
+            }
+        } else {
+            self.snap_states.borrow_mut().clear();
+        }
+        self.gen_snap_task_mut().take();
+        STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.cancel.inc();
+    }
+
     /// Cancel generating snapshot.
-    pub fn cancel_generating_snap(&self, compact_to: Option<u64>) {
+    pub fn cancel_generating_snap_1(&self, compact_to: Option<u64>) {
         let mut snap_state = self.snap_state_mut();
         let SnapState::Generating {
            ref canceled,
@@ -330,12 +404,37 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.cancel.inc();
     }
 
+    pub fn on_snapshot_generated(&self, res: GenSnapRes) -> bool {
+        if res.is_none() {
+            self.cancel_generating_snap(None, None);
+            return false;
+        }
+        let snap = res.unwrap();
+        if let Some(state) = self.snap_states.borrow_mut().get_mut(&snap.1) {
+            let SnapState::Generating {
+                ref canceled,
+                ref index,
+             } = *state else { return false };
+            if snap.0.get_metadata().get_index() < index.load(Ordering::SeqCst) {
+                warn!(
+                    self.logger(),
+                    "snapshot is staled, skip";
+                    "snap index" => snap.0.get_metadata().get_index(),
+                    "required index" => index.load(Ordering::SeqCst),
+                );
+                return false;
+            }
+            *state = SnapState::Generated(snap);
+        }
+        true
+    }
+
     /// Try to switch snap state to generated. only `Generating` can switch to
     /// `Generated`.
     ///  TODO: make the snap state more clearer, the snapshot must be consumed.
-    pub fn on_snapshot_generated(&self, res: GenSnapRes) -> bool {
+    pub fn on_snapshot_generated_1(&self, res: GenSnapRes) -> bool {
         if res.is_none() {
-            self.cancel_generating_snap(None);
+            self.cancel_generating_snap(None, None);
             return false;
         }
         let snap = res.unwrap();
