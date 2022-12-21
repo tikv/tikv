@@ -1,6 +1,17 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! `CompactLog` command.
+//! This module contains processing logic of the following:
+//!
+//! # `RaftLogGc` and `EntryCacheEvict` ticks
+//!
+//! On region leader, periodically compacts useless Raft logs from the
+//! underlying log engine, and evicts logs from entry cache if it reaches memory
+//! limit.
+//!
+//! # `CompactLog` command
+//!
+//! It makes sure all to-be-compacted logs are persisted in kvdb. Then it issues
+//! a background task to do the actual log compact.
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
@@ -199,7 +210,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_compact_log<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        res: CompactLogResult,
+        mut res: CompactLogResult,
     ) {
         let first_index = self.entry_storage().first_index();
         if res.compact_index <= first_index {
@@ -213,11 +224,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: check is_merging
         // compact failure is safe to be omitted, no need to assert.
-        if res.compact_index <= self.entry_storage().truncated_index()
-            || res.compact_index > self.storage().apply_trace().persisted_apply_index()
-        {
+        if res.compact_index <= self.entry_storage().truncated_index() {
             return;
         }
+        res.compact_index = std::cmp::min(
+            res.compact_index,
+            self.storage().apply_trace().persisted_apply_index(),
+        );
 
         // TODO: check entry_cache_warmup_state
         self.schedule_raft_log_gc(store_ctx, res.compact_index);
