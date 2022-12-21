@@ -68,6 +68,7 @@ fn test_witness_update_region_in_local_reader() {
 fn test_request_snapshot_after_reboot() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.raft_store.check_request_snapshot_interval = ReadableDuration::millis(20);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -173,6 +174,7 @@ fn test_push_non_witness_availability() {
 #[test]
 fn test_non_witness_replica_read() {
     let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.check_request_snapshot_interval = ReadableDuration::millis(20);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
