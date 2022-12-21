@@ -9,7 +9,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
-pub use split::{SplitInit, SplitResult, SPLIT_PREFIX};
+pub use split::{RequestSplit, SplitInit, SplitResult, SPLIT_PREFIX};
 use tikv_util::box_err;
 use txn_types::WriteBatchFlags;
 
@@ -37,7 +37,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply::notify_req_region_removed(self.region_id(), ch);
             return;
         }
-        if let Err(e) = self.validate_command(&req, &mut ctx.raft_metrics) {
+        if !req.has_admin_request() {
+            let e = box_err!("{:?} expect only execute admin command", self.logger.list());
+            let resp = cmd_resp::new_error(e);
+            ch.report_error(resp);
+            return;
+        }
+        let cmd_type = req.get_admin_request().get_cmd_type();
+        if let Err(e) =
+            self.validate_command(req.get_header(), Some(cmd_type), &mut ctx.raft_metrics)
+        {
             let resp = cmd_resp::new_error(e);
             ch.report_error(resp);
             return;
@@ -57,7 +66,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        let cmd_type = req.get_admin_request().get_cmd_type();
         if let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
             conflict.delay_channel(ch);
             return;

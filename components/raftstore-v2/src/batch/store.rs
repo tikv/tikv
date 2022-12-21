@@ -528,6 +528,14 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
         &self.logger
     }
 
+    #[inline]
+    pub fn check_send(&self, addr: u64, msg: PeerMsg) -> crate::Result<()> {
+        match self.router.send(addr, msg) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(raftstore::router::handle_send_error(addr, e)),
+        }
+    }
+
     pub fn send_raft_message(
         &self,
         msg: Box<RaftMessage>,

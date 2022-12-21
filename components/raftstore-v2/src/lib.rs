@@ -24,6 +24,8 @@
 #![feature(let_chains)]
 #![feature(array_windows)]
 #![feature(div_duration)]
+#![feature(box_into_inner)]
+#![feature(assert_matches)]
 
 mod batch;
 mod bootstrap;
@@ -37,4 +39,5 @@ pub(crate) use batch::StoreContext;
 pub use batch::{create_store_batch_system, StoreRouter, StoreSystem};
 pub use bootstrap::Bootstrap;
 pub use fsm::{LockManagerNotifier, StoreMeta};
-pub use raftstore::{Error, Result};
+pub use operation::{SimpleWriteBinary, SimpleWriteEncoder, StateStorage};
+pub use raftstore::{store::Config, Error, Result};

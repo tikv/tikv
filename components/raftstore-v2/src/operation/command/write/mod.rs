@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, Mutable, RaftEngine, CF_DEFAULT};
-use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
     store::{
         cmd_resp,
@@ -14,22 +14,26 @@ use raftstore::{
 
 use crate::{
     batch::StoreContext,
+    operation::cf_offset,
     raft::{Apply, Peer},
     router::CmdResChannel,
 };
 
 mod simple_write;
 
-pub use simple_write::{SimpleWriteDecoder, SimpleWriteEncoder};
+pub use simple_write::{
+    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
+};
 
 pub use self::simple_write::SimpleWrite;
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
-    pub fn on_write_command<T>(
+    pub fn on_simple_write<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        header: Box<RaftRequestHeader>,
+        data: SimpleWriteBinary,
         ch: CmdResChannel,
     ) {
         if !self.serving() {
@@ -37,16 +41,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         if let Some(encoder) = self.simple_write_encoder_mut() {
-            match encoder.amend(req) {
-                Ok(()) => {
-                    encoder.add_response_channel(ch);
-                    self.set_has_ready();
-                    return;
-                }
-                Err(r) => req = r,
+            if encoder.amend(&header, &data) {
+                encoder.add_response_channel(ch);
+                self.set_has_ready();
+                return;
             }
         }
-        if let Err(e) = self.validate_command(&req, &mut ctx.raft_metrics) {
+        if let Err(e) = self.validate_command(&header, None, &mut ctx.raft_metrics) {
             let resp = cmd_resp::new_error(e);
             ch.report_error(resp);
             return;
@@ -59,21 +60,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // ProposalControl is reliable only when applied to current term.
         let call_proposed_on_success = self.applied_to_current_term();
-        match SimpleWriteEncoder::new(
-            req,
+        let mut encoder = SimpleWriteReqEncoder::new(
+            header,
+            data,
             (ctx.cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as usize,
             call_proposed_on_success,
-        ) {
-            Ok(mut encoder) => {
-                encoder.add_response_channel(ch);
-                self.set_has_ready();
-                self.simple_write_encoder_mut().replace(encoder);
-            }
-            Err(req) => {
-                let res = self.propose_command(ctx, req);
-                self.post_propose_command(ctx, res, vec![ch], call_proposed_on_success);
-            }
-        }
+        );
+        encoder.add_response_channel(ch);
+        self.set_has_ready();
+        self.simple_write_encoder_mut().replace(encoder);
     }
 
     pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
@@ -109,7 +104,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
-    pub fn apply_put(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    pub fn apply_put(&mut self, cf: &str, index: u64, key: &[u8], value: &[u8]) -> Result<()> {
+        let off = cf_offset(cf);
+        if self.should_skip(off, index) {
+            return Ok(());
+        }
         util::check_key_in_region(key, self.region_state().get_region())?;
         // Technically it's OK to remove prefix for raftstore v2. But rocksdb doesn't
         // support specifying infinite upper bound in various APIs.
@@ -140,11 +139,16 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         fail::fail_point!("APPLY_PUT", |_| Err(raftstore::Error::Other(
             "aborted by failpoint".into()
         )));
+        self.modifications_mut()[off] = index;
         Ok(())
     }
 
     #[inline]
-    pub fn apply_delete(&mut self, cf: &str, key: &[u8]) -> Result<()> {
+    pub fn apply_delete(&mut self, cf: &str, index: u64, key: &[u8]) -> Result<()> {
+        let off = cf_offset(cf);
+        if self.should_skip(off, index) {
+            return Ok(());
+        }
         util::check_key_in_region(key, self.region_state().get_region())?;
         keys::data_key_with_buffer(key, &mut self.key_buffer);
         let res = if cf.is_empty() || cf == CF_DEFAULT {
@@ -165,6 +169,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 e
             );
         });
+        self.modifications_mut()[off] = index;
         Ok(())
     }
 
@@ -172,6 +177,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn apply_delete_range(
         &mut self,
         _cf: &str,
+        _index: u64,
         _start_key: &[u8],
         _end_key: &[u8],
         _notify_only: bool,

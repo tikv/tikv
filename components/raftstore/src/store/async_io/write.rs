@@ -152,6 +152,17 @@ impl<W: WriteBatch, L: RaftLogBatch> ExtraWrite<W, L> {
     }
 
     #[inline]
+    pub fn merge_v2(&mut self, log_batch: L) {
+        if let ExtraWrite::None = self {
+            *self = ExtraWrite::V2(log_batch);
+        } else if let ExtraWrite::V1(_) = self {
+            unreachable!("v1 and v2 are mixed used");
+        } else if let ExtraWrite::V2(l) = self {
+            l.merge(log_batch).unwrap();
+        }
+    }
+
+    #[inline]
     pub fn v2_mut(&mut self) -> Option<&mut L> {
         if let ExtraWrite::V2(l) = self {
             Some(l)

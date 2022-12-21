@@ -3,12 +3,13 @@
 use std::{path::Path, sync::Arc};
 
 use engine_rocks::{
-    raw::{Cache, Env, Statistics},
+    raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
-    RocksDbOptions, RocksEngine, RocksEventListener,
+    RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
 };
 use engine_traits::{
-    CompactionJobInfo, MiscExt, Result, TabletContext, TabletFactory, CF_DEFAULT, CF_WRITE,
+    CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
+    TabletFactory, CF_DEFAULT, CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
@@ -27,7 +28,8 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
-    statistics: Statistics,
+    statistics: Arc<RocksStatistics>,
+    state_storage: Option<Arc<dyn StateStorage>>,
     lite: bool,
 }
 
@@ -38,6 +40,7 @@ pub struct KvEngineFactoryBuilder {
 
 impl KvEngineFactoryBuilder {
     pub fn new(env: Arc<Env>, config: &TikvConfig, cache: Cache) -> Self {
+        let statistics = Arc::new(RocksStatistics::new_titan());
         Self {
             inner: FactoryInner {
                 env,
@@ -47,7 +50,8 @@ impl KvEngineFactoryBuilder {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                statistics: Statistics::new_titan(),
+                statistics,
+                state_storage: None,
                 lite: false,
             },
             compact_event_sender: None,
@@ -82,6 +86,13 @@ impl KvEngineFactoryBuilder {
     /// In lite mode, most listener/filters will not be installed.
     pub fn lite(mut self, lite: bool) -> Self {
         self.inner.lite = lite;
+        self
+    }
+
+    /// A storage for persisting flush states, which is used for recovering when
+    /// disable WAL. Only work for v2.
+    pub fn state_storage(mut self, storage: Arc<dyn StateStorage>) -> Self {
+        self.inner.state_storage = Some(storage);
         self
     }
 
@@ -122,12 +133,16 @@ impl KvEngineFactory {
         ))
     }
 
+    pub fn rocks_statistics(&self) -> Arc<RocksStatistics> {
+        self.inner.statistics.clone()
+    }
+
     fn db_opts(&self) -> RocksDbOptions {
         // Create kv engine.
         let mut db_opts = self
             .inner
             .rocksdb_config
-            .build_opt(Some(&self.inner.statistics));
+            .build_opt(Some(self.inner.statistics.as_ref()));
         db_opts.set_env(self.inner.env.clone());
         if !self.inner.lite {
             db_opts.add_event_listener(RocksEventListener::new(
@@ -180,6 +195,16 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         let cf_opts = self.cf_opts(EngineType::RaftKv2);
         if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
             db_opts.add_event_listener(listener.clone_with(ctx.id, suffix));
+        }
+        if let Some(storage) = &self.inner.state_storage
+            && let Some(flush_state) = ctx.flush_state {
+            let listener = PersistenceListener::new(
+                ctx.id,
+                ctx.suffix.unwrap(),
+                flush_state,
+                storage.clone(),
+            );
+            db_opts.add_event_listener(RocksPersistenceListener::new(listener));
         }
         let kv_engine =
             engine_rocks::util::new_engine_opt(path.to_str().unwrap(), db_opts, cf_opts);

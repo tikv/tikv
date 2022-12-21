@@ -8,8 +8,8 @@ use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
-    engine::RocksEngine, r2e, rocks_metrics_defs::*, sst::RocksSstWriterBuilder, util,
-    RocksSstWriter,
+    engine::RocksEngine, r2e, rocks_metrics::RocksStatisticsReporter, rocks_metrics_defs::*,
+    sst::RocksSstWriterBuilder, util, RocksSstWriter,
 };
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -126,10 +126,17 @@ impl RocksEngine {
 }
 
 impl MiscExt for RocksEngine {
-    fn flush_cfs(&self, wait: bool) -> Result<()> {
+    type StatisticsReporter = RocksStatisticsReporter;
+
+    fn flush_cfs(&self, cfs: &[&str], wait: bool) -> Result<()> {
         let mut handles = vec![];
-        for cf in self.cf_names() {
+        for cf in cfs {
             handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+        }
+        if handles.is_empty() {
+            for cf in self.cf_names() {
+                handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+            }
         }
         self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
     }
@@ -269,11 +276,6 @@ impl MiscExt for RocksEngine {
         }
 
         if let Some(v) = self.as_inner().get_property_value(ROCKSDB_DB_STATS_KEY) {
-            s.extend_from_slice(v.as_bytes());
-        }
-
-        // more stats if enable_statistics is true.
-        if let Some(v) = self.as_inner().get_statistics() {
             s.extend_from_slice(v.as_bytes());
         }
 

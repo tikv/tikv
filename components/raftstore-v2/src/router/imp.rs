@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+use futures::Future;
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
@@ -67,6 +68,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
         self.router.send(addr, msg)
     }
 
+    #[inline]
+    pub fn check_send(&self, addr: u64, msg: PeerMsg) -> crate::Result<()> {
+        self.router.check_send(addr, msg)
+    }
+
     pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta>> {
         self.local_reader.store_meta()
     }
@@ -78,10 +84,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
         self.router.send_raft_message(msg)
     }
 
-    pub async fn get_snapshot(
+    pub fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-    ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse> {
-        self.local_reader.snapshot(req).await
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
+    {
+        self.local_reader.snapshot(req)
     }
 }

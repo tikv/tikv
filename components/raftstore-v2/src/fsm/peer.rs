@@ -228,9 +228,20 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     self.on_receive_command(cmd.send_time);
                     self.on_query(cmd.request, cmd.ch)
                 }
-                PeerMsg::RaftCommand(cmd) => {
+                PeerMsg::AdminCommand(cmd) => {
                     self.on_receive_command(cmd.send_time);
-                    self.on_command(cmd.request, cmd.ch)
+                    self.fsm
+                        .peer_mut()
+                        .on_admin_command(self.store_ctx, cmd.request, cmd.ch)
+                }
+                PeerMsg::SimpleWrite(write) => {
+                    self.on_receive_command(write.send_time);
+                    self.fsm.peer_mut().on_simple_write(
+                        self.store_ctx,
+                        write.header,
+                        write.data,
+                        write.ch,
+                    );
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),
@@ -254,6 +265,29 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     self.fsm.peer_mut().on_snapshot_generated(snap_res)
                 }
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
+                PeerMsg::DataFlushed {
+                    cf,
+                    tablet_index,
+                    flushed_index,
+                } => {
+                    self.fsm
+                        .peer_mut()
+                        .on_data_flushed(cf, tablet_index, flushed_index);
+                }
+                PeerMsg::PeerUnreachable { to_peer_id } => {
+                    self.fsm.peer_mut().on_peer_unreachable(to_peer_id)
+                }
+                PeerMsg::StoreUnreachable { to_store_id } => {
+                    self.fsm.peer_mut().on_store_unreachable(to_store_id)
+                }
+                PeerMsg::SnapshotSent { to_peer_id, status } => {
+                    self.fsm.peer_mut().on_snapshot_sent(to_peer_id, status)
+                }
+                PeerMsg::RequestSplit { request, ch } => {
+                    self.fsm
+                        .peer_mut()
+                        .on_request_split(self.store_ctx, request, ch)
+                }
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }
