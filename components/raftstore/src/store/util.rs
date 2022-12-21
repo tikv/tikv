@@ -1621,6 +1621,47 @@ impl LatencyInspector {
     }
 }
 
+pub fn validate_split_region(
+    region_id: u64,
+    peer_id: u64,
+    region: &Region,
+    epoch: &RegionEpoch,
+    split_keys: &[Vec<u8>],
+) -> Result<()> {
+    if split_keys.is_empty() {
+        return Err(box_err!(
+            "[region {}] {} no split key is specified.",
+            region_id,
+            peer_id
+        ));
+    }
+
+    let latest_epoch = region.get_region_epoch();
+    // This is a little difference for `check_region_epoch` in region split case.
+    // Here we just need to check `version` because `conf_ver` will be update
+    // to the latest value of the peer, and then send to PD.
+    if latest_epoch.get_version() != epoch.get_version() {
+        return Err(Error::EpochNotMatch(
+            format!(
+                "[region {}] {} epoch changed {:?} != {:?}, retry later",
+                region_id, peer_id, latest_epoch, epoch
+            ),
+            vec![region.to_owned()],
+        ));
+    }
+    for key in split_keys {
+        if key.is_empty() {
+            return Err(box_err!(
+                "[region {}] {} split key should not be empty",
+                region_id,
+                peer_id
+            ));
+        }
+        check_key_in_region(key, region)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;

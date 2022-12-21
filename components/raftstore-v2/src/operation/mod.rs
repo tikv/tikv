@@ -7,8 +7,8 @@ mod query;
 mod ready;
 
 pub use command::{
-    AdminCmdResult, CommittedEntries, ProposalControl, SimpleWriteBinary, SimpleWriteEncoder,
-    SimpleWriteReqDecoder, SimpleWriteReqEncoder,
+    AdminCmdResult, CommittedEntries, ProposalControl, RequestSplit, SimpleWriteBinary,
+    SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
 };
 pub use life::DestroyProgress;
 pub use ready::{

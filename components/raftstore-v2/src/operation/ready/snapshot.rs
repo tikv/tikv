@@ -31,9 +31,12 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletReg
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
-use raftstore::store::{
-    metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
-    TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
+use raftstore::{
+    coprocessor::RegionChangeEvent,
+    store::{
+        metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
+        TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
+    },
 };
 use slog::{error, info, warn};
 use tikv_util::box_err;
@@ -116,6 +119,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn on_snapshot_sent(&mut self, to_peer_id: u64, status: raft::SnapshotStatus) {
+        let to_peer = match self.peer_from_cache(to_peer_id) {
+            Some(peer) => peer,
+            None => {
+                // If to_peer is gone, ignore this snapshot status
+                warn!(
+                    self.logger,
+                    "peer not found, ignore snapshot status";
+                    "to_peer_id" => to_peer_id,
+                    "status" => ?status,
+                );
+                return;
+            }
+        };
+        info!(
+            self.logger,
+            "report snapshot status";
+            "to" => ?to_peer,
+            "status" => ?status,
+        );
+        self.raft_group_mut().report_snapshot(to_peer_id, status);
+    }
+
     pub fn on_applied_snapshot<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let persisted_index = self.persisted_index();
         let first_index = self.storage().entry_storage().first_index();
@@ -127,7 +153,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Use a new FlushState to avoid conflicts with the old one.
             tablet_ctx.flush_state = Some(flush_state);
             ctx.tablet_registry.load(tablet_ctx, false).unwrap();
+
             self.schedule_apply_fsm(ctx);
+            ctx.lock_manager_notifier.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Create,
+                self.get_role(),
+            );
+
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);
             {

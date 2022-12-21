@@ -33,15 +33,19 @@ use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletCont
 use fail::fail_point;
 use itertools::Itertools;
 use kvproto::{
-    metapb::{self, Region},
+    metapb::{self, Region, RegionEpoch},
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
     raft_serverpb::RaftSnapshotData,
 };
 use protobuf::Message;
 use raft::{prelude::Snapshot, INVALID_ID};
 use raftstore::{
-    coprocessor::split_observer::{is_valid_split_key, strip_timestamp_if_exists},
+    coprocessor::{
+        split_observer::{is_valid_split_key, strip_timestamp_if_exists},
+        RegionChangeReason,
+    },
     store::{
+        cmd_resp,
         fsm::apply::validate_batch_split,
         metrics::PEER_ADMIN_CMD_COUNTER,
         snap::TABLET_SNAPSHOT_VERSION,
@@ -58,7 +62,8 @@ use crate::{
     fsm::ApplyResReporter,
     operation::AdminCmdResult,
     raft::{Apply, Peer},
-    router::{PeerMsg, StoreMsg},
+    router::{CmdResChannel, PeerMsg, StoreMsg},
+    Error,
 };
 
 pub const SPLIT_PREFIX: &str = "split_";
@@ -155,7 +160,49 @@ fn pre_propose_split(logger: &Logger, req: &mut AdminRequest, region: &Region) -
     }
 }
 
+#[derive(Debug)]
+pub struct RequestSplit {
+    pub epoch: RegionEpoch,
+    pub split_keys: Vec<Vec<u8>>,
+    pub source: Box<str>,
+}
+
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn on_request_split<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        rs: RequestSplit,
+        ch: CmdResChannel,
+    ) {
+        info!(
+            self.logger,
+            "on split";
+            "split_keys" => %KeysInfoFormatter(rs.split_keys.iter()),
+            "source" => &rs.source,
+        );
+        if !self.is_leader() {
+            // region on this store is no longer leader, skipped.
+            info!(self.logger, "not leader, skip.");
+            ch.set_result(cmd_resp::new_error(Error::NotLeader(
+                self.region_id(),
+                self.leader(),
+            )));
+            return;
+        }
+        if let Err(e) = util::validate_split_region(
+            self.region_id(),
+            self.peer_id(),
+            self.region(),
+            &rs.epoch,
+            &rs.split_keys,
+        ) {
+            info!(self.logger, "invalid split request"; "err" => ?e, "source" => &rs.source);
+            ch.set_result(cmd_resp::new_error(e));
+            return;
+        }
+        self.ask_batch_split_pd(ctx, rs.split_keys, ch);
+    }
+
     pub fn propose_split<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -371,7 +418,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
-            self.set_region(reader, derived.clone(), tablet_index);
+            self.set_region(
+                &store_ctx.lock_manager_notifier,
+                reader,
+                derived.clone(),
+                RegionChangeReason::Split,
+                tablet_index,
+            );
         }
 
         self.post_split();
