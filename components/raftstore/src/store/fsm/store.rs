@@ -33,6 +33,7 @@ use grpcio_health::HealthService;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     import_sstpb::{SstMeta, SwitchMode},
+    kvrpcpb::CommandPri,
     metapb::{self, Region, RegionEpoch},
     pdpb::{self, QueryStats, StoreStats},
     raft_cmdpb::{AdminCmdType, AdminRequest},
@@ -1011,13 +1012,18 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
         } else {
-            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-            if let Err(err) =
-                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+            let pri = self
+                .poll_ctx
+                .write_senders
+                .resource_ctl
+                .get_priority("default", CommandPri::Normal);
+            if let Err(err) = self.poll_ctx.write_senders.pri_write_sender.try_send(
+                WriteMsg::LatencyInspect {
                     send_time: write_begin,
                     inspector: latency_inspect,
-                })
-            {
+                },
+                pri,
+            ) {
                 warn!("send latency inspecting to write workers failed"; "err" => ?err);
             }
         }

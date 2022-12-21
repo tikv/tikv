@@ -266,7 +266,7 @@ where
 /// you should use `WriteRouter` to decide which sender to be used.
 #[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
-    resource_ctl: Arc<ResourceController>,
+    pub resource_ctl: Arc<ResourceController>,
     pub pri_write_sender: priority_queue::Sender<WriteMsg<EK, ER>>,
     write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
@@ -288,7 +288,7 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        false 
+        false
     }
 }
 
