@@ -68,6 +68,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
         self.router.send(addr, msg)
     }
 
+    #[inline]
+    pub fn check_send(&self, addr: u64, msg: PeerMsg) -> crate::Result<()> {
+        self.router.check_send(addr, msg)
+    }
+
     pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta>> {
         self.local_reader.store_meta()
     }

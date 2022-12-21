@@ -9,7 +9,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
-pub use split::{SplitInit, SplitResult, SPLIT_PREFIX};
+pub use split::{RequestSplit, SplitInit, SplitResult, SPLIT_PREFIX};
 use tikv_util::box_err;
 use txn_types::WriteBatchFlags;
 

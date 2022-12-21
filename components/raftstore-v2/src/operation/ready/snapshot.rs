@@ -116,6 +116,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn on_snapshot_sent(&mut self, to_peer_id: u64, status: raft::SnapshotStatus) {
+        let to_peer = match self.peer_from_cache(to_peer_id) {
+            Some(peer) => peer,
+            None => {
+                // If to_peer is gone, ignore this snapshot status
+                warn!(
+                    self.logger,
+                    "peer not found, ignore snapshot status";
+                    "to_peer_id" => to_peer_id,
+                    "status" => ?status,
+                );
+                return;
+            }
+        };
+        info!(
+            self.logger,
+            "report snapshot status";
+            "to" => ?to_peer,
+            "status" => ?status,
+        );
+        self.raft_group_mut().report_snapshot(to_peer_id, status);
+    }
+
     pub fn on_applied_snapshot<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let persisted_index = self.persisted_index();
         let first_index = self.storage().entry_storage().first_index();

@@ -233,8 +233,8 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
     }
 
     type RaftExtension = RE;
-    fn raft_extension(&self) -> &Self::RaftExtension {
-        &self.ext
+    fn raft_extension(&self) -> Self::RaftExtension {
+        self.ext.clone()
     }
 
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
