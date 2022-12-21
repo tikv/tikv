@@ -68,7 +68,6 @@ pub struct Storage<EK: KvEngine, ER> {
     logger: Logger,
 
     /// Snapshot part.
-    snap_state: RefCell<SnapState>,
     pub snap_states: RefCell<HashMap<u64, SnapState>>,
     gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
     split_init: Option<Box<SplitInit>>,
@@ -114,11 +113,6 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     #[inline]
     pub fn logger(&self) -> &Logger {
         &self.logger
-    }
-
-    #[inline]
-    pub fn snap_state_mut(&self) -> RefMut<'_, SnapState> {
-        self.snap_state.borrow_mut()
     }
 
     #[inline]
@@ -239,7 +233,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             region_state,
             ever_persisted: persisted,
             logger,
-            snap_state: RefCell::new(SnapState::Relax),
+            // snap_state: RefCell::new(SnapState::Relax),
             snap_states: RefCell::new(HashMap::default()),
             gen_snap_task: RefCell::new(Box::new(None)),
             split_init: None,
@@ -554,7 +548,8 @@ mod tests {
         );
 
         // Test get snapshot
-        let snap = s.snapshot(0, 7);
+        let to_peer_id = 7;
+        let snap = s.snapshot(0, to_peer_id);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
@@ -562,18 +557,18 @@ mod tests {
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.on_snapshot_generated(res);
         assert_eq!(s.snapshot(0, 8).unwrap_err(), unavailable);
-        let (snap, to_peer_id) = match *s.snap_states.borrow().get(&7).unwrap() {
+        assert!(s.snap_states.borrow().get(&8).is_some());
+        let snap = match *s.snap_states.borrow().get(&to_peer_id).unwrap() {
             SnapState::Generated(ref snap) => *snap.clone(),
             ref s => panic!("unexpected state: {:?}", s),
         };
-        assert_eq!(7, to_peer_id);
         assert_eq!(snap.get_metadata().get_index(), 0);
         assert_eq!(snap.get_metadata().get_term(), 0);
         assert_eq!(snap.get_data().is_empty(), false);
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
         let checkpointer_path = mgr.tablet_gen_path(&snap_key);
         assert!(checkpointer_path.exists());
-        s.snapshot(0, 7).unwrap();
+        s.snapshot(0, to_peer_id).unwrap();
 
         // Test cancel snapshot
         let snap = s.snapshot(0, 7);
@@ -582,7 +577,7 @@ mod tests {
         apply.schedule_gen_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.cancel_generating_snap(None, None);
-        assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
+        assert!(s.snap_states.borrow().get(&to_peer_id).is_none());
 
         // Test get twice snapshot and cancel once.
         // get snapshot a
