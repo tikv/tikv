@@ -211,7 +211,7 @@ impl ApplyTrace {
         self.admin.last_modified = index;
     }
 
-    fn persisted_apply_index(&self) -> u64 {
+    pub fn persisted_apply_index(&self) -> u64 {
         self.admin.flushed
     }
 

@@ -274,8 +274,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // asynchronously.
         if self.is_leader() {
             for entry in committed_entries.iter().rev() {
-                self.raft_log_size_hint += entry.get_data().len() as u64;
-                // TODO: handle raft_log_size_hint
+                self.update_approximate_raft_log_size(|s| *s += entry.get_data().len() as u64);
                 let propose_time = self
                     .proposals()
                     .find_propose_time(entry.get_term(), entry.get_index());

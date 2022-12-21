@@ -47,10 +47,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Statistics for other peers, only maintained when self is the leader.
     peer_heartbeats: HashMap<u64, Instant>,
 
-    /// For gc.
-    pub last_compacted_index: u64,
-    pub skip_gc_raft_log_ticks: usize,
-    pub raft_log_size_hint: u64,
+    /// For raft log GC.
+    skip_raft_log_gc_ticks: usize,
+    raft_log_size_hint: u64,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -135,8 +134,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
-            last_compacted_index: 0,
-            skip_gc_raft_log_ticks: 0,
+            skip_raft_log_gc_ticks: 0,
             raft_log_size_hint: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
@@ -464,6 +462,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: `refill_disk_full_peers`
         down_peers
+    }
+
+    #[inline]
+    pub fn reset_skip_raft_log_gc_ticks(&mut self) {
+        self.skip_raft_log_gc_ticks = 0;
+    }
+
+    #[inline]
+    pub fn maybe_skip_raft_log_gc(&mut self, max_skip_ticks: usize) -> bool {
+        if self.skip_raft_log_gc_ticks < max_skip_ticks {
+            self.skip_raft_log_gc_ticks += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    pub fn approximate_raft_log_size(&self) -> u64 {
+        self.raft_log_size_hint
+    }
+
+    #[inline]
+    pub fn update_approximate_raft_log_size(&mut self, f: impl Fn(&mut u64)) {
+        f(&mut self.raft_log_size_hint);
     }
 
     #[inline]

@@ -109,17 +109,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.entry_storage_mut()
             .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx + 1));
 
-        let mut compact_idx = if (applied_idx > first_idx
-            && applied_idx - first_idx >= store_ctx.cfg.raft_log_gc_count_limit())
-            || (self.raft_log_size_hint >= store_ctx.cfg.raft_log_gc_size_limit().0)
+        let mut compact_idx = if applied_idx > first_idx
+            && applied_idx - first_idx >= store_ctx.cfg.raft_log_gc_count_limit()
+            || self.approximate_raft_log_size() >= store_ctx.cfg.raft_log_gc_size_limit().0
         {
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
-        } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
-            return;
-        } else if replicated_idx - first_idx < store_ctx.cfg.raft_log_gc_threshold
-            && self.skip_gc_raft_log_ticks < store_ctx.cfg.raft_log_reserve_max_ticks
+        } else if replicated_idx < first_idx
+            || last_idx - first_idx < 3
+            || replicated_idx - first_idx < store_ctx.cfg.raft_log_gc_threshold
+                && self.maybe_skip_raft_log_gc(store_ctx.cfg.raft_log_reserve_max_ticks)
         {
-            self.skip_gc_raft_log_ticks += 1;
             return;
         } else {
             replicated_idx
@@ -145,7 +144,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let (ch, _) = CmdResChannel::pair();
         self.on_admin_command(store_ctx, req, ch);
 
-        self.skip_gc_raft_log_ticks = 0;
+        self.reset_skip_raft_log_gc_ticks();
     }
 }
 
@@ -242,8 +241,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         compact_index: u64,
     ) {
-        let task =
-            raft_log_gc::Task::gc(self.region_id(), self.last_compacted_index, compact_index);
+        // For raft-engine there's no need to set a meaningful first_index.
+        let task = raft_log_gc::Task::gc(self.region_id(), 0, compact_index);
         debug!(
             self.logger,
             "scheduling raft log gc task";
@@ -256,13 +255,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "err" => %e,
             );
         } else {
-            self.last_compacted_index = compact_index;
             // Not including this command.
             let applied = self.storage().apply_state().get_applied_index();
 
             let total_cnt = applied - self.storage().entry_storage().first_index() + 1;
             let remain_cnt = applied - compact_index;
-            self.raft_log_size_hint = self.raft_log_size_hint * remain_cnt / total_cnt;
+            self.update_approximate_raft_log_size(|s| *s = *s * remain_cnt / total_cnt);
         }
     }
 }
