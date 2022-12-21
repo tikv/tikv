@@ -288,7 +288,7 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.write_senders.is_empty()
+        false 
     }
 }
 
