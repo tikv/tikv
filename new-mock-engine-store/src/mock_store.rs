@@ -405,6 +405,12 @@ impl EngineStoreServerWrap {
                                     .insert(region_meta.id, Box::new(new_region));
                             }
                         }
+                        {
+                            // Move data
+                            let region_ids =
+                                regions.iter().map(|r| r.get_id()).collect::<Vec<u64>>();
+                            move_data_from(engine_store_server, region_id, region_ids.as_slice());
+                        }
                     }
                     AdminCmdType::PrepareMerge => {
                         let tikv_region = resp.get_split().get_left();
@@ -433,9 +439,12 @@ impl EngineStoreServerWrap {
                         // We don't handle MergeState and PeerState here
                     }
                     AdminCmdType::CommitMerge => {
+                        fail::fail_point!("ffi_before_commit_merge", |_| {
+                            return ffi_interfaces::EngineStoreApplyRes::Persist;
+                        });
+                        let (target_id, source_id) =
+                            { (region_id, req.get_commit_merge().get_source().get_id()) };
                         {
-                            let tikv_target_region_meta = resp.get_split().get_left();
-
                             let target_region =
                                 &mut (engine_store_server.kvstore.get_mut(&region_id).unwrap());
                             let target_region_meta = &mut target_region.region;
@@ -465,6 +474,8 @@ impl EngineStoreServerWrap {
                                     == std::cmp::Ordering::Equal
                             };
 
+                            // The validation of applied result on TiFlash's side.
+                            let tikv_target_region_meta = resp.get_split().get_left();
                             if source_at_left {
                                 target_region_meta
                                     .set_start_key(source_region.get_start_key().to_vec());
@@ -481,6 +492,9 @@ impl EngineStoreServerWrap {
                                 );
                             }
                             target_region.set_applied(header.index, header.term);
+                        }
+                        {
+                            move_data_from(engine_store_server, source_id, &[target_id]);
                         }
                         let to_remove = req.get_commit_merge().get_source().get_id();
                         engine_store_server.kvstore.remove(&to_remove);
@@ -1216,5 +1230,44 @@ unsafe extern "C" fn ffi_handle_compute_store_stats(
         engine_keys_written: 0,
         engine_bytes_read: 0,
         engine_keys_read: 0,
+    }
+}
+
+#[allow(clippy::single_element_loop)]
+pub fn move_data_from(
+    engine_store_server: &mut EngineStoreServer,
+    old_region_id: u64,
+    new_region_ids: &[u64],
+) {
+    let kvs = {
+        let old_region = engine_store_server.kvstore.get_mut(&old_region_id).unwrap();
+        let res = old_region.data.clone();
+        old_region.data = Default::default();
+        res
+    };
+    for new_region_id in new_region_ids {
+        let new_region = engine_store_server.kvstore.get_mut(&new_region_id).unwrap();
+        let new_region_meta = new_region.region.clone();
+        let start_key = new_region_meta.get_start_key();
+        let end_key = new_region_meta.get_end_key();
+        for cf in &[ffi_interfaces::ColumnFamilyType::Default] {
+            let cf = (*cf) as usize;
+            for (k, v) in &kvs[cf] {
+                let k = k.as_slice();
+                let v = v.as_slice();
+                match k {
+                    keys::PREPARE_BOOTSTRAP_KEY | keys::STORE_IDENT_KEY => {}
+                    _ => {
+                        if k >= start_key && (end_key.is_empty() || k < end_key) {
+                            debug!(
+                                "move region data {:?} {:?} from {} to {}",
+                                k, v, old_region_id, new_region_id
+                            );
+                            write_kv_in_mem(new_region, cf, k, v);
+                        }
+                    }
+                };
+            }
+        }
     }
 }
