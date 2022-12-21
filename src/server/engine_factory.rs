@@ -3,9 +3,9 @@
 use std::{path::Path, sync::Arc};
 
 use engine_rocks::{
-    raw::{Cache, Env, Statistics},
+    raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
-    RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener,
+    RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
 };
 use engine_traits::{
     CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
@@ -28,7 +28,7 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
-    statistics: Statistics,
+    statistics: Arc<RocksStatistics>,
     state_storage: Option<Arc<dyn StateStorage>>,
     lite: bool,
 }
@@ -40,6 +40,7 @@ pub struct KvEngineFactoryBuilder {
 
 impl KvEngineFactoryBuilder {
     pub fn new(env: Arc<Env>, config: &TikvConfig, cache: Cache) -> Self {
+        let statistics = Arc::new(RocksStatistics::new_titan());
         Self {
             inner: FactoryInner {
                 env,
@@ -49,7 +50,7 @@ impl KvEngineFactoryBuilder {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                statistics: Statistics::new_titan(),
+                statistics,
                 state_storage: None,
                 lite: false,
             },
@@ -132,12 +133,16 @@ impl KvEngineFactory {
         ))
     }
 
+    pub fn rocks_statistics(&self) -> Arc<RocksStatistics> {
+        self.inner.statistics.clone()
+    }
+
     fn db_opts(&self) -> RocksDbOptions {
         // Create kv engine.
         let mut db_opts = self
             .inner
             .rocksdb_config
-            .build_opt(Some(&self.inner.statistics));
+            .build_opt(Some(self.inner.statistics.as_ref()));
         db_opts.set_env(self.inner.env.clone());
         if !self.inner.lite {
             db_opts.add_event_listener(RocksEventListener::new(

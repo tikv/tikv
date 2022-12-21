@@ -559,11 +559,6 @@
 ## Max RocksDB WAL size in total
 # max-total-wal-size = "4GB"
 
-## RocksDB Statistics provides cumulative stats over time.
-## Turning statistics on will introduce about 5%-10% overhead for RocksDB, but it can help you to
-## know the internal status of RocksDB.
-# enable-statistics = true
-
 ## Dump statistics periodically in information logs.
 ## Same as RocksDB's default value (10 min).
 # stats-dump-period = "10m"
@@ -972,7 +967,6 @@
 # max-manifest-file-size = "20MB"
 # create-if-missing = true
 
-# enable-statistics = true
 # stats-dump-period = "10m"
 
 ## Raft RocksDB WAL directory.
