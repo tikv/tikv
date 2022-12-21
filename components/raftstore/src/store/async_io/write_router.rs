@@ -69,6 +69,8 @@ where
     last_unpersisted: Option<u64>,
     /// Pending write msgs since rescheduling.
     pending_write_msgs: Vec<WriteMsg<EK, ER>>,
+    ///
+    last_pri: u64,
 }
 
 impl<EK, ER> WriteRouter<EK, ER>
@@ -84,6 +86,7 @@ where
             next_writer_id: None,
             last_unpersisted: None,
             pending_write_msgs: vec![],
+            last_pri: 0,
         }
     }
 
@@ -223,7 +226,7 @@ where
         }
     }
 
-    fn send<C: WriteRouterContext<EK, ER>>(&self, ctx: &mut C, msg: WriteMsg<EK, ER>) {
+    fn send<C: WriteRouterContext<EK, ER>>(&mut self, ctx: &mut C, msg: WriteMsg<EK, ER>) {
         let sender = ctx.write_senders();
         let mut dominant_group = "default";
         let mut max_write_bytes = 0;
@@ -238,9 +241,13 @@ where
                     .consume(group_name, ResourceType::Bytes(*write_bytes));
             }
         }
-        let pri = sender
+        let mut pri = sender
             .resource_ctl
             .get_priority(dominant_group, msg.priority());
+        if pri < self.last_pri {
+            pri = self.last_pri + 1;
+        } 
+        self.last_pri = pri;
         sender.pri_write_sender.send(msg, pri).unwrap();
         // match ctx.write_senders()[self.writer_id].try_send(msg) {
         //     Ok(()) => (),
