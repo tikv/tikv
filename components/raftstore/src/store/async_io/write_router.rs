@@ -16,7 +16,7 @@ use crossbeam::channel::{SendError, Sender, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::{
     config::{Tracker, VersionTrack},
-    info,
+    error, info, safe_panic,
     time::Instant,
 };
 
@@ -162,13 +162,11 @@ where
             return false;
         }
         let async_io_pool_size = ctx.write_senders().capacity();
+        if async_io_pool_size <= 1 {
+            self.writer_id = 0;
+            return true;
+        }
         if last_unpersisted.is_none() {
-            // Only when there exists no unpersisted messages, can we directly send
-            // messages to the only writer.
-            if async_io_pool_size <= 1 {
-                self.writer_id = 0;
-                return true;
-            }
             // If no previous pending ready, we can randomly select a new writer worker.
             self.writer_id = rand::random::<usize>() % async_io_pool_size;
             self.next_retry_time =
@@ -236,7 +234,7 @@ where
                 let now = Instant::now();
                 if write_senders.send(self.writer_id, msg).is_err() {
                     // Write threads are destroyed after store threads during shutdown.
-                    panic!("{} failed to send write msg, err: disconnected", self.tag);
+                    safe_panic!("{} failed to send write msg, err: disconnected", self.tag);
                 }
                 ctx.raft_metrics()
                     .write_block_wait
@@ -244,7 +242,7 @@ where
             }
             Err(TrySendError::Disconnected(_)) => {
                 // Write threads are destroyed after store threads during shutdown.
-                panic!("{} failed to send write msg, err: disconnected", self.tag);
+                safe_panic!("{} failed to send write msg, err: disconnected", self.tag);
             }
         }
     }
@@ -259,22 +257,15 @@ pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
     senders: Tracker<SenderVec<EK, ER>>,
     _cached_senders: SenderVec<EK, ER>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
-    /// Valid capacity of async ios. It's shared between all `WriteSender`s and
-    /// the global `StoreWriter` in store.
-    io_capacity: Arc<AtomicUsize>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
-    pub fn new(
-        senders: Arc<VersionTrack<SenderVec<EK, ER>>>,
-        io_capacity: Arc<AtomicUsize>,
-    ) -> Self {
+    pub fn new(senders: Arc<VersionTrack<SenderVec<EK, ER>>>) -> Self {
         let cached_senders = senders.value().clone();
         WriteSenders {
             senders: senders.tracker("async writers' trackers".to_owned()),
             _cached_senders: cached_senders,
             io_reschedule_concurrent_count: Arc::default(),
-            io_capacity,
         }
     }
 
@@ -286,7 +277,7 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
     #[inline]
     /// Returns the valid capacity of async senders.
     pub fn capacity(&self) -> usize {
-        self.io_capacity.load(Ordering::Relaxed)
+        self._cached_senders.len()
     }
 }
 
@@ -304,12 +295,13 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
         idx: usize,
         msg: WriteMsg<EK, ER>,
     ) -> Result<(), SendError<WriteMsg<EK, ER>>> {
-        debug_assert!(!self._cached_senders.is_empty());
-        // To avoid losting several async messages when concurrently modifying the
-        // shared senders by outer operators, such as refresh_config runner, it should
-        // redirect the async messages to valid senders by `MOD self.capacity()`.
-        let valid_idx = idx % std::cmp::min(self.capacity(), self._cached_senders.len());
-        self._cached_senders[valid_idx].send(msg)
+        debug_assert!(!self.is_empty());
+        // Because the given `idx` is not atomically updated during the progress of
+        // resizing, there exists one corner case should be tackled. That is, the given
+        // `idx` for accessing the senders might be obsolete when resizing the
+        // size of async-ios, so we should correct it by mod `capacity` to avoid
+        // out of bound.
+        self._cached_senders[idx % self.capacity()].send(msg)
     }
 
     #[inline]
@@ -318,9 +310,8 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
         idx: usize,
         msg: WriteMsg<EK, ER>,
     ) -> Result<(), TrySendError<WriteMsg<EK, ER>>> {
-        debug_assert!(!self._cached_senders.is_empty());
-        let valid_idx = idx % std::cmp::min(self.capacity(), self._cached_senders.len());
-        self._cached_senders[valid_idx].try_send(msg)
+        debug_assert!(!self.is_empty());
+        self._cached_senders[idx % self.capacity()].try_send(msg)
     }
 }
 
@@ -351,10 +342,7 @@ mod tests {
             }
             Self {
                 receivers,
-                senders: WriteSenders::new(
-                    Arc::new(VersionTrack::new(senders)),
-                    Arc::new(config.store_io_pool_size.into()),
-                ),
+                senders: WriteSenders::new(Arc::new(VersionTrack::new(senders))),
                 config,
                 raft_metrics: RaftMetrics::new(true),
             }

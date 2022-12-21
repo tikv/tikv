@@ -9,10 +9,7 @@
 
 use std::{
     fmt, mem,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::Arc,
     thread::{self, JoinHandle},
 };
 
@@ -853,8 +850,6 @@ where
     writers: Arc<VersionTrack<SenderVec<EK, ER>>>,
     /// Background threads for handling asynchronous messages.
     handlers: Arc<Mutex<Vec<JoinHandle<()>>>>,
-    /// Validate io capacity for sending messages by async ios.
-    io_capacity: Arc<AtomicUsize>,
 }
 
 impl<EK, ER> Default for StoreWriters<EK, ER>
@@ -866,7 +861,6 @@ where
         Self {
             writers: Arc::new(VersionTrack::default()),
             handlers: Arc::new(Mutex::new(vec![])),
-            io_capacity: Arc::default(),
         }
     }
 }
@@ -877,7 +871,7 @@ where
     ER: RaftEngine,
 {
     pub fn senders(&self) -> WriteSenders<EK, ER> {
-        WriteSenders::new(self.writers.clone(), self.io_capacity.clone())
+        WriteSenders::new(self.writers.clone())
     }
 
     pub fn spawn<T: Transport + 'static, N: PersistedNotifier>(
@@ -914,13 +908,17 @@ where
         }
     }
 
+    pub fn need_resize(&self, target_size: usize) -> bool {
+        self.writers.value().len() != target_size
+    }
+
     pub fn resize<T: Transport + 'static, N: PersistedNotifier>(
         &mut self,
         size: usize,
         writer_meta: StoreWritersMeta<EK, ER, T, N>,
     ) -> Result<()> {
-        let current_size = self.io_capacity.load(Ordering::Relaxed);
-        // TODO: if capacity was reset to `0`, that is, no async-io, we should find a
+        let current_size = self.writers.value().len();
+        // TODO: if size was reset to `0`, that is, no async-io, we should find a
         // elegant way to initialize the sync_io after we release all async-io threads
         // and mailboxes.
         match current_size.cmp(&size) {
@@ -931,7 +929,7 @@ where
         info!(
             "resize store writers pool";
             "from" => current_size,
-            "to" => self.io_capacity.load(Ordering::Relaxed)
+            "to" => self.writers.value().len()
         );
         Ok(())
     }
@@ -939,12 +937,8 @@ where
     fn decrease_by(&mut self, size: usize) -> Result<()> {
         let mut joinable_handlers: Vec<JoinHandle<()>> = {
             let mut handlers = self.handlers.lock();
-            let current_size = self.io_capacity.load(Ordering::Relaxed);
+            let current_size = self.writers.value().len();
             assert_eq!(current_size, handlers.len());
-            // We modifity the capacity of writers to make the concurrent processing of
-            // sending messages can be redirected to reserved mailboxes in advance.
-            self.io_capacity
-                .store(current_size - size, Ordering::Relaxed);
             // Clear obsolete mailboxes and collect stale handlers.
             self.writers.update(
                 move |writers: &mut Vec<Sender<WriteMsg<EK, ER>>>| -> Result<Vec<JoinHandle<()>>> {
@@ -976,7 +970,7 @@ where
         writer_meta: StoreWritersMeta<EK, ER, T, N>,
     ) -> Result<()> {
         let mut handlers = self.handlers.lock();
-        let current_size = self.io_capacity.load(Ordering::Relaxed);
+        let current_size = self.writers.value().len();
         assert_eq!(current_size, handlers.len());
         self.writers.update(
             move |writers: &mut Vec<Sender<WriteMsg<EK, ER>>>| -> Result<()> {
@@ -1006,10 +1000,6 @@ where
                 Ok(())
             },
         )?;
-        // After we successfully update senders and handlers, we can update the validate
-        // io capacity.
-        self.io_capacity
-            .store(current_size + size, Ordering::Relaxed);
         Ok(())
     }
 }

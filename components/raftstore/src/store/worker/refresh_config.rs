@@ -260,9 +260,20 @@ where
 
     /// Resizes the count of background threads in store_writers.
     fn resize_store_writers(&mut self, size: usize) {
-        let writer_meta = self.writer_ctrl.writer_meta.clone();
-        if let Err(e) = self.writer_ctrl.store_writers.resize(size, writer_meta) {
-            error!("failed to resize store writers size, err_msg: {:?}", e);
+        // To avoid concurrent racing write when decreasing or increasing background
+        // threads for async-ios, the `resize` progress will take the following steps:
+        // [1] Release all existing pollers. It will make sure all existing or
+        // unpersisted messages have been persisted into raftdb.
+        // [2] Resize the async-ios.
+        // [3] Restart all poller.
+        if self.writer_ctrl.store_writers.need_resize(size) {
+            let current_pool_size = self.raft_pool.state.expected_pool_size;
+            self.resize_raft_pool(0);
+            let writer_meta = self.writer_ctrl.writer_meta.clone();
+            if let Err(e) = self.writer_ctrl.store_writers.resize(size, writer_meta) {
+                error!("failed to resize store writers size, err_msg: {:?}", e);
+            }
+            self.resize_raft_pool(current_pool_size);
         }
     }
 }

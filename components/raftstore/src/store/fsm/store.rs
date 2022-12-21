@@ -1011,14 +1011,17 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     inspector.finish();
                 }
             }
-        } else if let Err(err) = self.poll_ctx.write_senders.try_send(
-            rand::random::<usize>(),
-            WriteMsg::LatencyInspect {
-                send_time: write_begin,
-                inspector: latency_inspect,
-            },
-        ) {
-            warn!("send latency inspecting to write workers failed"; "err" => ?err);
+        } else {
+            let writer_id = rand::random::<usize>() % self.poll_ctx.write_senders.capacity();
+            if let Err(err) = self.poll_ctx.write_senders.try_send(
+                writer_id,
+                WriteMsg::LatencyInspect {
+                    send_time: write_begin,
+                    inspector: latency_inspect,
+                },
+            ) {
+                warn!("send latency inspecting to write workers failed"; "err" => ?err);
+            }
         }
         dur = self.timer.saturating_elapsed();
         if self.poll_ctx.has_ready {
