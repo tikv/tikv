@@ -44,6 +44,8 @@ use txn_types::{Key, WriteRef, WriteType};
 use super::make_rpc_error;
 use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_GAUGE};
 
+const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
+
 /// ImportSstService provides tikv-server with the ability to ingest SST files.
 ///
 /// It saves the SST sent from client to a file and then sends a command to
@@ -212,8 +214,6 @@ impl RequestCollector {
     }
 }
 
-// inflight_futures:
-// Vec<futures::channel::oneshot::Receiver<raftstore::store::WriteResponse>>,
 impl<E, Router> ImportSstService<E, Router>
 where
     E: KvEngine,
@@ -464,7 +464,7 @@ where
             }
 
             let is_last_task = tasks.peek().is_none();
-            if collector.pending_raft_size() > 10000 || is_last_task {
+            if collector.pending_raft_size() > MAX_INFLIGHT_RAFT_MSGS || is_last_task {
                 for future in inflight_futures.drain(..) {
                     match future.await {
                         Err(e) => {
