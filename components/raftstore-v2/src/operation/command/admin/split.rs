@@ -25,31 +25,29 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{cmp, collections::VecDeque};
+use std::cmp;
 
 use collections::HashSet;
-use crossbeam::channel::{SendError, TrySendError};
-use engine_traits::{
-    Checkpointer, DeleteStrategy, KvEngine, OpenOptions, RaftEngine, RaftLogBatch, Range,
-    CF_DEFAULT, SPLIT_PREFIX,
-};
+use crossbeam::channel::SendError;
+use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext};
 use fail::fail_point;
-use keys::enc_end_key;
+use itertools::Itertools;
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
-    raft_serverpb::{RaftMessage, RaftSnapshotData, RegionLocalState},
+    raft_serverpb::RaftSnapshotData,
 };
 use protobuf::Message;
-use raft::{prelude::Snapshot, RawNode, INVALID_ID};
+use raft::{prelude::Snapshot, INVALID_ID};
 use raftstore::{
-    coprocessor::RegionChangeReason,
+    coprocessor::split_observer::{is_valid_split_key, strip_timestamp_if_exists},
     store::{
+        cmd_resp,
         fsm::apply::validate_batch_split,
         metrics::PEER_ADMIN_CMD_COUNTER,
         snap::TABLET_SNAPSHOT_VERSION,
         util::{self, KeysInfoFormatter},
-        PeerPessimisticLocks, PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        PeerPessimisticLocks, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
     Result,
 };
@@ -58,11 +56,14 @@ use tikv_util::box_err;
 
 use crate::{
     batch::StoreContext,
-    fsm::{ApplyResReporter, PeerFsmDelegate},
+    fsm::ApplyResReporter,
     operation::AdminCmdResult,
-    raft::{write_initial_states, Apply, Peer, Storage},
-    router::{ApplyRes, PeerMsg, StoreMsg},
+    raft::{Apply, Peer},
+    router::{CmdResChannel, PeerMsg, StoreMsg},
+    Error,
 };
+
+pub const SPLIT_PREFIX: &str = "split_";
 
 #[derive(Debug)]
 pub struct SplitResult {
@@ -103,13 +104,108 @@ impl SplitInit {
     }
 }
 
+// validate split request and strip ts from split keys if needed
+fn pre_propose_split(logger: &Logger, req: &mut AdminRequest, region: &Region) -> Result<()> {
+    if !req.has_splits() {
+        return Err(box_err!(
+            "cmd_type is BatchSplit but it doesn't have splits request, message maybe \
+             corrupted!"
+                .to_owned()
+        ));
+    }
+
+    let mut requests: Vec<SplitRequest> = req.mut_splits().take_requests().into();
+    let ajusted_splits = std::mem::take(&mut requests)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, mut split)| {
+            let key = split.take_split_key();
+            let key = strip_timestamp_if_exists(key);
+            if is_valid_split_key(&key, i, region) {
+                split.split_key = key;
+                Some(split)
+            } else {
+                None
+            }
+        })
+        .coalesce(|prev, curr| {
+            // Make sure that the split keys are sorted and unique.
+            if prev.split_key < curr.split_key {
+                Err((prev, curr))
+            } else {
+                warn!(
+                    logger,
+                    "skip invalid split key: key should not be larger than the previous.";
+                    "key" => log_wrappers::Value::key(&curr.split_key),
+                    "previous" => log_wrappers::Value::key(&prev.split_key),
+                );
+                Ok(prev)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if ajusted_splits.is_empty() {
+        error!(
+            logger,
+            "failed to handle split req, no valid key found for split";
+        );
+        Err(box_err!("no valid key found for split.".to_owned()))
+    } else {
+        // Rewrite the splits.
+        req.mut_splits().set_requests(ajusted_splits.into());
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct RequestSplit {
+    pub epoch: RegionEpoch,
+    pub split_keys: Vec<Vec<u8>>,
+    pub source: Box<str>,
+}
+
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn on_request_split<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        rs: RequestSplit,
+        ch: CmdResChannel,
+    ) {
+        info!(
+            self.logger,
+            "on split";
+            "split_keys" => %KeysInfoFormatter(rs.split_keys.iter()),
+            "source" => &rs.source,
+        );
+        if !self.is_leader() {
+            // region on this store is no longer leader, skipped.
+            info!(self.logger, "not leader, skip.");
+            ch.set_result(cmd_resp::new_error(Error::NotLeader(
+                self.region_id(),
+                self.leader(),
+            )));
+            return;
+        }
+        if let Err(e) = util::validate_split_region(
+            self.region_id(),
+            self.peer_id(),
+            self.region(),
+            &rs.epoch,
+            &rs.split_keys,
+        ) {
+            info!(self.logger, "invalid split request"; "err" => ?e, "source" => &rs.source);
+            ch.set_result(cmd_resp::new_error(e));
+            return;
+        }
+        self.ask_batch_split_pd(ctx, rs.split_keys, ch);
+    }
+
     pub fn propose_split<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
     ) -> Result<u64> {
-        validate_batch_split(req.get_admin_request(), self.region())?;
+        pre_propose_split(&self.logger, req.mut_admin_request(), self.region())?;
         // We rely on ConflictChecker to detect conflicts, so no need to set proposal
         // context.
         let data = req.write_to_bytes().unwrap();
@@ -225,17 +321,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             )
         });
 
+        let reg = self.tablet_registry();
         for new_region in &regions {
             let new_region_id = new_region.id;
             if new_region_id == region_id {
                 continue;
             }
 
-            let split_temp_path = self.tablet_factory().tablet_path_with_prefix(
-                SPLIT_PREFIX,
-                new_region_id,
-                RAFT_INIT_LOG_INDEX,
-            );
+            let name = reg.tablet_name(SPLIT_PREFIX, new_region_id, RAFT_INIT_LOG_INDEX);
+            let split_temp_path = reg.tablet_root().join(name);
             checkpointer
                 .create_at(&split_temp_path, None, 0)
                 .unwrap_or_else(|e| {
@@ -248,7 +342,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 });
         }
 
-        let derived_path = self.tablet_factory().tablet_path(region_id, log_index);
+        let derived_path = self.tablet_registry().tablet_path(region_id, log_index);
         checkpointer
             .create_at(&derived_path, None, 0)
             .unwrap_or_else(|e| {
@@ -259,12 +353,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     e
                 )
             });
-        let tablet = self
-            .tablet_factory()
-            .open_tablet(region_id, Some(log_index), OpenOptions::default())
-            .unwrap();
         // Remove the old write batch.
-        self.write_batch_mut().take();
+        self.write_batch.take();
+        let reg = self.tablet_registry();
+        let path = reg.tablet_path(region_id, log_index);
+        let mut ctx = TabletContext::new(&regions[derived_index], Some(log_index));
+        // Now the tablet is flushed, so all previous states should be persisted.
+        // Reusing the tablet should not be a problem.
+        // TODO: Should we avoid flushing for the old tablet?
+        ctx.flush_state = Some(self.flush_state().clone());
+        let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
         self.publish_tablet(tablet);
 
         self.region_state_mut()
@@ -314,17 +412,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         fail_point!("on_split_invalidate_locks");
 
-        // Roughly estimate the size and keys for new regions.
-        let new_region_count = regions.len() as u64;
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
-            self.set_region(
-                reader,
-                derived.clone(),
-                RegionChangeReason::Split,
-                tablet_index,
-            );
+            self.set_region(reader, derived.clone(), tablet_index);
         }
 
         self.post_split();
@@ -382,6 +473,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         self.split_trace_mut().push((tablet_index, new_ids));
+        let region_state = self.storage().region_state().clone();
+        self.state_changes_mut()
+            .put_region_state(region_id, tablet_index, &region_state)
+            .unwrap();
+        self.set_has_extra_write();
     }
 
     pub fn on_split_init<T>(
@@ -454,9 +550,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .force_send(split_init.source_id, PeerMsg::SplitInitFinish(region_id));
     }
 
-    pub fn on_split_init_finish<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, region_id: u64) {
+    pub fn on_split_init_finish(&mut self, region_id: u64) {
         let mut found = false;
-        for (tablet_index, ids) in self.split_trace_mut() {
+        for (_, ids) in self.split_trace_mut() {
             if ids.remove(&region_id) {
                 found = true;
                 break;
@@ -476,8 +572,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if off > 0 {
             // There should be very few elements in the vector.
             split_trace.drain(..off);
+            // TODO: save admin_flushed.
+            assert_ne!(admin_flushed, 0);
+            self.storage_mut()
+                .apply_trace_mut()
+                .on_admin_flush(admin_flushed);
             // Persist admin flushed.
-            self.set_has_ready();
+            self.set_has_extra_write();
         }
     }
 }
@@ -489,35 +590,29 @@ mod test {
         Arc,
     };
 
-    use collections::HashMap;
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::TestTabletFactoryV2,
-        raft,
+        kv::TestTabletFactory,
     };
-    use engine_traits::{CfOptionsExt, Peekable, TabletFactory, WriteBatch, ALL_CFS};
-    use futures::channel::mpsc::unbounded;
+    use engine_traits::{
+        Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
+    };
     use kvproto::{
         metapb::RegionEpoch,
-        raft_cmdpb::{AdminCmdType, BatchSplitRequest, PutRequest, RaftCmdResponse, SplitRequest},
-        raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
+        raft_cmdpb::{BatchSplitRequest, SplitRequest},
+        raft_serverpb::{PeerState, RegionLocalState},
     };
-    use raftstore::store::{cmd_resp::new_error, Config, ReadRunner};
+    use raftstore::store::cmd_resp::new_error;
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
-        codec::bytes::encode_bytes,
-        config::VersionTrack,
         store::{new_learner_peer, new_peer},
-        worker::{dummy_future_scheduler, dummy_scheduler, FutureScheduler, Scheduler, Worker},
+        worker::dummy_scheduler,
     };
+    use txn_types::Key;
 
     use super::*;
-    use crate::{
-        fsm::{ApplyFsm, ApplyResReporter},
-        raft::Apply,
-        tablet::CachedTablet,
-    };
+    use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes};
 
     struct MockReporter {
         sender: Sender<ApplyRes>,
@@ -546,7 +641,6 @@ mod test {
 
     fn assert_split(
         apply: &mut Apply<engine_test::kv::KvTestEngine, MockReporter>,
-        factory: &Arc<TestTabletFactoryV2>,
         parent_id: u64,
         right_derived: bool,
         new_region_ids: Vec<u64>,
@@ -589,8 +683,9 @@ mod test {
                 let state = apply.region_state();
                 assert_eq!(state.tablet_index, log_index);
                 assert_eq!(state.get_region(), region);
-                let tablet_path = factory.tablet_path(region.id, log_index);
-                assert!(factory.exists_raw(&tablet_path));
+                let reg = apply.tablet_registry();
+                let tablet_path = reg.tablet_path(region.id, log_index);
+                assert!(reg.tablet_factory().exists(&tablet_path));
 
                 match apply_res {
                     AdminCmdResult::SplitRegion(SplitResult {
@@ -610,11 +705,49 @@ mod test {
                 }
                 child_idx += 1;
 
-                let tablet_path =
-                    factory.tablet_path_with_prefix(SPLIT_PREFIX, region.id, RAFT_INIT_LOG_INDEX);
-                assert!(factory.exists_raw(&tablet_path));
+                let reg = apply.tablet_registry();
+                let tablet_name = reg.tablet_name(SPLIT_PREFIX, region.id, RAFT_INIT_LOG_INDEX);
+                let path = reg.tablet_root().join(tablet_name);
+                assert!(reg.tablet_factory().exists(&path));
             }
         }
+    }
+
+    #[test]
+    fn test_propose() {
+        let logger = slog_global::borrow_global().new(o!());
+
+        let mut region = Region::default();
+        region.set_end_key(b"k10".to_vec());
+
+        let mut req = AdminRequest::default();
+        let err = pre_propose_split(&logger, &mut req, &region).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cmd_type is BatchSplit but it doesn't have splits")
+        );
+
+        let mut splits = BatchSplitRequest::default();
+        req.set_splits(splits.clone());
+        let err = pre_propose_split(&logger, &mut req, &region).unwrap_err();
+        assert!(err.to_string().contains("no valid key found"));
+
+        splits.mut_requests().push(new_split_req(b"", 0, vec![]));
+        splits.mut_requests().push(new_split_req(b"k03", 0, vec![]));
+        splits.mut_requests().push(new_split_req(b"k02", 0, vec![]));
+        splits.mut_requests().push(new_split_req(b"k11", 0, vec![]));
+        let split_key = Key::from_raw(b"k06");
+        let split_key_with_ts = split_key.clone().append_ts(10.into());
+        splits
+            .mut_requests()
+            .push(new_split_req(split_key_with_ts.as_encoded(), 0, vec![]));
+
+        req.set_splits(splits);
+        pre_propose_split(&logger, &mut req, &region).unwrap();
+        let split_reqs = req.get_splits().get_requests();
+        assert_eq!(split_reqs.len(), 2);
+        assert_eq!(split_reqs[0].get_split_key(), b"k03");
+        assert_eq!(split_reqs[1].get_split_key(), split_key.as_encoded());
     }
 
     #[test]
@@ -630,24 +763,15 @@ mod test {
 
         let logger = slog_global::borrow_global().new(o!());
         let path = TempDir::new().unwrap();
-        let cf_opts = ALL_CFS
+        let cf_opts = DATA_CFS
             .iter()
             .copied()
             .map(|cf| (cf, CfOptions::default()))
             .collect();
-        let factory = Arc::new(TestTabletFactoryV2::new(
-            path.path(),
-            DbOptions::default(),
-            cf_opts,
-        ));
-
-        let tablet = factory
-            .open_tablet(
-                region.id,
-                Some(5),
-                OpenOptions::default().set_create_new(true),
-            )
-            .unwrap();
+        let factory = Box::new(TestTabletFactory::new(DbOptions::default(), cf_opts));
+        let reg = TabletRegistry::new(factory, path.path()).unwrap();
+        let ctx = TabletContext::new(&region, Some(5));
+        reg.load(ctx, true).unwrap();
 
         let mut region_state = RegionLocalState::default();
         region_state.set_state(PeerState::Normal);
@@ -665,9 +789,10 @@ mod test {
                 .clone(),
             region_state,
             reporter,
-            CachedTablet::new(Some(tablet)),
-            factory.clone(),
+            reg,
             read_scheduler,
+            Arc::default(),
+            None,
             logger.clone(),
         );
 
@@ -827,7 +952,6 @@ mod test {
 
             assert_split(
                 &mut apply,
-                &factory,
                 parent_id,
                 right_derive,
                 new_region_ids,
@@ -842,17 +966,22 @@ mod test {
 
         // Split will create checkpoint tablet, so if there are some writes before
         // split, they should be flushed immediately.
-        apply.apply_put(CF_DEFAULT, b"k04", b"v4").unwrap();
-        assert!(!WriteBatch::is_empty(
-            apply.write_batch_mut().as_ref().unwrap()
-        ));
+        apply.apply_put(CF_DEFAULT, 50, b"k04", b"v4").unwrap();
+        assert!(!WriteBatch::is_empty(apply.write_batch.as_ref().unwrap()));
         splits.mut_requests().clear();
         splits
             .mut_requests()
             .push(new_split_req(b"k05", 70, vec![71, 72, 73]));
         req.set_splits(splits);
-        apply.apply_batch_split(&req, 50).unwrap();
-        assert!(apply.write_batch_mut().is_none());
-        assert_eq!(apply.tablet().get_value(b"k04").unwrap().unwrap(), b"v4");
+        apply.apply_batch_split(&req, 51).unwrap();
+        assert!(apply.write_batch.is_none());
+        assert_eq!(
+            apply
+                .tablet()
+                .get_value(&keys::data_key(b"k04"))
+                .unwrap()
+                .unwrap(),
+            b"v4"
+        );
     }
 }

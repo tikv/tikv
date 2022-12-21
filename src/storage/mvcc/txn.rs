@@ -5,6 +5,7 @@ use std::fmt;
 
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use kvproto::kvrpcpb::LockInfo;
 use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
@@ -64,6 +65,11 @@ pub struct MvccTxn {
     // `writes`, so it can be further processed. The elements are tuples representing
     // (key, lock, remove_pessimistic_lock)
     pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
+    // Collects the information of locks that are acquired in this MvccTxn. Locks that already
+    // exists but updated in this MvccTxn won't be collected. The collected information will be
+    // used to update the lock waiting information and redo deadlock detection, if there are some
+    // pessimistic lock requests waiting on the keys.
+    pub(crate) new_locks: Vec<LockInfo>,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
     // readers before they are written to the engine.
@@ -84,7 +90,8 @@ impl MvccTxn {
             start_ts,
             write_size: 0,
             modifies: vec![],
-            locks_for_1pc: Vec::new(),
+            locks_for_1pc: vec![],
+            new_locks: vec![],
             concurrency_manager,
             guards: vec![],
         }
@@ -99,6 +106,10 @@ impl MvccTxn {
         std::mem::take(&mut self.guards)
     }
 
+    pub fn take_new_locks(&mut self) -> Vec<LockInfo> {
+        std::mem::take(&mut self.new_locks)
+    }
+
     pub fn write_size(&self) -> usize {
         self.write_size
     }
@@ -107,7 +118,12 @@ impl MvccTxn {
         self.modifies.len() == 0 && self.locks_for_1pc.len() == 0
     }
 
-    pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock) {
+    // Write a lock. If the key doesn't have lock before, `is_new` should be set.
+    pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock, is_new: bool) {
+        if is_new {
+            self.new_locks
+                .push(lock.clone().into_lock_info(key.to_raw().unwrap()));
+        }
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.modifies.push(write);
@@ -117,7 +133,13 @@ impl MvccTxn {
         self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
     }
 
-    pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock) {
+    // Write a pessimistic lock. If the key doesn't have lock before, `is_new`
+    // should be set.
+    pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock, is_new: bool) {
+        if is_new {
+            self.new_locks
+                .push(lock.to_lock().into_lock_info(key.to_raw().unwrap()));
+        }
         self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
@@ -198,12 +220,13 @@ impl MvccTxn {
         }
 
         lock.rollback_ts.push(self.start_ts);
-        self.put_lock(key.clone(), &lock);
+        self.put_lock(key.clone(), &lock, false);
     }
 
     pub(crate) fn clear(&mut self) {
         self.write_size = 0;
         self.modifies.clear();
+        self.new_locks.clear();
         self.locks_for_1pc.clear();
         self.guards.clear();
     }

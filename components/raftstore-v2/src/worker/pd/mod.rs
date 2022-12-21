@@ -2,16 +2,13 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicBool, Arc},
 };
 
 use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
 use raftstore::store::{util::KeysInfoFormatter, TxnExt};
@@ -19,7 +16,10 @@ use slog::{error, info, Logger};
 use tikv_util::{time::UnixSecs, worker::Runnable};
 use yatp::{task::future::TaskCell, Remote};
 
-use crate::{batch::StoreRouter, router::PeerMsg};
+use crate::{
+    batch::StoreRouter,
+    router::{CmdResChannel, PeerMsg},
+};
 
 mod region_heartbeat;
 mod split;
@@ -42,6 +42,7 @@ pub enum Task {
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+        ch: CmdResChannel,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -97,7 +98,7 @@ where
     store_id: u64,
     pd_client: Arc<T>,
     raft_engine: ER,
-    tablet_factory: Arc<dyn TabletFactory<EK>>,
+    tablet_registry: TabletRegistry<EK>,
     router: StoreRouter<EK, ER>,
 
     remote: Remote<TaskCell>,
@@ -130,7 +131,7 @@ where
         store_id: u64,
         pd_client: Arc<T>,
         raft_engine: ER,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        tablet_registry: TabletRegistry<EK>,
         router: StoreRouter<EK, ER>,
         remote: Remote<TaskCell>,
         concurrency_manager: ConcurrencyManager,
@@ -142,7 +143,7 @@ where
             store_id,
             pd_client,
             raft_engine,
-            tablet_factory,
+            tablet_registry,
             router,
             remote,
             region_peers: HashMap::default(),
@@ -177,7 +178,8 @@ where
                 split_keys,
                 peer,
                 right_derive,
-            } => self.handle_ask_batch_split(region, split_keys, peer, right_derive),
+                ch,
+            } => self.handle_ask_batch_split(region, split_keys, peer, right_derive, ch),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::UpdateMaxTimestamp {
                 region_id,
@@ -204,14 +206,14 @@ where
     }
 }
 
-pub mod requests {
+mod requests {
     use kvproto::raft_cmdpb::{
         AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
-        SplitRequest,
     };
     use raft::eraftpb::ConfChangeType;
 
     use super::*;
+    use crate::router::RaftRequest;
 
     pub fn send_admin_request<EK, ER>(
         logger: &Logger,
@@ -220,6 +222,7 @@ pub mod requests {
         epoch: metapb::RegionEpoch,
         peer: metapb::Peer,
         request: AdminRequest,
+        ch: Option<CmdResChannel>,
     ) where
         EK: KvEngine,
         ER: RaftEngine,
@@ -232,7 +235,10 @@ pub mod requests {
         req.mut_header().set_peer(peer);
         req.set_admin_request(request);
 
-        let (msg, _) = PeerMsg::raft_command(req);
+        let msg = match ch {
+            Some(ch) => PeerMsg::AdminCommand(RaftRequest::new(req, ch)),
+            None => PeerMsg::admin_command(req).0,
+        };
         if let Err(e) = router.send(region_id, msg) {
             error!(
                 logger,
@@ -271,41 +277,6 @@ pub mod requests {
         req
     }
 
-    pub fn new_split_region_request(
-        split_key: Vec<u8>,
-        new_region_id: u64,
-        peer_ids: Vec<u64>,
-        right_derive: bool,
-    ) -> AdminRequest {
-        let mut req = AdminRequest::default();
-        req.set_cmd_type(AdminCmdType::Split);
-        req.mut_split().set_split_key(split_key);
-        req.mut_split().set_new_region_id(new_region_id);
-        req.mut_split().set_new_peer_ids(peer_ids);
-        req.mut_split().set_right_derive(right_derive);
-        req
-    }
-
-    pub fn new_batch_split_region_request(
-        split_keys: Vec<Vec<u8>>,
-        ids: Vec<pdpb::SplitId>,
-        right_derive: bool,
-    ) -> AdminRequest {
-        let mut req = AdminRequest::default();
-        req.set_cmd_type(AdminCmdType::BatchSplit);
-        req.mut_splits().set_right_derive(right_derive);
-        let mut requests = Vec::with_capacity(ids.len());
-        for (mut id, key) in ids.into_iter().zip(split_keys) {
-            let mut split = SplitRequest::default();
-            split.set_split_key(key);
-            split.set_new_region_id(id.get_new_region_id());
-            split.set_new_peer_ids(id.take_new_peer_ids());
-            requests.push(split);
-        }
-        req.mut_splits().set_requests(requests.into());
-        req
-    }
-
     pub fn new_transfer_leader_request(
         peer: metapb::Peer,
         peers: Vec<metapb::Peer>,
@@ -314,14 +285,6 @@ pub mod requests {
         req.set_cmd_type(AdminCmdType::TransferLeader);
         req.mut_transfer_leader().set_peer(peer);
         req.mut_transfer_leader().set_peers(peers.into());
-        req
-    }
-
-    pub fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
-        let mut req = AdminRequest::default();
-        req.set_cmd_type(AdminCmdType::PrepareMerge);
-        req.mut_prepare_merge()
-            .set_target(merge.get_target().to_owned());
         req
     }
 }
