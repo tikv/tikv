@@ -617,7 +617,6 @@ pub mod tests {
         .unwrap_or_else(|_| Some(Key::from_raw(b"")))
         .unwrap();
         assert_eq!(first_key, Key::from_raw(prewrite_key));
-
         // case 1: start key is before all keys, flashback b"c".
         let start_key = b"a";
         let (flashback_start_ts, flashback_commit_ts) = (*ts.incr(), *ts.incr());
