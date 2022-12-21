@@ -6,11 +6,7 @@ use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::{compat::Future01CompatExt, FutureExt};
-use kvproto::{metapb::Region, raft_serverpb::RaftMessage};
-use raftstore::{
-    coprocessor::RegionChangeReason,
-    store::{Config, ReadDelegate, RegionReadProgressRegistry},
-};
+use raftstore::store::{Config, ReadDelegate, RegionReadProgressRegistry};
 use slog::{info, o, Logger};
 use tikv_util::{
     future::poll_future_notify,
@@ -20,7 +16,6 @@ use tikv_util::{
 
 use crate::{
     batch::StoreContext,
-    raft::Peer,
     router::{StoreMsg, StoreTick},
 };
 
@@ -162,6 +157,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => self.fsm.store.on_raft_message(self.store_ctx, msg),
                 StoreMsg::SplitInit(msg) => self.fsm.store.on_split_init(self.store_ctx, msg),
+                StoreMsg::StoreUnreachable { to_store_id } => self
+                    .fsm
+                    .store
+                    .on_store_unreachable(self.store_ctx, to_store_id),
             }
         }
     }

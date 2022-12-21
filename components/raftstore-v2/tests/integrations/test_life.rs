@@ -49,8 +49,11 @@ fn assert_tombstone(raft_engine: &impl RaftEngine, region_id: u64, peer: &metapb
     raft_engine.get_all_entries_to(region_id, &mut buf).unwrap();
     assert!(buf.is_empty(), "{:?}", buf);
     assert_matches!(raft_engine.get_raft_state(region_id), Ok(None));
-    assert_matches!(raft_engine.get_apply_state(region_id), Ok(None));
-    let region_state = raft_engine.get_region_state(region_id).unwrap().unwrap();
+    assert_matches!(raft_engine.get_apply_state(region_id, u64::MAX), Ok(None));
+    let region_state = raft_engine
+        .get_region_state(region_id, u64::MAX)
+        .unwrap()
+        .unwrap();
     assert_matches!(region_state.get_state(), PeerState::Tombstone);
     assert!(
         region_state.get_region().get_peers().contains(peer),
@@ -121,7 +124,7 @@ fn test_life_by_message() {
     let raft_engine = &cluster.node(0).running_state().unwrap().raft_engine;
     raft_engine.get_raft_state(test_region_id).unwrap().unwrap();
     raft_engine
-        .get_apply_state(test_region_id)
+        .get_apply_state(test_region_id, 0)
         .unwrap()
         .unwrap();
 

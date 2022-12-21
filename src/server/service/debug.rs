@@ -1,7 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::RocksEngine;
-use engine_traits::{Engines, MiscExt, RaftEngine};
+use std::sync::Arc;
+
+use engine_rocks::{RocksEngine, RocksStatistics};
+use engine_traits::{Engines, RaftEngine};
 use futures::{
     future::{Future, FutureExt, TryFutureExt},
     sink::SinkExt,
@@ -54,11 +56,15 @@ impl<ER: RaftEngine, T: RaftExtension> Service<ER, T> {
     /// `GcWorker`.
     pub fn new(
         engines: Engines<RocksEngine, ER>,
+        kv_statistics: Option<Arc<RocksStatistics>>,
+        raft_statistics: Option<Arc<RocksStatistics>>,
         pool: Handle,
         raft_router: T,
         cfg_controller: ConfigController,
     ) -> Self {
-        let debugger = Debugger::new(engines, cfg_controller);
+        let mut debugger = Debugger::new(engines, cfg_controller);
+        debugger.set_kv_statistics(kv_statistics);
+        debugger.set_raft_statistics(raft_statistics);
         Service {
             pool,
             debugger,
@@ -353,9 +359,8 @@ impl<ER: RaftEngine, T: RaftExtension + 'static> debugpb::Debug for Service<ER, 
                 resp.set_store_id(debugger.get_store_ident()?.store_id);
                 resp.set_prometheus(metrics::dump(false));
                 if req.get_all() {
-                    let engines = debugger.get_engine();
-                    resp.set_rocksdb_kv(box_try!(MiscExt::dump_stats(&engines.kv)));
-                    resp.set_rocksdb_raft(box_try!(RaftEngine::dump_stats(&engines.raft)));
+                    resp.set_rocksdb_kv(debugger.dump_kv_stats()?);
+                    resp.set_rocksdb_raft(debugger.dump_raft_stats()?);
                     resp.set_jemalloc(tikv_alloc::dump_stats());
                 }
                 Ok(resp)

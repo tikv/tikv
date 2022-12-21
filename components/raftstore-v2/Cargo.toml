@@ -41,6 +41,7 @@ fail = "0.5"
 file_system = { workspace = true }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["compat"] }
+itertools = "0.10"
 keys = { workspace = true }
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }
@@ -71,9 +72,9 @@ test_util = { workspace = true }
 [[test]]
 name = "raftstore-v2-failpoints"
 path = "tests/failpoints/mod.rs"
-required-features = ["failpoints", "testexport"]
+required-features = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 
 [[test]]
 name = "raftstore-v2-integrations"
 path = "tests/integrations/mod.rs"
-required-features = ["testexport"]
+required-features = ["testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]

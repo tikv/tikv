@@ -1,19 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    task::{Context, Poll},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{KvEngine, TabletRegistry};
-use futures::{compat::Future01CompatExt, Future, FutureExt, StreamExt};
+use engine_traits::{FlushState, KvEngine, TabletRegistry};
+use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use raftstore::store::ReadTask;
 use slog::Logger;
@@ -24,6 +19,7 @@ use tikv_util::{
 };
 
 use crate::{
+    operation::DataTrace,
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
 };
@@ -67,6 +63,8 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        flush_state: Arc<FlushState>,
+        log_recovery: Option<Box<DataTrace>>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
@@ -76,6 +74,8 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             res_reporter,
             tablet_registry,
             read_scheduler,
+            flush_state,
+            log_recovery,
             logger,
         );
         (

@@ -137,6 +137,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     &mut reader,
                     next_lock_key,
                     self.end_key.as_ref(),
+                    self.start_ts,
                 )?;
                 if key_locks.is_empty() {
                     // - No more locks to rollback, continue to the Prewrite Phase.
