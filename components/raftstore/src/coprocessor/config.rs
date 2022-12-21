@@ -1,12 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use engine_traits::{perf_level_serde, PerfLevel};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
-use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
-
+use tikv_util::{
+    box_err,
+    config::{ReadableSize, VersionTrack},
+};
 use super::Result;
-use crate::store::SplitCheckTask;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -177,25 +179,29 @@ impl Config {
     }
 }
 
-pub struct SplitCheckConfigManager(pub Scheduler<SplitCheckTask>);
+pub struct SplitCheckConfigManager {
+    config: Arc<VersionTrack<Config>>,
+}
+
+impl SplitCheckConfigManager {
+    pub fn new(config: Arc<VersionTrack<Config>>) -> Self {
+        SplitCheckConfigManager { config }
+    }
+}
 
 impl ConfigManager for SplitCheckConfigManager {
     fn dispatch(
         &mut self,
         change: ConfigChange,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        self.0.schedule(SplitCheckTask::ChangeConfig(change))?;
-        Ok(())
+        let change = change;
+        self.config
+            .update(move |cfg: &mut Config| cfg.update(change))?;
+            Ok(())
     }
 }
 
-impl std::ops::Deref for SplitCheckConfigManager {
-    type Target = Scheduler<SplitCheckTask>;
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 #[cfg(test)]
 mod tests {

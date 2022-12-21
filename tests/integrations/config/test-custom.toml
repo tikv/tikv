@@ -230,10 +230,6 @@ max-entry-cache-warmup-duration = "2s"
 [coprocessor]
 split-region-on-table = false
 batch-split-limit = 1
-region-max-size = "12MB"
-region-split-size = "12MB"
-region-max-keys = 100000
-region-split-keys = 100000
 consistency-check-method = "raw"
 enable-region-bucket = true
 region-bucket-size = "1MB"

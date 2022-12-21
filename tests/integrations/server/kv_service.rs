@@ -46,7 +46,7 @@ use tikv::{
     storage::txn::FLASHBACK_BATCH_SIZE,
 };
 use tikv_util::{
-    config::ReadableSize,
+    config::{ReadableSize, VersionTrack},
     worker::{dummy_scheduler, LazyWorker},
     HandyRwLock,
 };
@@ -1194,7 +1194,10 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
-    let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
+    let coprocessor_host = CoprocessorHost::new(
+        router,
+        Arc::new(VersionTrack::new(raftstore::coprocessor::Config::default())),
+    );
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())

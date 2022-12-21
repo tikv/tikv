@@ -14,7 +14,6 @@ use kvproto::{
     metapb::{Region, RegionEpoch},
     pdpb::CheckPolicy,
 };
-use online_config::{ConfigChange, OnlineConfig};
 use tikv_util::{box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable};
 use txn_types::Key;
 
@@ -153,7 +152,6 @@ pub enum Task {
         bucket_ranges: Option<Vec<BucketRange>>,
     },
     ApproximateBuckets(Region),
-    ChangeConfig(ConfigChange),
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
 }
@@ -202,16 +200,17 @@ impl Display for Task {
                 start_key,
                 end_key,
                 auto_split,
+                policy,
                 ..
             } => write!(
                 f,
-                "[split check worker] Split Check Task for {}, start_key: {:?}, end_key: {:?}, auto_split: {:?}",
+                "[split check worker] Split Check Task for {}, start_key: {:?}, end_key: {:?}, auto_split: {:?}, policy: {:?}",
                 region.get_id(),
                 start_key,
                 end_key,
-                auto_split
+                auto_split,
+                policy,
             ),
-            Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
             Task::ApproximateBuckets(_) => write!(f, "[split check worker] Approximate buckets"),
@@ -244,7 +243,7 @@ where
     fn approximate_check_bucket(
         &self,
         region: &Region,
-        host: &mut SplitCheckerHost<'_, E>,
+        host: &mut SplitCheckerHost<E>,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) -> Result<()> {
         let ranges = bucket_ranges.clone().unwrap_or_else(|| {
@@ -484,7 +483,7 @@ where
     ///                If it's Some(vec![]), skip generating buckets.
     fn scan_split_keys(
         &self,
-        host: &mut SplitCheckerHost<'_, E>,
+        host: &mut SplitCheckerHost<E>,
         region: &Region,
         is_key_range: bool,
         start_key: &[u8],
@@ -619,17 +618,6 @@ where
 
         Ok(host.split_keys())
     }
-
-    fn change_cfg(&mut self, change: ConfigChange) {
-        if let Err(e) = self.coprocessor.cfg.update(change.clone()) {
-            error!("update split check config failed"; "err" => ?e);
-            return;
-        };
-        info!(
-            "split check config updated";
-            "change" => ?change
-        );
-    }
 }
 
 impl<E, S> Runnable for Runner<E, S>
@@ -656,9 +644,8 @@ where
                 policy,
                 bucket_ranges,
             ),
-            Task::ChangeConfig(c) => self.change_cfg(c),
             Task::ApproximateBuckets(region) => {
-                if self.coprocessor.cfg.enable_region_bucket {
+                if self.coprocessor.cfg.value().enable_region_bucket {
                     let mut host = self.coprocessor.new_split_checker_host(
                         &region,
                         &self.engine,
@@ -674,7 +661,7 @@ where
                 }
             }
             #[cfg(any(test, feature = "testexport"))]
-            Task::Validate(f) => f(&self.coprocessor.cfg),
+            Task::Validate(f) => f(&self.coprocessor.cfg.value()),
         }
     }
 }

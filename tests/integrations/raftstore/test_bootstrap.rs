@@ -90,8 +90,11 @@ fn test_node_bootstrap_with_prepared_data() {
     );
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::new(node.get_router(), cfg.coprocessor);
-
+    let coprocessor_host = CoprocessorHost::new(
+        node.get_router(),
+        Arc::new(VersionTrack::new(cfg.coprocessor)),
+    );
+    
     let importer = {
         let dir = tmp_path.path().join("import-sst");
         Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())

@@ -11,8 +11,7 @@ use kvproto::{
 };
 use protobuf::Message;
 use raft::eraftpb;
-use tikv_util::box_try;
-
+use tikv_util::{box_try, config::VersionTrack};
 use super::*;
 use crate::store::CasualRouter;
 
@@ -323,7 +322,7 @@ where
     E: KvEngine + 'static,
 {
     pub registry: Registry<E>,
-    pub cfg: Config,
+    pub cfg: Arc<VersionTrack<Config>>,    
 }
 
 impl<E: KvEngine> Default for CoprocessorHost<E>
@@ -341,8 +340,8 @@ where
 impl<E: KvEngine> CoprocessorHost<E> {
     pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(
         ch: C,
-        cfg: Config,
-    ) -> CoprocessorHost<E> {
+        cfg: Arc<VersionTrack<Config>>,
+        ) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -557,14 +556,14 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn new_split_checker_host<'a>(
-        &'a self,
+    pub fn new_split_checker_host(
+        &self,
         region: &Region,
         engine: &E,
         auto_split: bool,
         policy: CheckPolicy,
-    ) -> SplitCheckerHost<'a, E> {
-        let mut host = SplitCheckerHost::new(auto_split, &self.cfg);
+    ) -> SplitCheckerHost<E> {
+        let mut host = SplitCheckerHost::new(auto_split, self.cfg.value().clone());
         loop_ob!(
             region,
             &self.registry.split_check_observers,

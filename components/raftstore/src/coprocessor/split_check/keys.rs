@@ -142,7 +142,7 @@ where
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host<'_, E>,
+        host: &mut Host<E>,
         engine: &E,
         policy: CheckPolicy,
     ) {
@@ -239,8 +239,10 @@ mod tests {
         pdpb::CheckPolicy,
     };
     use tempfile::Builder;
-    use tikv_util::{config::ReadableSize, worker::Runnable};
-    use txn_types::{Key, TimeStamp, Write, WriteType};
+    use tikv_util::{
+        config::{ReadableSize, VersionTrack},
+        worker::Runnable,
+    };    use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::{
         super::{
@@ -309,7 +311,7 @@ mod tests {
             batch_split_limit: 5,
             ..Default::default()
         };
-
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
@@ -415,6 +417,7 @@ mod tests {
             ..Default::default()
         };
 
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
@@ -587,7 +590,7 @@ mod tests {
         let mut runnable = SplitCheckRunner::new(
             engine.clone(),
             tx.clone(),
-            CoprocessorHost::new(tx.clone(), cfg.clone()),
+            CoprocessorHost::new(tx.clone(), Arc::new(VersionTrack::new(cfg.clone()))),
         );
 
         put_data(&engine, 0, 90, false);
@@ -614,7 +617,11 @@ mod tests {
         // exists, it will result in split by keys failed.
         cfg.region_max_size = Some(ReadableSize(region_size * 6 / 5));
         cfg.region_split_size = ReadableSize(region_size * 4 / 5);
-        runnable = SplitCheckRunner::new(engine, tx.clone(), CoprocessorHost::new(tx, cfg));
+        runnable = SplitCheckRunner::new(
+            engine,
+            tx.clone(),
+            CoprocessorHost::new(tx, Arc::new(VersionTrack::new(cfg))),
+        );
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
