@@ -5557,7 +5557,7 @@ where
         if !self.fsm.peer.is_leader() {
             // region on this store is no longer leader, skipped.
             info!(
-                "not leader, skip.";
+                "not leader, skip proposing split";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
@@ -5574,7 +5574,13 @@ where
             &region_epoch,
             &split_keys,
         ) {
-            info!("invalid split request"; "err" => ?e, "region_id" => self.fsm.region_id(), "peer_id" => self.fsm.peer_id(), "source" => %source);
+            info!(
+                "invalid split request";
+                "err" => ?e,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "source" => %source
+            );
             cb.invoke_with_response(new_error(e));
             return;
         }
