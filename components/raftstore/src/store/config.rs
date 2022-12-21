@@ -1259,7 +1259,7 @@ mod tests {
         cfg.raft_entry_max_size = ReadableSize(0);
         cfg.validate(split_size, false, ReadableSize(0))
             .unwrap_err();
-        cfg.raft_entry_max_size = ReadableSize::mb(3071);
+        cfg.raft_entry_max_size = ReadableSize::mb(3073);
         cfg.validate(split_size, false, ReadableSize(0))
             .unwrap_err();
         cfg.raft_entry_max_size = ReadableSize::gb(3);
