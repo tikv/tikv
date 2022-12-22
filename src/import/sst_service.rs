@@ -19,9 +19,12 @@ use grpcio::{
 use kvproto::{
     encryptionpb::EncryptionMethod,
     errorpb,
-    import_sstpb::{RawWriteRequest_oneof_chunk as RawChunk, WriteRequest_oneof_chunk as Chunk, *},
+    import_sstpb::{
+        Error as ImportPbError, ImportSst, Range, RawWriteRequest_oneof_chunk as RawChunk, SstMeta,
+        SwitchMode, WriteRequest_oneof_chunk as Chunk, *,
+    },
     kvrpcpb::Context,
-    raft_cmdpb::*,
+    raft_cmdpb::{CmdType, DeleteRequest, PutRequest, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
 use raftstore::{
@@ -78,6 +81,7 @@ pub struct SnapshotResult<E: KvEngine> {
 
 struct RequestCollector {
     context: Context,
+    max_raft_req_size: usize,
     /// Retain the last ts of each key in each request.
     /// This is used for write CF because resolved ts observer hates duplicated
     /// key in the same request.
@@ -85,9 +89,8 @@ struct RequestCollector {
     /// Collector favor that simple collect all items, and it do not contains
     /// duplicated key-value. This is used for default CF.
     default_reqs: HashMap<Vec<u8>, Request>,
-    // Size of all `Request`s.
+    /// Size of all `Request`s.
     unpacked_size: usize,
-    max_raft_req_size: usize,
 
     pending_raft_reqs: Vec<RaftCmdRequest>,
 }
@@ -96,17 +99,14 @@ impl RequestCollector {
     fn new(context: Context, max_raft_req_size: usize) -> Self {
         Self {
             context,
+            max_raft_req_size,
             write_reqs: HashMap::default(),
             default_reqs: HashMap::default(),
             unpacked_size: 0,
-            max_raft_req_size,
             pending_raft_reqs: Vec::new(),
         }
     }
 
-    // we need to remove duplicate keys in here, since
-    // in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
-    // will panic if found duplicated entry during Vec<PutRequest>.
     fn accect_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
@@ -135,15 +135,21 @@ impl RequestCollector {
         self.accept(cf, req);
     }
 
+    // we need to remove duplicate keys in here, since
+    // in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
+    // will panic if found duplicated entry during Vec<PutRequest>.
     fn accept(&mut self, cf: &str, req: Request) {
         let k = key_from_request(&req);
-        let req_size = req.compute_size();
         match cf {
             CF_WRITE => {
                 let (encoded_key, ts) = match Key::split_on_ts_for(k) {
                     Ok(k) => k,
                     Err(err) => {
-                        warn!("key without ts, skipping"; "key" => %log_wrappers::Value::key(k), "err" => %err);
+                        warn!(
+                            "key without ts, skipping";
+                            "key" => %log_wrappers::Value::key(k),
+                            "err" => %err
+                        );
                         return;
                     }
                 };
@@ -153,17 +159,24 @@ impl RequestCollector {
                     .map(|(_, old_ts)| *old_ts < ts.into_inner())
                     .unwrap_or(true)
                 {
-                    self.write_reqs
-                        .insert(encoded_key.to_owned(), (req, ts.into_inner()));
+                    self.unpacked_size += req.compute_size() as usize;
+                    if let Some((v, _)) = self
+                        .write_reqs
+                        .insert(encoded_key.to_owned(), (req, ts.into_inner()))
+                    {
+                        self.unpacked_size -= v.get_cached_size() as usize;
+                    }
                 }
             }
             CF_DEFAULT => {
-                self.default_reqs.insert(k.to_owned(), req);
+                self.unpacked_size += req.compute_size() as usize;
+                if let Some(v) = self.default_reqs.insert(k.to_owned(), req) {
+                    self.unpacked_size -= v.get_cached_size() as usize;
+                }
             }
             _ => unreachable!(),
         }
 
-        self.unpacked_size += req_size as usize;
         if self.unpacked_size >= self.max_raft_req_size {
             self.pack_all();
         }
@@ -171,11 +184,15 @@ impl RequestCollector {
 
     #[cfg(test)]
     fn drain_unpacked_reqs(&mut self, cf: &str) -> Vec<Request> {
-        if cf == CF_DEFAULT {
+        let res: Vec<Request> = if cf == CF_DEFAULT {
             self.default_reqs.drain().map(|(_, req)| req).collect()
         } else {
             self.write_reqs.drain().map(|(_, (req, _))| req).collect()
+        };
+        for r in &res {
+            self.unpacked_size -= r.get_cached_size() as usize;
         }
+        res
     }
 
     #[inline]
@@ -413,7 +430,7 @@ where
         router: Router,
         limiter: Limiter,
         max_raft_size: usize,
-    ) -> std::result::Result<Option<Range>, kvproto::import_sstpb::Error> {
+    ) -> std::result::Result<Option<Range>, ImportPbError> {
         let mut range: Option<Range> = None;
 
         let mut collector = RequestCollector::new(req.take_context(), max_raft_size);
@@ -466,7 +483,7 @@ where
                     Ok(_) => inflight_futures.push(future),
                     Err(e) => {
                         let msg = format!("failed to send raft command: {}", e);
-                        let mut e = kvproto::import_sstpb::Error::default();
+                        let mut e = ImportPbError::default();
                         e.set_message(msg);
                         return Err(e);
                     }
@@ -483,12 +500,12 @@ where
                 match future.await {
                     Err(e) => {
                         let msg = format!("failed to complete raft command: {}", e);
-                        let mut e = kvproto::import_sstpb::Error::default();
+                        let mut e = ImportPbError::default();
                         e.set_message(msg);
                         return Err(e);
                     }
                     Ok(mut r) if r.response.get_header().has_error() => {
-                        let mut e = kvproto::import_sstpb::Error::default();
+                        let mut e = ImportPbError::default();
                         e.set_message("failed to complete raft command".to_string());
                         e.set_store_error(r.response.take_header().take_error());
                         return Err(e);
@@ -669,7 +686,7 @@ where
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             if let Err(e) = importer.remove_dir(req.get_prefix()) {
-                let mut import_err = kvproto::import_sstpb::Error::default();
+                let mut import_err = ImportPbError::default();
                 import_err.set_message(format!("failed to remove directory: {}", e));
                 resp.set_error(import_err);
             }
