@@ -41,3 +41,4 @@ pub use bootstrap::Bootstrap;
 pub use fsm::StoreMeta;
 pub use operation::{SimpleWriteBinary, SimpleWriteEncoder, StateStorage};
 pub use raftstore::{store::Config, Error, Result};
+pub use worker::pd::{FlowReporter, Task as PdTask};

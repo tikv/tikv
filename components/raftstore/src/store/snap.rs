@@ -1984,6 +1984,31 @@ impl TabletSnapManager {
             true
         }
     }
+
+    pub fn total_snap_size(&self) -> Result<u64> {
+        let mut total_size = 0;
+        for entry in file_system::read_dir(&self.base)? {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
+
+            let path = entry.path();
+            // Generated snapshots are just checkpoints, only counts received snapshots.
+            if !path.starts_with(SNAP_REV_PREFIX) {
+                continue;
+            }
+            for e in file_system::read_dir(path)? {
+                match e.and_then(|e| e.metadata()) {
+                    Ok(m) => total_size += m.len(),
+                    Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                    Err(e) => return Err(Error::from(e)),
+                }
+            }
+        }
+        Ok(total_size)
+    }
 }
 
 #[cfg(test)]
