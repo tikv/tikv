@@ -287,14 +287,15 @@ struct WriteCompactionFilter {
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     // A key batch which is going to be sent to the GC worker.
     mvcc_deletions: Vec<Key>,
-    // The count of records covered the current mvcc-deletion mark. The mvcc-deletion
-    // mark will be sent to the GC worker only if `mvcc_deletion_overlaps` is 0. It's
-    // a little optimization to reduce modifications on write CF.
-    mvcc_deletion_overlaps: Option<usize>,
+    // The mvcc-deletion mark will be sent to the GC worker only if `mvcc_del_gc_needed` is
+    // true. It's a little optimization to reduce modifications on write CF.
+    mvcc_del_gc_needed: bool,
     regions_provider: (u64, Arc<dyn RegionInfoProvider>),
 
     mvcc_key_prefix: Vec<u8>,
-    remove_older: bool,
+    // `last_is_rollback_or_lock` is true if the last version before gc safepoint is Rollback or
+    // Lock.
+    last_is_rollback_or_lock: bool,
 
     // Some metrics about implementation detail.
     versions: usize,
@@ -332,11 +333,11 @@ impl WriteCompactionFilter {
             write_batch,
             gc_scheduler,
             mvcc_deletions: Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT),
-            mvcc_deletion_overlaps: None,
+            mvcc_del_gc_needed: false,
             regions_provider,
 
             mvcc_key_prefix: vec![],
-            remove_older: false,
+            last_is_rollback_or_lock: false,
 
             versions: 0,
             filtered: 0,
@@ -379,11 +380,18 @@ impl WriteCompactionFilter {
         }
     }
 
-    fn handle_bottommost_delete(&mut self) {
+    fn handle_bottommost_delete_if_needed(&mut self) {
+        if self.mvcc_del_gc_needed == false {
+            return;
+        }
+        self.mvcc_del_gc_needed = false;
         // Valid MVCC records should begin with `DATA_PREFIX`.
         debug_assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
         self.mvcc_deletions.push(key);
+        if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
+            self.gc_mvcc_deletions();
+        }
     }
 
     fn gc_mvcc_deletions(&mut self) {
@@ -396,6 +404,34 @@ impl WriteCompactionFilter {
             };
             self.schedule_gc_task(task, false);
         }
+    }
+
+    // `check_latest_version_before_safepoint` checks the last(latest) version
+    // before gc safepoint and returns the CompactionFilterDecision for current
+    // version.
+    fn check_latest_version_before_safepoint(
+        &mut self,
+        write: WriteRef<'_>,
+    ) -> Result<CompactionFilterDecision, String> {
+        self.last_is_rollback_or_lock = false;
+        match write.write_type {
+            WriteType::Rollback | WriteType::Lock => {
+                self.mvcc_rollback_and_locks += 1;
+                self.filtered += 1;
+                self.last_is_rollback_or_lock = true;
+                return Ok(CompactionFilterDecision::Remove);
+            }
+            WriteType::Put => {}
+            WriteType::Delete => {
+                if self.is_bottommost_level {
+                    self.mvcc_del_gc_needed = true;
+                    GC_COMPACTION_FILTER_MVCC_DELETION_MET
+                        .with_label_values(&[STAT_TXN_KEYMODE])
+                        .inc();
+                }
+            }
+        }
+        Ok(CompactionFilterDecision::Keep)
     }
 
     fn do_filter(
@@ -412,59 +448,39 @@ impl WriteCompactionFilter {
         }
 
         self.versions += 1;
+        let write = parse_write(value)?;
+
+        // If it is the latest version before safepoint for current key.
         if self.mvcc_key_prefix != mvcc_key_prefix {
-            if self.mvcc_deletion_overlaps.take() == Some(0) {
-                self.handle_bottommost_delete();
-                if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
-                    self.gc_mvcc_deletions();
-                }
-            }
+            self.handle_bottommost_delete_if_needed();
             self.switch_key_metrics();
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
-            self.remove_older = false;
-        } else if let Some(ref mut overlaps) = self.mvcc_deletion_overlaps {
-            *overlaps += 1;
+            return self.check_latest_version_before_safepoint(write);
         }
 
-        let mut filtered = self.remove_older;
-        let write = parse_write(value)?;
-        if !self.remove_older {
-            match write.write_type {
-                WriteType::Rollback | WriteType::Lock => {
-                    self.mvcc_rollback_and_locks += 1;
-                    filtered = true;
-                }
-                WriteType::Put => self.remove_older = true,
-                WriteType::Delete => {
-                    self.remove_older = true;
-                    if self.is_bottommost_level {
-                        self.mvcc_deletion_overlaps = Some(0);
-                        GC_COMPACTION_FILTER_MVCC_DELETION_MET
-                            .with_label_values(&[STAT_TXN_KEYMODE])
-                            .inc();
-                    }
-                }
-            }
+        // If the last version before safepoint is rollback or lock,
+        // check and remove the current version until meet the Put or Delete version.
+        if self.last_is_rollback_or_lock {
+            return self.check_latest_version_before_safepoint(write);
         }
 
-        if !filtered {
-            return Ok(CompactionFilterDecision::Keep);
-        }
+        // If there is any version after WriteType::Delete in bottomost level,
+        // do not gc the current key this time.
+        self.mvcc_del_gc_needed = false;
+
+        // Remove the current version directly since the latest valid version(PUT or
+        // Delete) already exist.
         self.filtered += 1;
+        // remove data from default cf if needed.
         self.handle_filtered_write(write)?;
-        self.flush_pending_writes_if_need(false /* force */)?;
-        let decision = if self.remove_older {
-            // Use `Decision::RemoveAndSkipUntil` instead of `Decision::Remove` to avoid
-            // leaving tombstones, which can only be freed at the bottommost level.
-            debug_assert!(commit_ts > 0);
-            let prefix = Key::from_encoded_slice(mvcc_key_prefix);
-            let skip_until = prefix.append_ts((commit_ts - 1).into()).into_encoded();
-            CompactionFilterDecision::RemoveAndSkipUntil(skip_until)
-        } else {
-            CompactionFilterDecision::Remove
-        };
-        Ok(decision)
+
+        // Use `Decision::RemoveAndSkipUntil` instead of `Decision::Remove` to avoid
+        // leaving tombstones, which can only be freed at the bottommost level.
+        debug_assert!(commit_ts > 0);
+        let prefix = Key::from_encoded_slice(mvcc_key_prefix);
+        let skip_until = prefix.append_ts((commit_ts - 1).into()).into_encoded();
+        Ok(CompactionFilterDecision::RemoveAndSkipUntil(skip_until))
     }
 
     fn handle_filtered_write(&mut self, write: WriteRef<'_>) -> Result<(), String> {
@@ -472,6 +488,7 @@ impl WriteCompactionFilter {
             let prefix = Key::from_encoded_slice(&self.mvcc_key_prefix);
             let def_key = prefix.append_ts(write.start_ts).into_encoded();
             self.write_batch.delete(&def_key)?;
+            self.flush_pending_writes_if_need(false /* force */)?;
         }
         Ok(())
     }
@@ -599,9 +616,7 @@ impl Drop for WriteCompactionFilter {
     // NOTE: it's required that `CompactionFilter` is dropped before the compaction
     // result becomes installed into the DB instance.
     fn drop(&mut self) {
-        if self.mvcc_deletion_overlaps.take() == Some(0) {
-            self.handle_bottommost_delete();
-        }
+        self.handle_bottommost_delete_if_needed();
         self.gc_mvcc_deletions();
 
         if let Err(e) = self.flush_pending_writes_if_need(true) {
