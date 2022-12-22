@@ -29,7 +29,6 @@ use crate::{
     operation::AdminCmdResult,
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerTick},
-    worker::engine_gc,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
@@ -210,7 +209,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_compact_log<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        mut res: CompactLogResult,
+        res: CompactLogResult,
     ) {
         let first_index = self.entry_storage().first_index();
         if res.compact_index <= first_index {
@@ -227,13 +226,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if res.compact_index <= self.entry_storage().truncated_index() {
             return;
         }
-        res.compact_index = std::cmp::min(
-            res.compact_index,
-            self.storage().apply_trace().persisted_apply_index(),
-        );
 
         // TODO: check entry_cache_warmup_state
-        self.schedule_raft_log_gc(store_ctx, res.compact_index);
         self.entry_storage_mut()
             .compact_entry_cache(res.compact_index);
         self.storage_mut()
@@ -247,33 +241,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .apply_state_mut()
             .mut_truncated_state()
             .set_term(res.compact_term);
+
+        self.maybe_compact_log_from_engine(store_ctx);
     }
 
-    fn schedule_raft_log_gc<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        compact_index: u64,
-    ) {
-        // For raft-engine there's no need to set a meaningful first_index.
-        let task = engine_gc::Task::raft_log_gc(self.region_id(), 0, compact_index);
-        debug!(
-            self.logger,
-            "scheduling raft log gc task";
-            "task" => %task,
+    pub fn maybe_compact_log_from_engine<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+        let compact_index = std::cmp::min(
+            self.entry_storage().truncated_index(),
+            self.storage().apply_trace().persisted_apply_index(),
         );
-        if let Err(e) = store_ctx.engine_gc_scheduler.schedule(task) {
-            error!(
-                self.logger,
-                "failed to schedule raft log gc task";
-                "err" => %e,
-            );
-        } else {
-            // Not including this command.
-            let applied = self.storage().apply_state().get_applied_index();
+        if compact_index > self.last_engine_compact_index {
+            // Raft Engine doesn't care about first index.
+            if let Err(e) =
+                store_ctx
+                    .engine
+                    .gc(self.region_id(), 0, compact_index, self.state_changes_mut())
+            {
+                error!(self.logger, "failed to gc raft logs"; "err" => ?e);
+            } else {
+                self.last_engine_compact_index = compact_index;
 
-            let total_cnt = applied - self.storage().entry_storage().first_index() + 1;
-            let remain_cnt = applied - compact_index;
-            self.update_approximate_raft_log_size(|s| *s = *s * remain_cnt / total_cnt);
+                let applied = self.storage().apply_state().get_applied_index();
+                let total_cnt = applied - self.storage().entry_storage().first_index() + 1;
+                let remain_cnt = applied - compact_index;
+                self.update_approximate_raft_log_size(|s| *s = *s * remain_cnt / total_cnt);
+            }
         }
     }
 }

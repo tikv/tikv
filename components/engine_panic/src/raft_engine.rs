@@ -120,7 +120,7 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
+    fn gc(&self, raft_group_id: u64, from: u64, to: u64, batch: &mut Self::LogBatch) -> Result<()> {
         panic!()
     }
 

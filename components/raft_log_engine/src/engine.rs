@@ -11,8 +11,8 @@ use codec::number::NumberCodec;
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
     CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
-    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGcTask, Result, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
@@ -658,34 +658,17 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
-        self.batch_gc(vec![RaftLogGcTask {
-            raft_group_id,
-            from,
-            to,
-        }])
-    }
-
-    fn batch_gc(&self, tasks: Vec<RaftLogGcTask>) -> Result<usize> {
-        let mut batch = self.log_batch(tasks.len());
-        let mut old_first_index = Vec::with_capacity(tasks.len());
-        for task in &tasks {
-            batch
-                .0
-                .add_command(task.raft_group_id, Command::Compact { index: task.to });
-            old_first_index.push(self.0.first_index(task.raft_group_id));
-        }
-
-        self.consume(&mut batch, false)?;
-
-        let mut total = 0;
-        for (old_first_index, task) in old_first_index.iter().zip(tasks) {
-            let new_first_index = self.0.first_index(task.raft_group_id);
-            if let (Some(old), Some(new)) = (old_first_index, new_first_index) {
-                total += new.saturating_sub(*old);
-            }
-        }
-        Ok(total as usize)
+    fn gc(
+        &self,
+        raft_group_id: u64,
+        _from: u64,
+        to: u64,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()> {
+        batch
+            .0
+            .add_command(raft_group_id, Command::Compact { index: to });
+        Ok(())
     }
 
     fn need_manual_purge(&self) -> bool {

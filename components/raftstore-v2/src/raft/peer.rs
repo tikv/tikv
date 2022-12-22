@@ -50,6 +50,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// For raft log GC.
     skip_raft_log_gc_ticks: usize,
     raft_log_size_hint: u64,
+    // TODO: private
+    pub(crate) last_engine_compact_index: u64,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -136,6 +138,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_heartbeats: HashMap::default(),
             skip_raft_log_gc_ticks: 0,
             raft_log_size_hint: 0,
+            last_engine_compact_index: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
