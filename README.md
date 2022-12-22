@@ -151,7 +151,7 @@ A third-party security auditing was performed by Cure53. See the full report [he
 
 To report a security vulnerability, please send an email to [TiKV-security](mailto:tikv-security@lists.cncf.io) group.
 
-See [Security](./security/SECURITY.md) for the process and policy followed by the TiKV project.
+See [Security](SECURITY.md) for the process and policy followed by the TiKV project.
 
 ## Communication
 

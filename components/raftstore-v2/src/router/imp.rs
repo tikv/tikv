@@ -3,14 +3,13 @@
 use std::sync::{Arc, Mutex};
 
 use crossbeam::channel::TrySendError;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+use futures::Future;
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use raftstore::store::{AsyncReadNotifier, FetchedLogs, GenSnapRes, RegionSnapshot};
-use slog::Logger;
 
 use super::PeerMsg;
 use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
@@ -49,15 +48,15 @@ where
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
-    pub fn new(store_id: u64, router: StoreRouter<EK, ER>) -> Self {
-        let mut store_meta = StoreMeta::new();
+    pub fn new(store_id: u64, reg: TabletRegistry<EK>, router: StoreRouter<EK, ER>) -> Self {
+        let mut store_meta = StoreMeta::default();
         store_meta.store_id = Some(store_id);
         let store_meta = Arc::new(Mutex::new(store_meta));
 
         let logger = router.logger().clone();
         RaftRouter {
             router: router.clone(),
-            local_reader: LocalReader::new(store_meta, router, logger),
+            local_reader: LocalReader::new(store_meta, reg, router, logger),
         }
     }
 
@@ -69,7 +68,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
         self.router.send(addr, msg)
     }
 
-    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta<EK>>> {
+    #[inline]
+    pub fn check_send(&self, addr: u64, msg: PeerMsg) -> crate::Result<()> {
+        self.router.check_send(addr, msg)
+    }
+
+    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta>> {
         self.local_reader.store_meta()
     }
 
@@ -80,10 +84,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
         self.router.send_raft_message(msg)
     }
 
-    pub async fn get_snapshot(
+    pub fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-    ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse> {
-        self.local_reader.snapshot(req).await
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
+    {
+        self.local_reader.snapshot(req)
     }
 }

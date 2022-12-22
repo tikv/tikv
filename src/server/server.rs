@@ -122,7 +122,7 @@ where
 
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
-        let raft_ext = storage.get_engine().raft_extension().clone();
+        let raft_ext = storage.get_engine().raft_extension();
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(

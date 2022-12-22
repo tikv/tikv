@@ -2,7 +2,6 @@
 
 use std::{
     ops::{Deref, DerefMut},
-    path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -16,26 +15,23 @@ use batch_system::{
 use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::channel::{Sender, TrySendError};
-use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
+use crossbeam::channel::TrySendError;
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType};
-use futures::{compat::Future01CompatExt, FutureExt};
-use kvproto::{
-    metapb::Store,
-    raft_serverpb::{PeerState, RaftMessage},
-};
+use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
-use raft::INVALID_ID;
-use raftstore::store::{
-    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
-    StoreWriters, TabletSnapManager, Transport, WriteSenders,
+use raft::{StateRole, INVALID_ID};
+use raftstore::{
+    coprocessor::RegionChangeEvent,
+    store::{
+        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
+        StoreWriters, TabletSnapManager, Transport, WriteSenders,
+    },
 };
 use slog::Logger;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
-    defer,
-    future::poll_future_notify,
     sys::SysQuota,
     time::Instant as TiInstant,
     timer::SteadyTimer,
@@ -46,10 +42,13 @@ use tikv_util::{
 use time::Timespec;
 
 use crate::{
-    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
+    fsm::{
+        LockManagerNotifier, PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate,
+        StoreMeta,
+    },
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{PdRunner, PdTask},
+    worker::pd,
     Error, Result,
 };
 
@@ -72,13 +71,19 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub timer: SteadyTimer,
     pub write_senders: WriteSenders<EK, ER>,
     /// store meta
-    pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    pub store_meta: Arc<Mutex<StoreMeta>>,
     pub engine: ER,
-    pub tablet_factory: Arc<dyn TabletFactory<EK>>,
+    pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
     pub read_scheduler: Scheduler<ReadTask<EK>>,
+
+    /// Disk usage for the store itself.
+    pub self_disk_usage: DiskUsage,
+
     pub snap_mgr: TabletSnapManager,
-    pub pd_scheduler: Scheduler<PdTask>,
+    pub pd_scheduler: Scheduler<pd::Task>,
+
+    pub lock_manager_notifier: Arc<dyn LockManagerNotifier>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -203,7 +208,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         }
     }
 
-    fn end(&mut self, batch: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {}
+    fn end(&mut self, _batch: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {}
 
     fn pause(&mut self) {
         if self.poll_ctx.trans.need_flush() {
@@ -222,16 +227,17 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     cfg: Arc<VersionTrack<Config>>,
     store_id: u64,
     engine: ER,
-    tablet_factory: Arc<dyn TabletFactory<EK>>,
+    tablet_registry: TabletRegistry<EK>,
     trans: T,
     router: StoreRouter<EK, ER>,
     read_scheduler: Scheduler<ReadTask<EK>>,
-    pd_scheduler: Scheduler<PdTask>,
+    pd_scheduler: Scheduler<pd::Task>,
     write_senders: WriteSenders<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
-    store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
     snap_mgr: TabletSnapManager,
+    lock_manager_notifier: Arc<dyn LockManagerNotifier>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -239,15 +245,16 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         cfg: Arc<VersionTrack<Config>>,
         store_id: u64,
         engine: ER,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        tablet_registry: TabletRegistry<EK>,
         trans: T,
         router: StoreRouter<EK, ER>,
         read_scheduler: Scheduler<ReadTask<EK>>,
-        pd_scheduler: Scheduler<PdTask>,
+        pd_scheduler: Scheduler<pd::Task>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
-        store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         snap_mgr: TabletSnapManager,
+        lock_manager_notifier: Arc<dyn LockManagerNotifier>,
     ) -> Self {
         let pool_size = cfg.value().apply_batch_system.pool_size;
         let max_pool_size = std::cmp::max(
@@ -263,7 +270,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             cfg,
             store_id,
             engine,
-            tablet_factory,
+            tablet_registry,
             trans,
             router,
             read_scheduler,
@@ -273,6 +280,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             write_senders: store_writers.senders(),
             store_meta,
             snap_mgr,
+            lock_manager_notifier,
         }
     }
 
@@ -280,7 +288,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
     fn init(&self) -> Result<HashMap<u64, SenderFsmPair<EK, ER>>> {
         let mut regions = HashMap::default();
         let cfg = self.cfg.value();
-        let mut meta = self.store_meta.lock().unwrap();
+        let meta = self.store_meta.lock().unwrap();
         self.engine
             .for_each_raft_group::<Error, _>(&mut |region_id| {
                 assert_ne!(region_id, INVALID_ID);
@@ -294,7 +302,13 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     Some(p) => p,
                     None => return Ok(()),
                 };
-                let (sender, peer_fsm) = PeerFsm::new(&cfg, &*self.tablet_factory, storage)?;
+                self.lock_manager_notifier.on_region_changed(
+                    storage.region_state().get_region(),
+                    RegionChangeEvent::Create,
+                    StateRole::Follower,
+                );
+
+                let (sender, peer_fsm) = PeerFsm::new(&cfg, &self.tablet_registry, storage)?;
                 meta.region_read_progress
                     .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
 
@@ -312,7 +326,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         Ok(regions)
     }
 
-    fn clean_up_tablets(&self, peers: &HashMap<u64, SenderFsmPair<EK, ER>>) -> Result<()> {
+    fn clean_up_tablets(&self, _peers: &HashMap<u64, SenderFsmPair<EK, ER>>) -> Result<()> {
         // TODO: list all available tablets and destroy those which are not in the
         // peers.
         Ok(())
@@ -327,7 +341,7 @@ where
 {
     type Handler = StorePoller<EK, ER, T>;
 
-    fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
+    fn build(&mut self, _priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
         let poll_ctx = StoreContext {
             logger: self.logger.clone(),
@@ -342,11 +356,13 @@ where
             write_senders: self.write_senders.clone(),
             store_meta: self.store_meta.clone(),
             engine: self.engine.clone(),
-            tablet_factory: self.tablet_factory.clone(),
+            tablet_registry: self.tablet_registry.clone(),
             apply_pool: self.apply_pool.clone(),
             read_scheduler: self.read_scheduler.clone(),
+            self_disk_usage: DiskUsage::Normal,
             snap_mgr: self.snap_mgr.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
+            lock_manager_notifier: self.lock_manager_notifier.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -386,14 +402,15 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         store_id: u64,
         cfg: Arc<VersionTrack<Config>>,
         raft_engine: ER,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        tablet_registry: TabletRegistry<EK>,
         trans: T,
         pd_client: Arc<C>,
         router: &StoreRouter<EK, ER>,
-        store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        lock_manager_notifier: Arc<dyn LockManagerNotifier>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -420,11 +437,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let pd_scheduler = workers.pd_worker.start(
             "pd-worker",
-            PdRunner::new(
+            pd::Runner::new(
                 store_id,
                 pd_client,
                 raft_engine.clone(),
-                tablet_factory.clone(),
+                tablet_registry.clone(),
                 router.clone(),
                 workers.pd_worker.remote(),
                 concurrency_manager,
@@ -434,11 +451,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
-        let mut builder = StorePollerBuilder::new(
+        let builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
             raft_engine,
-            tablet_factory,
+            tablet_registry,
             trans,
             router.clone(),
             read_scheduler,
@@ -447,6 +464,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             self.logger.clone(),
             store_meta.clone(),
             snap_mgr,
+            lock_manager_notifier,
         );
         self.workers = Some(workers);
         let peers = builder.init()?;
@@ -462,8 +480,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             for (region_id, (tx, fsm)) in peers {
                 meta.readers
                     .insert(region_id, fsm.peer().generate_read_delegate());
-                meta.tablet_caches
-                    .insert(region_id, fsm.peer().tablet().clone());
 
                 address.push(region_id);
                 mailboxes.push((
@@ -510,6 +526,14 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
     #[inline]
     pub fn logger(&self) -> &Logger {
         &self.logger
+    }
+
+    #[inline]
+    pub fn check_send(&self, addr: u64, msg: PeerMsg) -> crate::Result<()> {
+        match self.router.send(addr, msg) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(raftstore::router::handle_send_error(addr, e)),
+        }
     }
 
     pub fn send_raft_message(
