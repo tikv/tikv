@@ -28,7 +28,6 @@ use raftstore::{
     },
     store::util::is_region_initialized,
 };
-use raftstore_v2::LockManagerNotifier;
 use security::SecurityManager;
 use tikv_util::{
     future::paired_future_callback,
@@ -525,7 +524,7 @@ const LEADER_KEY: &[u8] = b"";
 /// way to change the node from the leader of deadlock detector to follower, and
 /// vice versa.
 #[derive(Clone)]
-pub struct RoleChangeNotifier {
+pub(crate) struct RoleChangeNotifier {
     /// The id of the valid leader region.
     // raftstore.coprocessor needs it to be Sync + Send.
     leader_region_id: Arc<Mutex<u64>>,
@@ -604,18 +603,6 @@ impl RegionChangeObserver for RoleChangeNotifier {
                 RegionChangeEvent::UpdateBuckets(_) => {}
             }
         }
-    }
-}
-
-impl LockManagerNotifier for RoleChangeNotifier {
-    fn on_role_change(&self, region: &Region, role_change: RoleChange) {
-        let mut ctx = ObserverContext::new(region);
-        RoleObserver::on_role_change(self, &mut ctx, &role_change);
-    }
-
-    fn on_region_changed(&self, region: &Region, event: RegionChangeEvent, role: StateRole) {
-        let mut ctx = ObserverContext::new(region);
-        RegionChangeObserver::on_region_changed(self, &mut ctx, event, role);
     }
 }
 
