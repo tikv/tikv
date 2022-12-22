@@ -119,6 +119,12 @@ pub struct SimpleWrite {
     pub ch: CmdResChannel,
 }
 
+#[derive(Debug)]
+pub struct UnsafeWrite {
+    pub send_time: Instant,
+    pub data: SimpleWriteBinary,
+}
+
 /// Message that can be sent to a peer.
 #[derive(Debug)]
 pub enum PeerMsg {
@@ -132,6 +138,7 @@ pub enum PeerMsg {
     /// Command changes the inernal states. It will be transformed into logs and
     /// applied on all replicas.
     SimpleWrite(SimpleWrite),
+    UnsafeWrite(UnsafeWrite),
     /// Command that contains admin requests.
     AdminCommand(RaftRequest<CmdResChannel>),
     /// Tick is periodical task. If target peer doesn't exist there is a
@@ -204,6 +211,13 @@ impl PeerMsg {
             }),
             sub,
         )
+    }
+
+    pub fn unsafe_write(data: SimpleWriteBinary) -> Self {
+        PeerMsg::UnsafeWrite(UnsafeWrite {
+            send_time: Instant::now(),
+            data,
+        })
     }
 
     pub fn request_split(

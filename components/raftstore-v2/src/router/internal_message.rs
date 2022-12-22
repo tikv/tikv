@@ -8,6 +8,8 @@ use crate::operation::{AdminCmdResult, CommittedEntries, DataTrace, GenSnapTask}
 pub enum ApplyTask {
     CommittedEntries(CommittedEntries),
     Snapshot(GenSnapTask),
+    /// Writes that doesn't care consistency.
+    UnsafeWrite(Box<[u8]>),
 }
 
 #[derive(Debug, Default)]

@@ -243,6 +243,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         write.ch,
                     );
                 }
+                PeerMsg::UnsafeWrite(write) => {
+                    self.on_receive_command(write.send_time);
+                    self.fsm
+                        .peer_mut()
+                        .on_unsafe_write(self.store_ctx, write.data);
+                }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),
                 PeerMsg::SplitInit(msg) => self.fsm.peer.on_split_init(self.store_ctx, msg),

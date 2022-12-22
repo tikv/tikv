@@ -319,6 +319,32 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
+    pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
+        let decoder = match SimpleWriteReqDecoder::new(&self.logger, &data, u64::MAX, u64::MAX) {
+            Ok(decoder) => decoder,
+            Err(req) => unreachable!("unexpected request: {:?}", req),
+        };
+        for req in decoder {
+            match req {
+                SimpleWrite::Put(put) => {
+                    let _ = self.apply_put(put.cf, u64::MAX, put.key, put.value);
+                }
+                SimpleWrite::Delete(delete) => {
+                    let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
+                }
+                SimpleWrite::DeleteRange(dr) => {
+                    let _ = self.apply_delete_range(
+                        dr.cf,
+                        u64::MAX,
+                        dr.start_key,
+                        dr.end_key,
+                        dr.notify_only,
+                    );
+                }
+            }
+        }
+    }
+
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
