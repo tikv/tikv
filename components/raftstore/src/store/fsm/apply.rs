@@ -3052,29 +3052,34 @@ where
         // lagging voter catch up logs when leader is down. In this situation Compact
         // index should be queued. If witness receives a voter_replicated_index
         // that is larger than the pending compact index, logs can be deleted.
-        if self.peer.is_witness && voter_replicated_index < compact_index {
-            self.pending_cmds.push_compact(PendingCmd::new(
-                compact_index,
-                compact_term,
-                Callback::None,
-            ));
-            match self.pending_cmds.pop_compact(voter_replicated_index) {
-                Some(cmd) => {
-                    compact_index = cmd.index;
-                    compact_term = cmd.term;
+        if self.peer.is_witness {
+            if voter_replicated_index < compact_index {
+                self.pending_cmds.push_compact(PendingCmd::new(
+                    compact_index,
+                    compact_term,
+                    Callback::None,
+                ));
+                match self.pending_cmds.pop_compact(voter_replicated_index) {
+                    Some(cmd) => {
+                        compact_index = cmd.index;
+                        compact_term = cmd.term;
+                    }
+                    None => {
+                        info!(
+                            "voter_replicated_index < compact_index, skip";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "command" => ?req.get_compact_log()
+                        );
+                        return Ok((resp, ApplyResult::Res(ExecResult::PendingCompactCmd)));
+                    }
                 }
-                None => {
-                    info!(
-                        "voter_replicated_index < compact_index, skip";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "command" => ?req.get_compact_log()
-                    );
-                    return Ok((resp, ApplyResult::Res(ExecResult::PendingCompactCmd)));
+            } else {
+                for mut cmd in self.pending_cmds.compacts.drain(..) {
+                    cmd.cb.take().unwrap();
                 }
             }
         }
-
         // compact failure is safe to be omitted, no need to assert.
         compact_raft_log(
             &self.tag,
