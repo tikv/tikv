@@ -124,15 +124,6 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn delete_all_states_before(
-        &self,
-        raft_group_id: u64,
-        apply_index: u64,
-        batch: &mut Self::LogBatch,
-    ) -> Result<()> {
-        panic!()
-    }
-
     fn need_manual_purge(&self) -> bool {
         panic!()
     }

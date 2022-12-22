@@ -321,15 +321,6 @@ impl RaftEngine for RocksEngine {
         Ok(total)
     }
 
-    fn delete_all_states_before(
-        &self,
-        _raft_group_id: u64,
-        _apply_index: u64,
-        _batch: &mut Self::LogBatch,
-    ) -> Result<()> {
-        panic!()
-    }
-
     fn flush_metrics(&self, instance: &str) {
         KvEngine::flush_metrics(self, instance)
     }
