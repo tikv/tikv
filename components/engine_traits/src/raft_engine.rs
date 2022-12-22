@@ -107,6 +107,14 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     /// Like `cut_logs` but the range could be very large.
     fn gc(&self, raft_group_id: u64, from: u64, to: u64, batch: &mut Self::LogBatch) -> Result<()>;
 
+    /// Delete all states that are associated with smaller apply_index.
+    fn delete_all_states_before(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()>;
+
     fn need_manual_purge(&self) -> bool {
         false
     }

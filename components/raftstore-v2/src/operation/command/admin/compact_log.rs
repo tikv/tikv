@@ -253,11 +253,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.storage().apply_trace().persisted_apply_index(),
         );
         if compact_index > self.last_engine_compact_log_index() {
+            let region_id = self.region_id();
+            let lb = self.state_changes_mut();
             // Raft Engine doesn't care about first index.
-            if let Err(e) =
-                store_ctx
-                    .engine
-                    .gc(self.region_id(), 0, compact_index, self.state_changes_mut())
+            if let Err(e) = store_ctx
+                .engine
+                .gc(region_id, 0, compact_index, lb)
+                .and_then(|_| {
+                    store_ctx
+                        .engine
+                        .delete_all_states_before(region_id, compact_index, lb)
+                })
             {
                 error!(self.logger, "failed to compact raft logs"; "err" => ?e);
             } else {
