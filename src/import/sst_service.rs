@@ -76,7 +76,6 @@ pub struct SnapshotResult<E: KvEngine> {
     term: u64,
 }
 
-#[derive(Default)]
 struct RequestCollector {
     context: Context,
     /// Retain the last ts of each key in each request.
@@ -91,7 +90,6 @@ struct RequestCollector {
     max_raft_req_size: usize,
 
     pending_raft_reqs: Vec<RaftCmdRequest>,
-    pending_raft_size: usize,
 }
 
 impl RequestCollector {
@@ -103,7 +101,6 @@ impl RequestCollector {
             unpacked_size: 0,
             max_raft_req_size,
             pending_raft_reqs: Vec::new(),
-            pending_raft_size: 0,
         }
     }
 
@@ -204,13 +201,12 @@ impl RequestCollector {
         cmd.set_requests(reqs.into());
 
         self.pending_raft_reqs.push(cmd);
-        self.pending_raft_size += self.unpacked_size;
         self.unpacked_size = 0;
     }
 
     #[inline]
-    fn pending_raft_size(&self) -> usize {
-        self.pending_raft_size
+    fn is_empty(&self) -> bool {
+        self.pending_raft_reqs.is_empty() && self.unpacked_size == 0
     }
 }
 
@@ -443,7 +439,7 @@ where
             let buff = importer.read_from_kv_file(
                 meta,
                 rule,
-                Arc::clone(&ext_storage),
+                ext_storage.clone(),
                 req.get_storage_backend(),
                 &limiter,
             )?;
@@ -464,39 +460,45 @@ where
             }
 
             let is_last_task = tasks.peek().is_none();
-            if collector.pending_raft_size() > MAX_INFLIGHT_RAFT_MSGS || is_last_task {
-                for future in inflight_futures.drain(..) {
-                    match future.await {
-                        Err(e) => {
-                            let msg = format!("failed to complete raft command: {}", e);
-                            let mut e = kvproto::import_sstpb::Error::default();
-                            e.set_message(msg);
-                            return Err(e);
-                        }
-                        Ok(mut r) if r.response.get_header().has_error() => {
-                            let mut e = kvproto::import_sstpb::Error::default();
-                            e.set_message("failed to complete raft command".to_string());
-                            e.set_store_error(r.response.take_header().take_error());
-                            return Err(e);
-                        }
-                        _ => {}
-                    }
-                }
-                for req in collector.drain_raft_reqs(is_last_task) {
-                    let (cb, future) = paired_future_callback();
-                    match router.send_command(req, Callback::write(cb), RaftCmdExtraOpts::default())
-                    {
-                        Ok(_) => inflight_futures.push(future),
-                        Err(e) => {
-                            let msg = format!("failed to send raft command: {}", e);
-                            let mut e = kvproto::import_sstpb::Error::default();
-                            e.set_message(msg);
-                            return Err(e);
-                        }
+            for req in collector.drain_raft_reqs(is_last_task) {
+                let (cb, future) = paired_future_callback();
+                match router.send_command(req, Callback::write(cb), RaftCmdExtraOpts::default()) {
+                    Ok(_) => inflight_futures.push(future),
+                    Err(e) => {
+                        let msg = format!("failed to send raft command: {}", e);
+                        let mut e = kvproto::import_sstpb::Error::default();
+                        e.set_message(msg);
+                        return Err(e);
                     }
                 }
             }
+            let wait_futures = if is_last_task {
+                inflight_futures.len()
+            } else {
+                inflight_futures
+                    .len()
+                    .saturating_sub(MAX_INFLIGHT_RAFT_MSGS)
+            };
+            for future in inflight_futures.drain(..wait_futures) {
+                match future.await {
+                    Err(e) => {
+                        let msg = format!("failed to complete raft command: {}", e);
+                        let mut e = kvproto::import_sstpb::Error::default();
+                        e.set_message(msg);
+                        return Err(e);
+                    }
+                    Ok(mut r) if r.response.get_header().has_error() => {
+                        let mut e = kvproto::import_sstpb::Error::default();
+                        e.set_message("failed to complete raft command".to_string());
+                        e.set_store_error(r.response.take_header().take_error());
+                        return Err(e);
+                    }
+                    _ => {}
+                }
+            }
         }
+        assert!(inflight_futures.is_empty());
+        assert!(collector.is_empty());
 
         Ok(range)
     }
@@ -1270,7 +1272,7 @@ mod test {
             k1.cmp(k2)
         });
         assert_eq!(reqs, reqs_result);
-        assert_eq!(request_collector.pending_raft_size(), 0);
+        assert!(request_collector.is_empty());
     }
 
     #[test]
@@ -1301,6 +1303,6 @@ mod test {
             k1.cmp(k2).then(ts1.cmp(&ts2))
         });
         assert_eq!(reqs, reqs_result);
-        assert_eq!(request_collector.pending_raft_size(), 0);
+        assert!(request_collector.is_empty());
     }
 }
