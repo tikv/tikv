@@ -525,12 +525,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
+            let target = self.refresh_leader_transferee();
             ctx.coprocessor_host.on_role_change(
                 self.region(),
                 RoleChange {
                     state: ss.raft_state,
                     leader_id: ss.leader_id,
-                    prev_lead_transferee: INVALID_ID,
+                    prev_lead_transferee: target,
                     vote: self.raft_group().raft.vote,
                 },
             );

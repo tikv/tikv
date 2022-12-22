@@ -40,7 +40,7 @@ use kvproto::{
 use protobuf::Message;
 use raft::{prelude::Snapshot, INVALID_ID};
 use raftstore::{
-    coprocessor::{RegionChangeEvent, RegionChangeReason},
+    coprocessor::RegionChangeReason,
     store::{
         cmd_resp,
         fsm::{apply::validate_batch_split, ApplyMetrics},
@@ -415,7 +415,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
-            self.set_region(reader, derived.clone(), tablet_index);
+            self.set_region(
+                &store_ctx.coprocessor_host,
+                reader,
+                derived.clone(),
+                RegionChangeReason::Split,
+                tablet_index,
+            );
         }
 
         self.post_split();
@@ -475,11 +481,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         self.split_trace_mut().push((tablet_index, new_ids));
         let region_state = self.storage().region_state().clone();
-        store_ctx.coprocessor_host.on_region_changed(
-            region_state.get_region(),
-            RegionChangeEvent::Update(RegionChangeReason::Split),
-            self.raft_group().raft.state,
-        );
         self.state_changes_mut()
             .put_region_state(region_id, tablet_index, &region_state)
             .unwrap();
