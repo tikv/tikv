@@ -6,7 +6,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
+use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb,
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
@@ -39,7 +39,7 @@ pub struct Storage<EK: KvEngine, ER> {
 
     /// Snapshot part.
     pub snap_states: RefCell<HashMap<u64, SnapState>>,
-    gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
+    pub gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
     split_init: Option<Box<SplitInit>>,
     /// The flushed index of all CFs.
     apply_trace: ApplyTrace,
@@ -90,6 +90,21 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     #[inline]
     pub fn gen_snap_task_mut(&self) -> RefMut<'_, Box<Option<GenSnapTask>>> {
         self.gen_snap_task.borrow_mut()
+    }
+
+    #[inline]
+    pub fn cancel_snap_task(&self, to_peer_id: Option<u64>) {
+        if to_peer_id.is_none() {
+            self.gen_snap_task.borrow_mut().take();
+            return;
+        }
+        let to = to_peer_id.unwrap();
+        let mut task = self.gen_snap_task.borrow_mut();
+        if let Some(t) = &**task {
+            if to == t.to_peer() {
+                *task = Box::new(None);
+            };
+        }
     }
 
     #[inline]
@@ -460,7 +475,7 @@ mod tests {
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
-        let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let _res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.cancel_generating_snap(None, None);
         assert!(s.snap_states.borrow().get(&to_peer_id).is_none());
 

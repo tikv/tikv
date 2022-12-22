@@ -20,7 +20,7 @@
 
 use std::{
     fmt::{self, Debug},
-    fs, mem,
+    fs,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
@@ -97,6 +97,10 @@ impl GenSnapTask {
 
     pub fn set_for_balance(&mut self) {
         self.for_balance = true;
+    }
+
+    pub fn to_peer(&self) -> u64 {
+        self.to_peer
     }
 }
 
@@ -319,8 +323,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             let mut states = self.snap_states.borrow_mut();
             if let Some(state) = states.get(&id) {
                 let SnapState::Generating {
-                    ref canceled,
                     ref index,
+                    ..
                 } = *state else { return };
                 if let Some(idx) = compact_to {
                     let snap_index = index.load(Ordering::SeqCst);
@@ -333,12 +337,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                     "snapshot is canceled";
                     "compact_to" => compact_to,
                 );
+                self.cancel_snap_task(to);
                 states.remove(&id);
             }
         } else {
+            self.cancel_snap_task(to);
             self.snap_states.borrow_mut().clear();
         }
-        self.gen_snap_task_mut().take();
         STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.cancel.inc();
     }
 
@@ -353,8 +358,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let (snapshot, to_peer_id) = *res.unwrap();
         if let Some(state) = self.snap_states.borrow_mut().get_mut(&to_peer_id) {
             let SnapState::Generating {
-                ref canceled,
                 ref index,
+                ..
             } = *state else { return false };
             if snapshot.get_metadata().get_index() < index.load(Ordering::SeqCst) {
                 warn!(
