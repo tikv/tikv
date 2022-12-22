@@ -47,11 +47,10 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Statistics for other peers, only maintained when self is the leader.
     peer_heartbeats: HashMap<u64, Instant>,
 
-    /// For raft log GC.
-    skip_raft_log_gc_ticks: usize,
-    raft_log_size_hint: u64,
-    // TODO: private
-    pub(crate) last_engine_compact_index: u64,
+    /// For raft log compaction.
+    skip_compact_log_ticks: usize,
+    approximate_raft_log_size: u64,
+    last_engine_compact_log_index: u64,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -136,9 +135,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
-            skip_raft_log_gc_ticks: 0,
-            raft_log_size_hint: 0,
-            last_engine_compact_index: 0,
+            skip_compact_log_ticks: 0,
+            approximate_raft_log_size: 0,
+            last_engine_compact_log_index: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
@@ -468,14 +467,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn reset_skip_raft_log_gc_ticks(&mut self) {
-        self.skip_raft_log_gc_ticks = 0;
+    pub fn reset_skip_compact_log_ticks(&mut self) {
+        self.skip_compact_log_ticks = 0;
     }
 
     #[inline]
-    pub fn maybe_skip_raft_log_gc(&mut self, max_skip_ticks: usize) -> bool {
-        if self.skip_raft_log_gc_ticks < max_skip_ticks {
-            self.skip_raft_log_gc_ticks += 1;
+    pub fn maybe_skip_compact_log(&mut self, max_skip_ticks: usize) -> bool {
+        if self.skip_compact_log_ticks < max_skip_ticks {
+            self.skip_compact_log_ticks += 1;
             true
         } else {
             false
@@ -483,13 +482,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn approximate_raft_log_size(&self) -> u64 {
-        self.raft_log_size_hint
+    pub fn last_engine_compact_log_index(&self) -> u64 {
+        self.last_engine_compact_log_index
     }
 
     #[inline]
-    pub fn update_approximate_raft_log_size(&mut self, f: impl Fn(&mut u64)) {
-        f(&mut self.raft_log_size_hint);
+    pub fn set_last_engine_compact_log_index(&mut self, i: u64) {
+        self.last_engine_compact_log_index = i;
+    }
+
+    #[inline]
+    pub fn approximate_raft_log_size(&self) -> u64 {
+        self.approximate_raft_log_size
+    }
+
+    #[inline]
+    pub fn update_approximate_raft_log_size(&mut self, f: impl Fn(u64) -> u64) {
+        self.approximate_raft_log_size = f(self.approximate_raft_log_size);
     }
 
     #[inline]

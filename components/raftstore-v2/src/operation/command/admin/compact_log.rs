@@ -2,7 +2,7 @@
 
 //! This module contains processing logic of the following:
 //!
-//! # `RaftLogGc` and `EntryCacheEvict` ticks
+//! # `CompactLog` and `EntryCacheEvict` ticks
 //!
 //! On region leader, periodically compacts useless Raft logs from the
 //! underlying log engine, and evicts logs from entry cache if it reaches memory
@@ -10,8 +10,8 @@
 //!
 //! # `CompactLog` command
 //!
-//! It makes sure all to-be-compacted logs are persisted in kvdb. Then it issues
-//! a background task to do the actual log compact.
+//! Updates truncated index, and compacts logs if the corresponding changes have
+//! been persisted in kvdb.
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
@@ -32,16 +32,18 @@ use crate::{
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
-    pub fn on_raft_log_gc(&mut self) {
+    pub fn on_compact_log_tick(&mut self) {
         if !self.fsm.peer().is_leader() {
             // `compact_cache_to` is called when apply, there is no need to call
             // `compact_to` here, snapshot generating has already been cancelled
             // when the role becomes follower.
             return;
         }
-        self.schedule_tick(PeerTick::RaftLogGc);
+        self.schedule_tick(PeerTick::CompactLog);
 
-        self.fsm.peer_mut().raft_log_gc_imp(self.store_ctx);
+        self.fsm
+            .peer_mut()
+            .maybe_propose_compact_log(self.store_ctx);
 
         self.on_entry_cache_evict();
     }
@@ -61,7 +63,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // Mirrors v1::on_raft_gc_log_tick.
-    fn raft_log_gc_imp<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+    fn maybe_propose_compact_log<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         // As leader, we would not keep caches for the peers that didn't response
         // heartbeat in the last few seconds. That happens probably because
         // another TiKV is down. In this case if we do not clean up the cache,
@@ -127,7 +129,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         } else if replicated_idx < first_idx
             || last_idx - first_idx < 3
             || replicated_idx - first_idx < store_ctx.cfg.raft_log_gc_threshold
-                && self.maybe_skip_raft_log_gc(store_ctx.cfg.raft_log_reserve_max_ticks)
+                && self.maybe_skip_compact_log(store_ctx.cfg.raft_log_reserve_max_ticks)
         {
             return;
         } else {
@@ -154,7 +156,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let (ch, _) = CmdResChannel::pair();
         self.on_admin_command(store_ctx, req, ch);
 
-        self.reset_skip_raft_log_gc_ticks();
+        self.reset_skip_compact_log_ticks();
     }
 }
 
@@ -250,21 +252,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.entry_storage().truncated_index(),
             self.storage().apply_trace().persisted_apply_index(),
         );
-        if compact_index > self.last_engine_compact_index {
+        if compact_index > self.last_engine_compact_log_index() {
             // Raft Engine doesn't care about first index.
             if let Err(e) =
                 store_ctx
                     .engine
                     .gc(self.region_id(), 0, compact_index, self.state_changes_mut())
             {
-                error!(self.logger, "failed to gc raft logs"; "err" => ?e);
+                error!(self.logger, "failed to compact raft logs"; "err" => ?e);
             } else {
-                self.last_engine_compact_index = compact_index;
+                self.set_last_engine_compact_log_index(compact_index);
 
                 let applied = self.storage().apply_state().get_applied_index();
                 let total_cnt = applied - self.storage().entry_storage().first_index() + 1;
                 let remain_cnt = applied - compact_index;
-                self.update_approximate_raft_log_size(|s| *s = *s * remain_cnt / total_cnt);
+                self.update_approximate_raft_log_size(|s| s * remain_cnt / total_cnt);
             }
         }
     }

@@ -189,7 +189,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     fn on_start(&mut self) {
         self.schedule_tick(PeerTick::Raft);
         self.schedule_tick(PeerTick::PdHeartbeat);
-        self.schedule_tick(PeerTick::RaftLogGc);
+        self.schedule_tick(PeerTick::CompactLog);
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
         }
@@ -207,7 +207,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
-            PeerTick::RaftLogGc => self.on_raft_log_gc(),
+            PeerTick::CompactLog => self.on_compact_log_tick(),
             PeerTick::SplitRegionCheck => unimplemented!(),
             PeerTick::CheckMerge => unimplemented!(),
             PeerTick::CheckPeerStaleState => unimplemented!(),

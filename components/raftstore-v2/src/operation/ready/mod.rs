@@ -274,7 +274,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // asynchronously.
         if self.is_leader() {
             for entry in committed_entries.iter().rev() {
-                self.update_approximate_raft_log_size(|s| *s += entry.get_data().len() as u64);
+                self.update_approximate_raft_log_size(|s| s + entry.get_data().len() as u64);
                 let propose_time = self
                     .proposals()
                     .find_propose_time(entry.get_term(), entry.get_index());
@@ -515,7 +515,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
 
                     self.region_heartbeat_pd(ctx);
-                    self.add_pending_tick(PeerTick::RaftLogGc);
+                    self.add_pending_tick(PeerTick::CompactLog);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();

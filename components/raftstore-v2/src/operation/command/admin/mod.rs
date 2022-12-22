@@ -1,15 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod compact_log;
 mod conf_change;
-mod raft_log_gc;
 mod split;
 mod transfer_leader;
 
+use compact_log::CompactLogResult;
 use conf_change::ConfChangeResult;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::Message;
-use raft_log_gc::CompactLogResult;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
 use split::SplitResult;
