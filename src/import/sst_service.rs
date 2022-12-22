@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     future::Future,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -107,7 +107,7 @@ impl RequestCollector {
         }
     }
 
-    fn accect_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
+    fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
         if k.is_empty() || (!is_delete && v.is_empty()) {
@@ -431,6 +431,26 @@ where
         limiter: Limiter,
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {
+        type RaftWriteFuture = futures::channel::oneshot::Receiver<raftstore::store::WriteResponse>;
+        async fn handle_raft_write(fut: RaftWriteFuture) -> std::result::Result<(), ImportPbError> {
+            match fut.await {
+                Err(e) => {
+                    let msg = format!("failed to complete raft command: {}", e);
+                    let mut e = ImportPbError::default();
+                    e.set_message(msg);
+                    return Err(e);
+                }
+                Ok(mut r) if r.response.get_header().has_error() => {
+                    let mut e = ImportPbError::default();
+                    e.set_message("failed to complete raft command".to_string());
+                    e.set_store_error(r.response.take_header().take_error());
+                    return Err(e);
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+
         let mut range: Option<Range> = None;
 
         let mut collector = RequestCollector::new(req.take_context(), max_raft_size * 7 / 8);
@@ -447,9 +467,7 @@ where
             false,
         );
 
-        let mut inflight_futures: Vec<
-            futures::channel::oneshot::Receiver<raftstore::store::WriteResponse>,
-        > = Vec::new();
+        let mut inflight_futures: VecDeque<RaftWriteFuture> = VecDeque::new();
 
         let mut tasks = metas.iter().zip(rules.iter()).peekable();
         while let Some((meta, rule)) = tasks.next() {
@@ -466,7 +484,7 @@ where
                 meta.get_start_ts(),
                 meta.get_restore_ts(),
                 buff,
-                |k, v| collector.accect_kv(meta.get_cf(), meta.get_is_delete(), k, v),
+                |k, v| collector.accept_kv(meta.get_cf(), meta.get_is_delete(), k, v),
             )? {
                 if let Some(range) = range.as_mut() {
                     range.start = range.take_start().min(r.take_start());
@@ -478,9 +496,12 @@ where
 
             let is_last_task = tasks.peek().is_none();
             for req in collector.drain_raft_reqs(is_last_task) {
+                while inflight_futures.len() >= MAX_INFLIGHT_RAFT_MSGS {
+                    handle_raft_write(inflight_futures.pop_front().unwrap()).await?;
+                }
                 let (cb, future) = paired_future_callback();
                 match router.send_command(req, Callback::write(cb), RaftCmdExtraOpts::default()) {
-                    Ok(_) => inflight_futures.push(future),
+                    Ok(_) => inflight_futures.push_back(future),
                     Err(e) => {
                         let msg = format!("failed to send raft command: {}", e);
                         let mut e = ImportPbError::default();
@@ -489,33 +510,11 @@ where
                     }
                 }
             }
-            let wait_futures = if is_last_task {
-                inflight_futures.len()
-            } else {
-                inflight_futures
-                    .len()
-                    .saturating_sub(MAX_INFLIGHT_RAFT_MSGS)
-            };
-            for future in inflight_futures.drain(..wait_futures) {
-                match future.await {
-                    Err(e) => {
-                        let msg = format!("failed to complete raft command: {}", e);
-                        let mut e = ImportPbError::default();
-                        e.set_message(msg);
-                        return Err(e);
-                    }
-                    Ok(mut r) if r.response.get_header().has_error() => {
-                        let mut e = ImportPbError::default();
-                        e.set_message("failed to complete raft command".to_string());
-                        e.set_store_error(r.response.take_header().take_error());
-                        return Err(e);
-                    }
-                    _ => {}
-                }
-            }
         }
-        assert!(inflight_futures.is_empty());
         assert!(collector.is_empty());
+        for fut in inflight_futures {
+            handle_raft_write(fut).await?;
+        }
 
         Ok(range)
     }
@@ -1180,7 +1179,7 @@ mod test {
             let mut collector = RequestCollector::new(Context::new(), 1024);
 
             for (k, v) in c.mutations.clone() {
-                collector.accect_kv(c.cf, c.is_delete, k, v);
+                collector.accept_kv(c.cf, c.is_delete, k, v);
             }
             let reqs = collector.drain_raft_reqs(true);
 
