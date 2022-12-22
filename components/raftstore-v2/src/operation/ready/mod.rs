@@ -29,7 +29,10 @@ use error_code::ErrorCodeExt;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use protobuf::Message as _;
 use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
-use raftstore::store::{util, FetchedLogs, ReadProgress, Transport, WriteTask};
+use raftstore::{
+    coprocessor::RoleChange,
+    store::{util, FetchedLogs, ReadProgress, Transport, WriteTask},
+};
 use slog::{debug, error, trace, warn};
 use tikv_util::{
     store::find_peer,
@@ -68,6 +71,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         if self.fsm.peer_mut().tick() {
             self.fsm.peer_mut().set_has_ready();
         }
+        self.fsm.peer_mut().refresh_lead_transferee();
+
         self.schedule_tick(PeerTick::Raft);
     }
 }
@@ -383,7 +388,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .collect();
         }
         if !self.serving() {
-            self.start_destroy(&mut write_task);
+            self.start_destroy(ctx, &mut write_task);
         }
         // Ready number should increase monotonically.
         assert!(self.async_writer.known_largest_number() < ready.number());
@@ -517,8 +522,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
+            ctx.lock_manager_notifier.on_role_change(
+                self.region(),
+                RoleChange {
+                    state: ss.raft_state,
+                    leader_id: ss.leader_id,
+                    prev_lead_transferee: self.lead_transferee(),
+                    vote: self.raft_group().raft.vote,
+                },
+            );
             self.proposal_control_mut().maybe_update_term(term);
         }
+        self.refresh_lead_transferee();
     }
 
     /// If leader commits new admin commands, it may break lease assumption. So
