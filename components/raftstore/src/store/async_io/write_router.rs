@@ -243,12 +243,12 @@ where
         }
         let mut pri = sender
             .resource_ctl
-            .get_priority(dominant_group, msg.priority());
+            .get_write_priority(dominant_group, msg.priority());
         if pri < self.last_pri {
             pri = self.last_pri + 1;
-        } 
+        }
         self.last_pri = pri;
-        sender.pri_write_sender.send(msg, pri).unwrap();
+        sender.pri_write_sender().send(msg, pri).unwrap();
         // match ctx.write_senders()[self.writer_id].try_send(msg) {
         //     Ok(()) => (),
         //     Err(TrySendError::Full(msg)) => {
@@ -274,7 +274,7 @@ where
 #[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
     pub resource_ctl: Arc<ResourceController>,
-    pub pri_write_sender: priority_queue::Sender<WriteMsg<EK, ER>>,
+    pub pri_write_sender: Option<priority_queue::Sender<WriteMsg<EK, ER>>>,
     write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
 }
@@ -283,7 +283,7 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
     pub fn new(
         resource_ctl: Arc<ResourceController>,
         write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
-        pri_write_sender: priority_queue::Sender<WriteMsg<EK, ER>>,
+        pri_write_sender: Option<priority_queue::Sender<WriteMsg<EK, ER>>>,
     ) -> Self {
         WriteSenders {
             resource_ctl,
@@ -295,7 +295,11 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        false
+        self.write_senders.is_empty() && self.pri_write_sender.is_none()
+    }
+
+    pub fn pri_write_sender(&self) -> &priority_queue::Sender<WriteMsg<EK, ER>> {
+        self.pri_write_sender.as_ref().unwrap()
     }
 }
 

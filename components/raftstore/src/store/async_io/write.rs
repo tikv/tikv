@@ -14,7 +14,7 @@ use std::{
 };
 
 use collections::HashMap;
-use crossbeam::channel::{Sender, TryRecvError};
+use crossbeam::channel::{bounded, Sender, TryRecvError};
 use engine_traits::{
     KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
 };
@@ -912,7 +912,7 @@ where
         WriteSenders::new(
             self.resource_ctl.clone(),
             self.writers.clone(),
-            self.pri_writer.as_ref().unwrap().clone(),
+            self.pri_writer.clone(),
         )
     }
 
@@ -926,6 +926,10 @@ where
         cfg: &Arc<VersionTrack<Config>>,
     ) -> Result<()> {
         let pool_size = cfg.value().store_io_pool_size;
+        if pool_size == 0 {
+            return Ok(());
+        }
+
         let tag = format!("store-writer-{}", 0);
         let (tx, rx) = priority_queue::unbounded();
         let mut worker = Worker::new(

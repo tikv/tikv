@@ -165,8 +165,12 @@ impl ResourceController {
         }
     }
 
-    pub fn get_priority(&self, name: &str, priority: CommandPri) -> u64 {
-        self.resource_group(name).get_priority(priority)
+    pub fn get_read_priority(&self, name: &str, priority: CommandPri) -> u64 {
+        self.resource_group(name).get_priority(priority, true)
+    }
+
+    pub fn get_write_priority(&self, name: &str, priority: CommandPri) -> u64 {
+        self.resource_group(name).get_priority(priority, false)
     }
 
     pub fn consume(&self, name: &str, delta: ResourceType) {
@@ -243,7 +247,7 @@ pub struct ResourceGroup {
 }
 
 impl ResourceGroup {
-    fn get_priority(&self, priority: CommandPri) -> u64 {
+    fn get_priority(&self, priority: CommandPri, update_vt: bool) -> u64 {
         let level = match priority {
             CommandPri::High => 0,
             CommandPri::Normal => 0,
@@ -251,9 +255,12 @@ impl ResourceGroup {
         };
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.priority_factor;
         let base_priority_delta = DEFAULT_PRIORITY_PER_TASK * self.priority_factor;
-        self.virtual_time
-            .fetch_add(base_priority_delta, Ordering::Relaxed)
-            + base_priority_delta
+        (if update_vt {
+            self.virtual_time
+                .fetch_add(base_priority_delta, Ordering::Relaxed)
+        } else {
+            self.virtual_time.load(Ordering::Relaxed)
+        }) + base_priority_delta
             + task_extra_priority
     }
 
@@ -317,7 +324,7 @@ impl<F: Future> Future for ControlledFuture<F> {
         if res.is_pending() {
             set_task_priority(
                 this.controller
-                    .get_priority(this.group_name, *this.priority),
+                    .get_read_priority(this.group_name, *this.priority),
             );
         }
         res

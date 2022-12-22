@@ -168,7 +168,7 @@ impl ReadPoolHandle {
                 };
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
                 if enable_priority.load(Ordering::Relaxed) {
-                    let priority_value = resource_ctl.get_priority(&group_name, priority);
+                    let priority_value = resource_ctl.get_read_priority(&group_name, priority);
                     extras.set_priority(priority_value);
                     let task_cell = TaskCell::new(
                         TrackedFuture::new(ControlledFuture::new(
