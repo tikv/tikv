@@ -240,10 +240,19 @@ impl MiscExt for RocksEngine {
 
     fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        let ret = self.as_inner().get_column_family_meta_data(handle).get_level(level).get_files()
-            .iter().map(|sst_meta| {
-                (sst_meta.get_smallestkey().to_vec(), sst_meta.get_largestkey().to_vec())
-            }).collect();
+        let ret = self
+            .as_inner()
+            .get_column_family_meta_data(handle)
+            .get_level(level)
+            .get_files()
+            .iter()
+            .map(|sst_meta| {
+                (
+                    sst_meta.get_smallestkey().to_vec(),
+                    sst_meta.get_largestkey().to_vec(),
+                )
+            })
+            .collect();
         Ok(ret)
     }
 
@@ -341,7 +350,10 @@ impl MiscExt for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt, ALL_CFS, CompactExt};
+    use engine_traits::{
+        CompactExt, DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt,
+        ALL_CFS,
+    };
     use tempfile::Builder;
 
     use super::*;
@@ -628,17 +640,11 @@ mod tests {
 
         db.flush_cf(cf, true).unwrap();
         let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
-        let expected = vec![
-            (b"k1".to_vec(), b"k7".to_vec()),
-        ];
+        let expected = vec![(b"k1".to_vec(), b"k7".to_vec())];
         assert_eq!(sst_range, expected);
 
         let mut wb = db.write_batch();
-        let kvs: Vec<(&[u8], &[u8])> = vec![
-            (b"k3", b"v1"),
-            (b"k4", b"v2"),
-            (b"k8", b"v3"),
-        ];
+        let kvs: Vec<(&[u8], &[u8])> = vec![(b"k3", b"v1"), (b"k4", b"v2"), (b"k8", b"v3")];
 
         for &(k, v) in kvs.as_slice() {
             wb.put_cf(cf, k, v).unwrap();
@@ -657,9 +663,7 @@ mod tests {
         let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
         assert_eq!(sst_range.len(), 0);
         let sst_range = db.get_sst_key_ranges(cf, 1).unwrap();
-        let expected = vec![
-            (b"k1".to_vec(), b"k8".to_vec()),
-        ];
+        let expected = vec![(b"k1".to_vec(), b"k8".to_vec())];
         assert_eq!(sst_range, expected);
     }
 }
