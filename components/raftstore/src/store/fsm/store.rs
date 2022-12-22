@@ -2932,11 +2932,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        if let Err(e) = kv_wb.write_opt(&write_opts) {
-            panic!(
-                "Unsafe recovery, fail to write to disk while creating peer {:?}, the error is {:?}",
-                region, e,
-            );
+        if !kv_wb.is_empty() {
+            if let Err(e) = kv_wb.write_opt(&write_opts) {
+                panic!(
+                    "Unsafe recovery, fail to write to disk while creating peer {:?}, the error is {:?}",
+                    region, e,
+                );
+            }
         }
 
         let mailbox = BasicMailbox::new(sender, peer, self.ctx.router.state_cnt().clone());

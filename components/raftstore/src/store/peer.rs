@@ -1476,7 +1476,9 @@ where
             // write kv rocksdb first in case of restart happen between two write
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            kv_wb.write_opt(&write_opts)?;
+            if !kv_wb.is_empty() {
+                kv_wb.write_opt(&write_opts)?;
+            }
 
             drop(pending_create_peers);
 

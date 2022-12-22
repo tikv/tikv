@@ -1041,7 +1041,9 @@ mod test {
         }
         let mut wopt = WriteOptions::new();
         wopt.set_sync(true);
-        wb.write_opt(&wopt).unwrap();
+        if !wb.is_empty() {
+            wb.write_opt(&wopt).unwrap();
+        }
         // force memtable to disk.
         engine.get_sync_db().compact_range(None, None);
 

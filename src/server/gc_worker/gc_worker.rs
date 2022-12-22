@@ -986,10 +986,12 @@ impl<E: Engine> Runnable for GcRunner<E> {
                 info!("handling GcTask::OrphanVersions"; "id" => id);
                 let mut wopts = WriteOptions::default();
                 wopts.set_sync(true);
-                if let Err(e) = wb.write_opt(&wopts) {
-                    error!("write GcTask::OrphanVersions fail"; "id" => id, "err" => ?e);
-                    update_metrics(true);
-                    return;
+                if !wb.empty() {
+                    if let Err(e) = wb.write_opt(&wopts) {
+                        error!("write GcTask::OrphanVersions fail"; "id" => id, "err" => ?e);
+                        update_metrics(true);
+                        return;
+                    }
                 }
                 info!("write GcTask::OrphanVersions success"; "id" => id);
                 GC_COMPACTION_FILTER_ORPHAN_VERSIONS
