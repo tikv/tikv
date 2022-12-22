@@ -16,9 +16,8 @@ use crossbeam::channel::{SendError, Sender, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::{
     config::{Tracker, VersionTrack},
-    info,
+    error, info, safe_panic,
     time::Instant,
-    warn,
 };
 
 use crate::store::{
@@ -234,20 +233,16 @@ where
             Err(TrySendError::Full(msg)) => {
                 let now = Instant::now();
                 if write_senders.send(self.writer_id, msg).is_err() {
-                    // Write threads are destroyed after store threads during shutdown,
-                    // this error can be ignored if there exists `resize` operations
-                    // on writers.
-                    warn!("{} failed to send write msg, err: disconnected", self.tag);
+                    // Write threads are destroyed after store threads during shutdown.
+                    safe_panic!("{} failed to send write msg, err: disconnected", self.tag);
                 }
                 ctx.raft_metrics()
                     .write_block_wait
                     .observe(now.saturating_elapsed_secs());
             }
             Err(TrySendError::Disconnected(_)) => {
-                // Write threads are destroyed after store threads during shutdown,
-                // this error can be ignored if there exists `resize` operations
-                // on writers.
-                warn!("{} failed to send write msg, err: disconnected", self.tag);
+                // Write threads are destroyed after store threads during shutdown.
+                safe_panic!("{} failed to send write msg, err: disconnected", self.tag);
             }
         }
     }
