@@ -196,16 +196,16 @@ impl ResourceController {
             return;
         }
 
-        // self.resource_consumptions.iter().for_each(|g| {
-        //     let vt = g.current_vt();
-        //     if vt < max_vt {
-        //         // TODO: is increase by half is a good choice.
-        //         g.increase_vt((max_vt - vt) / 2);
-        //     }
-        // });
-        // // max_vt is actually a little bigger than the current min vt, but we don't
-        // // need totally accurate here.
-        // self.last_min_vt.store(max_vt, Ordering::Relaxed);
+        self.resource_consumptions.iter().for_each(|g| {
+            let vt = g.current_vt();
+            if vt < max_vt {
+                // TODO: is increase by half is a good choice.
+                g.increase_vt((max_vt - vt) / 2);
+            }
+        });
+        // max_vt is actually a little bigger than the current min vt, but we don't
+        // need totally accurate here.
+        self.last_min_vt.store(max_vt, Ordering::Relaxed);
     }
 }
 
