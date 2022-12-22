@@ -5,6 +5,7 @@
 use std::sync::*;
 
 use collections::HashMap;
+use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use new_mock_engine_store::{
@@ -104,12 +105,12 @@ use proxy_server::status_server::StatusServer;
 use security::SecurityConfig;
 use tikv::config::ConfigController;
 
-async fn check(authority: SocketAddr, region_id: u64) -> Result<(), Box<dyn Error>> {
+async fn check_impl(authority: SocketAddr, region_id: u64) -> Result<(), Box<dyn Error>> {
     let client = Client::new();
     let uri = Uri::builder()
         .scheme("http")
         .authority(authority.to_string().as_str())
-        .path_and_query("/debug/pprof/profile")
+        .path_and_query("/debug/pprof/profile?seconds=10")
         .build()?;
     let resp = client.get(uri).await?;
     let (parts, raw_body) = resp.into_parts();
@@ -131,6 +132,12 @@ async fn check(authority: SocketAddr, region_id: u64) -> Result<(), Box<dyn Erro
     Ok(())
 }
 
+async fn check(authority: SocketAddr, region_id: u64) {
+    if let Err(e) = check_impl(authority, region_id).await {
+        panic!("error in check_impl {:?}", e);
+    }
+}
+
 #[test]
 fn test_pprof() {
     let mut cluster = new_server_cluster(0, 1);
@@ -142,31 +149,42 @@ fn test_pprof() {
     let store_id = peer.unwrap().get_store_id();
     let id = 1;
     let engine = cluster.get_engine(id);
+
+    let mut status_server = None;
     iter_ffi_helpers(
         &cluster,
         Some(vec![id]),
         &mut |_, _, ffiset: &mut FFIHelperSet| {
             let router = cluster.sim.rl().get_router(store_id);
             assert!(router.is_some());
-            let mut status_server = StatusServer::new(
-                engine_store_ffi::gen_engine_store_server_helper(
-                    ffiset.engine_store_server_helper_ptr,
-                ),
-                1,
-                ConfigController::default(),
-                Arc::new(SecurityConfig::default()),
-                router.unwrap(),
-                std::env::temp_dir(),
-            )
-            .unwrap();
-            let addr = format!("127.0.0.1:{}", test_util::alloc_port());
-            status_server.start(addr).unwrap();
-            let check_task = check(status_server.listening_addr(), region_id);
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            if let Err(err) = rt.block_on(check_task) {
-                panic!("{}", err);
-            }
-            status_server.stop();
+            status_server = Some(
+                StatusServer::new(
+                    engine_store_ffi::gen_engine_store_server_helper(
+                        ffiset.engine_store_server_helper_ptr,
+                    ),
+                    1,
+                    ConfigController::default(),
+                    Arc::new(SecurityConfig::default()),
+                    router.unwrap(),
+                    std::env::temp_dir(),
+                )
+                .unwrap(),
+            );
         },
     );
+    let addr = format!("127.0.0.1:{}", test_util::alloc_port());
+    let mut status_server = status_server.unwrap();
+    status_server.start(addr).unwrap();
+    let check_task = check(status_server.listening_addr(), region_id);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let handle = rt.spawn(check_task);
+    for i in 0..300 {
+        let k = format!("k{}", i);
+        cluster.must_put(k.as_bytes(), b"v");
+        if handle.is_finished() {
+            break;
+        }
+    }
+    block_on(handle).unwrap();
+    status_server.stop();
 }
