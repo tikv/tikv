@@ -8,20 +8,24 @@ use std::{
 use causal_ts::CausalTsProvider;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
-use futures::{compat::Future01CompatExt, FutureExt};
-use pd_client::PdClient;
+use futures::{channel::oneshot, compat::Future01CompatExt, FutureExt, StreamExt};
+use kvproto::pdpb;
+use pd_client::PdClientV2;
 use raftstore::{store::TxnExt, Result};
-use slog::{info, warn};
-use tikv_util::{box_err, timer::GLOBAL_TIMER_HANDLE};
+use slog::{error, info, warn};
+use tikv_util::{box_err, mpsc::future as mpsc, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
 use super::Runner;
+
+type CallerChannel = oneshot::Sender<pd_client::Result<pdpb::TsoResponse>>;
+pub type Transport = (mpsc::Sender<pdpb::TsoRequest>, mpsc::Sender<CallerChannel>);
 
 impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     pub fn handle_update_max_timestamp(
         &mut self,
@@ -29,7 +33,10 @@ where
         initial_status: u64,
         txn_ext: Arc<TxnExt>,
     ) {
-        let pd_client = self.pd_client.clone();
+        if !self.maybe_create_transport() {
+            return;
+        }
+        let transport = self.tso_transport.clone().unwrap();
         let concurrency_manager = self.concurrency_manager.clone();
         let causal_ts_provider = self.causal_ts_provider.clone();
         let logger = self.logger.clone();
@@ -56,7 +63,19 @@ where
                         .await
                         .map_err(|e| box_err!(e))
                 } else {
-                    pd_client.get_tso().await.map_err(Into::into)
+                    let (tx, rx) = oneshot::channel();
+                    let mut req = pdpb::TsoRequest::default();
+                    // TODO(tabokie): header
+                    req.set_count(1);
+                    let _ = transport.0.send(req);
+                    let _ = transport.1.send(tx);
+                    rx.await
+                        .unwrap()
+                        .map(|resp| {
+                            let ts = resp.timestamp.unwrap();
+                            TimeStamp::compose(ts.physical as u64, ts.logical as u64)
+                        })
+                        .map_err(Into::into)
                 };
 
                 match res {
@@ -110,5 +129,39 @@ where
         } else {
             self.remote.spawn(f);
         }
+    }
+
+    fn maybe_create_transport(&mut self) -> bool {
+        if self.tso_transport.is_some() {
+            return true;
+        }
+        match self
+            .pd_client
+            .create_tso_stream(mpsc::WakePolicy::Immediately)
+        {
+            Err(e) => error!(self.logger, "failed to create tso stream"; "err" => %e),
+            Ok((tx, mut rx)) => {
+                let store_id = self.store_id;
+                let logger = self.logger.clone();
+                let (caller_tx, mut caller_rx) =
+                    mpsc::unbounded::<CallerChannel>(mpsc::WakePolicy::Immediately);
+                self.remote.spawn(async move {
+                    while let Some(resp) = rx.next().await {
+                        if let Some(caller) = caller_rx.next().await {
+                            let _ = caller.send(resp);
+                        } else {
+                            panic!("cannot pair a caller with tso response");
+                        }
+                    }
+                    info!(
+                        logger,
+                        "tso response handler exit";
+                        "store_id" => store_id,
+                    );
+                });
+                self.tso_transport = Some((tx, caller_tx))
+            }
+        };
+        self.tso_transport.is_some()
     }
 }

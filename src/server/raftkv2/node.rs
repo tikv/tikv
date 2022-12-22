@@ -6,7 +6,7 @@ use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletContext, TabletRegistry};
 use kvproto::{metapb, replication_modepb::ReplicationStatus};
-use pd_client::PdClient;
+use pd_client::PdClientV2;
 use raftstore::store::{GlobalReplicationState, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::{router::RaftRouter, Bootstrap, LockManagerNotifier, StoreSystem};
 use slog::{info, o, Logger};
@@ -15,14 +15,14 @@ use tikv_util::{config::VersionTrack, worker::Worker};
 use crate::server::{node::init_store, Result};
 
 // TODO: we will rename another better name like RaftStore later.
-pub struct NodeV2<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
+pub struct NodeV2<C: PdClientV2 + Clone + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
     system: StoreSystem<EK, ER>,
     has_started: bool,
 
-    pd_client: Arc<C>,
+    pd_client: C,
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
     registry: TabletRegistry<EK>,
@@ -31,7 +31,7 @@ pub struct NodeV2<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
 
 impl<C, EK, ER> NodeV2<C, EK, ER>
 where
-    C: PdClient,
+    C: PdClientV2 + Clone,
     EK: KvEngine,
     ER: RaftEngine,
 {
@@ -40,7 +40,7 @@ where
         system: StoreSystem<EK, ER>,
         cfg: &crate::server::Config,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
-        pd_client: Arc<C>,
+        pd_client: C,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
         store: Option<metapb::Store>,
@@ -66,7 +66,7 @@ where
         let store_id = Bootstrap::new(
             raft_engine,
             self.cluster_id,
-            &*self.pd_client,
+            &mut self.pd_client,
             self.logger.clone(),
         )
         .bootstrap_store()?;
@@ -98,7 +98,7 @@ where
         if let Some(region) = Bootstrap::new(
             &raft_engine,
             self.cluster_id,
-            &*self.pd_client,
+            &mut self.pd_client,
             self.logger.clone(),
         )
         .bootstrap_first_region(&self.store, store_id)?

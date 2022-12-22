@@ -3724,6 +3724,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "tokio-stream",
  "tokio-timer",
  "txn_types",
  "yatp",
@@ -6689,6 +6690,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

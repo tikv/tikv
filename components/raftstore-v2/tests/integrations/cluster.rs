@@ -27,7 +27,7 @@ use kvproto::{
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request},
     raft_serverpb::RaftMessage,
 };
-use pd_client::RpcClient;
+use pd_client::RpcClientV2;
 use raft::{eraftpb::MessageType, StateRole};
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
@@ -228,7 +228,7 @@ pub struct RunningState {
 
 impl RunningState {
     fn new(
-        pd_client: &Arc<RpcClient>,
+        mut pd_client: RpcClientV2,
         path: &Path,
         cfg: Arc<VersionTrack<Config>>,
         transport: TestTransport,
@@ -240,7 +240,7 @@ impl RunningState {
             engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
                 .unwrap();
 
-        let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client.as_ref(), logger.clone());
+        let mut bootstrap = Bootstrap::new(&raft_engine, 0, &mut pd_client, logger.clone());
         let store_id = bootstrap.bootstrap_store().unwrap();
         let mut store = Store::default();
         store.set_id(store_id);
@@ -285,7 +285,7 @@ impl RunningState {
                 raft_engine.clone(),
                 registry.clone(),
                 transport.clone(),
-                pd_client.clone(),
+                pd_client,
                 router.store_router(),
                 store_meta,
                 snap_mgr.clone(),
@@ -315,7 +315,7 @@ impl Drop for RunningState {
 }
 
 pub struct TestNode {
-    pd_client: Arc<RpcClient>,
+    pd_client: RpcClientV2,
     path: TempDir,
     running_state: Option<RunningState>,
     logger: Logger,
@@ -323,7 +323,7 @@ pub struct TestNode {
 
 impl TestNode {
     fn with_pd(pd_server: &test_pd::Server<Service>, logger: Logger) -> TestNode {
-        let pd_client = Arc::new(test_pd::util::new_client(pd_server.bind_addrs(), None));
+        let pd_client = test_pd::util::new_client_v2(pd_server.bind_addrs(), None);
         let path = TempDir::new().unwrap();
         TestNode {
             pd_client,
@@ -335,7 +335,7 @@ impl TestNode {
 
     fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
         let (router, state) = RunningState::new(
-            &self.pd_client,
+            self.pd_client.clone(),
             self.path.path(),
             cfg,
             trans,
@@ -352,8 +352,8 @@ impl TestNode {
         &self.running_state().unwrap().registry
     }
 
-    pub fn pd_client(&self) -> &Arc<RpcClient> {
-        &self.pd_client
+    pub fn pd_client(&self) -> RpcClientV2 {
+        self.pd_client.clone()
     }
 
     fn stop(&mut self) {

@@ -402,10 +402,7 @@ fn test_change_leader_async() {
 
         let new = client.get_leader();
         if new != leader {
-            assert!(matches!(
-                reconnect_recv.try_recv(),
-                Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
-            ));
+            assert!(block_on(reconnect_recv.next()).is_some());
             return;
         }
         thread::sleep(LeaderChange::get_leader_interval());
@@ -546,10 +543,7 @@ fn test_periodical_update() {
     for _ in 0..5 {
         let new = client.get_leader();
         if new != leader {
-            assert!(matches!(
-                reconnect_recv.try_recv(),
-                Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
-            ));
+            assert!(block_on(reconnect_recv.next()).is_some());
             return;
         }
         thread::sleep(LeaderChange::get_leader_interval());

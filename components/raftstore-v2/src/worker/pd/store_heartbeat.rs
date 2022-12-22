@@ -11,7 +11,7 @@ use pd_client::{
         REGION_READ_BYTES_HISTOGRAM, REGION_READ_KEYS_HISTOGRAM, REGION_WRITTEN_BYTES_HISTOGRAM,
         REGION_WRITTEN_KEYS_HISTOGRAM, STORE_SIZE_GAUGE_VEC,
     },
-    PdClient,
+    PdClientV2,
 };
 use prometheus::local::LocalHistogram;
 use slog::{error, warn};
@@ -163,7 +163,7 @@ impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     pub fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats) {
         let mut report_peers = HashMap::default();

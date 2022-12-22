@@ -2,7 +2,7 @@
 
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
-use pd_client::PdClient;
+use pd_client::PdClientV2;
 use tikv_util::store::new_peer;
 
 use crate::cluster::Cluster;
@@ -49,7 +49,9 @@ fn test_store_heartbeat() {
     let cluster = Cluster::with_node_count(1, None);
     let store_id = cluster.node(0).id();
     for _ in 0..5 {
-        let stats = block_on(cluster.node(0).pd_client().get_store_stats_async(store_id)).unwrap();
+        let stats = block_on(cluster.node(0).pd_client().get_store_and_stats(store_id))
+            .unwrap()
+            .1;
         if stats.get_start_time() > 0 {
             assert_ne!(stats.get_capacity(), 0);
             return;

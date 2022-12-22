@@ -5,7 +5,7 @@ use kvproto::{
     metapb, pdpb,
     raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
 };
-use pd_client::PdClient;
+use pd_client::PdClientV2;
 use slog::{info, warn};
 
 use super::{requests::*, Runner};
@@ -35,7 +35,7 @@ impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     pub fn handle_ask_batch_split(
         &mut self,

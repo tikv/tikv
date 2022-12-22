@@ -10,7 +10,7 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
-use pd_client::PdClient;
+use pd_client::PdClientV2;
 use raftstore::store::{util::KeysInfoFormatter, TxnExt};
 use slog::{error, info, Logger};
 use tikv_util::{time::UnixSecs, worker::Runnable};
@@ -93,10 +93,10 @@ pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     store_id: u64,
-    pd_client: Arc<T>,
+    pd_client: T,
     raft_engine: ER,
     tablet_registry: TabletRegistry<EK>,
     router: StoreRouter<EK, ER>,
@@ -111,11 +111,12 @@ where
 
     // For region_heartbeat.
     region_cpu_records: HashMap<u64, u32>,
-    is_hb_receiver_scheduled: bool,
+    region_heartbeat_transport: Option<region_heartbeat::Transport>,
 
     // For update_max_timestamp.
     concurrency_manager: ConcurrencyManager,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    tso_transport: Option<update_max_timestamp::Transport>,
 
     logger: Logger,
     shutdown: Arc<AtomicBool>,
@@ -125,11 +126,11 @@ impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     pub fn new(
         store_id: u64,
-        pd_client: Arc<T>,
+        pd_client: T,
         raft_engine: ER,
         tablet_registry: TabletRegistry<EK>,
         router: StoreRouter<EK, ER>,
@@ -150,9 +151,10 @@ where
             start_ts: UnixSecs::zero(),
             store_stat: store_heartbeat::StoreStat::default(),
             region_cpu_records: HashMap::default(),
-            is_hb_receiver_scheduled: false,
+            region_heartbeat_transport: None,
             concurrency_manager,
             causal_ts_provider,
+            tso_transport: None,
             logger,
             shutdown,
         }
@@ -163,12 +165,11 @@ impl<EK, ER, T> Runnable for Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
-        self.maybe_schedule_heartbeat_receiver();
         match task {
             Task::RegionHeartbeat(task) => self.handle_region_heartbeat(task),
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
@@ -194,7 +195,7 @@ impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     fn handle_destroy_peer(&mut self, region_id: u64) {
         match self.region_peers.remove(&region_id) {

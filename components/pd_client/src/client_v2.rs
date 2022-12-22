@@ -483,11 +483,6 @@ impl RpcClient {
         })
     }
 
-    #[inline]
-    pub fn subscribe_reconnect(&self) -> broadcast::Receiver<()> {
-        self.raw_client.clone().on_reconnect_rx
-    }
-
     #[cfg(feature = "testexport")]
     pub fn feature_gate(&self) -> &FeatureGate {
         &self.feature_gate
@@ -519,15 +514,17 @@ impl RpcClient {
     }
 }
 
-pub trait PdClient {
-    type ResponseChannel<R: Debug>: Stream<Item = Result<R>>;
+type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
+
+pub trait PdClient: Send + Sync {
+    fn subscribe_reconnect(&self) -> BoxStream<()>;
 
     fn create_region_heartbeat_stream(
         &mut self,
         wake_policy: mpsc::WakePolicy,
     ) -> Result<(
         mpsc::Sender<RegionHeartbeatRequest>,
-        Self::ResponseChannel<RegionHeartbeatResponse>,
+        BoxStream<Result<RegionHeartbeatResponse>>,
     )>;
 
     fn create_report_region_buckets_stream(
@@ -538,7 +535,7 @@ pub trait PdClient {
     fn create_tso_stream(
         &mut self,
         wake_policy: mpsc::WakePolicy,
-    ) -> Result<(mpsc::Sender<TsoRequest>, Self::ResponseChannel<TsoResponse>)>;
+    ) -> Result<(mpsc::Sender<TsoRequest>, BoxStream<Result<TsoResponse>>)>;
 
     fn fetch_cluster_id(&mut self) -> Result<u64>;
 
@@ -668,14 +665,20 @@ impl<T: Debug> Stream for CachedDuplexResponse<T> {
 }
 
 impl PdClient for RpcClient {
-    type ResponseChannel<R: Debug> = CachedDuplexResponse<R>;
+    fn subscribe_reconnect(&self) -> BoxStream<()> {
+        let stream =
+            tokio_stream::wrappers::BroadcastStream::new(self.raw_client.clone().on_reconnect_rx);
+        // We don't care about lagged.
+        let stream = stream.map(|_| {});
+        Box::pin(stream)
+    }
 
     fn create_region_heartbeat_stream(
         &mut self,
         wake_policy: mpsc::WakePolicy,
     ) -> Result<(
         mpsc::Sender<RegionHeartbeatRequest>,
-        Self::ResponseChannel<RegionHeartbeatResponse>,
+        BoxStream<Result<RegionHeartbeatResponse>>,
     )> {
         // TODO: use bounded channel.
         let (tx, rx) = mpsc::unbounded(wake_policy);
@@ -713,7 +716,7 @@ impl PdClient for RpcClient {
                 let _ = hb_tx.close().await;
             }
         });
-        Ok((tx, resp_rx))
+        Ok((tx, Box::pin(resp_rx)))
     }
 
     fn create_report_region_buckets_stream(
@@ -759,7 +762,7 @@ impl PdClient for RpcClient {
     fn create_tso_stream(
         &mut self,
         wake_policy: mpsc::WakePolicy,
-    ) -> Result<(mpsc::Sender<TsoRequest>, Self::ResponseChannel<TsoResponse>)> {
+    ) -> Result<(mpsc::Sender<TsoRequest>, BoxStream<Result<TsoResponse>>)> {
         let (tx, rx) = mpsc::unbounded(wake_policy);
         let (resp_tx, resp_rx) = CachedDuplexResponse::<TsoResponse>::new();
         let mut raw_client = self.raw_client.clone();
@@ -788,7 +791,7 @@ impl PdClient for RpcClient {
                 let _ = tso_tx.close().await;
             }
         });
-        Ok((tx, resp_rx))
+        Ok((tx, Box::pin(resp_rx)))
     }
 
     fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>> {

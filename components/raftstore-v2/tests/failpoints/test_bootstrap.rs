@@ -12,12 +12,12 @@ use tempfile::TempDir;
 fn test_bootstrap_half_way_failure() {
     let server = test_pd::Server::new(1);
     let eps = server.bind_addrs();
-    let pd_client = test_pd::util::new_client(eps, None);
+    let mut pd_client = test_pd::util::new_client_v2(eps, None);
     let path = TempDir::new().unwrap();
     let engines = engine_test::new_temp_engine(&path);
-    let bootstrap = || {
+    let mut bootstrap = || {
         let logger = slog_global::borrow_global().new(o!());
-        let mut bootstrap = Bootstrap::new(&engines.raft, 0, &pd_client, logger);
+        let mut bootstrap = Bootstrap::new(&engines.raft, 0, &mut pd_client, logger);
         match bootstrap.bootstrap_store() {
             Ok(store_id) => {
                 let mut store = Store::default();
