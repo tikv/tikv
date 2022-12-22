@@ -7,7 +7,10 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletContext, TabletRegistry};
 use kvproto::{metapb, replication_modepb::ReplicationStatus};
 use pd_client::PdClient;
-use raftstore::store::{GlobalReplicationState, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX};
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{GlobalReplicationState, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX},
+};
 use raftstore_v2::{router::RaftRouter, Bootstrap, StoreSystem};
 use slog::{info, o, Logger};
 use tikv_util::{config::VersionTrack, worker::Worker};
@@ -85,6 +88,8 @@ where
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        coprocessor_host: CoprocessorHost<EK>,
+        background: Worker,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -125,6 +130,8 @@ where
             snap_mgr,
             concurrency_manager,
             causal_ts_provider,
+            coprocessor_host,
+            background,
         )?;
 
         Ok(())
@@ -171,6 +178,8 @@ where
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        coprocessor_host: CoprocessorHost<EK>,
+        background: Worker,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -196,6 +205,8 @@ where
             snap_mgr,
             concurrency_manager,
             causal_ts_provider,
+            coprocessor_host,
+            background,
         )?;
         Ok(())
     }

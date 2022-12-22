@@ -29,9 +29,12 @@ use kvproto::{
 };
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
-use raftstore::store::{
-    region_meta::{RegionLocalState, RegionMeta},
-    Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{
+        region_meta::{RegionLocalState, RegionMeta},
+        Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+    },
 };
 use raftstore_v2::{
     create_store_batch_system,
@@ -44,6 +47,7 @@ use test_pd::mocker::Service;
 use tikv_util::{
     config::{ReadableDuration, VersionTrack},
     store::new_peer,
+    worker::Worker,
 };
 use txn_types::WriteBatchFlags;
 
@@ -221,6 +225,7 @@ pub struct RunningState {
     pub cfg: Arc<VersionTrack<Config>>,
     pub transport: TestTransport,
     snap_mgr: TabletSnapManager,
+    background: Worker,
 }
 
 impl RunningState {
@@ -275,6 +280,12 @@ impl RunningState {
         let store_meta = router.store_meta().clone();
         let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap());
         snap_mgr.init().unwrap();
+
+        let coprocessor_host = CoprocessorHost::new(
+            router.store_router().clone(),
+            raftstore::coprocessor::Config::default(),
+        );
+        let background = Worker::new("background");
         system
             .start(
                 store_id,
@@ -288,6 +299,8 @@ impl RunningState {
                 snap_mgr.clone(),
                 concurrency_manager,
                 causal_ts_provider,
+                coprocessor_host,
+                background.clone(),
             )
             .unwrap();
 
@@ -299,6 +312,7 @@ impl RunningState {
             cfg,
             transport,
             snap_mgr,
+            background,
         };
         (TestRouter(router), state)
     }
@@ -307,6 +321,7 @@ impl RunningState {
 impl Drop for RunningState {
     fn drop(&mut self) {
         self.system.shutdown();
+        self.background.stop();
     }
 }
 
