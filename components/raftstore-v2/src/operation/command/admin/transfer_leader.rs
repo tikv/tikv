@@ -35,7 +35,7 @@ use crate::{
     router::{CmdResChannel, PeerMsg, PeerTick},
 };
 
-fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
+fn transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
     if !msg.has_admin_request() {
         return None;
     }
@@ -79,7 +79,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) -> bool {
         ctx.raft_metrics.propose.transfer_leader.inc();
 
-        let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
+        let transfer_leader = transfer_leader_cmd(&req).unwrap();
         let prs = self.raft_group().raft.prs();
 
         // Find the target with the largest matched index among the candidate
@@ -108,7 +108,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             _ => peers.choose(&mut rand::thread_rng()).unwrap(),
         };
 
-        let transferee = if peer.id == self.peer().id {
+        let transferee = if peer.id == self.peer_id() {
             false
         } else {
             self.pre_transfer_leader(peer)
@@ -212,6 +212,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             "peer" => ?from,
                         );
                         self.raft_group_mut().transfer_leader(from.get_id());
+                        self.refresh_leader_transferee();
                     }
                 }
             }

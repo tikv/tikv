@@ -217,7 +217,7 @@ impl PeerMsg {
                 request: RequestSplit {
                     epoch,
                     split_keys,
-                    source: source.into_boxed_str(),
+                    source: source.into(),
                 },
                 ch,
             },

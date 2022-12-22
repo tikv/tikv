@@ -9,7 +9,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
-pub use split::{RequestSplit, SplitInit, SplitResult, SPLIT_PREFIX};
+pub use split::{RequestSplit, SplitFlowControl, SplitInit, SplitResult, SPLIT_PREFIX};
 use tikv_util::box_err;
 use txn_types::WriteBatchFlags;
 
@@ -30,7 +30,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_admin_command<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
         ch: CmdResChannel,
     ) {
         if !self.serving() {
@@ -40,6 +40,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !req.has_admin_request() {
             let e = box_err!("{:?} expect only execute admin command", self.logger.list());
             let resp = cmd_resp::new_error(e);
+            ch.report_error(resp);
+            return;
+        }
+        if let Err(e) = ctx.coprocessor_host.pre_propose(self.region(), &mut req) {
+            let resp = cmd_resp::new_error(e.into());
             ch.report_error(resp);
             return;
         }

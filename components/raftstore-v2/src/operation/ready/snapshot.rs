@@ -30,7 +30,7 @@ use std::{
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
 use protobuf::Message;
-use raft::eraftpb::Snapshot;
+use raft::{eraftpb::Snapshot, StateRole};
 use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{
@@ -143,6 +143,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_applied_snapshot<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        ctx.coprocessor_host.on_region_changed(
+            self.region(),
+            RegionChangeEvent::Create,
+            StateRole::Follower,
+        );
         let persisted_index = self.persisted_index();
         let first_index = self.storage().entry_storage().first_index();
         if first_index == persisted_index + 1 {
@@ -153,14 +158,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Use a new FlushState to avoid conflicts with the old one.
             tablet_ctx.flush_state = Some(flush_state);
             ctx.tablet_registry.load(tablet_ctx, false).unwrap();
-
             self.schedule_apply_fsm(ctx);
-            ctx.lock_manager_notifier.on_region_changed(
-                self.region(),
-                RegionChangeEvent::Create,
-                self.get_role(),
-            );
-
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);
             {
@@ -232,6 +230,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
+    pub fn is_generating_snapshot(&self) -> bool {
+        let snap_state = self.snap_state_mut();
+        matches!(*snap_state, SnapState::Generating { .. })
+    }
+
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {

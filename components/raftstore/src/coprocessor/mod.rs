@@ -33,7 +33,7 @@ pub use self::{
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
         BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver,
-        BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry,
+        BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry, StoreHandle,
     },
     error::{Error, Result},
     region_info_accessor::{
