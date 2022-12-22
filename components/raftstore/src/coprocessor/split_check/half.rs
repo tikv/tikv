@@ -140,8 +140,8 @@ mod tests {
         *,
     };
     use crate::{
-        coprocessor::{Config, CoprocessorHost},
-        store::{BucketRange, CasualMessage, SplitCheckRunner, SplitCheckTask},
+        coprocessor::{dispatcher::SchedTask, Config, CoprocessorHost},
+        store::{BucketRange, SplitCheckRunner, SplitCheckTask},
     };
 
     #[test]
@@ -451,15 +451,11 @@ mod tests {
         ));
 
         loop {
-            if let Ok((
-                _,
-                CasualMessage::RefreshRegionBuckets {
-                    region_epoch: _,
-                    buckets,
-                    bucket_ranges,
-                    ..
-                },
-            )) = rx.try_recv()
+            if let Ok(SchedTask::RefreshRegionBuckets {
+                buckets,
+                bucket_ranges,
+                ..
+            }) = rx.try_recv()
             {
                 assert_eq!(buckets.len(), bucket_ranges.unwrap().len());
                 assert_eq!(buckets.len(), 5);

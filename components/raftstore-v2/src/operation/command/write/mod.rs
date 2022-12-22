@@ -139,6 +139,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         fail::fail_point!("APPLY_PUT", |_| Err(raftstore::Error::Other(
             "aborted by failpoint".into()
         )));
+        self.metrics.size_diff_hint += (self.key_buffer.len() + value.len()) as i64;
         self.modifications_mut()[off] = index;
         Ok(())
     }
@@ -169,6 +170,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 e
             );
         });
+        self.metrics.size_diff_hint -= self.key_buffer.len() as i64;
         self.modifications_mut()[off] = index;
         Ok(())
     }
