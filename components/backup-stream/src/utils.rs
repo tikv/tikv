@@ -3,6 +3,7 @@
 use core::pin::Pin;
 use std::{
     borrow::Borrow,
+    cell::RefCell,
     collections::{hash_map::RandomState, BTreeMap, HashMap},
     ops::{Bound, RangeBounds},
     path::Path,
@@ -20,6 +21,7 @@ use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
 use kvproto::{
     brpb::CompressionType,
+    metapb::Region,
     raft_cmdpb::{CmdType, Request},
 };
 use raft::StateRole;
@@ -743,6 +745,109 @@ impl CompressionWriter for ZstdCompressionWriter {
     }
 }
 
+/// make a pair of key range to impl Debug which prints [start_key,$end_key).
+pub fn debug_key_range<'ret, 'a: 'ret, 'b: 'ret>(
+    start: &'a [u8],
+    end: &'b [u8],
+) -> impl std::fmt::Debug + 'ret {
+    DebugKeyRange::<'a, 'b>(start, end)
+}
+
+struct DebugKeyRange<'start, 'end>(&'start [u8], &'end [u8]);
+
+impl<'start, 'end> std::fmt::Debug for DebugKeyRange<'start, 'end> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let end_key = if self.1.is_empty() {
+            Either::Left("inf")
+        } else {
+            Either::Right(redact(&self.1))
+        };
+        let end_key: &dyn std::fmt::Display = match &end_key {
+            Either::Left(x) => x,
+            Either::Right(y) => y,
+        };
+        write!(f, "[{},{})", redact(&self.0), end_key)
+    }
+}
+
+/// make a [`Region`](kvproto::metapb::Region) implements [`slog::KV`], which
+/// prints its fields like `[r.id=xxx] [r.ver=xxx] ...`
+pub fn slog_region(r: &Region) -> impl slog::KV + '_ {
+    SlogRegion(r)
+}
+
+/// make a [`Region`](kvproto::metapb::Region) implements
+/// [`Debug`](std::fmt::Debug), which prints its essential fields.
+pub fn debug_region(r: &Region) -> impl std::fmt::Debug + '_ {
+    DebugRegion(r)
+}
+
+struct DebugRegion<'a>(&'a Region);
+
+impl<'a> std::fmt::Debug for DebugRegion<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let r = self.0;
+        f.debug_struct("Region")
+            .field("id", &r.get_id())
+            .field("ver", &r.get_region_epoch().get_version())
+            .field("conf_ver", &r.get_region_epoch().get_conf_ver())
+            .field(
+                "range",
+                &debug_key_range(r.get_start_key(), r.get_end_key()),
+            )
+            .field(
+                "peers",
+                &debug_iter(r.get_peers().iter().map(|p| p.store_id)),
+            )
+            .finish()
+    }
+}
+
+struct SlogRegion<'a>(&'a Region);
+
+impl<'a> slog::KV for SlogRegion<'a> {
+    fn serialize(
+        &self,
+        _record: &slog::Record<'_>,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        let r = self.0;
+        serializer.emit_u64("r.id", r.get_id())?;
+        serializer.emit_u64("r.ver", r.get_region_epoch().get_version())?;
+        serializer.emit_u64("r.conf_ver", r.get_region_epoch().get_conf_ver())?;
+        serializer.emit_arguments(
+            "r.range",
+            &format_args!("{:?}", debug_key_range(r.get_start_key(), r.get_end_key())),
+        )?;
+        serializer.emit_arguments(
+            "r.peers",
+            &format_args!("{:?}", debug_iter(r.get_peers().iter().map(|p| p.store_id))),
+        )?;
+        Ok(())
+    }
+}
+
+pub fn debug_iter<D: std::fmt::Debug>(t: impl Iterator<Item = D>) -> impl std::fmt::Debug {
+    DebugIter(RefCell::new(t))
+}
+
+struct DebugIter<D: std::fmt::Debug, T: Iterator<Item = D>>(RefCell<T>);
+
+impl<D: std::fmt::Debug, T: Iterator<Item = D>> std::fmt::Debug for DebugIter<D, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut is_first = true;
+        while let Some(x) = self.0.borrow_mut().next() {
+            if !is_first {
+                write!(f, ",{:?}", x)?;
+            } else {
+                write!(f, "{:?}", x)?;
+                is_first = false;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -755,9 +860,34 @@ mod test {
 
     use engine_traits::WriteOptions;
     use futures::executor::block_on;
+    use kvproto::metapb::{Region, RegionEpoch};
     use tokio::io::{AsyncWriteExt, BufReader};
 
     use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
+
+    #[test]
+    fn test_redact() {
+        log_wrappers::set_redact_info_log(true);
+        let mut region = Region::default();
+        region.set_id(42);
+        region.set_start_key(b"TiDB".to_vec());
+        region.set_end_key(b"TiDC".to_vec());
+        region.set_region_epoch({
+            let mut r = RegionEpoch::default();
+            r.set_version(108);
+            r.set_conf_ver(352);
+            r
+        });
+
+        // Can we make a better way to test this?
+        assert_eq!(
+            "Region { id: 42, ver: 108, conf_ver: 352, range: [?,?), peers:  }",
+            format!("{:?}", super::debug_region(&region))
+        );
+
+        let range = super::debug_key_range(b"alpha", b"omega");
+        assert_eq!("[?,?)", format!("{:?}", range));
+    }
 
     #[test]
     fn test_range_functions() {
