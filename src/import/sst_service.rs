@@ -433,7 +433,7 @@ where
     ) -> std::result::Result<Option<Range>, ImportPbError> {
         let mut range: Option<Range> = None;
 
-        let mut collector = RequestCollector::new(req.take_context(), max_raft_size);
+        let mut collector = RequestCollector::new(req.take_context(), max_raft_size * 7 / 8);
         let mut metas = req.take_metas();
         let mut rules = req.take_rewrite_rules();
         // For compatibility with old requests.
@@ -708,7 +708,7 @@ where
         let importer = self.importer.clone();
         let router = self.router.clone();
         let limiter = self.limiter.clone();
-        let max_raft_size = self.raft_entry_max_size.0;
+        let max_raft_size = self.raft_entry_max_size.0 as usize;
 
         let handle_task = async move {
             // Records how long the apply task waits to be scheduled.
@@ -718,7 +718,7 @@ where
 
             let mut resp = ApplyResponse::default();
 
-            match Self::apply_imp(req, importer, router, limiter, max_raft_size as usize).await {
+            match Self::apply_imp(req, importer, router, limiter, max_raft_size).await {
                 Ok(Some(r)) => resp.set_range(r),
                 Err(e) => resp.set_error(e),
                 _ => {}
