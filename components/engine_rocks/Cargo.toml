@@ -55,7 +55,8 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/tabokie/rust-rocksdb.git"
+branch = "schedule-memtable"
 package = "rocksdb"
 features = ["encryption"]
 

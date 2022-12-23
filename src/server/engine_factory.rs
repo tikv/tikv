@@ -16,7 +16,7 @@ use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
 use crate::{
-    config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    config::{DbConfig, SharedBetweenCfs, SharedBetweenDbs, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
     storage::config::EngineType,
 };
 
@@ -28,7 +28,8 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
-    statistics: Arc<RocksStatistics>,
+    shared_between_tablets: SharedBetweenDbs,
+    shared_between_cfs: Vec<SharedBetweenCfs>,
     state_storage: Option<Arc<dyn StateStorage>>,
     lite: bool,
 }
@@ -40,7 +41,6 @@ pub struct KvEngineFactoryBuilder {
 
 impl KvEngineFactoryBuilder {
     pub fn new(env: Arc<Env>, config: &TikvConfig, cache: Cache) -> Self {
-        let statistics = Arc::new(RocksStatistics::new_titan());
         Self {
             inner: FactoryInner {
                 env,
@@ -50,7 +50,8 @@ impl KvEngineFactoryBuilder {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                statistics,
+                shared_between_tablets: config.rocksdb.build_shared(),
+                shared_between_cfs: config.rocksdb.build_cf_shared(),
                 state_storage: None,
                 lite: false,
             },
@@ -134,7 +135,7 @@ impl KvEngineFactory {
     }
 
     pub fn rocks_statistics(&self) -> Arc<RocksStatistics> {
-        self.inner.statistics.clone()
+        self.inner.shared_between_tablets.statistics.clone()
     }
 
     fn db_opts(&self) -> RocksDbOptions {
@@ -142,7 +143,7 @@ impl KvEngineFactory {
         let mut db_opts = self
             .inner
             .rocksdb_config
-            .build_opt(Some(self.inner.statistics.as_ref()));
+            .build_opt(Some(&self.inner.shared_between_tablets));
         db_opts.set_env(self.inner.env.clone());
         if !self.inner.lite {
             db_opts.add_event_listener(RocksEventListener::new(
@@ -158,6 +159,7 @@ impl KvEngineFactory {
 
     fn cf_opts(&self, for_engine: EngineType) -> Vec<(&str, RocksCfOptions)> {
         self.inner.rocksdb_config.build_cf_opts(
+            Some(&self.inner.shared_between_cfs),
             &self.inner.block_cache,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,

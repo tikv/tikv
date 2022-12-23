@@ -102,21 +102,27 @@ impl TestEngineBuilder {
             .map(|cf| match *cf {
                 CF_DEFAULT => (
                     CF_DEFAULT,
-                    cfg_rocksdb
-                        .defaultcf
-                        .build_opt(&cache, None, api_version, EngineType::RaftKv),
+                    cfg_rocksdb.defaultcf.build_opt(
+                        None,
+                        &cache,
+                        None,
+                        api_version,
+                        EngineType::RaftKv,
+                    ),
                 ),
                 CF_LOCK => (
                     CF_LOCK,
-                    cfg_rocksdb.lockcf.build_opt(&cache, EngineType::RaftKv),
+                    cfg_rocksdb
+                        .lockcf
+                        .build_opt(None, &cache, EngineType::RaftKv),
                 ),
                 CF_WRITE => (
                     CF_WRITE,
                     cfg_rocksdb
                         .writecf
-                        .build_opt(&cache, None, EngineType::RaftKv),
+                        .build_opt(None, &cache, None, EngineType::RaftKv),
                 ),
-                CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(None, &cache)),
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
