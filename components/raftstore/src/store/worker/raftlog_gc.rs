@@ -85,6 +85,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     }
 
     fn process_tasks(&mut self) -> Vec<Box<dyn FnOnce() + Send>> {
+        fail::fail_point!("worker_gc_raft_log", |_| { Vec::new() });
         let tasks = std::mem::take(&mut self.tasks);
         let mut cbs = Vec::new();
         let mut batch = self.engines.raft.log_batch(tasks.len());
@@ -117,7 +118,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 RAFT_LOG_GC_FAILED.inc();
             }
         }
-        fail::fail_point!("worker_gc_raft_log");
         if let Err(e) = self.engines.raft.consume(&mut batch, false) {
             error!("failed to write gc task"; "err" => %e);
             RAFT_LOG_GC_FAILED.inc();

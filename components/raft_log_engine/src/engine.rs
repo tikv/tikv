@@ -301,6 +301,7 @@ fn cf_to_id(cf: &str) -> u8 {
         _ => panic!("unrecognized cf {}", cf),
     }
 }
+const MAX_CF_ID: u8 = 3;
 
 /// Encode a key in the format `{prefix}{num}`.
 fn encode_key(prefix: &'static [u8], num: u64) -> [u8; 9] {
@@ -380,6 +381,7 @@ const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
 const RECOVER_STATE_KEY: &[u8] = &[0x05];
 const FLUSH_STATE_KEY: &[u8] = &[0x06];
+const KEY_PREFIX_LEN: usize = 1;
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -681,18 +683,13 @@ impl RaftEngine for RaftLogEngine {
         // largest.
         debug_assert!(REGION_STATE_KEY < APPLY_STATE_KEY);
         debug_assert!(APPLY_STATE_KEY < FLUSH_STATE_KEY);
-        // And they all have the same length.
-        debug_assert!(REGION_STATE_KEY.len() == APPLY_STATE_KEY.len());
-        debug_assert!(REGION_STATE_KEY.len() == FLUSH_STATE_KEY.len());
 
-        let key_len = REGION_STATE_KEY.len();
-        let mut end = [0; 2];
-        end[..key_len].copy_from_slice(FLUSH_STATE_KEY);
-        // cf_to_id() <= 3.
-        end[key_len] = 4;
+        let mut end = [0; KEY_PREFIX_LEN + 1];
+        end[..KEY_PREFIX_LEN].copy_from_slice(FLUSH_STATE_KEY);
+        end[KEY_PREFIX_LEN] = MAX_CF_ID + 1;
         let mut found_region_state = false;
         let mut found_apply_state = false;
-        let mut found_flush_state = false;
+        let mut found_flush_state = [false; MAX_CF_ID as usize];
         self.0
             .scan_raw_messages(
                 raft_group_id,
@@ -700,9 +697,9 @@ impl RaftEngine for RaftLogEngine {
                 Some(&end),
                 true,
                 |key, _| {
-                    match &key[..key_len] {
+                    match &key[..KEY_PREFIX_LEN] {
                         REGION_STATE_KEY
-                            if NumberCodec::decode_u64(&key[key_len..]) < apply_index =>
+                            if NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]) <= apply_index =>
                         {
                             if found_region_state {
                                 batch.0.delete(raft_group_id, key.to_vec());
@@ -711,7 +708,7 @@ impl RaftEngine for RaftLogEngine {
                             }
                         }
                         APPLY_STATE_KEY
-                            if NumberCodec::decode_u64(&key[key_len..]) < apply_index =>
+                            if NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]) <= apply_index =>
                         {
                             if found_apply_state {
                                 batch.0.delete(raft_group_id, key.to_vec());
@@ -719,13 +716,15 @@ impl RaftEngine for RaftLogEngine {
                                 found_apply_state = true;
                             }
                         }
-                        FLUSH_STATE_KEY
-                            if NumberCodec::decode_u64(&key[key_len..]) < apply_index =>
-                        {
-                            if found_flush_state {
-                                batch.0.delete(raft_group_id, key.to_vec());
-                            } else {
-                                found_flush_state = true;
+                        FLUSH_STATE_KEY => {
+                            let cf_id =
+                                NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..KEY_PREFIX_LEN + 1]);
+                            if cf_id <= MAX_CF_ID as u64 {
+                                if found_flush_state[cf_id as usize] {
+                                    batch.0.delete(raft_group_id, key.to_vec());
+                                } else {
+                                    found_flush_state[cf_id as usize] = true;
+                                }
                             }
                         }
                         _ => {}

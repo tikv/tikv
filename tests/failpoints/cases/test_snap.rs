@@ -700,7 +700,7 @@ fn test_snapshot_clean_up_logs_with_unfinished_log_gc() {
     cluster.run();
     // Simulate raft log gc are pending in queue.
     let fp = "worker_gc_raft_log";
-    fail::cfg(fp, "return(0)").unwrap();
+    fail::cfg(fp, "return").unwrap();
 
     let state = cluster.truncated_state(1, 3);
     for i in 0..30 {
