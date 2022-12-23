@@ -235,8 +235,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     pub fn is_generating_snapshot(&self) -> bool {
-        let snap_state = self.snap_state_mut();
-        matches!(*snap_state, SnapState::Generating { .. })
+        let snap_states = self.snap_states.borrow_mut();
+        for (_, state) in snap_states.iter() {
+            if matches!(*state, SnapState::Generating { .. }) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
