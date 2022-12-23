@@ -362,6 +362,7 @@ macro_rules! cf_config {
             #[serde(with = "rocks_config::checksum_serde")]
             #[online_config(skip)]
             pub checksum: ChecksumType,
+            #[online_config(skip)]
             pub max_compactions: u32,
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
@@ -1122,10 +1123,15 @@ pub struct DbConfig {
     pub enable_unordered_write: bool,
     #[online_config(skip)]
     pub allow_concurrent_memtable_write: Option<bool>,
+    #[online_config(skip)]
     pub write_buffer_limit: Option<ReadableSize>,
     #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub write_buffer_stall_ratio: f32,
     #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub write_buffer_flush_oldest_first: bool,
     // Dangerous option only for programming use.
     #[online_config(skip)]
@@ -1299,22 +1305,30 @@ impl DbConfig {
 
     pub fn build_cf_shared(&self, cache: Cache) -> SharedBetweenCfs {
         let mut compaction_thread_limiters = HashMap::new();
-        compaction_thread_limiters.insert(
-            CF_DEFAULT,
-            ConcurrentTaskLimiter::new(CF_DEFAULT, self.defaultcf.max_compactions),
-        );
-        compaction_thread_limiters.insert(
-            CF_WRITE,
-            ConcurrentTaskLimiter::new(CF_WRITE, self.writecf.max_compactions),
-        );
-        compaction_thread_limiters.insert(
-            CF_LOCK,
-            ConcurrentTaskLimiter::new(CF_LOCK, self.lockcf.max_compactions),
-        );
-        compaction_thread_limiters.insert(
-            CF_RAFT,
-            ConcurrentTaskLimiter::new(CF_RAFT, self.raftcf.max_compactions),
-        );
+        if self.defaultcf.max_compactions > 0 {
+            compaction_thread_limiters.insert(
+                CF_DEFAULT,
+                ConcurrentTaskLimiter::new(CF_DEFAULT, self.defaultcf.max_compactions),
+            );
+        }
+        if self.writecf.max_compactions > 0 {
+            compaction_thread_limiters.insert(
+                CF_WRITE,
+                ConcurrentTaskLimiter::new(CF_WRITE, self.writecf.max_compactions),
+            );
+        }
+        if self.lockcf.max_compactions > 0 {
+            compaction_thread_limiters.insert(
+                CF_LOCK,
+                ConcurrentTaskLimiter::new(CF_LOCK, self.lockcf.max_compactions),
+            );
+        }
+        if self.raftcf.max_compactions > 0 {
+            compaction_thread_limiters.insert(
+                CF_RAFT,
+                ConcurrentTaskLimiter::new(CF_RAFT, self.raftcf.max_compactions),
+            );
+        }
         SharedBetweenCfs {
             cache,
             compaction_thread_limiters,
@@ -1467,10 +1481,19 @@ impl Default for RaftDefaultCfConfig {
 
 impl RaftDefaultCfConfig {
     pub fn build_opt(&self, cache: &Cache) -> RocksCfOptions {
-        let no_limiter: Option<&ConcurrentTaskLimiter> = None;
+        let limiter = if self.max_compactions > 0 {
+            Some(ConcurrentTaskLimiter::new(CF_DEFAULT, self.max_compactions))
+        } else {
+            None
+        };
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
-        let mut cf_opts =
-            build_cf_opt!(self, CF_DEFAULT, cache, no_limiter, no_region_info_accessor);
+        let mut cf_opts = build_cf_opt!(
+            self,
+            CF_DEFAULT,
+            cache,
+            limiter.as_ref(),
+            no_region_info_accessor
+        );
         let f = FixedPrefixSliceTransform::new(region_raft_prefix_len());
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)

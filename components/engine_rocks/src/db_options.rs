@@ -70,10 +70,11 @@ impl DbOptions for RocksDbOptions {
     }
 
     fn set_rate_bytes_per_sec(&mut self, rate_bytes_per_sec: i64) -> Result<()> {
-        self.0
-            .get_rate_limiter()
-            .unwrap()
-            .set_bytes_per_second(rate_bytes_per_sec);
+        if let Some(r) = self.0.get_rate_limiter() {
+            r.set_bytes_per_second(rate_bytes_per_sec);
+        } else {
+            return Err(box_err!("rate limiter not found"));
+        }
         Ok(())
     }
 
@@ -82,10 +83,11 @@ impl DbOptions for RocksDbOptions {
     }
 
     fn set_rate_limiter_auto_tuned(&mut self, rate_limiter_auto_tuned: bool) -> Result<()> {
-        self.0
-            .get_rate_limiter()
-            .unwrap()
-            .set_auto_tuned(rate_limiter_auto_tuned);
+        if let Some(r) = self.0.get_rate_limiter() {
+            r.set_auto_tuned(rate_limiter_auto_tuned);
+        } else {
+            return Err(box_err!("rate limiter not found"));
+        }
         Ok(())
     }
 
