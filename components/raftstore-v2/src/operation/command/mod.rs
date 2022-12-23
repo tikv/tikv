@@ -16,6 +16,8 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
+use std::mem;
+
 use engine_traits::{KvEngine, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
@@ -49,7 +51,7 @@ mod admin;
 mod control;
 mod write;
 
-pub use admin::{AdminCmdResult, RequestSplit, SplitInit, SPLIT_PREFIX};
+pub use admin::{AdminCmdResult, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
 pub use control::ProposalControl;
 pub use write::{
     SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
@@ -274,6 +276,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
 
+        self.update_split_flow_control(&apply_res.metrics);
+        self.update_stat(&apply_res.metrics);
+
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);
         self.proposal_control_advance_apply(apply_res.applied_index);
@@ -309,6 +314,32 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
+    pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
+        let decoder = match SimpleWriteReqDecoder::new(&self.logger, &data, u64::MAX, u64::MAX) {
+            Ok(decoder) => decoder,
+            Err(req) => unreachable!("unexpected request: {:?}", req),
+        };
+        for req in decoder {
+            match req {
+                SimpleWrite::Put(put) => {
+                    let _ = self.apply_put(put.cf, u64::MAX, put.key, put.value);
+                }
+                SimpleWrite::Delete(delete) => {
+                    let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
+                }
+                SimpleWrite::DeleteRange(dr) => {
+                    let _ = self.apply_delete_range(
+                        dr.cf,
+                        u64::MAX,
+                        dr.start_key,
+                        dr.end_key,
+                        dr.notify_only,
+                    );
+                }
+            }
+        }
+    }
+
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
@@ -480,6 +511,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             if let Err(e) = wb.write_opt(&write_opt) {
                 panic!("failed to write data: {:?}: {:?}", self.logger.list(), e);
             }
+            self.metrics.written_bytes += wb.data_size() as u64;
+            self.metrics.written_keys += wb.count() as u64;
             if wb.data_size() <= APPLY_WB_SHRINK_SIZE {
                 wb.clear();
             } else {
@@ -499,6 +532,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.applied_term = term;
         apply_res.admin_result = self.take_admin_result().into_boxed_slice();
         apply_res.modifications = *self.modifications_mut();
+        apply_res.metrics = mem::take(&mut self.metrics);
         self.res_reporter().report(apply_res);
     }
 }

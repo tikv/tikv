@@ -25,41 +25,40 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::cmp;
+use std::{borrow::Cow, cmp};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
 use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext};
 use fail::fail_point;
-use itertools::Itertools;
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
+    pdpb::CheckPolicy,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
     raft_serverpb::RaftSnapshotData,
 };
 use protobuf::Message;
 use raft::{prelude::Snapshot, INVALID_ID};
 use raftstore::{
-    coprocessor::split_observer::{is_valid_split_key, strip_timestamp_if_exists},
+    coprocessor::RegionChangeReason,
     store::{
         cmd_resp,
-        fsm::apply::validate_batch_split,
+        fsm::{apply::validate_batch_split, ApplyMetrics},
         metrics::PEER_ADMIN_CMD_COUNTER,
         snap::TABLET_SNAPSHOT_VERSION,
         util::{self, KeysInfoFormatter},
-        PeerPessimisticLocks, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        PeerPessimisticLocks, SplitCheckTask, Transport, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
     Result,
 };
-use slog::{error, info, warn, Logger};
-use tikv_util::box_err;
+use slog::info;
 
 use crate::{
     batch::StoreContext,
-    fsm::ApplyResReporter,
+    fsm::{ApplyResReporter, PeerFsmDelegate},
     operation::AdminCmdResult,
     raft::{Apply, Peer},
-    router::{CmdResChannel, PeerMsg, StoreMsg},
+    router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
     Error,
 };
 
@@ -104,67 +103,68 @@ impl SplitInit {
     }
 }
 
-// validate split request and strip ts from split keys if needed
-fn pre_propose_split(logger: &Logger, req: &mut AdminRequest, region: &Region) -> Result<()> {
-    if !req.has_splits() {
-        return Err(box_err!(
-            "cmd_type is BatchSplit but it doesn't have splits request, message maybe \
-             corrupted!"
-                .to_owned()
-        ));
-    }
-
-    let mut requests: Vec<SplitRequest> = req.mut_splits().take_requests().into();
-    let ajusted_splits = std::mem::take(&mut requests)
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, mut split)| {
-            let key = split.take_split_key();
-            let key = strip_timestamp_if_exists(key);
-            if is_valid_split_key(&key, i, region) {
-                split.split_key = key;
-                Some(split)
-            } else {
-                None
-            }
-        })
-        .coalesce(|prev, curr| {
-            // Make sure that the split keys are sorted and unique.
-            if prev.split_key < curr.split_key {
-                Err((prev, curr))
-            } else {
-                warn!(
-                    logger,
-                    "skip invalid split key: key should not be larger than the previous.";
-                    "key" => log_wrappers::Value::key(&curr.split_key),
-                    "previous" => log_wrappers::Value::key(&prev.split_key),
-                );
-                Ok(prev)
-            }
-        })
-        .collect::<Vec<_>>();
-
-    if ajusted_splits.is_empty() {
-        error!(
-            logger,
-            "failed to handle split req, no valid key found for split";
-        );
-        Err(box_err!("no valid key found for split.".to_owned()))
-    } else {
-        // Rewrite the splits.
-        req.mut_splits().set_requests(ajusted_splits.into());
-        Ok(())
-    }
-}
-
 #[derive(Debug)]
 pub struct RequestSplit {
     pub epoch: RegionEpoch,
     pub split_keys: Vec<Vec<u8>>,
-    pub source: Box<str>,
+    pub source: Cow<'static, str>,
+}
+
+#[derive(Default, Debug)]
+pub struct SplitFlowControl {
+    size_diff_hint: i64,
+    skip_split_count: u64,
+    may_skip_split_check: bool,
+}
+
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
+    pub fn on_split_region_check(&mut self) {
+        if !self.fsm.peer_mut().on_split_region_check(self.store_ctx) {
+            self.schedule_tick(PeerTick::SplitRegionCheck)
+        }
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    /// Handle split check.
+    ///
+    /// Returns true means the check tick is consumed, no need to schedule
+    /// another tick.
+    pub fn on_split_region_check<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) -> bool {
+        if !self.is_leader() {
+            return true;
+        }
+        let is_generating_snapshot = self.storage().is_generating_snapshot();
+        let control = self.split_flow_control_mut();
+        if control.may_skip_split_check
+            && control.size_diff_hint < ctx.cfg.region_split_check_diff().0 as i64
+        {
+            return true;
+        }
+        if ctx.schedulers.split_check.is_busy() {
+            return false;
+        }
+        if is_generating_snapshot && control.skip_split_count < 3 {
+            control.skip_split_count += 1;
+            return false;
+        }
+        let task =
+            SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan, None);
+        if let Err(e) = ctx.schedulers.split_check.schedule(task) {
+            info!(self.logger, "failed to schedule split check"; "err" => ?e);
+        }
+        let control = self.split_flow_control_mut();
+        control.may_skip_split_check = true;
+        control.size_diff_hint = 0;
+        control.skip_split_count = 0;
+        false
+    }
+
+    pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics) {
+        let control = self.split_flow_control_mut();
+        control.size_diff_hint += metrics.size_diff_hint;
+    }
+
     pub fn on_request_split<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
@@ -175,7 +175,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.logger,
             "on split";
             "split_keys" => %KeysInfoFormatter(rs.split_keys.iter()),
-            "source" => &rs.source,
+            "source" => %&rs.source,
         );
         if !self.is_leader() {
             // region on this store is no longer leader, skipped.
@@ -193,7 +193,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             &rs.epoch,
             &rs.split_keys,
         ) {
-            info!(self.logger, "invalid split request"; "err" => ?e, "source" => &rs.source);
+            info!(self.logger, "invalid split request"; "err" => ?e, "source" => %&rs.source);
             ch.set_result(cmd_resp::new_error(e));
             return;
         }
@@ -203,9 +203,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn propose_split<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
     ) -> Result<u64> {
-        pre_propose_split(&self.logger, req.mut_admin_request(), self.region())?;
+        validate_batch_split(req.get_admin_request(), self.region())?;
         // We rely on ConflictChecker to detect conflicts, so no need to set proposal
         // context.
         let data = req.write_to_bytes().unwrap();
@@ -413,7 +413,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
-            self.set_region(reader, derived.clone(), res.tablet_index);
+            self.set_region(
+                &store_ctx.coprocessor_host,
+                reader,
+                derived.clone(),
+                RegionChangeReason::Split,
+                res.tablet_index,
+            );
         }
 
         self.post_split();
@@ -429,6 +435,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Now pd only uses ReportBatchSplit for history operation show,
             // so we send it independently here.
             self.report_batch_split_pd(store_ctx, res.regions.to_vec());
+            self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
 
         let last_region_id = res.regions.last().unwrap().get_id();
@@ -539,7 +546,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_id = self.region_id();
 
         if split_init.check_split {
-            // TODO: check if the last region needs to split again
+            self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
         let _ = store_ctx
             .router
@@ -568,7 +575,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if off > 0 {
             // There should be very few elements in the vector.
             split_trace.drain(..off);
-            // TODO: save admin_flushed.
             assert_ne!(admin_flushed, 0);
             self.storage_mut()
                 .apply_trace_mut()
@@ -605,7 +611,6 @@ mod test {
         store::{new_learner_peer, new_peer},
         worker::dummy_scheduler,
     };
-    use txn_types::Key;
 
     use super::*;
     use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes};
@@ -707,43 +712,6 @@ mod test {
                 assert!(reg.tablet_factory().exists(&path));
             }
         }
-    }
-
-    #[test]
-    fn test_propose() {
-        let logger = slog_global::borrow_global().new(o!());
-
-        let mut region = Region::default();
-        region.set_end_key(b"k10".to_vec());
-
-        let mut req = AdminRequest::default();
-        let err = pre_propose_split(&logger, &mut req, &region).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("cmd_type is BatchSplit but it doesn't have splits")
-        );
-
-        let mut splits = BatchSplitRequest::default();
-        req.set_splits(splits.clone());
-        let err = pre_propose_split(&logger, &mut req, &region).unwrap_err();
-        assert!(err.to_string().contains("no valid key found"));
-
-        splits.mut_requests().push(new_split_req(b"", 0, vec![]));
-        splits.mut_requests().push(new_split_req(b"k03", 0, vec![]));
-        splits.mut_requests().push(new_split_req(b"k02", 0, vec![]));
-        splits.mut_requests().push(new_split_req(b"k11", 0, vec![]));
-        let split_key = Key::from_raw(b"k06");
-        let split_key_with_ts = split_key.clone().append_ts(10.into());
-        splits
-            .mut_requests()
-            .push(new_split_req(split_key_with_ts.as_encoded(), 0, vec![]));
-
-        req.set_splits(splits);
-        pre_propose_split(&logger, &mut req, &region).unwrap();
-        let split_reqs = req.get_splits().get_requests();
-        assert_eq!(split_reqs.len(), 2);
-        assert_eq!(split_reqs[0].get_split_key(), b"k03");
-        assert_eq!(split_reqs[1].get_split_key(), split_key.as_encoded());
     }
 
     #[test]

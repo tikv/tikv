@@ -238,8 +238,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        coprocessor::{Config, CoprocessorHost},
-        store::{CasualMessage, SplitCheckRunner, SplitCheckTask},
+        coprocessor::{dispatcher::SchedTask, Config, CoprocessorHost},
+        store::{SplitCheckRunner, SplitCheckTask},
     };
 
     /// Composes table record and index prefix: `t[table_id]`.
@@ -353,9 +353,9 @@ mod tests {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     loop {
                         match rx.try_recv() {
-                            Ok((_, CasualMessage::RegionApproximateSize { .. }))
-                            | Ok((_, CasualMessage::RegionApproximateKeys { .. })) => (),
-                            Ok((_, CasualMessage::SplitRegion { split_keys, .. })) => {
+                            Ok(SchedTask::UpdateApproximateSize { .. })
+                            | Ok(SchedTask::UpdateApproximateKeys { .. }) => (),
+                            Ok(SchedTask::AskSplit { split_keys, .. }) => {
                                 assert_eq!(split_keys, vec![key.into_encoded()]);
                                 break;
                             }
@@ -365,8 +365,8 @@ mod tests {
                 } else {
                     loop {
                         match rx.try_recv() {
-                            Ok((_, CasualMessage::RegionApproximateSize { .. }))
-                            | Ok((_, CasualMessage::RegionApproximateKeys { .. })) => (),
+                            Ok(SchedTask::UpdateApproximateSize { .. })
+                            | Ok(SchedTask::UpdateApproximateKeys { .. }) => (),
                             Err(mpsc::TryRecvError::Empty) => {
                                 break;
                             }

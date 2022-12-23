@@ -41,7 +41,6 @@ fail = "0.5"
 file_system = { workspace = true }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["compat"] }
-itertools = "0.10"
 keys = { workspace = true }
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }

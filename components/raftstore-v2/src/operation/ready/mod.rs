@@ -29,8 +29,9 @@ use error_code::ErrorCodeExt;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use protobuf::Message as _;
 use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
-use raftstore::store::{
-    needs_evict_entry_cache, util, FetchedLogs, ReadProgress, Transport, WriteTask,
+use raftstore::{
+    coprocessor::{RegionChangeEvent, RoleChange},
+    store::{needs_evict_entry_cache, util, FetchedLogs, ReadProgress, Transport, WriteTask},
 };
 use slog::{debug, error, trace, warn};
 use tikv_util::{
@@ -390,6 +391,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if !self.serving() {
             self.start_destroy(&mut write_task);
+            ctx.coprocessor_host.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Destroy,
+                self.raft_group().raft.state,
+            );
         }
         // Ready number should increase monotonically.
         assert!(self.async_writer.known_largest_number() < ready.number());
@@ -524,6 +530,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
+            let target = self.refresh_leader_transferee();
+            ctx.coprocessor_host.on_role_change(
+                self.region(),
+                RoleChange {
+                    state: ss.raft_state,
+                    leader_id: ss.leader_id,
+                    prev_lead_transferee: target,
+                    vote: self.raft_group().raft.vote,
+                },
+            );
             self.proposal_control_mut().maybe_update_term(term);
         }
     }

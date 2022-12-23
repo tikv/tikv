@@ -18,6 +18,7 @@ use kvproto::{
 use protobuf::Message;
 use raft::prelude::*;
 use raftstore::{
+    coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
         metrics::{PEER_ADMIN_CMD_COUNTER_VEC, PEER_PROPOSE_LOG_SIZE_HISTOGRAM},
         util::{self, ChangePeerI, ConfChangeKind},
@@ -182,6 +183,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.set_has_ready();
             }
         }
+        ctx.coprocessor_host.on_region_changed(
+            self.region(),
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
+            self.raft_group().raft.state,
+        );
         if remove_self {
             self.mark_for_destroy(None);
         }
