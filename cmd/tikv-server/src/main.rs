@@ -211,7 +211,7 @@ fn main() {
     }
 
     match config.storage.engine {
-        EngineType::RaftKv => server::server_rn::run_tikv(config),
-        EngineType::RaftKv2 => server::server::run_tikv(config),
+        EngineType::RaftKv => server::server::run_tikv(config),
+        EngineType::RaftKv2 => server::server2::run_tikv(config),
     }
 }

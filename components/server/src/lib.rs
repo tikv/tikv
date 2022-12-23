@@ -12,5 +12,5 @@ pub mod setup;
 pub mod memory;
 pub mod raft_engine_switch;
 pub mod server;
-pub mod server_rn;
+pub mod server2;
 pub mod signal_handler;
