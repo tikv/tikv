@@ -262,7 +262,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .and_then(|_| {
                     store_ctx
                         .engine
-                        .delete_all_states_before(region_id, compact_index, lb)
+                        .delete_all_but_one_states_before(region_id, compact_index, lb)
                 })
             {
                 error!(self.logger, "failed to compact raft logs"; "err" => ?e);

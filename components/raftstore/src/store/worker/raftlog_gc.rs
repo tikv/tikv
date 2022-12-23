@@ -84,20 +84,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
     }
 
-    fn flush(&mut self) {
-        if self.tasks.is_empty() {
-            return;
-        }
-        fail::fail_point!("worker_gc_raft_log_flush");
-        // Sync wal of kv_db to make sure the data before apply_index has been persisted
-        // to disk.
-        let start = Instant::now();
-        self.engines.kv.sync().unwrap_or_else(|e| {
-            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
-        });
-        RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
-
-        fail::fail_point!("worker_gc_raft_log");
+    fn process_tasks(&mut self) -> Vec<Box<dyn FnOnce() + Send>> {
         let tasks = std::mem::take(&mut self.tasks);
         let mut cbs = Vec::new();
         let mut batch = self.engines.raft.log_batch(tasks.len());
@@ -130,15 +117,32 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 RAFT_LOG_GC_FAILED.inc();
             }
         }
+        fail::fail_point!("worker_gc_raft_log");
         if let Err(e) = self.engines.raft.consume(&mut batch, false) {
             error!("failed to write gc task"; "err" => %e);
             RAFT_LOG_GC_FAILED.inc();
         }
         RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
-        for cb in cbs {
+        fail::fail_point!("worker_gc_raft_log_finished");
+        cbs
+    }
+
+    fn flush(&mut self) {
+        if self.tasks.is_empty() {
+            return;
+        }
+        fail::fail_point!("worker_gc_raft_log_flush");
+        // Sync wal of kv_db to make sure the data before apply_index has been persisted
+        // to disk.
+        let start = Instant::now();
+        self.engines.kv.sync().unwrap_or_else(|e| {
+            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
+        });
+        RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+
+        for cb in self.process_tasks() {
             cb();
         }
-        fail::fail_point!("worker_gc_raft_log_finished");
     }
 }
 

@@ -124,7 +124,7 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn delete_all_states_before(
+    fn delete_all_but_one_states_before(
         &self,
         raft_group_id: u64,
         apply_index: u64,
