@@ -1996,7 +1996,11 @@ impl TabletSnapManager {
 
             let path = entry.path();
             // Generated snapshots are just checkpoints, only counts received snapshots.
-            if !path.starts_with(SNAP_REV_PREFIX) {
+            if !path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map_or(true, |n| n.starts_with(SNAP_REV_PREFIX))
+            {
                 continue;
             }
             for e in file_system::read_dir(path)? {
