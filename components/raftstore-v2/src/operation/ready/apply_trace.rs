@@ -413,6 +413,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let apply_trace = self.storage_mut().apply_trace_mut();
         apply_trace.on_flush(cf, index);
         apply_trace.maybe_advance_admin_flushed(apply_index);
+        self.retire_tombstone_tablet();
     }
 
     pub fn on_data_modified(&mut self, modification: DataTrace) {

@@ -36,6 +36,7 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
+    tombstone_tablet: Option<EK>,
 
     /// Statistics for self.
     self_stat: PeerStat,
@@ -127,6 +128,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: cached_tablet,
+            tombstone_tablet: None,
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
@@ -303,13 +305,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn tablet(&self) -> &CachedTablet<EK> {
-        &self.tablet
+    pub fn refresh_tablet(&mut self) {
+        // If the tablet isn't updated, we will hold duplicate references, which is
+        // fine.
+        self.tombstone_tablet = self.tablet.cache().cloned();
+        self.tablet.latest();
     }
 
     #[inline]
-    pub fn tablet_mut(&mut self) -> &mut CachedTablet<EK> {
-        &mut self.tablet
+    pub fn retire_tombstone_tablet(&mut self) {
+        self.tombstone_tablet.take();
     }
 
     #[inline]
