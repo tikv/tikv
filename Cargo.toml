@@ -278,6 +278,7 @@ members = [
   "components/test_pd",
   "components/test_pd_client",
   "components/test_raftstore",
+  "components/test_raftstore-v2",
   "components/test_sst_importer",
   "components/test_storage",
   "components/test_util",
@@ -352,6 +353,7 @@ example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/exampl
 test_pd = { path = "components/test_pd" }
 test_pd_client = { path = "components/test_pd_client" }
 test_raftstore = { path = "components/test_raftstore", default-features = false }
+test_raftstore-v2 = { path = "components/test_raftstore-v2", default-features = false }
 test_sst_importer = { path = "components/test_sst_importer" }
 test_storage = { path = "components/test_storage", default-features = false }
 test_util = { path = "components/test_util" }

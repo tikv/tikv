@@ -5899,6 +5899,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_raftstore-v2"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "backtrace",
+ "causal_ts",
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "encryption_export",
+ "engine_rocks",
+ "engine_rocks_helper",
+ "engine_test",
+ "engine_traits",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "grpcio",
+ "grpcio-health",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "pd_client",
+ "protobuf",
+ "raft",
+ "raftstore",
+ "raftstore-v2",
+ "rand 0.8.5",
+ "resolved_ts",
+ "resource_metering",
+ "security",
+ "server",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_pd_client",
+ "test_raftstore",
+ "test_util",
+ "tikv",
+ "tikv_util",
+ "tokio",
+ "tokio-timer",
+ "txn_types",
+]
+
+[[package]]
 name = "test_sst_importer"
 version = "0.1.0"
 dependencies = [
@@ -6008,6 +6055,7 @@ dependencies = [
  "test_pd",
  "test_pd_client",
  "test_raftstore",
+ "test_raftstore-v2",
  "test_sst_importer",
  "test_storage",
  "test_util",

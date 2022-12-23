@@ -14,6 +14,11 @@ name = "integrations"
 path = "integrations/mod.rs"
 required-features = ["testexport"]
 
+[[test]]
+name = "integrations-v2"
+path = "integrations-v2/mod.rs"
+required-features = ["testexport"]
+
 [[bench]]
 name = "raftstore"
 harness = false
@@ -142,6 +147,7 @@ test_coprocessor = { workspace = true }
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 test_raftstore = { workspace = true }
+test_raftstore-v2 = { workspace = true }
 test_sst_importer = { workspace = true }
 test_storage = { workspace = true }
 test_util = { workspace = true }
