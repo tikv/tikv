@@ -1542,18 +1542,14 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
 
     pub fn flush(&mut self, now: Instant) {
         let mut reporter = EK::StatisticsReporter::new("kv");
-        let mut collected = false;
         self.tablet_registry
             .for_each_opened_tablet(|_, db: &mut CachedTablet<EK>| {
                 if let Some(db) = db.latest() {
                     reporter.collect(db);
-                    collected = true;
                 }
                 true
             });
-        if collected {
-            reporter.flush();
-        }
+        reporter.flush();
         self.raft_engine.flush_metrics("raft");
 
         if let Some(s) = self.kv_statistics.as_ref() {
