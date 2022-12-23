@@ -169,7 +169,7 @@ pub fn path_in_diff_mount_point(path1: impl AsRef<Path>, path2: impl AsRef<Path>
     if empty_path(path1) || empty_path(path2) {
         return false;
     }
-    match (get_mount(&path1), get_mount(&path2)) {
+    match (get_mount(path1), get_mount(path2)) {
         (Err(e1), _) => {
             warn!("Get mount point error for path {}, {}", path1.display(), e1);
             false
