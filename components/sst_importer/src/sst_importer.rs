@@ -455,7 +455,7 @@ impl SstImporter {
         let size = meta.get_length();
         let old = self.mem_use.fetch_add(size, Ordering::SeqCst);
 
-        // If the memory is limited, roll backup the mem_use and return false.
+        // If the memory is limited, rollback the mem_use and return false.
         if old + size > self.mem_limit.0 {
             self.mem_use.fetch_sub(size, Ordering::SeqCst);
             false
@@ -614,7 +614,7 @@ impl SstImporter {
             self.do_read_kv_file(meta, rewrite_rule, ext_storage, speed_limiter)?
         };
         match c {
-            // If cache memroy, it has been rewrite, return buffer directly.
+            // If cache memory, it has been rewrite, return buffer directly.
             CacheKvFile::Mem(buff) => Ok(buff),
             // If cache file name, it need to read and rewrite.
             CacheKvFile::Fs(path) => {

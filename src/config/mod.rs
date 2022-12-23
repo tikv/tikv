@@ -2443,10 +2443,10 @@ impl BackupStreamConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         let limit = SysQuota::cpu_cores_quota() as usize;
         let default_cfg = BackupStreamConfig::default();
-        if self.num_threads == 0 || self.num_threads > limit {
+        if self.num_threads == 0 || self.num_threads > 2 * limit {
             warn!(
                 "log_backup.num_threads cannot be 0 or larger than {}, change it to {}",
-                limit, default_cfg.num_threads
+                limit, default_cfg.num_threads * 2
             );
             self.num_threads = default_cfg.num_threads;
         }
@@ -2460,9 +2460,9 @@ impl Default for BackupStreamConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
-            max_flush_interval: ReadableDuration::minutes(3),
+            max_flush_interval: ReadableDuration::minutes(2),
             // use at most 50% of vCPU by default
-            num_threads: (cpu_num * 0.5).clamp(2.0, 12.0) as usize,
+            num_threads: cpu_num.clamp(2.0, 16.0) as usize,
             enable: true,
             // TODO: may be use raft store directory
             temp_path: String::new(),
