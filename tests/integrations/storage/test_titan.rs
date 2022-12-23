@@ -159,10 +159,11 @@ fn test_delete_files_in_range_for_titan() {
     cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize(0);
     cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
     cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
-    let kv_db_opts = cfg.rocksdb.build_opt(None);
+    let kv_db_opts = cfg
+        .rocksdb
+        .build_opt(&cfg.rocksdb.build_shared(Default::default()));
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts(
-        None,
-        &cache,
+        &cfg.rocksdb.build_cf_shared(cache),
         None,
         cfg.storage.api_version(),
         cfg.storage.engine,

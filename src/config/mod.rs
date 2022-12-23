@@ -385,15 +385,6 @@ macro_rules! cf_config {
                 self.titan.validate()?;
                 Ok(())
             }
-
-            fn build_shared(&self) -> SharedBetweenCfs {
-                SharedBetweenCfs {
-                    compaction_thread_limiter: ConcurrentTaskLimiter::new(
-                        stringify!($name),
-                        self.max_compactions,
-                    ),
-                }
-            }
         }
     };
 }
@@ -525,7 +516,13 @@ macro_rules! write_into_metrics {
 }
 
 macro_rules! build_cf_opt {
-    ($opt:ident, $cf_name:ident, $shared:ident, $cache:expr, $region_info_provider:ident) => {{
+    (
+        $opt:ident,
+        $cf_name:ident,
+        $cache:expr,
+        $compaction_limiter:expr,
+        $region_info_provider:ident
+    ) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
@@ -610,21 +607,16 @@ macro_rules! build_cf_opt {
                 warn!("compaction guard is disabled due to region info provider not available")
             }
         }
-        match $shared {
-            Some(SharedBetweenCfs {
-                compaction_thread_limiter,
-            }) => cf_opts.set_compaction_thread_limiter(&compaction_thread_limiter),
-            None => {
-                let shared = $opt.build_shared();
-                cf_opts.set_compaction_thread_limiter(&shared.compaction_thread_limiter);
-            }
+        if let Some(r) = $compaction_limiter {
+            cf_opts.set_compaction_thread_limiter(r);
         }
         cf_opts
     }};
 }
 
 pub struct SharedBetweenCfs {
-    pub compaction_thread_limiter: ConcurrentTaskLimiter,
+    pub cache: Cache,
+    pub compaction_thread_limiters: HashMap<&'static str, ConcurrentTaskLimiter>,
 }
 
 cf_config!(DefaultCfConfig);
@@ -694,13 +686,18 @@ impl Default for DefaultCfConfig {
 impl DefaultCfConfig {
     pub fn build_opt(
         &self,
-        shared: Option<&SharedBetweenCfs>,
-        cache: &Cache,
+        shared: &SharedBetweenCfs,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
         for_engine: EngineType,
     ) -> RocksCfOptions {
-        let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, shared, cache, region_info_accessor);
+        let mut cf_opts = build_cf_opt!(
+            self,
+            CF_DEFAULT,
+            &shared.cache,
+            shared.compaction_thread_limiters.get(CF_DEFAULT),
+            region_info_accessor
+        );
         cf_opts.set_memtable_prefix_bloom_size_ratio(bloom_filter_ratio(for_engine));
         let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
@@ -814,12 +811,17 @@ impl Default for WriteCfConfig {
 impl WriteCfConfig {
     pub fn build_opt(
         &self,
-        shared: Option<&SharedBetweenCfs>,
-        cache: &Cache,
+        shared: &SharedBetweenCfs,
         region_info_accessor: Option<&RegionInfoAccessor>,
         for_engine: EngineType,
     ) -> RocksCfOptions {
-        let mut cf_opts = build_cf_opt!(self, CF_WRITE, shared, cache, region_info_accessor);
+        let mut cf_opts = build_cf_opt!(
+            self,
+            CF_WRITE,
+            &shared.cache,
+            shared.compaction_thread_limiters.get(CF_WRITE),
+            region_info_accessor
+        );
         // Prefix extractor(trim the timestamp at tail) for write cf.
         cf_opts
             .set_prefix_extractor(
@@ -913,14 +915,15 @@ impl Default for LockCfConfig {
 }
 
 impl LockCfConfig {
-    pub fn build_opt(
-        &self,
-        shared: Option<&SharedBetweenCfs>,
-        cache: &Cache,
-        for_engine: EngineType,
-    ) -> RocksCfOptions {
+    pub fn build_opt(&self, shared: &SharedBetweenCfs, for_engine: EngineType) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
-        let mut cf_opts = build_cf_opt!(self, CF_LOCK, shared, cache, no_region_info_accessor);
+        let mut cf_opts = build_cf_opt!(
+            self,
+            CF_LOCK,
+            &shared.cache,
+            shared.compaction_thread_limiters.get(CF_LOCK),
+            no_region_info_accessor
+        );
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
@@ -995,9 +998,15 @@ impl Default for RaftCfConfig {
 }
 
 impl RaftCfConfig {
-    pub fn build_opt(&self, shared: Option<&SharedBetweenCfs>, cache: &Cache) -> RocksCfOptions {
+    pub fn build_opt(&self, shared: &SharedBetweenCfs) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
-        let mut cf_opts = build_cf_opt!(self, CF_RAFT, shared, cache, no_region_info_accessor);
+        let mut cf_opts = build_cf_opt!(
+            self,
+            CF_RAFT,
+            &shared.cache,
+            shared.compaction_thread_limiters.get(CF_RAFT),
+            no_region_info_accessor
+        );
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
@@ -1134,10 +1143,13 @@ pub struct DbConfig {
     pub titan: TitanDbConfig,
 }
 
+#[derive(Clone)]
 pub struct SharedBetweenDbs {
+    // DB Options.
+    pub env: Arc<Env>,
     pub statistics: Arc<RocksStatistics>,
-    pub rate_limiter: RateLimiter,
-    pub write_buffer_manager: WriteBufferManager,
+    pub rate_limiter: Option<Arc<RateLimiter>>,
+    pub write_buffer_manager: Option<Arc<WriteBufferManager>>,
 }
 
 impl Default for DbConfig {
@@ -1206,26 +1218,28 @@ impl DbConfig {
         }
     }
 
-    pub fn build_shared(&self) -> SharedBetweenDbs {
+    pub fn build_shared(&self, env: Arc<Env>) -> SharedBetweenDbs {
         SharedBetweenDbs {
+            env,
             statistics: Arc::new(RocksStatistics::new_titan()),
-            rate_limiter: RateLimiter::new_writeampbased_with_auto_tuned(
+            rate_limiter: Some(Arc::new(RateLimiter::new_writeampbased_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
                 (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
                 10, // fairness
                 self.rate_limiter_mode,
                 self.rate_limiter_auto_tuned,
-            ),
-            write_buffer_manager: WriteBufferManager::new(
-                // self.write_buffer_limit.0,
-                0,
-                self.write_buffer_stall_ratio,
-                self.write_buffer_flush_oldest_first,
-            ),
+            ))),
+            write_buffer_manager: self.write_buffer_limit.map(|limit| {
+                Arc::new(WriteBufferManager::new(
+                    limit.0 as usize,
+                    self.write_buffer_stall_ratio,
+                    self.write_buffer_flush_oldest_first,
+                ))
+            }),
         }
     }
 
-    pub fn build_opt(&self, shared: Option<&SharedBetweenDbs>) -> RocksDbOptions {
+    pub fn build_opt(&self, shared: &SharedBetweenDbs) -> RocksDbOptions {
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -1241,23 +1255,6 @@ impl DbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        match shared {
-            Some(SharedBetweenDbs {
-                statistics,
-                rate_limiter,
-                write_buffer_manager,
-            }) => {
-                opts.set_statistics(statistics);
-                opts.set_rate_limiter(rate_limiter);
-                opts.set_write_buffer_manager(write_buffer_manager);
-            }
-            None => {
-                let shared = self.build_shared();
-                opts.set_statistics(&shared.statistics);
-                opts.set_rate_limiter(&shared.rate_limiter);
-                opts.set_write_buffer_manager(&shared.write_buffer_manager);
-            }
-        }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
@@ -1289,23 +1286,44 @@ impl DbConfig {
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
+        opts.set_env(shared.env.clone());
+        opts.set_statistics(&shared.statistics);
+        if let Some(r) = &shared.rate_limiter {
+            opts.set_rate_limiter(r);
+        }
+        if let Some(r) = &shared.write_buffer_manager {
+            opts.set_write_buffer_manager(r);
+        }
         opts
     }
 
-    pub fn build_cf_shared(&self) -> Vec<SharedBetweenCfs> {
-        // TODO: avoid build raftcf for v2.
-        vec![
-            self.defaultcf.build_shared(),
-            self.lockcf.build_shared(),
-            self.writecf.build_shared(),
-            self.raftcf.build_shared(),
-        ]
+    pub fn build_cf_shared(&self, cache: Cache) -> SharedBetweenCfs {
+        let mut compaction_thread_limiters = HashMap::new();
+        compaction_thread_limiters.insert(
+            CF_DEFAULT,
+            ConcurrentTaskLimiter::new(CF_DEFAULT, self.defaultcf.max_compactions),
+        );
+        compaction_thread_limiters.insert(
+            CF_WRITE,
+            ConcurrentTaskLimiter::new(CF_WRITE, self.writecf.max_compactions),
+        );
+        compaction_thread_limiters.insert(
+            CF_LOCK,
+            ConcurrentTaskLimiter::new(CF_LOCK, self.lockcf.max_compactions),
+        );
+        compaction_thread_limiters.insert(
+            CF_RAFT,
+            ConcurrentTaskLimiter::new(CF_RAFT, self.raftcf.max_compactions),
+        );
+        SharedBetweenCfs {
+            cache,
+            compaction_thread_limiters,
+        }
     }
 
     pub fn build_cf_opts(
         &self,
-        shared: Option<&[SharedBetweenCfs]>,
-        cache: &Cache,
+        shared: &SharedBetweenCfs,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
         for_engine: EngineType,
@@ -1313,30 +1331,17 @@ impl DbConfig {
         let mut cf_opts = Vec::with_capacity(4);
         cf_opts.push((
             CF_DEFAULT,
-            self.defaultcf.build_opt(
-                shared.map(|s| &s[0]),
-                cache,
-                region_info_accessor,
-                api_version,
-                for_engine,
-            ),
+            self.defaultcf
+                .build_opt(shared, region_info_accessor, api_version, for_engine),
         ));
-        cf_opts.push((
-            CF_LOCK,
-            self.lockcf
-                .build_opt(shared.map(|s| &s[1]), cache, for_engine),
-        ));
+        cf_opts.push((CF_LOCK, self.lockcf.build_opt(shared, for_engine)));
         cf_opts.push((
             CF_WRITE,
-            self.writecf.build_opt(
-                shared.map(|s| &s[2]),
-                cache,
-                region_info_accessor,
-                for_engine,
-            ),
+            self.writecf
+                .build_opt(shared, region_info_accessor, for_engine),
         ));
         if for_engine == EngineType::RaftKv {
-            cf_opts.push((CF_RAFT, self.raftcf.build_opt(shared.map(|s| &s[3]), cache)));
+            cf_opts.push((CF_RAFT, self.raftcf.build_opt(shared)));
         }
         cf_opts
     }
@@ -1462,8 +1467,10 @@ impl Default for RaftDefaultCfConfig {
 
 impl RaftDefaultCfConfig {
     pub fn build_opt(&self, cache: &Cache) -> RocksCfOptions {
+        let no_limiter: Option<&ConcurrentTaskLimiter> = None;
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
-        let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, None, cache, no_region_info_accessor);
+        let mut cf_opts =
+            build_cf_opt!(self, CF_DEFAULT, cache, no_limiter, no_region_info_accessor);
         let f = FixedPrefixSliceTransform::new(region_raft_prefix_len());
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
@@ -1576,7 +1583,7 @@ impl Default for RaftDbConfig {
 }
 
 impl RaftDbConfig {
-    pub fn build_opt(&self) -> RocksDbOptions {
+    pub fn build_opt(&self, env: Arc<Env>, statistics: Option<&RocksStatistics>) -> RocksDbOptions {
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -1591,7 +1598,10 @@ impl RaftDbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        opts.set_statistics(&RocksStatistics::new_titan());
+        match statistics {
+            Some(s) => opts.set_statistics(s),
+            None => opts.set_statistics(&RocksStatistics::new_titan()),
+        }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
@@ -1614,7 +1624,7 @@ impl RaftDbConfig {
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
-
+        opts.set_env(env);
         opts
     }
 
@@ -4511,10 +4521,13 @@ mod tests {
         assert_eq!(F::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
-            Some(cfg.rocksdb.build_opt(None)),
+            Some(
+                cfg.rocksdb
+                    .build_opt(&cfg.rocksdb.build_shared(Arc::new(Env::default()))),
+            ),
             cfg.rocksdb.build_cf_opts(
-                None,
-                &cfg.storage.block_cache.build_shared_cache(),
+                &cfg.rocksdb
+                    .build_cf_shared(cfg.storage.block_cache.build_shared_cache()),
                 None,
                 cfg.storage.api_version(),
                 cfg.storage.engine,
@@ -5130,6 +5143,7 @@ mod tests {
     #[test]
     fn test_compaction_guard() {
         let cache = Cache::new_lru_cache(LRUCacheOptions::new());
+        let no_limiter: Option<ConcurrentTaskLimiter> = None;
         // Test comopaction guard disabled.
         let config = DefaultCfConfig {
             target_file_size_base: ReadableSize::mb(16),
@@ -5137,7 +5151,7 @@ mod tests {
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, None, &cache, provider);
+        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
         assert_eq!(
             config.target_file_size_base.0,
             cf_opts.get_target_file_size_base()
@@ -5150,7 +5164,7 @@ mod tests {
             ..Default::default()
         };
         let provider: Option<MockRegionInfoProvider> = None;
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, None, &cache, provider);
+        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
         assert_eq!(
             config.target_file_size_base.0,
             cf_opts.get_target_file_size_base()
@@ -5165,7 +5179,7 @@ mod tests {
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, None, &cache, provider);
+        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
         assert_eq!(
             config.compaction_guard_max_output_file_size.0,
             cf_opts.get_target_file_size_base()

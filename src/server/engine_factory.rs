@@ -21,15 +21,13 @@ use crate::{
 };
 
 struct FactoryInner {
-    env: Arc<Env>,
     region_info_accessor: Option<RegionInfoAccessor>,
-    block_cache: Cache,
     rocksdb_config: Arc<DbConfig>,
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
     shared_between_tablets: SharedBetweenDbs,
-    shared_between_cfs: Vec<SharedBetweenCfs>,
+    shared_between_cfs: SharedBetweenCfs,
     state_storage: Option<Arc<dyn StateStorage>>,
     lite: bool,
 }
@@ -43,15 +41,13 @@ impl KvEngineFactoryBuilder {
     pub fn new(env: Arc<Env>, config: &TikvConfig, cache: Cache) -> Self {
         Self {
             inner: FactoryInner {
-                env,
                 region_info_accessor: None,
-                block_cache: cache,
                 rocksdb_config: Arc::new(config.rocksdb.clone()),
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                shared_between_tablets: config.rocksdb.build_shared(),
-                shared_between_cfs: config.rocksdb.build_cf_shared(),
+                shared_between_tablets: config.rocksdb.build_shared(env),
+                shared_between_cfs: config.rocksdb.build_cf_shared(cache),
                 state_storage: None,
                 lite: false,
             },
@@ -143,8 +139,7 @@ impl KvEngineFactory {
         let mut db_opts = self
             .inner
             .rocksdb_config
-            .build_opt(Some(&self.inner.shared_between_tablets));
-        db_opts.set_env(self.inner.env.clone());
+            .build_opt(&self.inner.shared_between_tablets);
         if !self.inner.lite {
             db_opts.add_event_listener(RocksEventListener::new(
                 "kv",
@@ -159,8 +154,7 @@ impl KvEngineFactory {
 
     fn cf_opts(&self, for_engine: EngineType) -> Vec<(&str, RocksCfOptions)> {
         self.inner.rocksdb_config.build_cf_opts(
-            Some(&self.inner.shared_between_cfs),
-            &self.inner.block_cache,
+            &self.inner.shared_between_cfs,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
             for_engine,
@@ -168,7 +162,7 @@ impl KvEngineFactory {
     }
 
     pub fn block_cache(&self) -> &Cache {
-        &self.inner.block_cache
+        &self.inner.shared_between_cfs.cache
     }
 
     /// Create a shared db.
