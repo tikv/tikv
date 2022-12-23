@@ -558,6 +558,8 @@ where
             self.cfg.check_long_uncommitted_interval.0;
         self.tick_batch[PeerTick::CheckPeersAvailability as usize].wait_duration =
             self.cfg.check_peers_availability_interval.0;
+        self.tick_batch[PeerTick::ProposePendingWrite as usize].wait_duration =
+            Duration::from_millis(1);
     }
 }
 

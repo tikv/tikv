@@ -1,10 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Duration;
+
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
 use protobuf::{CodedInputStream, Message};
 use raftstore::store::WriteCallback;
 use slog::Logger;
+use tikv_util::time::Instant;
 
 use crate::{operation::command::parse_at, router::CmdResChannel};
 
@@ -29,6 +32,7 @@ pub struct SimpleWriteReqEncoder {
     channels: Vec<CmdResChannel>,
     size_limit: usize,
     notify_proposed: bool,
+    create_time: Instant,
 }
 
 impl SimpleWriteReqEncoder {
@@ -53,7 +57,12 @@ impl SimpleWriteReqEncoder {
             channels: vec![],
             size_limit,
             notify_proposed,
+            create_time: Instant::now(),
         }
+    }
+
+    pub fn need_schedule(&self) -> bool {
+        Instant::now().saturating_duration_since(self.create_time) >= Duration::from_millis(1)
     }
 
     /// Encode the simple write into the buffer dispite header check.

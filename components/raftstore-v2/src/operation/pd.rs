@@ -72,6 +72,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         // TODO: hibernate region
         self.schedule_tick(PeerTick::PdHeartbeat);
     }
+
+    #[inline]
+    pub fn on_propose_pending_write(&mut self) {
+        if let Some(write) = self.fsm.peer.simple_write_encoder_mut()&& write.need_schedule() {
+            self.fsm.peer.propose_pending_writes(self.store_ctx);
+        }
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
