@@ -204,6 +204,9 @@ impl RequestCollector {
     }
 
     fn pack_all(&mut self) {
+        if self.unpacked_size == 0 {
+            return;
+        }
         let mut cmd = RaftCmdRequest::default();
         let mut header = make_request_header(self.context.clone());
         // Set the UUID of header to prevent raftstore batching our requests.
@@ -215,6 +218,10 @@ impl RequestCollector {
         cmd.set_header(header);
         let mut reqs: Vec<_> = self.write_reqs.drain().map(|(_, (req, _))| req).collect();
         reqs.append(&mut self.default_reqs.drain().map(|(_, req)| req).collect());
+        if reqs.is_empty() {
+            error!("unexpected empty requests");
+            return;
+        }
         cmd.set_requests(reqs.into());
 
         self.pending_raft_reqs.push(cmd);
@@ -1065,8 +1072,7 @@ fn key_from_request(req: &Request) -> &[u8] {
     if req.has_delete() {
         return req.get_delete().get_key();
     }
-    warn!("trying to extract key from request is neither put nor delete.");
-    b""
+    panic!("trying to extract key from request is neither put nor delete.")
 }
 
 fn make_request_header(mut context: Context) -> RaftRequestHeader {
