@@ -163,6 +163,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.raft_group_mut().advance_apply_to(persisted_index);
             {
                 let mut meta = ctx.store_meta.lock().unwrap();
+                meta.set_region(self.region(), true, &self.logger);
                 meta.readers
                     .insert(region_id, self.generate_read_delegate());
                 meta.region_read_progress

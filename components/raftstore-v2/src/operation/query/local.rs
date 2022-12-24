@@ -17,8 +17,9 @@ use kvproto::{
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, util::LeaseState, LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor,
-        ReadExecutorProvider, RegionSnapshot, RequestPolicy, TLS_LOCAL_READ_METRICS,
+        cmd_resp, util::LeaseState, worker_metrics::TLS_LOCAL_READ_METRICS, LocalReadContext,
+        LocalReaderCore, ReadDelegate, ReadExecutor, ReadExecutorProvider, RegionSnapshot,
+        RequestPolicy,
     },
     Error, Result,
 };
@@ -78,7 +79,7 @@ where
     }
 
     pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta>> {
-        self.local_reader.store_meta()
+        &self.local_reader.store_meta().store_meta
     }
 
     pub fn pre_propose_raft_command(
@@ -353,7 +354,7 @@ where
     type StoreMeta = Arc<Mutex<StoreMeta>>;
 
     fn store_id(&self) -> Option<u64> {
-        self.store_meta.as_ref().lock().unwrap().store_id
+        Some(self.store_meta.as_ref().lock().unwrap().store_id)
     }
 
     /// get the ReadDelegate with region_id and the number of delegates in the
@@ -373,10 +374,6 @@ where
             );
         }
         (meta.readers.len(), None)
-    }
-
-    fn store_meta(&self) -> &Self::StoreMeta {
-        &self.store_meta
     }
 }
 
@@ -471,8 +468,8 @@ mod tests {
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use pd_client::BucketMeta;
     use raftstore::store::{
-        util::Lease, ReadCallback, ReadProgress, RegionReadProgress, TrackVer, TxnExt,
-        TLS_LOCAL_READ_METRICS,
+        util::Lease, worker_metrics::TLS_LOCAL_READ_METRICS, ReadCallback, ReadProgress,
+        RegionReadProgress, TrackVer, TxnExt,
     };
     use slog::o;
     use tempfile::Builder;
@@ -584,7 +581,7 @@ mod tests {
         let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
         let reg = TabletRegistry::new(factory, path.path()).unwrap();
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::default()));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(store_id)));
         let (mut reader, mut rx) = new_reader(store_id, store_meta.clone(), reg.clone());
         let (mix_tx, mix_rx) = sync_channel(1);
         let handler = mock_raftstore(mix_rx);
@@ -785,7 +782,7 @@ mod tests {
         let reg = TabletRegistry::new(factory, path.path()).unwrap();
 
         let store_meta =
-            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::default())), reg.clone());
+            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(1))), reg.clone());
 
         let tablet1;
         let tablet2;

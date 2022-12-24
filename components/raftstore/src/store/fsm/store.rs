@@ -115,6 +115,14 @@ pub struct StoreInfo<EK, ER> {
     pub capacity: u64,
 }
 
+/// A trait that provide the meta information that can be accessed outside
+/// of raftstore.
+pub trait ExternStoreMeta: Send {
+    fn store_id(&self) -> u64;
+    fn region_read_progress(&self) -> &RegionReadProgressRegistry;
+    fn search_region(&self, start_key: &[u8], end_key: &[u8], visitor: impl FnMut(&Region));
+}
+
 pub struct StoreMeta {
     pub store_id: Option<u64>,
     /// region_end_key -> region_id
@@ -152,6 +160,34 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
+}
+
+impl ExternStoreMeta for StoreMeta {
+    #[inline]
+    fn store_id(&self) -> u64 {
+        self.store_id.unwrap()
+    }
+
+    #[inline]
+    fn search_region(&self, start_key: &[u8], end_key: &[u8], mut visitor: impl FnMut(&Region)) {
+        let start_key = data_key(start_key);
+        for (_, id) in self
+            .region_ranges
+            .range((Excluded(start_key), Unbounded::<Vec<u8>>))
+        {
+            let region = &self.regions[id];
+            if end_key.is_empty() || end_key > region.get_start_key() {
+                visitor(region);
+            } else {
+                break;
+            }
+        }
+    }
+
+    #[inline]
+    fn region_read_progress(&self) -> &RegionReadProgressRegistry {
+        &self.region_read_progress
+    }
 }
 
 impl StoreMeta {
