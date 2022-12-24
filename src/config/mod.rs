@@ -2988,6 +2988,10 @@ impl TikvConfig {
                 .to_owned();
         }
 
+        if self.storage.engine == EngineType::RaftKv2 {
+            self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
+        }
+
         self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
         self.raft_engine.config.dir = self.infer_raft_engine_path(None)?;
 

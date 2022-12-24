@@ -348,8 +348,7 @@ mod tests {
     fn test_apply_snapshot() {
         let region = new_region();
         let path = TempDir::new().unwrap();
-        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap());
-        mgr.init().unwrap();
+        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
         let raft_engine =
             engine_test::raft::new_engine(&format!("{}", path.path().join("raft").display()), None)
                 .unwrap();
@@ -402,8 +401,7 @@ mod tests {
         write_initial_states(&mut wb, region.clone()).unwrap();
         assert!(!wb.is_empty());
         raft_engine.consume(&mut wb, true).unwrap();
-        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap());
-        mgr.init().unwrap();
+        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
