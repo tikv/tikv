@@ -690,7 +690,7 @@ impl RaftEngine for RaftLogEngine {
         end[KEY_PREFIX_LEN] = MAX_CF_ID + 1;
         let mut found_region_state = false;
         let mut found_apply_state = false;
-        let mut found_flush_state = [false; MAX_CF_ID as usize];
+        let mut found_flush_state = [false; MAX_CF_ID as usize + 1];
         self.0
             .scan_raw_messages(
                 raft_group_id,

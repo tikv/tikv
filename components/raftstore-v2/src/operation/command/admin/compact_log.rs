@@ -21,7 +21,7 @@ use raftstore::{
     Result,
 };
 use slog::{debug, error, info};
-use tikv_util::box_err;
+use tikv_util::{box_err, Either};
 
 use crate::{
     batch::StoreContext,
@@ -237,6 +237,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage_mut()
             .cancel_generating_snap(Some(res.compact_index));
 
+        let old_truncated = self
+            .entry_storage()
+            .apply_state()
+            .get_truncated_state()
+            .get_index();
         self.entry_storage_mut()
             .apply_state_mut()
             .mut_truncated_state()
@@ -254,37 +259,60 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .unwrap();
         self.set_has_extra_write();
 
-        self.maybe_compact_log_from_engine(store_ctx);
+        self.maybe_compact_log_from_engine(store_ctx, Either::Right(old_truncated));
     }
 
-    pub fn maybe_compact_log_from_engine<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+    #[inline]
+    pub fn on_advance_persisted_apply_index<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        old_persisted: u64,
+    ) {
+        let new_persisted = self.storage().apply_trace().persisted_apply_index();
+        if old_persisted < new_persisted {
+            // TODO: batch it.
+            if let Err(e) = store_ctx.engine.delete_all_but_one_states_before(
+                self.region_id(),
+                new_persisted,
+                self.state_changes_mut(),
+            ) {
+                error!(self.logger, "failed to delete raft states"; "err" => ?e);
+            } else {
+                self.set_has_extra_write();
+            }
+        }
+        self.maybe_compact_log_from_engine(store_ctx, Either::Left(old_persisted));
+    }
+
+    pub fn maybe_compact_log_from_engine<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        old_index: Either<u64, u64>,
+    ) {
+        let truncated = self.entry_storage().truncated_index();
+        let persisted = self.storage().apply_trace().persisted_apply_index();
+        match old_index {
+            Either::Left(old_persisted) if old_persisted >= truncated => return,
+            Either::Right(old_truncated) if old_truncated >= persisted => return,
+            _ => {}
+        }
         let compact_index = std::cmp::min(
             self.entry_storage().truncated_index(),
             self.storage().apply_trace().persisted_apply_index(),
         );
-        if compact_index > self.last_engine_compact_log_index() {
-            let region_id = self.region_id();
-            let lb = self.state_changes_mut();
-            // Raft Engine doesn't care about first index.
-            if let Err(e) = store_ctx
+        // Raft Engine doesn't care about first index.
+        if let Err(e) =
+            store_ctx
                 .engine
-                .gc(region_id, 0, compact_index, lb)
-                .and_then(|_| {
-                    store_ctx
-                        .engine
-                        .delete_all_but_one_states_before(region_id, compact_index, lb)
-                })
-            {
-                error!(self.logger, "failed to compact raft logs"; "err" => ?e);
-            } else {
-                self.set_has_extra_write();
-                self.set_last_engine_compact_log_index(compact_index);
-
-                let applied = self.storage().apply_state().get_applied_index();
-                let total_cnt = applied - self.storage().entry_storage().first_index() + 1;
-                let remain_cnt = applied - compact_index;
-                self.update_approximate_raft_log_size(|s| s * remain_cnt / total_cnt);
-            }
+                .gc(self.region_id(), 0, compact_index, self.state_changes_mut())
+        {
+            error!(self.logger, "failed to compact raft logs"; "err" => ?e);
+        } else {
+            self.set_has_extra_write();
+            let applied = self.storage().apply_state().get_applied_index();
+            let total_cnt = applied - self.storage().entry_storage().first_index() + 1;
+            let remain_cnt = applied - compact_index;
+            self.update_approximate_raft_log_size(|s| s * remain_cnt / total_cnt);
         }
     }
 }
