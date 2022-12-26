@@ -9,7 +9,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine};
 use file_system::{IoType, WithIoType};
 use thiserror::Error;
 use tikv_util::{
-    debug, error,
+    box_try, debug, error,
     time::{Duration, Instant},
     warn,
     worker::{Runnable, RunnableWithTimer},
@@ -84,8 +84,26 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
     }
 
-    fn process_tasks(&mut self) -> Vec<Box<dyn FnOnce() + Send>> {
-        fail::fail_point!("worker_gc_raft_log", |_| { Vec::new() });
+    fn raft_log_gc(&mut self, mut batch: ER::LogBatch) -> Result<(), Error> {
+        fail::fail_point!("worker_gc_raft_log", |_| Ok(()));
+        box_try!(self.engines.raft.consume(&mut batch, false));
+        fail::fail_point!("worker_gc_raft_log_finished");
+        Ok(())
+    }
+
+    fn flush(&mut self) {
+        if self.tasks.is_empty() {
+            return;
+        }
+        fail::fail_point!("worker_gc_raft_log_flush");
+        // Sync wal of kv_db to make sure the data before apply_index has been persisted
+        // to disk.
+        let start = Instant::now();
+        self.engines.kv.sync().unwrap_or_else(|e| {
+            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
+        });
+        RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+
         let tasks = std::mem::take(&mut self.tasks);
         let mut cbs = Vec::new();
         let mut batch = self.engines.raft.log_batch(tasks.len());
@@ -118,31 +136,12 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 RAFT_LOG_GC_FAILED.inc();
             }
         }
-        if let Err(e) = self.engines.raft.consume(&mut batch, false) {
+        if let Err(e) = self.raft_log_gc(batch) {
             error!("failed to write gc task"; "err" => %e);
             RAFT_LOG_GC_FAILED.inc();
         }
+
         RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
-        fail::fail_point!("worker_gc_raft_log_finished");
-        cbs
-    }
-
-    fn flush(&mut self) {
-        if self.tasks.is_empty() {
-            return;
-        }
-        fail::fail_point!("worker_gc_raft_log_flush");
-        // Sync wal of kv_db to make sure the data before apply_index has been persisted
-        // to disk.
-        let start = Instant::now();
-        self.engines.kv.sync().unwrap_or_else(|e| {
-            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
-        });
-        RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
-
-        for cb in self.process_tasks() {
-            cb();
-        }
     }
 }
 
