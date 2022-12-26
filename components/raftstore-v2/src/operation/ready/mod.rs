@@ -17,19 +17,27 @@
 //!
 //! There two steps can be processed concurrently.
 
+mod apply_trace;
 mod async_writer;
 mod snapshot;
 
 use std::{cmp, time::Instant};
 
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
+pub use apply_trace::{cf_offset, write_initial_states, ApplyTrace, DataTrace, StateStorage};
+use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use protobuf::Message as _;
 use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
-use raftstore::store::{util, FetchedLogs, ReadProgress, Transport, WriteTask};
+use raftstore::{
+    coprocessor::{RegionChangeEvent, RoleChange},
+    store::{util, FetchedLogs, ReadProgress, Transport, WriteTask},
+};
 use slog::{debug, error, trace, warn};
-use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use tikv_util::{
+    store::find_peer,
+    time::{duration_to_sec, monotonic_raw_now},
+};
 
 pub use self::{
     async_writer::AsyncWriter,
@@ -37,10 +45,24 @@ pub use self::{
 };
 use crate::{
     batch::StoreContext,
-    fsm::PeerFsmDelegate,
+    fsm::{PeerFsmDelegate, Store},
     raft::{Peer, Storage},
-    router::{ApplyTask, PeerTick},
+    router::{ApplyTask, PeerMsg, PeerTick},
 };
+
+impl Store {
+    pub fn on_store_unreachable<EK, ER, T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        to_store_id: u64,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        ctx.router
+            .broadcast_normal(|| PeerMsg::StoreUnreachable { to_store_id });
+    }
+}
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
@@ -57,6 +79,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     fn tick(&mut self) -> bool {
         self.raft_group_mut().tick()
+    }
+
+    pub fn on_peer_unreachable(&mut self, to_peer_id: u64) {
+        if self.is_leader() {
+            self.raft_group_mut().report_unreachable(to_peer_id);
+        }
+    }
+
+    pub fn on_store_unreachable(&mut self, to_store_id: u64) {
+        if self.is_leader() {
+            if let Some(peer_id) = find_peer(self.region(), to_store_id).map(|p| p.get_id()) {
+                self.raft_group_mut().report_unreachable(peer_id);
+            }
+        }
     }
 
     pub fn on_raft_message<T>(
@@ -269,6 +305,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn handle_raft_ready<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let has_ready = self.reset_has_ready();
+        let has_extra_write = self.reset_has_extra_write();
         if !has_ready || self.destroy_progress().started() {
             #[cfg(feature = "testexport")]
             self.async_writer.notify_flush();
@@ -276,7 +313,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         ctx.has_ready = true;
 
-        if !self.raft_group().has_ready() && (self.serving() || self.postponed_destroy()) {
+        if !has_extra_write
+            && !self.raft_group().has_ready()
+            && (self.serving() || self.postponed_destroy())
+        {
             #[cfg(feature = "testexport")]
             self.async_writer.notify_flush();
             return;
@@ -328,11 +368,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Always sending snapshot task after apply task, so it gets latest
         // snapshot.
         if let Some(gen_task) = self.storage_mut().take_gen_snap_task() {
-            self.apply_scheduler().send(ApplyTask::Snapshot(gen_task));
+            self.apply_scheduler()
+                .unwrap()
+                .send(ApplyTask::Snapshot(gen_task));
         }
 
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
+        self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
         if !ready.persisted_messages().is_empty() {
@@ -344,6 +387,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if !self.serving() {
             self.start_destroy(&mut write_task);
+            ctx.coprocessor_host.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Destroy,
+                self.raft_group().raft.state,
+            );
         }
         // Ready number should increase monotonically.
         assert!(self.async_writer.known_largest_number() < ready.number());
@@ -477,6 +525,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
+            let target = self.refresh_leader_transferee();
+            ctx.coprocessor_host.on_role_change(
+                self.region(),
+                RoleChange {
+                    state: ss.raft_state,
+                    leader_id: ss.leader_id,
+                    prev_lead_transferee: target,
+                    vote: self.raft_group().raft.vote,
+                    initialized: self.storage().is_initialized(),
+                },
+            );
             self.proposal_control_mut().maybe_update_term(term);
         }
     }
@@ -554,17 +613,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         if !ever_persisted || prev_raft_state != *entry_storage.raft_state() {
             write_task.raft_state = Some(entry_storage.raft_state().clone());
         }
-        if !ever_persisted {
-            let region_id = self.region().get_id();
-            let raft_engine = self.entry_storage().raft_engine();
-            let lb = write_task
-                .extra_write
-                .ensure_v2(|| raft_engine.log_batch(3));
-            lb.put_apply_state(region_id, 0, self.apply_state())
-                .unwrap();
-            lb.put_region_state(region_id, 0, self.region_state())
-                .unwrap();
+        // If snapshot initializes the peer, we don't need to write apply trace again.
+        if !self.ever_persisted() {
+            self.init_apply_trace(write_task);
             self.set_ever_persisted();
+        }
+        if self.apply_trace().should_persist() {
+            self.record_apply_trace(write_task);
         }
     }
 }

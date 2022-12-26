@@ -9,7 +9,7 @@ use kvproto::{
     disk_usage::DiskUsage,
     metapb,
     raft_cmdpb::{
-        AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, RaftCmdRequest, Request,
+        AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest, RaftRequestHeader,
         TransferLeaderRequest,
     },
 };
@@ -30,11 +30,12 @@ use super::AdminCmdResult;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
+    operation::command::write::SimpleWriteEncoder,
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick},
 };
 
-fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
+fn transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
     if !msg.has_admin_request() {
         return None;
     }
@@ -78,7 +79,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) -> bool {
         ctx.raft_metrics.propose.transfer_leader.inc();
 
-        let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
+        let transfer_leader = transfer_leader_cmd(&req).unwrap();
         let prs = self.raft_group().raft.prs();
 
         // Find the target with the largest matched index among the candidate
@@ -107,7 +108,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             _ => peers.choose(&mut rand::thread_rng()).unwrap(),
         };
 
-        let transferee = if peer.id == self.peer().id {
+        let transferee = if peer.id == self.peer_id() {
             false
         } else {
             self.pre_transfer_leader(peer)
@@ -199,7 +200,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         cmd.mut_admin_request()
                             .set_cmd_type(AdminCmdType::TransferLeader);
                         cmd.mut_admin_request().mut_transfer_leader().set_peer(from);
-                        if let PeerMsg::RaftCommand(req) = PeerMsg::raft_command(cmd).0 {
+                        if let PeerMsg::AdminCommand(req) = PeerMsg::admin_command(cmd).0 {
                             self.on_admin_command(ctx, req.request, req.ch);
                         } else {
                             unreachable!();
@@ -211,6 +212,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             "peer" => ?from,
                         );
                         self.raft_group_mut().transfer_leader(from.get_id());
+                        self.refresh_leader_transferee();
                     }
                 }
             }
@@ -345,7 +347,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // FIXME: Raft command has size limit. Either limit the total size of
         // pessimistic locks in a region, or split commands here.
-        let mut cmd = RaftCmdRequest::default();
+        let mut encoder = SimpleWriteEncoder::with_capacity(512);
+        let mut lock_count = 0;
         {
             // Downgrade to a read guard, do not block readers in the scheduler as far as
             // possible.
@@ -355,33 +358,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 if *deleted {
                     continue;
                 }
-                let mut put = PutRequest::default();
-                put.set_cf(CF_LOCK.to_string());
-                put.set_key(key.as_encoded().to_owned());
-                put.set_value(lock.to_lock().to_bytes());
-                let mut req = Request::default();
-                req.set_cmd_type(CmdType::Put);
-                req.set_put(put);
-                cmd.mut_requests().push(req);
+                lock_count += 1;
+                encoder.put(CF_LOCK, key.as_encoded(), &lock.to_lock().to_bytes());
             }
         }
-        if cmd.get_requests().is_empty() {
+        if lock_count == 0 {
             // If the map is not empty but all locks are deleted, it is possible that a
             // write command has just marked locks deleted but not proposed yet.
             // It might cause that command to fail if we skip proposing the
             // extra TransferLeader command here.
             return true;
         }
-        cmd.mut_header().set_region_id(self.region_id());
-        cmd.mut_header()
-            .set_region_epoch(self.region().get_region_epoch().clone());
-        cmd.mut_header().set_peer(self.peer().clone());
+        let mut header = Box::<RaftRequestHeader>::default();
+        header.set_region_id(self.region_id());
+        header.set_region_epoch(self.region().get_region_epoch().clone());
+        header.set_peer(self.peer().clone());
         info!(
             self.logger,
-            "propose {} locks before transferring leader", cmd.get_requests().len();
+            "propose {} locks before transferring leader", lock_count;
         );
-        let PeerMsg::RaftCommand(req) = PeerMsg::raft_command(cmd).0 else {unreachable!()};
-        self.on_write_command(ctx, req.request, req.ch);
+        let PeerMsg::SimpleWrite(write) = PeerMsg::simple_write(header, encoder.encode()).0 else {unreachable!()};
+        self.on_simple_write(ctx, write.header, write.data, write.ch);
         true
     }
 }

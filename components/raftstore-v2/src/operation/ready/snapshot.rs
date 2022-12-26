@@ -27,13 +27,16 @@ use std::{
     },
 };
 
-use engine_traits::{KvEngine, RaftEngine, TabletContext, TabletRegistry};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
 use protobuf::Message;
-use raft::eraftpb::Snapshot;
-use raftstore::store::{
-    metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
-    TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
+use raft::{eraftpb::Snapshot, StateRole};
+use raftstore::{
+    coprocessor::RegionChangeEvent,
+    store::{
+        metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
+        TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
+    },
 };
 use slog::{error, info, warn};
 use tikv_util::box_err;
@@ -116,12 +119,44 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn on_snapshot_sent(&mut self, to_peer_id: u64, status: raft::SnapshotStatus) {
+        let to_peer = match self.peer_from_cache(to_peer_id) {
+            Some(peer) => peer,
+            None => {
+                // If to_peer is gone, ignore this snapshot status
+                warn!(
+                    self.logger,
+                    "peer not found, ignore snapshot status";
+                    "to_peer_id" => to_peer_id,
+                    "status" => ?status,
+                );
+                return;
+            }
+        };
+        info!(
+            self.logger,
+            "report snapshot status";
+            "to" => ?to_peer,
+            "status" => ?status,
+        );
+        self.raft_group_mut().report_snapshot(to_peer_id, status);
+    }
+
     pub fn on_applied_snapshot<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        ctx.coprocessor_host.on_region_changed(
+            self.region(),
+            RegionChangeEvent::Create,
+            StateRole::Follower,
+        );
         let persisted_index = self.persisted_index();
         let first_index = self.storage().entry_storage().first_index();
         if first_index == persisted_index + 1 {
             let region_id = self.region_id();
-            let tablet_ctx = TabletContext::new(self.region(), Some(persisted_index));
+            self.reset_flush_state();
+            let flush_state = self.flush_state().clone();
+            let mut tablet_ctx = TabletContext::new(self.region(), Some(persisted_index));
+            // Use a new FlushState to avoid conflicts with the old one.
+            tablet_ctx.flush_state = Some(flush_state);
             ctx.tablet_registry.load(tablet_ctx, false).unwrap();
             self.schedule_apply_fsm(ctx);
             self.storage_mut().on_applied_snapshot();
@@ -195,6 +230,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
+    pub fn is_generating_snapshot(&self) -> bool {
+        let snap_state = self.snap_state_mut();
+        matches!(*snap_state, SnapState::Generating { .. })
+    }
+
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
@@ -353,7 +393,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let index = entry.truncated_index();
         entry.set_applied_term(term);
         entry.apply_state_mut().set_applied_index(index);
-        self.region_state_mut().set_tablet_index(index);
+        self.apply_trace_mut().reset_snapshot(index);
     }
 
     pub fn apply_snapshot(
@@ -383,14 +423,27 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
         let last_index = snap.get_metadata().get_index();
         let last_term = snap.get_metadata().get_term();
-        self.region_state_mut().set_state(PeerState::Normal);
-        self.region_state_mut().set_region(region);
-        self.entry_storage_mut()
-            .raft_state_mut()
-            .set_last_index(last_index);
-        self.entry_storage_mut().set_truncated_index(last_index);
-        self.entry_storage_mut().set_truncated_term(last_term);
-        self.entry_storage_mut().set_last_term(last_term);
+        let region_state = self.region_state_mut();
+        region_state.set_state(PeerState::Normal);
+        region_state.set_region(region);
+        region_state.set_tablet_index(last_index);
+        let entry_storage = self.entry_storage_mut();
+        entry_storage.raft_state_mut().set_last_index(last_index);
+        entry_storage.set_truncated_index(last_index);
+        entry_storage.set_truncated_term(last_term);
+        entry_storage.set_last_term(last_term);
+
+        self.apply_trace_mut().reset_should_persist();
+        self.set_ever_persisted();
+        let lb = task
+            .extra_write
+            .ensure_v2(|| self.entry_storage().raft_engine().log_batch(3));
+        lb.put_apply_state(region_id, last_index, self.apply_state())
+            .unwrap();
+        lb.put_region_state(region_id, last_index, self.region_state())
+            .unwrap();
+        lb.put_flushed_index(region_id, CF_RAFT, last_index, last_index)
+            .unwrap();
 
         let (path, clean_split) = match self.split_init_mut() {
             // If index not match, the peer may accept a newer snapshot after split.

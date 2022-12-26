@@ -2,23 +2,11 @@
 
 use std::{any::Any, sync::Arc};
 
-use engine_traits::{
-    FlushState, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
-};
+use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::{
-    db_vector::RocksDbVector,
-    options::RocksReadOptions,
-    r2e,
-    rocks_metrics::{
-        flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
-        flush_engine_ticker_metrics,
-    },
-    rocks_metrics_defs::{
-        ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
-    },
-    util::get_cf_handle,
+    db_vector::RocksDbVector, options::RocksReadOptions, r2e, util::get_cf_handle,
     RocksEngineIterator, RocksSnapshot,
 };
 
@@ -26,7 +14,6 @@ use crate::{
 pub struct RocksEngine {
     db: Arc<DB>,
     support_multi_batch_write: bool,
-    flush_state: Option<Arc<FlushState>>,
 }
 
 impl RocksEngine {
@@ -38,7 +25,6 @@ impl RocksEngine {
         RocksEngine {
             db: db.clone(),
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
-            flush_state: None,
         }
     }
 
@@ -53,14 +39,6 @@ impl RocksEngine {
     pub fn support_multi_batch_write(&self) -> bool {
         self.support_multi_batch_write
     }
-
-    pub fn set_flush_state(&mut self, flush_state: Arc<FlushState>) {
-        self.flush_state = Some(flush_state);
-    }
-
-    pub fn flush_state(&self) -> Option<Arc<FlushState>> {
-        self.flush_state.clone()
-    }
 }
 
 impl KvEngine for RocksEngine {
@@ -72,35 +50,6 @@ impl KvEngine for RocksEngine {
 
     fn sync(&self) -> Result<()> {
         self.db.sync_wal().map_err(r2e)
-    }
-
-    fn flush_metrics(&self, instance: &str) {
-        for t in ENGINE_TICKER_TYPES {
-            let v = self.db.get_and_reset_statistics_ticker_count(*t);
-            flush_engine_ticker_metrics(*t, v, instance);
-        }
-        for t in ENGINE_HIST_TYPES {
-            if let Some(v) = self.db.get_statistics_histogram(*t) {
-                flush_engine_histogram_metrics(*t, v, instance);
-            }
-        }
-        if self.db.is_titan() {
-            for t in TITAN_ENGINE_TICKER_TYPES {
-                let v = self.db.get_and_reset_statistics_ticker_count(*t);
-                flush_engine_ticker_metrics(*t, v, instance);
-            }
-            for t in TITAN_ENGINE_HIST_TYPES {
-                if let Some(v) = self.db.get_statistics_histogram(*t) {
-                    flush_engine_histogram_metrics(*t, v, instance);
-                }
-            }
-        }
-        flush_engine_properties(&self.db, instance);
-        flush_engine_iostall_properties(&self.db, instance);
-    }
-
-    fn reset_statistics(&self) {
-        self.db.reset_statistics();
     }
 
     fn bad_downcast<T: 'static>(&self) -> &T {

@@ -38,14 +38,15 @@ use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
-    from_rocks_compression_type,
+    flush_engine_statistics, from_rocks_compression_type,
     raw::{Cache, Env},
-    FlowInfo, RocksEngine,
+    FlowInfo, RocksEngine, RocksStatistics,
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CachedTablet, CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
-    RaftEngine, SingletonFactory, TabletContext, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    RaftEngine, SingletonFactory, StatisticsReporter, TabletContext, TabletRegistry, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -91,7 +92,6 @@ use tikv::{
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
-        create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
@@ -107,7 +107,7 @@ use tikv::{
         config_manager::StorageConfigManger,
         mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{EngineFlowController, FlowController},
-        Engine,
+        Engine, Storage,
     },
 };
 use tikv_util::{
@@ -123,6 +123,7 @@ use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
+    Either,
 };
 use tokio::runtime::Builder;
 
@@ -169,7 +170,11 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.run_status_server();
     tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
 
-    signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
+    signal_handler::wait_for_signal(
+        Some(tikv.engines.take().unwrap().engines),
+        tikv.kv_statistics.clone(),
+        tikv.raft_statistics.clone(),
+    );
     tikv.stop();
 }
 
@@ -226,6 +231,8 @@ struct TikvServer<ER: RaftEngine> {
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TikvEngines<RocksEngine, ER>>,
+    kv_statistics: Option<Arc<RocksStatistics>>,
+    raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
@@ -376,6 +383,8 @@ where
             snap_mgr: None,
             encryption_key_manager: None,
             engines: None,
+            kv_statistics: None,
+            raft_statistics: None,
             servers: None,
             region_info_accessor,
             coprocessor_host,
@@ -788,7 +797,7 @@ where
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage::<_, _, _, F, _>(
+        let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -816,7 +825,7 @@ where
         let (resolver, state) = resolve::new_resolver(
             self.pd_client.clone(),
             &self.background_worker,
-            storage.get_engine().raft_extension().clone(),
+            storage.get_engine().raft_extension(),
         );
         self.resolver = Some(resolver);
 
@@ -951,9 +960,9 @@ where
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
-            snap_mgr.clone(),
+            Either::Left(snap_mgr.clone()),
             gc_worker.clone(),
-            check_leader_scheduler,
+            Some(check_leader_scheduler),
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
@@ -1204,8 +1213,10 @@ where
         // Debug service.
         let debug_service = DebugService::new(
             engines.engines.clone(),
+            self.kv_statistics.clone(),
+            self.raft_statistics.clone(),
             servers.server.get_debug_thread_pool().clone(),
-            engines.engine.raft_extension().clone(),
+            engines.engine.raft_extension(),
             self.cfg_controller.as_ref().unwrap().clone(),
         );
         if servers
@@ -1356,7 +1367,11 @@ where
         engines_info: Arc<EnginesResourceInfo>,
     ) {
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
-            self.engines.as_ref().unwrap().engines.clone(),
+            self.tablet_registry.clone().unwrap(),
+            self.kv_statistics.clone(),
+            self.config.rocksdb.titan.enabled,
+            self.engines.as_ref().unwrap().engines.raft.clone(),
+            self.raft_statistics.clone(),
         );
         let mut io_metrics = IoMetricsManager::new(fetcher);
         let engines_info_clone = engines_info.clone();
@@ -1635,7 +1650,7 @@ where
                 self.config.server.status_thread_pool_size,
                 self.cfg_controller.take().unwrap(),
                 Arc::new(self.config.security.clone()),
-                self.router.clone(),
+                self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.store_path.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
@@ -1675,7 +1690,12 @@ where
 }
 
 pub trait ConfiguredRaftEngine: RaftEngine {
-    fn build(_: &TikvConfig, _: &Arc<Env>, _: &Option<Arc<DataKeyManager>>, _: &Cache) -> Self;
+    fn build(
+        _: &TikvConfig,
+        _: &Arc<Env>,
+        _: &Option<Arc<DataKeyManager>>,
+        _: &Cache,
+    ) -> (Self, Option<Arc<RocksStatistics>>);
     fn as_rocks_engine(&self) -> Option<&RocksEngine>;
     fn register_config(&self, _cfg_controller: &mut ConfigController);
 }
@@ -1686,7 +1706,7 @@ impl<T: RaftEngine> ConfiguredRaftEngine for T {
         _: &Arc<Env>,
         _: &Option<Arc<DataKeyManager>>,
         _: &Cache,
-    ) -> Self {
+    ) -> (Self, Option<Arc<RocksStatistics>>) {
         unimplemented!()
     }
     default fn as_rocks_engine(&self) -> Option<&RocksEngine> {
@@ -1701,7 +1721,7 @@ impl ConfiguredRaftEngine for RocksEngine {
         env: &Arc<Env>,
         key_manager: &Option<Arc<DataKeyManager>>,
         block_cache: &Cache,
-    ) -> Self {
+    ) -> (Self, Option<Arc<RocksStatistics>>) {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &config.storage.data_dir,
             &config.raft_engine.config().dir,
@@ -1713,6 +1733,8 @@ impl ConfiguredRaftEngine for RocksEngine {
         let config_raftdb = &config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
+        let statistics = Arc::new(RocksStatistics::new_titan());
+        raft_db_opts.set_statistics(statistics.as_ref());
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
         let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
             .expect("failed to open raftdb");
@@ -1726,7 +1748,7 @@ impl ConfiguredRaftEngine for RocksEngine {
             drop(raft_engine);
             raft_data_state_machine.after_dump_data();
         }
-        raftdb
+        (raftdb, Some(statistics))
     }
 
     fn as_rocks_engine(&self) -> Option<&RocksEngine> {
@@ -1747,7 +1769,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
         env: &Arc<Env>,
         key_manager: &Option<Arc<DataKeyManager>>,
         block_cache: &Cache,
-    ) -> Self {
+    ) -> (Self, Option<Arc<RocksStatistics>>) {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &config.storage.data_dir,
             &config.raft_store.raftdb_path,
@@ -1776,7 +1798,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             drop(raftdb);
             raft_data_state_machine.after_dump_data();
         }
-        raft_engine
+        (raft_engine, None)
     }
 }
 
@@ -1792,12 +1814,13 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             .unwrap();
 
         // Create raft engine
-        let raft_engine = CER::build(
+        let (raft_engine, raft_statistics) = CER::build(
             &self.config,
             &env,
             &self.encryption_key_manager,
             &block_cache,
         );
+        self.raft_statistics = raft_statistics;
 
         // Create kv engine.
         let builder = KvEngineFactoryBuilder::new(env, &self.config, block_cache)
@@ -1811,6 +1834,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let kv_engine = factory
             .create_shared_db(&self.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+        self.kv_statistics = Some(factory.rocks_statistics());
         let engines = Engines::new(kv_engine.clone(), raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -1928,13 +1952,12 @@ fn get_lock_dir() -> String {
 
 /// A small trait for components which can be trivially stopped. Lets us keep
 /// a list of these in `TiKV`, rather than storing each component individually.
-trait Stop {
+pub(crate) trait Stop {
     fn stop(self: Box<Self>);
 }
 
-impl<E, R> Stop for StatusServer<E, R>
+impl<R> Stop for StatusServer<R>
 where
-    E: 'static,
     R: 'static + Send,
 {
     fn stop(self: Box<Self>) {
@@ -1954,25 +1977,58 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-pub struct EngineMetricsManager<EK: KvEngine, R: RaftEngine> {
-    engines: Engines<EK, R>,
+pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
+    tablet_registry: TabletRegistry<EK>,
+    kv_statistics: Option<Arc<RocksStatistics>>,
+    kv_is_titan: bool,
+    raft_engine: ER,
+    raft_statistics: Option<Arc<RocksStatistics>>,
     last_reset: Instant,
 }
 
-impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
-    pub fn new(engines: Engines<EK, R>) -> Self {
+impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
+    pub fn new(
+        tablet_registry: TabletRegistry<EK>,
+        kv_statistics: Option<Arc<RocksStatistics>>,
+        kv_is_titan: bool,
+        raft_engine: ER,
+        raft_statistics: Option<Arc<RocksStatistics>>,
+    ) -> Self {
         EngineMetricsManager {
-            engines,
+            tablet_registry,
+            kv_statistics,
+            kv_is_titan,
+            raft_engine,
+            raft_statistics,
             last_reset: Instant::now(),
         }
     }
 
     pub fn flush(&mut self, now: Instant) {
-        KvEngine::flush_metrics(&self.engines.kv, "kv");
-        self.engines.raft.flush_metrics("raft");
+        let mut reporter = EK::StatisticsReporter::new("kv");
+        self.tablet_registry
+            .for_each_opened_tablet(|_, db: &mut CachedTablet<EK>| {
+                if let Some(db) = db.latest() {
+                    reporter.collect(db);
+                }
+                true
+            });
+        reporter.flush();
+        self.raft_engine.flush_metrics("raft");
+
+        if let Some(s) = self.kv_statistics.as_ref() {
+            flush_engine_statistics(s, "kv", self.kv_is_titan);
+        }
+        if let Some(s) = self.raft_statistics.as_ref() {
+            flush_engine_statistics(s, "raft", false);
+        }
         if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
-            KvEngine::reset_statistics(&self.engines.kv);
-            self.engines.raft.reset_statistics();
+            if let Some(s) = self.kv_statistics.as_ref() {
+                s.reset();
+            }
+            if let Some(s) = self.raft_statistics.as_ref() {
+                s.reset();
+            }
             self.last_reset = now;
         }
     }
@@ -2109,7 +2165,7 @@ mod test {
         let cache = config.storage.block_cache.build_shared_cache();
 
         let factory = KvEngineFactoryBuilder::new(env, &config, cache).build();
-        let reg = TabletRegistry::new(Box::new(factory), path.path()).unwrap();
+        let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {
             let ctx = TabletContext::with_infinite_region(i, Some(10));

@@ -251,6 +251,8 @@
 #![cfg_attr(test, feature(test))]
 #![feature(min_specialization)]
 #![feature(assert_matches)]
+#![feature(linked_list_cursors)]
+#![feature(let_chains)]
 
 #[macro_use(fail_point)]
 extern crate fail;

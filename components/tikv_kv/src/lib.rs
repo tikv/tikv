@@ -311,7 +311,7 @@ pub trait Engine: Send + Clone + 'static {
 
     type RaftExtension: raft_extension::RaftExtension = FakeExtension;
     /// Get the underlying raft extension.
-    fn raft_extension(&self) -> &Self::RaftExtension {
+    fn raft_extension(&self) -> Self::RaftExtension {
         unimplemented!()
     }
 

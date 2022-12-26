@@ -65,6 +65,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     store_id: u64,
     /// Used to handle requests related to GC.
+    // TODO: make it Some after GC is supported for v2.
     gc_worker: GcWorker<E>,
     // For handling KV requests.
     storage: Storage<E, L, F>,
@@ -75,7 +76,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
     // For handling `CheckLeader` request.
-    check_leader_scheduler: Scheduler<CheckLeaderTask>,
+    check_leader_scheduler: Option<Scheduler<CheckLeaderTask>>,
 
     enable_req_batch: bool,
 
@@ -114,7 +115,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
         snap_scheduler: Scheduler<SnapTask>,
-        check_leader_scheduler: Scheduler<CheckLeaderTask>,
+        check_leader_scheduler: Option<Scheduler<CheckLeaderTask>>,
         grpc_thread_load: Arc<ThreadLoadPool>,
         enable_req_batch: bool,
         proxy: Proxy,
@@ -590,7 +591,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         sink: ClientStreamingSink<Done>,
     ) {
         let store_id = self.store_id;
-        let ch = self.storage.get_engine().raft_extension().clone();
+        let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
@@ -633,7 +634,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) {
         info!("batch_raft RPC is called, new gRPC stream established");
         let store_id = self.store_id;
-        let ch = self.storage.get_engine().raft_extension().clone();
+        let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
@@ -908,6 +909,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
+            let Some(check_leader_scheduler) = check_leader_scheduler else { return Err(box_err!("check leader is not supported")) };
             check_leader_scheduler
                 .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
                 .map_err(|e| Error::Other(format!("{}", e).into()))?;
@@ -943,7 +945,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) {
         let key_range = request.take_key_range();
         let (cb, resp) = paired_future_callback();
-        let check_leader_scheduler = self.check_leader_scheduler.clone();
+        let check_leader_scheduler = match self.check_leader_scheduler.clone() {
+            Some(s) => s,
+            // Avoid print errors if it's not supported.
+            None => return,
+        };
         let task = async move {
             check_leader_scheduler
                 .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })

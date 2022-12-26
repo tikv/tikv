@@ -9,6 +9,7 @@ use std::{
 use batch_system::Router;
 use crossbeam::channel::TrySendError;
 use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletRegistry};
+use futures::Future;
 use kvproto::{
     errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
@@ -22,7 +23,7 @@ use raftstore::{
     Error, Result,
 };
 use slog::{debug, Logger};
-use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now};
+use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now, Either};
 use time::Timespec;
 use txn_types::WriteBatchFlags;
 
@@ -32,7 +33,7 @@ use crate::{
     StoreRouter,
 };
 
-pub trait MsgRouter: Send {
+pub trait MsgRouter: Clone + Send {
     fn send(&self, addr: u64, msg: PeerMsg) -> std::result::Result<(), TrySendError<PeerMsg>>;
 }
 
@@ -103,44 +104,55 @@ where
 
     fn try_get_snapshot(
         &mut self,
-        req: RaftCmdRequest,
+        req: &RaftCmdRequest,
     ) -> std::result::Result<Option<RegionSnapshot<E::Snapshot>>, RaftCmdResponse> {
-        match self.pre_propose_raft_command(&req) {
-            Ok(Some((mut delegate, policy))) => match policy {
-                RequestPolicy::ReadLocal => {
-                    let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
-                    // Ensures the snapshot is acquired before getting the time
-                    atomic::fence(atomic::Ordering::Release);
-                    let snapshot_ts = monotonic_raw_now();
+        match self.pre_propose_raft_command(req) {
+            Ok(Some((mut delegate, policy))) => {
+                let mut snap = match policy {
+                    RequestPolicy::ReadLocal => {
+                        let region = Arc::clone(&delegate.region);
+                        let snap =
+                            RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
+                        // Ensures the snapshot is acquired before getting the time
+                        atomic::fence(atomic::Ordering::Release);
+                        let snapshot_ts = monotonic_raw_now();
 
-                    if !delegate.is_in_leader_lease(snapshot_ts) {
-                        return Ok(None);
+                        if !delegate.is_in_leader_lease(snapshot_ts) {
+                            return Ok(None);
+                        }
+
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_requests.inc());
+
+                        // Try renew lease in advance
+                        self.maybe_renew_lease_in_advance(&delegate, req, snapshot_ts);
+                        snap
                     }
+                    RequestPolicy::StaleRead => {
+                        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+                        delegate.check_stale_read_safe(read_ts)?;
 
-                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
+                        let region = Arc::clone(&delegate.region);
+                        let snap =
+                            RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
 
-                    // Try renew lease in advance
-                    self.maybe_renew_lease_in_advance(&delegate, &req, snapshot_ts);
-                    Ok(Some(snap))
-                }
-                RequestPolicy::StaleRead => {
-                    let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                    delegate.check_stale_read_safe(read_ts)?;
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_requests.inc());
 
-                    let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
+                        delegate.check_stale_read_safe(read_ts)?;
 
-                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
+                        snap
+                    }
+                    _ => unreachable!(),
+                };
 
-                    delegate.check_stale_read_safe(read_ts)?;
+                snap.txn_ext = Some(delegate.txn_ext.clone());
+                snap.bucket_meta = delegate.bucket_meta.clone();
 
-                    TLS_LOCAL_READ_METRICS
-                        .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
-                    Ok(Some(snap))
-                }
-                _ => unreachable!(),
-            },
+                Ok(Some(snap))
+            }
             Ok(None) => Ok(None),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
@@ -156,63 +168,84 @@ where
         }
     }
 
-    pub async fn snapshot(
+    pub fn snapshot(
         &mut self,
         mut req: RaftCmdRequest,
-    ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>> + Send
+    {
         let region_id = req.header.get_ref().region_id;
-        if let Some(snap) = self.try_get_snapshot(req.clone())? {
-            return Ok(snap);
-        }
+        let res = match self.try_get_snapshot(&req) {
+            res @ (Ok(Some(_)) | Err(_)) => Either::Left(res),
+            Ok(None) => Either::Right((self.try_to_renew_lease(region_id, &req), self.clone())),
+        };
 
-        if let Some(query_res) = self.try_to_renew_lease(region_id, &req).await? {
-            // If query successful, try again.
-            if query_res.read().is_some() {
-                req.mut_header().set_read_quorum(false);
-                if let Some(snap) = self.try_get_snapshot(req)? {
-                    return Ok(snap);
+        async move {
+            match res {
+                Either::Left(Ok(Some(snap))) => return Ok(snap),
+                Either::Left(Err(e)) => return Err(e),
+                Either::Right((fut, mut reader)) => {
+                    if let Some(query_res) = fut.await?
+                        && query_res.read().is_some()
+                    {
+                        // If query successful, try again.
+                            req.mut_header().set_read_quorum(false);
+                            if let Some(snap) = reader.try_get_snapshot(&req)? {
+                                return Ok(snap);
+                            }
+                    }
                 }
+                Either::Left(Ok(None)) => unreachable!(),
             }
-        }
 
-        let mut err = errorpb::Error::default();
-        err.set_message(format!(
-            "Fail to get snapshot from LocalReader for region {}. \
-            Maybe due to `not leader`, `region not found` or `not applied to the current term`",
-            region_id
-        ));
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        Err(resp)
+            let mut err = errorpb::Error::default();
+            err.set_message(format!(
+                "Fail to get snapshot from LocalReader for region {}. \
+                Maybe due to `not leader`, `region not found` or `not applied to the current term`",
+                region_id
+            ));
+            let mut resp = RaftCmdResponse::default();
+            resp.mut_header().set_error(err);
+            Err(resp)
+        }
     }
 
     // try to renew the lease by sending read query where the reading process may
     // renew the lease
-    async fn try_to_renew_lease(
+    fn try_to_renew_lease(
         &self,
         region_id: u64,
         req: &RaftCmdRequest,
-    ) -> std::result::Result<Option<QueryResult>, RaftCmdResponse> {
+    ) -> impl Future<Output = std::result::Result<Option<QueryResult>, RaftCmdResponse>> {
         let (msg, sub) = PeerMsg::raft_query(req.clone());
-        let mut err = errorpb::Error::default();
-        match MsgRouter::send(&self.router, region_id, msg) {
-            Ok(()) => return Ok(sub.result().await),
+        let res = match MsgRouter::send(&self.router, region_id, msg) {
+            Ok(()) => Ok(sub),
             Err(TrySendError::Full(_)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.channel_full.inc());
+                let mut err = errorpb::Error::default();
                 err.set_message(RAFTSTORE_IS_BUSY.to_owned());
                 err.mut_server_is_busy()
                     .set_reason(RAFTSTORE_IS_BUSY.to_owned());
+                Err(err)
             }
             Err(TrySendError::Disconnected(_)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
+                let mut err = errorpb::Error::default();
                 err.set_message(format!("region {} is missing", region_id));
                 err.mut_region_not_found().set_region_id(region_id);
+                Err(err)
+            }
+        };
+
+        async move {
+            match res {
+                Ok(sub) => Ok(sub.result().await),
+                Err(e) => {
+                    let mut resp = RaftCmdResponse::default();
+                    resp.mut_header().set_error(e);
+                    Err(resp)
+                }
             }
         }
-
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        Err(resp)
     }
 
     // If the remote lease will be expired in near future send message
@@ -436,6 +469,7 @@ mod tests {
     use engine_traits::{MiscExt, Peekable, SyncMutable, TabletContext, DATA_CFS};
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
+    use pd_client::BucketMeta;
     use raftstore::store::{
         util::Lease, ReadCallback, ReadProgress, RegionReadProgress, TrackVer, TxnExt,
         TLS_LOCAL_READ_METRICS,
@@ -449,6 +483,7 @@ mod tests {
     use super::*;
     use crate::router::{QueryResult, ReadResponse};
 
+    #[derive(Clone)]
     struct MockRouter {
         p_router: SyncSender<(u64, PeerMsg)>,
     }
@@ -605,6 +640,8 @@ mod tests {
         // Register region 1
         lease.renew(monotonic_raw_now());
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
+        let txn_ext = Arc::new(TxnExt::default());
+        let bucket_meta = Arc::new(BucketMeta::default());
         {
             let mut meta = store_meta.as_ref().lock().unwrap();
 
@@ -618,11 +655,11 @@ mod tests {
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                txn_ext: Arc::new(TxnExt::default()),
+                txn_ext: txn_ext.clone(),
                 read_progress: read_progress.clone(),
                 pending_remove: false,
                 track_ver: TrackVer::new(),
-                bucket_meta: None,
+                bucket_meta: Some(bucket_meta.clone()),
             };
             meta.readers.insert(1, read_delegate);
             // create tablet with region_id 1 and prepare some data
@@ -652,6 +689,11 @@ mod tests {
         // the applied term by the above thread, the snapshot will be acquired by
         // retrying.
         let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
+        assert!(Arc::ptr_eq(snap.txn_ext.as_ref().unwrap(), &txn_ext));
+        assert!(Arc::ptr_eq(
+            snap.bucket_meta.as_ref().unwrap(),
+            &bucket_meta
+        ));
         assert_eq!(*snap.get_region(), region1);
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
@@ -681,10 +723,11 @@ mod tests {
             ))
             .unwrap();
         block_on(reader.snapshot(cmd.clone())).unwrap();
-        // Updating lease makes cache miss.
+        // Updating lease makes cache miss. And because the cache is updated on cloned
+        // copy, so the old cache will still need to be updated again.
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
-            4
+            5
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),

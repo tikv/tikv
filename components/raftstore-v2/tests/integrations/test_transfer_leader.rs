@@ -2,14 +2,14 @@
 
 use std::time::Duration;
 
-use engine_traits::Peekable;
+use engine_traits::{Peekable, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::{
     metapb,
-    raft_cmdpb::{AdminCmdType, CmdType, Request, TransferLeaderRequest},
+    raft_cmdpb::{AdminCmdType, TransferLeaderRequest},
 };
 use raft::prelude::ConfChangeType;
-use raftstore_v2::router::PeerMsg;
+use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 use tikv_util::store::new_peer;
 
 use crate::cluster::Cluster;
@@ -22,12 +22,6 @@ fn put_data(
     key: &[u8],
 ) {
     let router = &cluster.routers[node_off];
-    let mut req = router.new_request_for(region_id);
-    let mut put_req = Request::default();
-    put_req.set_cmd_type(CmdType::Put);
-    put_req.mut_put().set_key(key[1..].to_vec());
-    put_req.mut_put().set_value(b"value".to_vec());
-    req.mut_requests().push(put_req);
 
     router.wait_applied_to_current_term(region_id, Duration::from_secs(3));
 
@@ -41,7 +35,10 @@ fn put_data(
         .clone();
     assert!(tablet.get_value(key).unwrap().is_none());
 
-    let (msg, mut sub) = PeerMsg::raft_command(req.clone());
+    let header = Box::new(router.new_request_for(region_id).take_header());
+    let mut put = SimpleWriteEncoder::with_capacity(64);
+    put.put(CF_DEFAULT, &key[1..], b"value");
+    let (msg, mut sub) = PeerMsg::simple_write(header, put.encode());
     router.send(region_id, msg).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(10));
     cluster.dispatch(region_id, vec![]);
@@ -84,7 +81,7 @@ pub fn must_transfer_leader(
     let admin_req = req.mut_admin_request();
     admin_req.set_cmd_type(AdminCmdType::TransferLeader);
     admin_req.set_transfer_leader(transfer_req);
-    let resp = router.command(region_id, req).unwrap();
+    let resp = router.admin_command(region_id, req).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     cluster.dispatch(region_id, vec![]);
 
@@ -114,7 +111,7 @@ fn test_transfer_leader() {
     let peer1 = new_peer(store_id, 10);
     admin_req.mut_change_peer().set_peer(peer1.clone());
     let req_clone = req.clone();
-    let resp = router0.command(region_id, req_clone).unwrap();
+    let resp = router0.admin_command(region_id, req_clone).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     let epoch = req.get_header().get_region_epoch();
     let new_conf_ver = epoch.get_conf_ver() + 1;
