@@ -97,7 +97,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL)
                     {
                         let data = req.write_to_bytes().unwrap();
-                        self.propose_with_ctx(ctx, data, vec![])
+                        self.propose(ctx, data)
                     } else {
                         if self.propose_transfer_leader(ctx, req, ch) {
                             self.set_has_ready();

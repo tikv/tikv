@@ -460,12 +460,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// deadline time.
     #[inline]
     pub fn peer_heartbeat_is_fresh(&self, peer_id: u64, deadline: &Instant) -> bool {
-        if let Some(last_heartbeat) = self.peer_heartbeats.get(&peer_id)
-            && *last_heartbeat >= *deadline
-        {
-            return true;
-        }
-        false
+        matches!(
+            self.peer_heartbeats.get(&peer_id),
+            Some(last_heartbeat) if *last_heartbeat >= *deadline
+        )
     }
 
     pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<pdpb::PeerStats> {

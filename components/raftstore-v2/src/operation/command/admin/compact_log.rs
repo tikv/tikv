@@ -188,7 +188,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         let data = req.write_to_bytes().unwrap();
-        self.propose_with_ctx(store_ctx, data, vec![])
+        self.propose(store_ctx, data)
     }
 }
 
@@ -226,30 +226,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         // TODO: check is_merging
-        // compact failure is safe to be omitted, no need to assert.
-        if res.compact_index <= self.entry_storage().truncated_index() {
-            return;
-        }
-
         // TODO: check entry_cache_warmup_state
         self.entry_storage_mut()
             .compact_entry_cache(res.compact_index);
         self.storage_mut()
             .cancel_generating_snap(Some(res.compact_index));
 
-        let old_truncated = self
-            .entry_storage()
-            .apply_state()
-            .get_truncated_state()
-            .get_index();
-        self.entry_storage_mut()
+        let truncated_state = self
+            .entry_storage_mut()
             .apply_state_mut()
-            .mut_truncated_state()
-            .set_index(res.compact_index);
-        self.entry_storage_mut()
-            .apply_state_mut()
-            .mut_truncated_state()
-            .set_term(res.compact_term);
+            .mut_truncated_state();
+        let old_truncated = truncated_state.get_index();
+        truncated_state.set_index(res.compact_index);
+        truncated_state.set_term(res.compact_term);
 
         let region_id = self.region_id();
         // TODO: get around this clone.
@@ -280,8 +269,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             } else {
                 self.set_has_extra_write();
             }
+            self.maybe_compact_log_from_engine(store_ctx, Either::Left(old_persisted));
         }
-        self.maybe_compact_log_from_engine(store_ctx, Either::Left(old_persisted));
     }
 
     pub fn maybe_compact_log_from_engine<T>(
@@ -296,10 +285,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Either::Right(old_truncated) if old_truncated >= persisted => return,
             _ => {}
         }
-        let compact_index = std::cmp::min(
-            self.entry_storage().truncated_index(),
-            self.storage().apply_trace().persisted_apply_index(),
-        );
+        let compact_index = std::cmp::min(truncated, persisted);
         // Raft Engine doesn't care about first index.
         if let Err(e) =
             store_ctx

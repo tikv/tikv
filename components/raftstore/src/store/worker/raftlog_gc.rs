@@ -140,8 +140,10 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             error!("failed to write gc task"; "err" => %e);
             RAFT_LOG_GC_FAILED.inc();
         }
-
         RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+        for cb in cbs {
+            cb();
+        }
     }
 }
 
