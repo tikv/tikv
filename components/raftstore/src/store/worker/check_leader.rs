@@ -12,7 +12,7 @@ use tikv_util::worker::Runnable;
 
 use crate::{
     coprocessor::CoprocessorHost,
-    store::{fsm::store::ExternStoreMeta, util::RegionReadProgressRegistry},
+    store::{fsm::store::StoreRegionMeta, util::RegionReadProgressRegistry},
 };
 
 pub struct Runner<S, E>
@@ -55,7 +55,7 @@ impl fmt::Display for Task {
 
 impl<S, E> Runner<S, E>
 where
-    S: ExternStoreMeta,
+    S: StoreRegionMeta,
     E: KvEngine,
 {
     pub fn new(store_meta: Arc<Mutex<S>>, coprocessor: CoprocessorHost<E>) -> Self {
@@ -101,7 +101,7 @@ where
     }
 }
 
-impl<S: ExternStoreMeta, E: KvEngine> Runnable for Runner<S, E> {
+impl<S: StoreRegionMeta, E: KvEngine> Runnable for Runner<S, E> {
     type Task = Task;
     fn run(&mut self, task: Task) {
         match task {

@@ -117,7 +117,7 @@ pub struct StoreInfo<EK, ER> {
 
 /// A trait that provide the meta information that can be accessed outside
 /// of raftstore.
-pub trait ExternStoreMeta: Send {
+pub trait StoreRegionMeta: Send {
     fn store_id(&self) -> u64;
     fn region_read_progress(&self) -> &RegionReadProgressRegistry;
     fn search_region(&self, start_key: &[u8], end_key: &[u8], visitor: impl FnMut(&Region));
@@ -162,7 +162,7 @@ pub struct StoreMeta {
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
 }
 
-impl ExternStoreMeta for StoreMeta {
+impl StoreRegionMeta for StoreMeta {
     #[inline]
     fn store_id(&self) -> u64 {
         self.store_id.unwrap()

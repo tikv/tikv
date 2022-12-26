@@ -13,7 +13,7 @@ use futures::{compat::Future01CompatExt, FutureExt};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raftstore::store::{
-    fsm::store::ExternStoreMeta, Config, ReadDelegate, RegionReadProgressRegistry,
+    fsm::store::StoreRegionMeta, Config, ReadDelegate, RegionReadProgressRegistry,
 };
 use slog::{info, o, Logger};
 use tikv_util::{
@@ -33,7 +33,7 @@ pub struct StoreMeta {
     pub readers: HashMap<u64, ReadDelegate>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
-    /// region_end_key -> region_id
+    /// (region_end_key, epoch.version) -> region_id
     ///
     /// Unlinke v1, ranges in v2 may be overlapped. So we use version
     /// to avoid end key conflict.
@@ -82,7 +82,7 @@ impl StoreMeta {
     }
 }
 
-impl ExternStoreMeta for StoreMeta {
+impl StoreRegionMeta for StoreMeta {
     #[inline]
     fn store_id(&self) -> u64 {
         self.store_id
