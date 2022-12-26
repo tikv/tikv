@@ -47,7 +47,7 @@ use test_pd::mocker::Service;
 use tikv_util::{
     config::{ReadableDuration, VersionTrack},
     store::new_peer,
-    worker::Worker,
+    worker::{LazyWorker, Worker},
 };
 use txn_types::WriteBatchFlags;
 
@@ -278,14 +278,14 @@ impl RunningState {
 
         let router = RaftRouter::new(store_id, registry.clone(), router);
         let store_meta = router.store_meta().clone();
-        let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap());
-        snap_mgr.init().unwrap();
+        let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap()).unwrap();
 
         let coprocessor_host = CoprocessorHost::new(
             router.store_router().clone(),
             raftstore::coprocessor::Config::default(),
         );
         let background = Worker::new("background");
+        let pd_worker = LazyWorker::new("pd-worker");
         system
             .start(
                 store_id,
@@ -301,6 +301,7 @@ impl RunningState {
                 causal_ts_provider,
                 coprocessor_host,
                 background.clone(),
+                pd_worker,
             )
             .unwrap();
 

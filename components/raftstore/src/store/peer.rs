@@ -2282,6 +2282,7 @@ where
                     leader_id: ss.leader_id,
                     prev_lead_transferee: self.lead_transferee,
                     vote: self.raft_group.raft.vote,
+                    initialized: self.is_initialized(),
                 },
             );
             self.cmd_epoch_checker.maybe_update_term(self.term());
