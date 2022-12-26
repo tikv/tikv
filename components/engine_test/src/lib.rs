@@ -76,12 +76,8 @@ pub mod raft {
 
 /// Types and constructors for the "kv" engine
 pub mod kv {
-    use std::{
-        path::{Path, PathBuf},
-        sync::{Arc, Mutex},
-    };
+    use std::path::Path;
 
-    use collections::HashMap;
     #[cfg(feature = "test-engine-kv-panic")]
     pub use engine_panic::{
         PanicEngine as KvTestEngine, PanicEngineIterator as KvTestEngineIterator,
@@ -92,11 +88,7 @@ pub mod kv {
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
         RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
-    use engine_traits::{
-        CfOptions, CfOptionsExt, MiscExt, OpenOptions, Result, TabletAccessor, TabletFactory,
-        CF_DEFAULT,
-    };
-    use tikv_util::box_err;
+    use engine_traits::{MiscExt, Result, TabletContext, TabletFactory};
 
     use crate::ctor::{CfOptions as KvTestCfOptions, DbOptions, KvEngineConstructorExt};
 
@@ -112,316 +104,40 @@ pub mod kv {
         KvTestEngine::new_kv_engine_opt(path, db_opt, cfs_opts)
     }
 
-    const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
+    const TOMBSTONE_SUFFIX: &str = ".tombstone";
 
     #[derive(Clone)]
     pub struct TestTabletFactory {
-        root_path: PathBuf,
         db_opt: DbOptions,
         cf_opts: Vec<(&'static str, KvTestCfOptions)>,
-        root_db: Arc<Mutex<Option<KvTestEngine>>>,
     }
 
     impl TestTabletFactory {
-        pub fn new(
-            root_path: &Path,
-            db_opt: DbOptions,
-            cf_opts: Vec<(&'static str, KvTestCfOptions)>,
-        ) -> Self {
-            let factory = Self {
-                root_path: root_path.to_path_buf(),
-                db_opt,
-                cf_opts,
-                root_db: Arc::new(Mutex::default()),
-            };
-            let tablet_path = factory.tablets_path();
-            if !tablet_path.exists() {
-                std::fs::create_dir_all(tablet_path).unwrap();
-            }
-            factory
-        }
-
-        fn create_tablet(&self, tablet_path: &Path) -> Result<KvTestEngine> {
-            KvTestEngine::new_kv_engine_opt(
-                tablet_path.to_str().unwrap(),
-                self.db_opt.clone(),
-                self.cf_opts.clone(),
-            )
+        pub fn new(db_opt: DbOptions, cf_opts: Vec<(&'static str, KvTestCfOptions)>) -> Self {
+            Self { db_opt, cf_opts }
         }
     }
 
     impl TabletFactory<KvTestEngine> for TestTabletFactory {
-        fn create_shared_db(&self) -> Result<KvTestEngine> {
-            let tablet_path = self.tablet_path(0, 0);
-            let tablet = self.create_tablet(&tablet_path)?;
-            let mut root_db = self.root_db.lock().unwrap();
-            root_db.replace(tablet.clone());
-            Ok(tablet)
-        }
-
-        /// See the comment above the same name method in KvEngineFactory
-        fn open_tablet(
-            &self,
-            _id: u64,
-            _suffix: Option<u64>,
-            options: OpenOptions,
-        ) -> Result<KvTestEngine> {
-            if let Some(db) = self.root_db.lock().unwrap().as_ref() {
-                if options.create_new() {
-                    return Err(box_err!("root tablet {} already exists", db.path()));
-                }
-                return Ok(db.clone());
-            }
-            // No need for mutex protection here since root_db creation only occurs at
-            // tikv bootstrap time when there is no racing issue.
-            if options.create_new() || options.create() {
-                return self.create_shared_db();
-            }
-
-            Err(box_err!("root tablet has not been initialized"))
-        }
-
-        fn open_tablet_raw(
-            &self,
-            _path: &Path,
-            _id: u64,
-            _suffix: u64,
-            _options: OpenOptions,
-        ) -> Result<KvTestEngine> {
-            self.create_shared_db()
-        }
-
-        fn exists_raw(&self, _path: &Path) -> bool {
-            false
-        }
-
-        #[inline]
-        fn tablet_path_with_prefix(&self, _prefix: &str, _id: u64, _suffix: u64) -> PathBuf {
-            self.root_path.join("db")
-        }
-
-        #[inline]
-        fn tablets_path(&self) -> PathBuf {
-            Path::new(&self.root_path).join("tablets")
-        }
-
-        #[inline]
-        fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
-            Ok(())
-        }
-
-        fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
-            let db = self.root_db.lock().unwrap();
-            let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
-            opt.set_block_cache_capacity(capacity)?;
-            Ok(())
-        }
-    }
-
-    impl TabletAccessor<KvTestEngine> for TestTabletFactory {
-        fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
-            let db = self.root_db.lock().unwrap();
-            let db = db.as_ref().unwrap();
-            f(0, 0, db);
-        }
-
-        fn is_single_engine(&self) -> bool {
-            true
-        }
-    }
-
-    #[derive(Clone)]
-    pub struct TestTabletFactoryV2 {
-        inner: TestTabletFactory,
-        // region_id -> (tablet, tablet_suffix)
-        registry: Arc<Mutex<HashMap<u64, (KvTestEngine, u64)>>>,
-    }
-
-    impl TestTabletFactoryV2 {
-        pub fn new(
-            root_path: &Path,
-            db_opt: DbOptions,
-            cf_opts: Vec<(&'static str, KvTestCfOptions)>,
-        ) -> Self {
-            Self {
-                inner: TestTabletFactory::new(root_path, db_opt, cf_opts),
-                registry: Arc::default(),
-            }
-        }
-    }
-
-    impl TabletFactory<KvTestEngine> for TestTabletFactoryV2 {
-        /// See the comment above the same name method in KvEngineFactoryV2
-        fn open_tablet(
-            &self,
-            id: u64,
-            suffix: Option<u64>,
-            mut options: OpenOptions,
-        ) -> Result<KvTestEngine> {
-            if options.create_new() && suffix.is_none() {
-                return Err(box_err!(
-                    "suffix should be provided when creating new tablet"
-                ));
-            }
-
-            if options.create_new() || options.create() {
-                options = options.set_cache_only(false);
-            }
-
-            let mut reg = self.registry.lock().unwrap();
-            if let Some(suffix) = suffix {
-                if let Some((cached_tablet, cached_suffix)) = reg.get(&id) && *cached_suffix == suffix {
-                    // Target tablet exist in the cache
-                    if options.create_new() {
-                        return Err(box_err!("region {} {} already exists", id, cached_tablet.path()));
-                    }
-                    return Ok(cached_tablet.clone());
-                } else if !options.cache_only() {
-                    let tablet_path = self.tablet_path(id, suffix);
-                    let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
-                    if !options.skip_cache() {
-                        reg.insert(id, (tablet.clone(), suffix));
-                    }
-                    return Ok(tablet);
-                }
-            } else if let Some((tablet, _)) = reg.get(&id) {
-                return Ok(tablet.clone());
-            }
-
-            Err(box_err!(
-                "tablet with region id {} suffix {:?} does not exist",
-                id,
-                suffix
-            ))
-        }
-
-        fn open_tablet_raw(
-            &self,
-            path: &Path,
-            id: u64,
-            _suffix: u64,
-            options: OpenOptions,
-        ) -> Result<KvTestEngine> {
-            let engine_exist = KvTestEngine::exists(path.to_str().unwrap_or_default());
-            // Even though neither options.create nor options.create_new are true, if the
-            // tablet files already exists, we will open it by calling
-            // inner.create_tablet. In this case, the tablet exists but not in the cache
-            // (registry).
-            if !options.create() && !options.create_new() && !engine_exist {
-                return Err(box_err!(
-                    "path {} does not have db",
-                    path.to_str().unwrap_or_default()
-                ));
-            };
-
-            if options.create_new() && engine_exist {
-                return Err(box_err!(
-                    "region {} {} already exists",
-                    id,
-                    path.to_str().unwrap()
-                ));
-            }
-
-            self.inner.create_tablet(path)
-        }
-
-        #[inline]
-        fn create_shared_db(&self) -> Result<KvTestEngine> {
-            self.open_tablet(0, Some(0), OpenOptions::default().set_create_new(true))
-        }
-
-        #[inline]
-        fn exists_raw(&self, path: &Path) -> bool {
-            KvTestEngine::exists(path.to_str().unwrap_or_default())
-        }
-
-        #[inline]
-        fn tablets_path(&self) -> PathBuf {
-            self.inner.root_path.join("tablets")
-        }
-
-        #[inline]
-        fn tablet_path_with_prefix(&self, prefix: &str, id: u64, suffix: u64) -> PathBuf {
-            self.inner
-                .root_path
-                .join(format!("tablets/{}{}_{}", prefix, id, suffix))
-        }
-
-        #[inline]
-        fn mark_tombstone(&self, region_id: u64, suffix: u64) {
-            let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
-            // When the full directory path does not exsit, create will return error and in
-            // this case, we just ignore it.
-            let _ = std::fs::File::create(path);
-            {
-                let mut reg = self.registry.lock().unwrap();
-                if let Some((cached_tablet, cached_suffix)) = reg.remove(&region_id) && cached_suffix != suffix {
-                    reg.insert(region_id, (cached_tablet, cached_suffix));
-                }
-            }
-        }
-
-        #[inline]
-        fn is_tombstoned(&self, region_id: u64, suffix: u64) -> bool {
-            self.tablet_path(region_id, suffix)
-                .join(TOMBSTONE_MARK)
-                .exists()
-        }
-
-        #[inline]
-        fn destroy_tablet(&self, region_id: u64, suffix: u64) -> engine_traits::Result<()> {
-            let path = self.tablet_path(region_id, suffix);
-            {
-                let mut reg = self.registry.lock().unwrap();
-                if let Some((cached_tablet, cached_suffix)) = reg.remove(&region_id) && cached_suffix != suffix {
-                    reg.insert(region_id, (cached_tablet, cached_suffix));
-                }
-            }
-            let _ = std::fs::remove_dir_all(path);
-            Ok(())
-        }
-
-        #[inline]
-        fn load_tablet(&self, path: &Path, region_id: u64, suffix: u64) -> Result<KvTestEngine> {
-            {
-                let reg = self.registry.lock().unwrap();
-                if let Some((db, db_suffix)) = reg.get(&region_id) && *db_suffix == suffix {
-                    return Err(box_err!("region {} {} already exists", region_id, db.path()));
-                }
-            }
-
-            let db_path = self.tablet_path(region_id, suffix);
-            std::fs::rename(path, db_path)?;
-            self.open_tablet(
-                region_id,
-                Some(suffix),
-                OpenOptions::default().set_create(true),
+        fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<KvTestEngine> {
+            KvTestEngine::new_tablet(
+                path.to_str().unwrap(),
+                ctx,
+                self.db_opt.clone(),
+                self.cf_opts.clone(),
             )
         }
 
-        fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
-            let reg = self.registry.lock().unwrap();
-            // pick up any tablet and set the shared block cache capacity
-            if let Some((_id, (tablet, _suffix))) = (*reg).iter().next() {
-                let opt = tablet.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
-                opt.set_block_cache_capacity(capacity)?;
-            }
+        fn destroy_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<()> {
+            let tombstone_path = path.join(TOMBSTONE_SUFFIX);
+            std::fs::remove_dir_all(&tombstone_path)?;
+            std::fs::rename(path, &tombstone_path)?;
+            std::fs::remove_dir_all(tombstone_path)?;
             Ok(())
         }
-    }
 
-    impl TabletAccessor<KvTestEngine> for TestTabletFactoryV2 {
-        #[inline]
-        fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
-            let reg = self.registry.lock().unwrap();
-            for (id, (tablet, suffix)) in &*reg {
-                f(*id, *suffix, tablet)
-            }
-        }
-
-        // it have multi tablets.
-        fn is_single_engine(&self) -> bool {
-            false
+        fn exists(&self, path: &Path) -> bool {
+            KvTestEngine::exists(path.to_str().unwrap_or_default())
         }
     }
 }
@@ -440,7 +156,7 @@ pub mod ctor {
     use std::sync::Arc;
 
     use encryption::DataKeyManager;
-    use engine_traits::Result;
+    use engine_traits::{Result, StateStorage, TabletContext};
     use file_system::IoRateLimiter;
 
     /// Kv engine construction
@@ -473,6 +189,14 @@ pub mod ctor {
             db_opt: DbOptions,
             cf_opts: Vec<(&str, CfOptions)>,
         ) -> Result<Self>;
+
+        /// Create a new engine specific for multi rocks.
+        fn new_tablet(
+            path: &str,
+            ctx: TabletContext,
+            db_opt: DbOptions,
+            cf_opts: Vec<(&str, CfOptions)>,
+        ) -> Result<Self>;
     }
 
     /// Raft engine construction
@@ -485,6 +209,7 @@ pub mod ctor {
     pub struct DbOptions {
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IoRateLimiter>>,
+        state_storage: Option<Arc<dyn StateStorage>>,
         enable_multi_batch_write: bool,
     }
 
@@ -495,6 +220,10 @@ pub mod ctor {
 
         pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IoRateLimiter>>) {
             self.rate_limiter = rate_limiter;
+        }
+
+        pub fn set_state_storage(&mut self, state_storage: Arc<dyn StateStorage>) {
+            self.state_storage = Some(state_storage);
         }
 
         pub fn set_enable_multi_batch_write(&mut self, enable: bool) {
@@ -614,6 +343,15 @@ pub mod ctor {
             ) -> Result<Self> {
                 Ok(PanicEngine)
             }
+
+            fn new_tablet(
+                _path: &str,
+                _ctx: engine_traits::TabletContext,
+                _db_opt: DbOptions,
+                _cf_opts: Vec<(&str, CfOptions)>,
+            ) -> Result<Self> {
+                Ok(PanicEngine)
+            }
         }
 
         impl RaftEngineConstructorExt for engine_panic::PanicEngine {
@@ -628,9 +366,11 @@ pub mod ctor {
             get_env,
             properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
             util::new_engine_opt as rocks_new_engine_opt,
-            RocksCfOptions, RocksDbOptions,
+            RocksCfOptions, RocksDbOptions, RocksPersistenceListener,
         };
-        use engine_traits::{CfOptions as _, Result, CF_DEFAULT};
+        use engine_traits::{
+            CfOptions as _, PersistenceListener, Result, TabletContext, CF_DEFAULT,
+        };
 
         use super::{
             CfOptions, DbOptions, KvEngineConstructorExt, RaftDbOptions, RaftEngineConstructorExt,
@@ -656,6 +396,36 @@ pub mod ctor {
             ) -> Result<Self> {
                 let rocks_db_opts = get_rocks_db_opts(db_opt)?;
                 let rocks_cfs_opts = cfs_opts
+                    .iter()
+                    .map(|(name, opt)| (*name, get_rocks_cf_opts(opt)))
+                    .collect();
+                rocks_new_engine_opt(path, rocks_db_opts, rocks_cfs_opts)
+            }
+
+            fn new_tablet(
+                path: &str,
+                ctx: TabletContext,
+                db_opt: DbOptions,
+                cf_opts: Vec<(&str, CfOptions)>,
+            ) -> Result<Self> {
+                let mut rocks_db_opts = RocksDbOptions::default();
+                let env = get_env(db_opt.key_manager.clone(), db_opt.rate_limiter)?;
+                rocks_db_opts.set_env(env);
+                rocks_db_opts.enable_unordered_write(false);
+                rocks_db_opts.enable_pipelined_write(false);
+                rocks_db_opts.enable_multi_batch_write(false);
+                rocks_db_opts.allow_concurrent_memtable_write(false);
+                if let Some(storage) = db_opt.state_storage
+                    && let Some(flush_state) = ctx.flush_state {
+                    let listener = PersistenceListener::new(
+                        ctx.id,
+                        ctx.suffix.unwrap(),
+                        flush_state,
+                        storage,
+                    );
+                    rocks_db_opts.add_event_listener(RocksPersistenceListener::new(listener));
+                }
+                let rocks_cfs_opts = cf_opts
                     .iter()
                     .map(|(name, opt)| (*name, get_rocks_cf_opts(opt)))
                     .collect();

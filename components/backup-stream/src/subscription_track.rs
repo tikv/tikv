@@ -286,7 +286,7 @@ impl SubscriptionTracer {
         let mut sub = match self.get_subscription_of(new_region.get_id()) {
             Some(sub) => sub,
             None => {
-                warn!("backup stream observer refreshing void subscription."; utils::slog_region(new_region));
+                warn!("backup stream observer refreshing pending / absent subscription."; utils::slog_region(new_region));
                 return false;
             }
         };

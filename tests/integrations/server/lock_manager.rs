@@ -1,6 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, thread, time::Duration};
+use std::{
+    sync::{
+        mpsc,
+        mpsc::{RecvTimeoutError, TryRecvError},
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
 
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -282,4 +290,107 @@ fn test_detect_deadlock_when_merge_region() {
         must_detect_deadlock(&mut cluster, b"k", 10);
         must_transfer_leader(&mut cluster, b"", 1);
     }
+}
+
+#[test]
+fn test_detect_deadlock_when_updating_wait_info() {
+    use kvproto::kvrpcpb::PessimisticLockKeyResultType::*;
+    let mut cluster = new_cluster_for_deadlock_test(3);
+
+    let key1 = b"key1";
+    let key2 = b"key2";
+    let (client, ctx) = build_leader_client(&mut cluster, key1);
+    let client = Arc::new(client);
+
+    fn async_pessimistic_lock(
+        client: Arc<TikvClient>,
+        ctx: Context,
+        key: &[u8],
+        ts: u64,
+    ) -> mpsc::Receiver<PessimisticLockResponse> {
+        let (tx, rx) = mpsc::channel();
+        let key = vec![key.to_vec()];
+        thread::spawn(move || {
+            let resp =
+                kv_pessimistic_lock_resumable(&client, ctx, key, ts, ts, Some(1000), false, false);
+            tx.send(resp).unwrap();
+        });
+        rx
+    }
+
+    // key1: txn 11 and 12 waits for 10
+    // key2: txn 11 waits for 12
+    let resp = kv_pessimistic_lock_resumable(
+        &client,
+        ctx.clone(),
+        vec![key1.to_vec()],
+        10,
+        10,
+        Some(1000),
+        false,
+        false,
+    );
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty());
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+    let resp = kv_pessimistic_lock_resumable(
+        &client,
+        ctx.clone(),
+        vec![key2.to_vec()],
+        12,
+        12,
+        Some(1000),
+        false,
+        false,
+    );
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty());
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+    let rx_txn11_k1 = async_pessimistic_lock(client.clone(), ctx.clone(), key1, 11);
+    let rx_txn12_k1 = async_pessimistic_lock(client.clone(), ctx.clone(), key1, 12);
+    let rx_txn11_k2 = async_pessimistic_lock(client.clone(), ctx.clone(), key2, 11);
+    // All blocked.
+    assert_eq!(
+        rx_txn11_k1
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap_err(),
+        RecvTimeoutError::Timeout
+    );
+    assert_eq!(rx_txn12_k1.try_recv().unwrap_err(), TryRecvError::Empty);
+    assert_eq!(rx_txn11_k2.try_recv().unwrap_err(), TryRecvError::Empty);
+
+    // Release lock at ts=10 on key1 so that txn 11 will be granted the lock.
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key1.to_vec(), 10, 10);
+    let resp = rx_txn11_k1
+        .recv_timeout(Duration::from_millis(200))
+        .unwrap();
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty());
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+    // And then 12 waits for k1 on key1, which forms a deadlock.
+    let resp = rx_txn12_k1
+        .recv_timeout(Duration::from_millis(1000))
+        .unwrap();
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors[0].has_deadlock());
+    assert_eq!(resp.results[0].get_type(), LockResultFailed);
+    // Check correctness of the wait chain.
+    let wait_chain = resp.errors[0].get_deadlock().get_wait_chain();
+    assert_eq!(wait_chain[0].get_txn(), 11);
+    assert_eq!(wait_chain[0].get_wait_for_txn(), 12);
+    assert_eq!(wait_chain[0].get_key(), key2);
+    assert_eq!(wait_chain[1].get_txn(), 12);
+    assert_eq!(wait_chain[1].get_wait_for_txn(), 11);
+    assert_eq!(wait_chain[1].get_key(), key1);
+
+    // Clean up.
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key1.to_vec(), 11, 11);
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key2.to_vec(), 12, 12);
+    let resp = rx_txn11_k2
+        .recv_timeout(Duration::from_millis(500))
+        .unwrap();
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty());
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+    must_kv_pessimistic_rollback(&client, ctx, key2.to_vec(), 11, 11);
 }

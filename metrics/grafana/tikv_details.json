@@ -30428,11 +30428,11 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "avg(tikv_engine_compression_ratio{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"$db\"}) by (level)",
+              "expr": "avg(tikv_engine_compression_ratio{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"$db\"}) by (cf, level)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "level - {{level}}",
+              "legendFormat": "{{cf}} - level - {{level}}",
               "metric": "",
               "refId": "A",
               "step": 10

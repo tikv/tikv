@@ -417,6 +417,7 @@ pub struct WriteResult {
     pub pr: ProcessResult,
     pub lock_info: Vec<WriteResultLockInfo>,
     pub released_locks: ReleasedLocks,
+    pub new_acquired_locks: Vec<LockInfo>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
 }
