@@ -1029,7 +1029,7 @@
 # format-version = 2
 # prepopulate-block-cache = "disabled"
 # checksum = "crc32c"
-# max-compaction = 3
+# max-compactions = 0
 
 [raft-engine]
 ## Determines whether to use Raft Engine to store raft logs. When it is
