@@ -1216,6 +1216,9 @@ where
             self.fsm.has_ready = true;
         }
         self.fsm.peer.maybe_gen_approximate_buckets(self.ctx);
+        if self.fsm.peer.is_witness() {
+            self.register_pull_voter_replicated_index_tick();
+        }
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
@@ -2315,7 +2318,14 @@ where
                 has_pending,
             } => {
                 self.fsm.peer.has_pending_compact_cmd = has_pending;
-                self.on_ready_compact_log(first_index, state);
+                // When the witness restarts, the pending compact cmds will be lost. We will try
+                // to use `voter_replicated_index` as the `compact index` to avoid log
+                // accumulation, but if `voter_replicated_index` is less than `first_index`,
+                // then gc is not needed. In this case, the `first_index` we pass back will be
+                // 0, and `has_pending` set to false.
+                if first_index != 0 {
+                    self.on_ready_compact_log(first_index, state);
+                }
             }
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {
@@ -2685,6 +2695,10 @@ where
                 voter_replicated_idx = p.matched;
             }
         }
+        let first_index = self.fsm.peer.get_store().first_index();
+        if voter_replicated_idx > first_index {
+            voter_replicated_idx = first_index;
+        }
         let mut resp = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgVoterReplicatedIndexResponse);
         resp.voter_replicated_index = voter_replicated_idx;
@@ -2704,10 +2718,17 @@ where
         if self.fsm.peer.is_leader() || !self.fsm.peer.is_witness() {
             return;
         }
-        self.ctx.apply_router.schedule_task(
-            self.region_id(),
-            ApplyTask::CheckCompact(self.region_id(), msg.voter_replicated_index),
-        )
+        let voter_replicated_index = msg.voter_replicated_index;
+        if let Ok(voter_replicated_term) = self.fsm.peer.get_store().term(voter_replicated_index) {
+            self.ctx.apply_router.schedule_task(
+                self.region_id(),
+                ApplyTask::CheckCompact {
+                    region_id: self.region_id(),
+                    voter_replicated_index,
+                    voter_replicated_term,
+                },
+            )
+        }
     }
 
     fn on_extra_message(&mut self, mut msg: RaftMessage) {

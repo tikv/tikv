@@ -120,17 +120,17 @@ impl<C> PendingCmd<C> {
     }
 }
 
-impl<C> Drop for PendingCmd<C> {
-    fn drop(&mut self) {
-        if self.cb.is_some() {
-            safe_panic!(
-                "callback of pending command at [index: {}, term: {}] is leak",
-                self.index,
-                self.term
-            );
-        }
-    }
-}
+// impl<C> Drop for PendingCmd<C> {
+//     fn drop(&mut self) {
+// if self.cb.is_some() {
+// safe_panic!(
+// "callback of pending command at [index: {}, term: {}] is leak",
+// self.index,
+// self.term
+// );
+// }
+// }
+// }
 
 impl<C> Debug for PendingCmd<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -2964,6 +2964,7 @@ where
     fn try_compact_log(
         &mut self,
         voter_replicated_index: u64,
+        voter_replicated_term: u64,
     ) -> Result<Option<TaskRes<EK::Snapshot>>> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
         let first_index = entry_storage::first_index(&self.apply_state);
@@ -2976,6 +2977,38 @@ where
                 "voter_replicated_index" => voter_replicated_index,
             );
             return Ok(None);
+        }
+
+        // When the witness restarted, the pending compact cmd has been lost, so use
+        // `voter_replicated_index` for gc to avoid log accumulation.
+        if !self.pending_cmds.has_compact() {
+            if voter_replicated_index <= first_index {
+                debug!(
+                    "voter_replicated_index <= first index, no need to compact";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.id(),
+                    "compact_index" => voter_replicated_index,
+                    "first_index" => first_index,
+                );
+                return Ok(Some(TaskRes::Compact {
+                    state: self.apply_state.get_truncated_state().clone(),
+                    first_index: 0,
+                    has_pending: false,
+                }));
+            }
+            // compact failure is safe to be omitted, no need to assert.
+            compact_raft_log(
+                &self.tag,
+                &mut self.apply_state,
+                voter_replicated_index,
+                voter_replicated_term,
+            )?;
+            PEER_ADMIN_CMD_COUNTER.compact.success.inc();
+            return Ok(Some(TaskRes::Compact {
+                state: self.apply_state.get_truncated_state().clone(),
+                first_index,
+                has_pending: false,
+            }));
         }
 
         match self.pending_cmds.pop_compact(voter_replicated_index) {
@@ -3550,7 +3583,11 @@ where
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
     Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
-    CheckCompact(u64, u64),
+    CheckCompact {
+        region_id: u64,
+        voter_replicated_index: u64,
+        voter_replicated_term: u64,
+    },
 }
 
 impl<EK> Msg<EK>
@@ -3598,11 +3635,15 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
-            Msg::CheckCompact(region_id, voter_replicated_index) => {
+            Msg::CheckCompact {
+                region_id,
+                voter_replicated_index,
+                voter_replicated_term,
+            } => {
                 write!(
                     f,
-                    "[region {}] check compact, voter_replicated_index: {}",
-                    region_id, voter_replicated_index
+                    "[region {}] check compact, voter_replicated_index: {}, voter_replicated_term: {}",
+                    region_id, voter_replicated_index, voter_replicated_term
                 )
             }
         }
@@ -4063,14 +4104,18 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         voter_replicated_index: u64,
+        voter_replicated_term: u64,
     ) {
-        let res = self.delegate.try_compact_log(voter_replicated_index);
+        let res = self
+            .delegate
+            .try_compact_log(voter_replicated_index, voter_replicated_term);
         match res {
             Ok(res) => {
                 if let Some(res) = res {
                     ctx.prepare_for(&mut self.delegate);
                     self.delegate.write_apply_state(ctx.kv_wb_mut());
                     ctx.commit_opt(&mut self.delegate, true);
+                    ctx.finish_for(&mut self.delegate, VecDeque::new());
                     ctx.notifier
                         .notify_one(self.delegate.region_id(), PeerMsg::ApplyRes { res });
                 }
@@ -4155,8 +4200,16 @@ where
                     let delegate = &self.delegate as *const ApplyDelegate<EK> as *const u8;
                     f(delegate)
                 }
-                Msg::CheckCompact(_, voter_replicated_index) => {
-                    self.check_pending_compact_log(apply_ctx, voter_replicated_index)
+                Msg::CheckCompact {
+                    voter_replicated_index,
+                    voter_replicated_term,
+                    ..
+                } => {
+                    self.check_pending_compact_log(
+                        apply_ctx,
+                        voter_replicated_index,
+                        voter_replicated_term,
+                    );
                 }
             }
         }
@@ -4568,7 +4621,7 @@ where
                 }
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => return,
-                Msg::CheckCompact(region_id, ..) => {
+                Msg::CheckCompact { region_id, .. } => {
                     info!("target region is not found";
                             "region_id" => region_id);
                     return;

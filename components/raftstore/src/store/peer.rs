@@ -1092,6 +1092,10 @@ where
 
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
+        // In order to avoid excessive log accumulation due to the loss of pending
+        // compaction cmds after the witness is restarted, it will actively pull
+        // voter_request_index once at start.
+        let has_pending_compact_cmd = peer.is_witness;
 
         let mut peer = Peer {
             peer,
@@ -1128,7 +1132,7 @@ where
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
             last_compacted_time: Instant::now(),
-            has_pending_compact_cmd: false,
+            has_pending_compact_cmd,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
             last_sent_snapshot_idx: 0,
