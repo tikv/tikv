@@ -58,3 +58,44 @@ pub fn create_test_engine(
 
     (reg, raft_engine, key_manager, dir)
 }
+
+/// Keep putting random kvs until specified size limit is reached.
+pub fn put_till_size<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    limit: u64,
+    range: &mut dyn Iterator<Item = u64>,
+) -> Vec<u8> {
+    put_cf_till_size(cluster, CF_DEFAULT, limit, range)
+}
+
+pub fn put_cf_till_size<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    cf: &'static str,
+    limit: u64,
+    range: &mut dyn Iterator<Item = u64>,
+) -> Vec<u8> {
+    assert!(limit > 0);
+    let mut len = 0;
+    let mut rng = rand::thread_rng();
+    let mut key = String::new();
+    let mut value = vec![0; 64];
+    while len < limit {
+        let batch_size = std::cmp::min(1024, limit - len);
+        let mut reqs = vec![];
+        for _ in 0..batch_size / 74 + 1 {
+            key.clear();
+            let key_id = range.next().unwrap();
+            write!(key, "{:09}", key_id).unwrap();
+            rng.fill_bytes(&mut value);
+            // plus 1 for the extra encoding prefix
+            len += key.len() as u64 + 1;
+            len += value.len() as u64;
+            reqs.push(new_put_cf_cmd(cf, key.as_bytes(), &value));
+        }
+        cluster.batch_put(key.as_bytes(), reqs).unwrap();
+        // Approximate size of memtable is inaccurate for small data,
+        // we flush it to SST so we can use the size properties instead.
+        cluster.must_flush_cf(cf, true);
+    }
+    key.into_bytes()
+}

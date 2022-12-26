@@ -2,49 +2,49 @@
 
 use std::{
     collections::hash_map::Entry as MapEntry,
+    result,
     sync::{Arc, Mutex, RwLock},
+    thread,
     time::Duration,
 };
 
 use collections::{HashMap, HashSet};
 use encryption_export::DataKeyManager;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletFactory, TabletRegistry};
+use engine_traits::{
+    Iterable, KvEngine, MiscExt, RaftEngine, RaftLogBatch, TabletRegistry, CF_DEFAULT,
+};
 use file_system::IoRateLimiter;
-use futures::executor::block_on;
+use futures::{compat::Future01CompatExt, executor::block_on, select, FutureExt};
 use keys::data_key;
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::ApiVersion,
-    metapb::{self, Buckets, PeerRole, RegionEpoch},
-    raft_cmdpb::{
-        AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RegionDetailResponse, Request,
-        Response, StatusCmdType,
-    },
-    raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent},
+    metapb::{self, PeerRole, RegionEpoch},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_serverpb::StoreIdent,
 };
 use pd_client::PdClient;
 use raftstore::{
     store::{
-        cmd_resp, initial_region, util::check_key_in_region, Bucket, BucketRange, Callback,
-        RegionSnapshot, WriteResponse, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+        initial_region, Callback, RegionSnapshot, WriteResponse, INIT_EPOCH_CONF_VER,
+        INIT_EPOCH_VER,
     },
     Error, Result,
 };
 use raftstore_v2::{
-    create_store_batch_system,
     router::{PeerMsg, QueryResult},
-    write_initial_states, Bootstrap, StoreMeta, StoreRouter, StoreSystem,
+    write_initial_states, Bootstrap, SimpleWriteEncoder, StoreMeta, StoreRouter,
 };
 use slog::o;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
-    is_error_response, new_admin_request, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd,
-    new_peer, new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd, new_request,
-    new_snap_cmd, new_status_request, new_store, new_tikv_config_with_api_ver,
-    new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
+    is_error_response, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd, new_peer,
+    new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd, new_request, new_snap_cmd,
+    new_status_request, new_store, new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms,
+    Config, Filter, FilterFactory, PartitionFilterFactory,
 };
 use tikv::server::Result as ServerResult;
 use tikv_util::{
@@ -69,10 +69,8 @@ pub trait Simulator {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta>>,
-        router: StoreRouter<RocksEngine, RaftTestEngine>,
-        system: StoreSystem<RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
-        factory: TabletRegistry<RocksEngine>,
+        tablet_registry: TabletRegistry<RocksEngine>,
     ) -> ServerResult<u64>;
 
     fn stop_node(&mut self, node_id: u64);
@@ -82,7 +80,9 @@ pub trait Simulator {
     fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>>;
     fn get_snap_dir(&self, node_id: u64) -> String;
 
-    fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
+    fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
+        unimplemented!()
+    }
 
     fn snapshot(
         &mut self,
@@ -129,31 +129,53 @@ pub trait Simulator {
     fn call_command_on_node(
         &self,
         node_id: u64,
-        request: RaftCmdRequest,
+        mut request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        // let region_id = request.get_header().get_region_id();
-        // let (msg, sub) = PeerMsg::raft_command(request);
-        // match self.async_peer_msg_on_node(node_id, region_id, msg) {
-        //     Ok(()) => {}
-        //     Err(e) => {
-        //         let mut resp = RaftCmdResponse::default();
-        //         resp.mut_header().set_error(e.into());
-        //         return Ok(resp);
-        //     }
-        // }
+        let region_id = request.get_header().get_region_id();
 
-        // let timeout_f = GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() +
-        // timeout); block_on(async move {
-        //     select! {
-        //         // todo: unwrap?
-        //         res = sub.result().fuse() => Ok(res.unwrap()),
-        //         _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request
-        // timeout for {:?}", timeout))),
+        let (msg, sub) = if request.has_admin_request() {
+            PeerMsg::admin_command(request)
+        } else {
+            let requests = request.get_requests();
+            let mut write_encoder = SimpleWriteEncoder::with_capacity(64);
+            for req in requests {
+                match req.get_cmd_type() {
+                    CmdType::Put => {
+                        let put = req.get_put();
+                        write_encoder.put(put.get_cf(), put.get_key(), put.get_value());
+                    }
+                    CmdType::Delete => {
+                        let delete = req.get_delete();
+                        write_encoder.delete(delete.get_cf(), delete.get_key());
+                    }
+                    CmdType::DeleteRange => {
+                        unimplemented!()
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            PeerMsg::simple_write(Box::new(request.take_header()), write_encoder.encode())
+        };
 
-        //     }
-        // })
-        unimplemented!()
+        match self.async_peer_msg_on_node(node_id, region_id, msg) {
+            Ok(()) => {}
+            Err(e) => {
+                let mut resp = RaftCmdResponse::default();
+                resp.mut_header().set_error(e.into());
+                return Ok(resp);
+            }
+        }
+
+        let timeout_f = GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + timeout);
+        block_on(async move {
+            select! {
+                // todo: unwrap?
+                res = sub.result().fuse() => Ok(res.unwrap()),
+                _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request timeout for {:?}", timeout))),
+
+            }
+        })
     }
 }
 
@@ -164,7 +186,7 @@ pub struct Cluster<T: Simulator> {
 
     pub paths: Vec<TempDir>,
     pub dbs: Vec<(TabletRegistry<RocksEngine>, RaftTestEngine)>,
-    pub tablet_factories: HashMap<u64, TabletRegistry<RocksEngine>>,
+    pub tablet_registries: HashMap<u64, TabletRegistry<RocksEngine>>,
     pub raft_engines: HashMap<u64, RaftTestEngine>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
@@ -191,7 +213,7 @@ impl<T: Simulator> Cluster<T> {
                 prefer_mem: true,
             },
             count,
-            tablet_factories: HashMap::default(),
+            tablet_registries: HashMap::default(),
             key_managers_map: HashMap::default(),
             group_props: HashMap::default(),
             raft_engines: HashMap::default(),
@@ -253,7 +275,7 @@ impl<T: Simulator> Cluster<T> {
             self.cfg.raft_store.store_io_pool_size = 1;
         }
 
-        let node_ids: Vec<u64> = self.tablet_factories.iter().map(|(&id, _)| id).collect();
+        let node_ids: Vec<u64> = self.tablet_registries.iter().map(|(&id, _)| id).collect();
         for node_id in node_ids {
             self.run_node(node_id)?;
         }
@@ -265,8 +287,6 @@ impl<T: Simulator> Cluster<T> {
             let (tablet_registry, raft_engine) = self.dbs.last().unwrap().clone();
             let id = Bootstrap::new(&raft_engine, self.id(), &*self.pd_client, logger.clone())
                 .bootstrap_store()?;
-
-            let (router, system) = create_store_batch_system(&self.cfg.raft_store, id, logger);
 
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::default()));
@@ -280,15 +300,13 @@ impl<T: Simulator> Cluster<T> {
                 id,
                 self.cfg.clone(),
                 store_meta.clone(),
-                router,
-                system,
                 raft_engine.clone(),
                 tablet_registry.clone(),
             )?;
             assert_eq!(id, node_id);
             self.group_props.insert(node_id, props);
             self.raft_engines.insert(node_id, raft_engine);
-            self.tablet_factories.insert(node_id, tablet_registry);
+            self.tablet_registries.insert(node_id, tablet_registry);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
         }
@@ -298,15 +316,13 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn run_node(&mut self, node_id: u64) -> ServerResult<()> {
         debug!("starting node {}", node_id);
-        let logger = slog_global::borrow_global().new(o!());
-        let factory = self.tablet_factories[&node_id].clone();
+        let tablet_registry = self.tablet_registries[&node_id].clone();
         let raft_engine = self.raft_engines[&node_id].clone();
         let cfg = self.cfg.clone();
 
         // if let Some(labels) = self.labels.get(&node_id) {
         //     cfg.server.labels = labels.to_owned();
         // }
-        let (router, system) = create_store_batch_system(&cfg.raft_store, node_id, logger.clone());
         let store_meta = match self.store_metas.entry(node_id) {
             MapEntry::Occupied(o) => {
                 let mut meta = o.get().lock().unwrap();
@@ -321,15 +337,9 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
 
         debug!("calling run node"; "node_id" => node_id);
-        self.sim.wl().run_node(
-            node_id,
-            cfg,
-            store_meta,
-            router,
-            system,
-            raft_engine,
-            factory,
-        )?;
+        self.sim
+            .wl()
+            .run_node(node_id, cfg, store_meta, raft_engine, tablet_registry)?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -354,7 +364,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn bootstrap_region(&mut self) -> Result<()> {
         for (i, (tablet_registry, raft_engine)) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
-            self.tablet_factories.insert(id, tablet_registry.clone());
+            self.tablet_registries.insert(id, tablet_registry.clone());
             self.raft_engines.insert(id, raft_engine.clone());
             let store_meta = Arc::new(Mutex::new(StoreMeta::default()));
             self.store_metas.insert(id, store_meta);
@@ -391,7 +401,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn bootstrap_conf_change(&mut self) -> u64 {
         for (i, (factory, raft_engine)) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
-            self.tablet_factories.insert(id, factory.clone());
+            self.tablet_registries.insert(id, factory.clone());
             self.raft_engines.insert(id, raft_engine.clone());
             let store_meta = Arc::new(Mutex::new(StoreMeta::default()));
             self.store_metas.insert(id, store_meta);
@@ -439,6 +449,564 @@ impl<T: Simulator> Cluster<T> {
     //         self.tablet_factories[&node_id].clone(),
     //     )
     // }
+
+    pub fn call_command(
+        &mut self,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        let mut is_read = false;
+        for req in request.get_requests() {
+            match req.get_cmd_type() {
+                CmdType::Get | CmdType::Snap | CmdType::ReadIndex => {
+                    is_read = true;
+                }
+                _ => (),
+            }
+        }
+        let ret = if is_read {
+            self.sim.wl().read(request.clone(), timeout)
+        } else {
+            if request.has_status_request() {
+                self.sim.wl().call_query(request.clone(), timeout)
+            } else {
+                self.sim.wl().call_command(request.clone(), timeout)
+            }
+        };
+        match ret {
+            Err(e) => {
+                warn!("failed to call command {:?}: {:?}", request, e);
+                Err(e)
+            }
+            a => a,
+        }
+    }
+
+    pub fn call_command_on_leader(
+        &mut self,
+        mut request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        let timer = Instant::now();
+        let region_id = request.get_header().get_region_id();
+        loop {
+            let leader = match self.leader_of_region(region_id) {
+                None => return Err(Error::NotLeader(region_id, None)),
+                Some(l) => l,
+            };
+            request.mut_header().set_peer(leader);
+            let resp = match self.call_command(request.clone(), timeout) {
+                e @ Err(_) => return e,
+                Ok(resp) => resp,
+            };
+            if self.refresh_leader_if_needed(&resp, region_id)
+                && timer.saturating_elapsed() < timeout
+            {
+                warn!(
+                    "{:?} is no longer leader, let's retry",
+                    request.get_header().get_peer()
+                );
+                continue;
+            }
+            return Ok(resp);
+        }
+    }
+
+    pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
+        let timer = Instant::now_coarse();
+        let timeout = Duration::from_secs(5);
+        let mut store_ids = None;
+        while timer.saturating_elapsed() < timeout {
+            match self.voter_store_ids_of_region(region_id) {
+                None => thread::sleep(Duration::from_millis(10)),
+                Some(ids) => {
+                    store_ids = Some(ids);
+                    break;
+                }
+            }
+        }
+        let store_ids = store_ids?;
+        if let Some(l) = self.leaders.get(&region_id) {
+            // leader may be stopped in some tests.
+            if self.valid_leader_id(region_id, l.get_store_id()) {
+                return Some(l.clone());
+            }
+        }
+        self.reset_leader_of_region(region_id);
+        let mut leader = None;
+        let mut leaders = HashMap::default();
+
+        let node_ids = self.sim.rl().get_node_ids();
+        // For some tests, we stop the node but pd still has this information,
+        // and we must skip this.
+        let alive_store_ids: Vec<_> = store_ids
+            .iter()
+            .filter(|id| node_ids.contains(id))
+            .cloned()
+            .collect();
+        while timer.saturating_elapsed() < timeout {
+            for store_id in &alive_store_ids {
+                let l = match self.query_leader(*store_id, region_id, Duration::from_secs(1)) {
+                    None => continue,
+                    Some(l) => l,
+                };
+                leaders
+                    .entry(l.get_id())
+                    .or_insert((l, vec![]))
+                    .1
+                    .push(*store_id);
+            }
+            if let Some((_, (l, c))) = leaders.iter().max_by_key(|(_, (_, c))| c.len()) {
+                if c.contains(&l.get_store_id()) {
+                    leader = Some(l.clone());
+                    // Technically, correct calculation should use two quorum when in joint
+                    // state. Here just for simplicity.
+                    if c.len() > store_ids.len() / 2 {
+                        break;
+                    }
+                }
+            }
+            debug!("failed to detect leaders"; "leaders" => ?leaders, "store_ids" => ?store_ids);
+            sleep_ms(10);
+            leaders.clear();
+        }
+
+        if let Some(l) = leader {
+            self.leaders.insert(region_id, l);
+        }
+
+        self.leaders.get(&region_id).cloned()
+    }
+
+    pub fn query_leader(
+        &mut self,
+        store_id: u64,
+        region_id: u64,
+        timeout: Duration,
+    ) -> Option<metapb::Peer> {
+        // To get region leader, we don't care real peer id, so use 0 instead.
+        let peer = new_peer(store_id, 0);
+        let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
+        let mut resp = match self.call_command(find_leader, timeout) {
+            Ok(resp) => resp,
+            Err(err) => {
+                error!(
+                    "fail to get leader of region {} on store {}, error: {:?}",
+                    region_id, store_id, err
+                );
+                return None;
+            }
+        };
+        let mut region_leader = resp.take_status_response().take_region_leader();
+        // NOTE: node id can't be 0.
+        if self.valid_leader_id(region_id, region_leader.get_leader().get_store_id()) {
+            Some(region_leader.take_leader())
+        } else {
+            None
+        }
+    }
+
+    fn valid_leader_id(&self, region_id: u64, leader_store_id: u64) -> bool {
+        let store_ids = match self.voter_store_ids_of_region(region_id) {
+            None => return false,
+            Some(ids) => ids,
+        };
+        let node_ids = self.sim.rl().get_node_ids();
+        store_ids.contains(&leader_store_id) && node_ids.contains(&leader_store_id)
+    }
+
+    fn voter_store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
+        block_on(self.pd_client.get_region_by_id(region_id))
+            .unwrap()
+            .map(|region| {
+                region
+                    .get_peers()
+                    .iter()
+                    .flat_map(|p| {
+                        if p.get_role() != PeerRole::Learner {
+                            Some(p.get_store_id())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+    }
+
+    pub fn reset_leader_of_region(&mut self, region_id: u64) {
+        self.leaders.remove(&region_id);
+    }
+
+    // If the resp is "not leader error", get the real leader.
+    // Otherwise reset or refresh leader if needed.
+    // Returns if the request should retry.
+    fn refresh_leader_if_needed(&mut self, resp: &RaftCmdResponse, region_id: u64) -> bool {
+        if !is_error_response(resp) {
+            return false;
+        }
+
+        let err = resp.get_header().get_error();
+        if err
+            .get_message()
+            .contains("peer has not applied to current term")
+        {
+            // leader peer has not applied to current term
+            return true;
+        }
+
+        // If command is stale, leadership may have changed.
+        // EpochNotMatch is not checked as leadership is checked first in raftstore.
+        if err.has_stale_command() {
+            self.reset_leader_of_region(region_id);
+            return true;
+        }
+
+        if !err.has_not_leader() {
+            return false;
+        }
+        let err = err.get_not_leader();
+        if !err.has_leader() {
+            self.reset_leader_of_region(region_id);
+            return true;
+        }
+        self.leaders.insert(region_id, err.get_leader().clone());
+        true
+    }
+
+    pub fn request(
+        &mut self,
+        key: &[u8],
+        reqs: Vec<Request>,
+        read_quorum: bool,
+        timeout: Duration,
+    ) -> RaftCmdResponse {
+        let timer = Instant::now();
+        let mut tried_times = 0;
+        while tried_times < 2 || timer.saturating_elapsed() < timeout {
+            tried_times += 1;
+            let mut region = self.get_region(key);
+            let region_id = region.get_id();
+            let req = new_request(
+                region_id,
+                region.take_region_epoch(),
+                reqs.clone(),
+                read_quorum,
+            );
+            let result = self.call_command_on_leader(req, timeout);
+
+            let resp = match result {
+                e @ Err(Error::Timeout(_))
+                | e @ Err(Error::NotLeader(..))
+                | e @ Err(Error::StaleCommand) => {
+                    warn!("call command failed, retry it"; "err" => ?e);
+                    sleep_ms(100);
+                    continue;
+                }
+                Err(e) => panic!("call command failed {:?}", e),
+                Ok(resp) => resp,
+            };
+
+            if resp.get_header().get_error().has_epoch_not_match() {
+                warn!("seems split, let's retry");
+                sleep_ms(100);
+                continue;
+            }
+            if resp
+                .get_header()
+                .get_error()
+                .get_message()
+                .contains("merging mode")
+            {
+                warn!("seems waiting for merge, let's retry");
+                sleep_ms(100);
+                continue;
+            }
+            return resp;
+        }
+        panic!("request timeout");
+    }
+
+    pub fn get_region(&self, key: &[u8]) -> metapb::Region {
+        self.get_region_with(key, |_| true)
+    }
+
+    pub fn get_region_id(&self, key: &[u8]) -> u64 {
+        self.get_region(key).get_id()
+    }
+
+    // Get region ids of all opened tablets in a store
+    pub fn region_ids(&self, store_id: u64) -> Vec<u64> {
+        let mut ids = vec![];
+        let registry = self.tablet_registries.get(&store_id).unwrap();
+        registry.for_each_opened_tablet(|id, _| -> bool {
+            ids.push(id);
+            true
+        });
+        ids
+    }
+
+    pub fn scan<F>(
+        &self,
+        store_id: u64,
+        region_id: u64,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        f: F,
+    ) -> engine_traits::Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> engine_traits::Result<bool>,
+    {
+        let tablet_registry = self.tablet_registries.get(&store_id).unwrap();
+        let tablet = tablet_registry
+            .get(region_id)
+            .unwrap()
+            .latest()
+            .unwrap()
+            .clone();
+
+        let region = block_on(self.pd_client.get_region_by_id(region_id))
+            .unwrap()
+            .unwrap();
+        let region_start_key = region.get_start_key();
+        let region_end_key = region.get_end_key();
+
+        let amended_start_key = if start_key > region_start_key {
+            start_key
+        } else {
+            region_start_key
+        };
+        let amended_end_key = if end_key < region_end_key || region_end_key.is_empty() {
+            end_key
+        } else {
+            region_end_key
+        };
+
+        tablet.scan(
+            cf,
+            &data_key(amended_start_key),
+            &data_key(amended_end_key),
+            fill_cache,
+            f,
+        )
+    }
+
+    pub fn get_raft_engine(&self, node_id: u64) -> RaftTestEngine {
+        self.raft_engines[&node_id].clone()
+    }
+
+    pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
+        block_on(self.pd_client.get_region_by_id(region_id))
+            .unwrap()
+            .unwrap()
+            .take_region_epoch()
+    }
+
+    fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
+        let mut resp = self.request(
+            key,
+            vec![new_get_cf_cmd(cf, key)],
+            read_quorum,
+            Duration::from_secs(5),
+        );
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
+        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
+        if resp.get_responses()[0].has_get() {
+            Some(resp.mut_responses()[0].mut_get().take_value())
+        } else {
+            None
+        }
+    }
+
+    // Flush the cf of all opened tablets
+    pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
+        for registry in self.tablet_registries.values() {
+            registry.for_each_opened_tablet(|_id, cached_tablet| -> bool {
+                let db = cached_tablet.latest().unwrap();
+                db.flush_cf(cf, true).unwrap();
+                true
+            });
+        }
+    }
+
+    // Get region when the `filter` returns true.
+    pub fn get_region_with<F>(&self, key: &[u8], filter: F) -> metapb::Region
+    where
+        F: Fn(&metapb::Region) -> bool,
+    {
+        for _ in 0..100 {
+            if let Ok(region) = self.pd_client.get_region(key) {
+                if filter(&region) {
+                    return region;
+                }
+            }
+            // We may meet range gap after split, so here we will
+            // retry to get the region again.
+            sleep_ms(20);
+        }
+
+        panic!("find no region for {}", log_wrappers::hex_encode_upper(key));
+    }
+
+    pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
+        self.must_put_cf(CF_DEFAULT, key, value);
+    }
+
+    pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
+        if let Err(e) = self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
+            panic!("has error: {:?}", e);
+        }
+    }
+
+    pub fn put(&mut self, key: &[u8], value: &[u8]) -> result::Result<(), PbError> {
+        self.batch_put(key, vec![new_put_cf_cmd(CF_DEFAULT, key, value)])
+            .map(|_| ())
+    }
+
+    pub fn batch_put(
+        &mut self,
+        region_key: &[u8],
+        reqs: Vec<Request>,
+    ) -> result::Result<RaftCmdResponse, PbError> {
+        let resp = self.request(region_key, reqs, false, Duration::from_secs(5));
+        if resp.get_header().has_error() {
+            Err(resp.get_header().get_error().clone())
+        } else {
+            Ok(resp)
+        }
+    }
+
+    // It's similar to `ask_split`, the difference is the msg, it sends, is
+    // `Msg::SplitRegion`, and `region` will not be embedded to that msg.
+    // Caller must ensure that the `split_key` is in the `region`.
+    pub fn split_region(
+        &mut self,
+        region: &metapb::Region,
+        split_key: &[u8],
+        mut cb: Callback<RocksSnapshot>,
+    ) {
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        let split_key = split_key.to_vec();
+        let (split_region_req, mut sub) = PeerMsg::request_split(
+            region.get_region_epoch().clone(),
+            vec![split_key],
+            "test".into(),
+        );
+
+        router
+            .check_send(region.get_id(), split_region_req)
+            .unwrap();
+
+        block_on(async {
+            sub.wait_proposed().await;
+            cb.invoke_proposed();
+            sub.wait_committed().await;
+            cb.invoke_committed();
+            let res = sub.result().await.unwrap();
+            cb.invoke_with_response(res)
+        });
+    }
+
+    pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
+        let mut try_cnt = 0;
+        let split_count = self.pd_client.get_split_count();
+        loop {
+            debug!("asking split"; "region" => ?region, "key" => ?split_key);
+            // In case ask split message is ignored, we should retry.
+            if try_cnt % 50 == 0 {
+                self.reset_leader_of_region(region.get_id());
+                let key = split_key.to_vec();
+                let check = Box::new(move |write_resp: WriteResponse| {
+                    let mut resp = write_resp.response;
+                    if resp.get_header().has_error() {
+                        let error = resp.get_header().get_error();
+                        if error.has_epoch_not_match()
+                            || error.has_not_leader()
+                            || error.has_stale_command()
+                            || error
+                                .get_message()
+                                .contains("peer has not applied to current term")
+                        {
+                            warn!("fail to split: {:?}, ignore.", error);
+                            return;
+                        }
+                        panic!("failed to split: {:?}", resp);
+                    }
+                    let admin_resp = resp.mut_admin_response();
+                    let split_resp = admin_resp.mut_splits();
+                    let regions = split_resp.get_regions();
+                    assert_eq!(regions.len(), 2);
+                    assert_eq!(regions[0].get_end_key(), key.as_slice());
+                    assert_eq!(regions[0].get_end_key(), regions[1].get_start_key());
+                });
+                if self.leader_of_region(region.get_id()).is_some() {
+                    self.split_region(region, split_key, Callback::write(check));
+                }
+            }
+
+            if self.pd_client.check_split(region, split_key)
+                && self.pd_client.get_split_count() > split_count
+            {
+                return;
+            }
+
+            if try_cnt > 250 {
+                panic!(
+                    "region {:?} has not been split by {}",
+                    region,
+                    log_wrappers::hex_encode_upper(split_key)
+                );
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
+    pub fn wait_region_split(&mut self, region: &metapb::Region) {
+        self.wait_region_split_max_cnt(region, 20, 250, true);
+    }
+
+    pub fn wait_region_split_max_cnt(
+        &mut self,
+        region: &metapb::Region,
+        itvl_ms: u64,
+        max_try_cnt: u64,
+        is_panic: bool,
+    ) {
+        let mut try_cnt = 0;
+        let split_count = self.pd_client.get_split_count();
+        loop {
+            if self.pd_client.get_split_count() > split_count {
+                match self.pd_client.get_region(region.get_start_key()) {
+                    Err(_) => {}
+                    Ok(left) => {
+                        if left.get_end_key() != region.get_end_key() {
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if try_cnt > max_try_cnt {
+                if is_panic {
+                    panic!(
+                        "region {:?} has not been split after {}ms",
+                        region,
+                        max_try_cnt * itvl_ms
+                    );
+                } else {
+                    return;
+                }
+            }
+            try_cnt += 1;
+            sleep_ms(itvl_ms);
+        }
+    }
 }
 
 pub fn bootstrap_store<ER: RaftEngine>(

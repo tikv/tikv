@@ -202,6 +202,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_tick(&mut self, tick: PeerTick) {
+        let key = 1u16 << (tick as u16);
+        if self.fsm.tick_registry & key == key {
+            self.fsm.tick_registry ^= key;
+        }
+        macro_rules! unimp {
+            ($tick:expr) => {
+                error!(self.fsm.logger(), "unsupported tick"; "tick" => ?$tick)
+            };
+        }
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),

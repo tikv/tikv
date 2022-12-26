@@ -2013,6 +2013,11 @@ impl TabletSnapManager {
         }
         Ok(total_size)
     }
+
+    #[inline]
+    pub fn root_path(&self) -> &str {
+        &self.base
+    }
 }
 
 #[cfg(test)]

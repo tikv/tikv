@@ -49,6 +49,8 @@ use crate::{
     Error, Result,
 };
 
+const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
+
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// A logger without any KV. It's clean for creating new PeerFSM.
@@ -334,7 +336,7 @@ where
 
     fn build(&mut self, _priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
-        let poll_ctx = StoreContext {
+        let mut poll_ctx = StoreContext {
             logger: self.logger.clone(),
             trans: self.trans.clone(),
             current_time: None,
@@ -353,8 +355,35 @@ where
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
         };
+        poll_ctx.update_ticks_timeout();
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
+    pub fn update_ticks_timeout(&mut self) {
+        self.tick_batch[PeerTick::Raft as usize].wait_duration = self.cfg.raft_base_tick_interval.0;
+        self.tick_batch[PeerTick::RaftLogGc as usize].wait_duration =
+            self.cfg.raft_log_gc_tick_interval.0;
+        self.tick_batch[PeerTick::EntryCacheEvict as usize].wait_duration =
+            ENTRY_CACHE_EVICT_TICK_DURATION;
+        self.tick_batch[PeerTick::PdHeartbeat as usize].wait_duration =
+            self.cfg.pd_heartbeat_tick_interval.0;
+        self.tick_batch[PeerTick::SplitRegionCheck as usize].wait_duration =
+            self.cfg.split_region_check_tick_interval.0;
+        self.tick_batch[PeerTick::CheckPeerStaleState as usize].wait_duration =
+            self.cfg.peer_stale_state_check_interval.0;
+        self.tick_batch[PeerTick::CheckMerge as usize].wait_duration =
+            self.cfg.merge_check_tick_interval.0;
+        self.tick_batch[PeerTick::CheckLeaderLease as usize].wait_duration =
+            self.cfg.check_leader_lease_interval.0;
+        self.tick_batch[PeerTick::ReactivateMemoryLock as usize].wait_duration =
+            self.cfg.reactive_memory_lock_tick_interval.0;
+        self.tick_batch[PeerTick::ReportBuckets as usize].wait_duration =
+            self.cfg.report_region_buckets_tick_interval.0;
+        self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
+            self.cfg.check_long_uncommitted_interval.0;
     }
 }
 

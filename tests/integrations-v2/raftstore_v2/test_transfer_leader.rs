@@ -1,26 +1,24 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-// use std::{sync::Arc, thread, time::Duration};
+use std::{sync::Arc, thread, time::Duration};
 
-// use api_version::{test_kv_format_impl, KvFormat};
-// use engine_traits::CF_LOCK;
-// use kvproto::kvrpcpb::Context;
-// use raft::eraftpb::MessageType;
-// use raftstore::store::LocksStatus;
-// use test_raftstore::{
-//     must_get_equal, must_get_none, new_admin_request, new_get_cmd, new_peer, new_put_cmd,
-//     new_request, new_transfer_leader_cmd, sleep_ms, CloneFilterFactory, DefaultFilterFactory,
-//     Direction, IsolationFilterFactory, RegionPacketFilter, SnapshotFilter,
-// };
-// use test_raftstore_v2::{
-//     new_server_cluster, new_server_cluster_with_api_ver, Cluster, ServerCluster, Simulator,
-// };
-// use tikv::storage::{
-//     kv::{SnapContext, SnapshotExt},
-//     Engine, Snapshot,
-// };
-// use tikv_util::config::*;
-// use txn_types::{Key, PessimisticLock};
+use api_version::{test_kv_format_impl, KvFormat};
+use engine_traits::CF_LOCK;
+use kvproto::kvrpcpb::Context;
+use raft::eraftpb::MessageType;
+use raftstore::store::LocksStatus;
+use test_raftstore::{
+    must_get_equal, must_get_none, new_admin_request, new_get_cmd, new_peer, new_put_cmd,
+    new_request, new_transfer_leader_cmd, sleep_ms, CloneFilterFactory, DefaultFilterFactory,
+    Direction, IsolationFilterFactory, RegionPacketFilter, SnapshotFilter,
+};
+use test_raftstore_v2::{Cluster, Simulator};
+use tikv::storage::{
+    kv::{SnapContext, SnapshotExt},
+    Engine, Snapshot,
+};
+use tikv_util::config::*;
+use txn_types::{Key, PessimisticLock};
 
 // fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 //     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
@@ -125,8 +123,8 @@
 //     }
 // }
 
-// fn test_pd_transfer_leader_multi_target<T: Simulator>(cluster: &mut Cluster<T>) {
-//     let pd_client = Arc::clone(&cluster.pd_client);
+// fn test_pd_transfer_leader_multi_target<T: Simulator>(cluster: &mut
+// Cluster<T>) {     let pd_client = Arc::clone(&cluster.pd_client);
 //     pd_client.disable_default_operator();
 
 //     cluster.run();
@@ -189,13 +187,14 @@
 //     test_pd_transfer_leader_multi_target(&mut cluster);
 // }
 
-// fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-//     let pd_client = Arc::clone(&cluster.pd_client);
+// fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut
+// Cluster<T>) {     let pd_client = Arc::clone(&cluster.pd_client);
 //     // Disable default max peer count check.
 //     pd_client.disable_default_operator();
-//     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-//     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
-//     cluster.cfg.raft_store.merge_max_log_gap = 1;
+//     cluster.cfg.raft_store.raft_log_gc_tick_interval =
+// ReadableDuration::millis(20);     cluster.cfg.raft_store.
+// raft_log_gc_count_limit = Some(2);     cluster.cfg.raft_store.
+// merge_max_log_gap = 1;
 
 //     let r1 = cluster.run_conf_change();
 //     pd_client.must_add_peer(r1, new_peer(2, 2));
@@ -210,17 +209,17 @@
 
 //     // hook transport and drop all snapshot packet, so follower's status
 //     // will stay at snapshot.
-//     cluster.add_send_filter(DefaultFilterFactory::<SnapshotFilter>::default());
-//     // don't allow leader transfer succeed if it is actually triggered.
-//     cluster.add_send_filter(CloneFilterFactory(
-//         RegionPacketFilter::new(1, 2)
-//             .msg_type(MessageType::MsgTimeoutNow)
-//             .direction(Direction::Recv),
-//     ));
+//     cluster.
+// add_send_filter(DefaultFilterFactory::<SnapshotFilter>::default());     //
+// don' t allow leader transfer succeed if it is actually triggered.
+// cluster. add_send_filter(CloneFilterFactory(
+// RegionPacketFilter::new(1, 2)
+// .msg_type(MessageType::MsgTimeoutNow)
+// .direction(Direction::Recv),     ));
 
 //     pd_client.must_add_peer(r1, new_peer(3, 3));
-//     // a just added peer needs wait a couple of ticks, it'll communicate with leader
-//     // before getting snapshot
+//     // a just added peer needs wait a couple of ticks, it'll communicate with
+// leader     // before getting snapshot
 //     sleep_ms(1000);
 
 //     let epoch = cluster.get_region_epoch(1);
@@ -325,8 +324,8 @@
 
 //     cluster.must_transfer_leader(1, new_peer(2, 2));
 
-//     // After the leader is transferred to store 2, we should be able to get the lock
-//     // in the lock CF.
+//     // After the leader is transferred to store 2, we should be able to get
+// the lock     // in the lock CF.
 //     let snapshot = cluster.must_get_snapshot_of_region(region_id);
 //     let value = snapshot
 //         .get_cf(CF_LOCK, &Key::from_raw(b"key"))
@@ -339,9 +338,9 @@
 // fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
 //     let mut cluster = new_server_cluster(0, 3);
 //     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
-//     cluster.cfg.raft_store.reactive_memory_lock_tick_interval = ReadableDuration::millis(200);
-//     cluster.cfg.raft_store.reactive_memory_lock_timeout_tick = 3;
-//     cluster.run();
+//     cluster.cfg.raft_store.reactive_memory_lock_tick_interval =
+// ReadableDuration::millis(200);     cluster.cfg.raft_store.
+// reactive_memory_lock_timeout_tick = 3;     cluster.run();
 
 //     cluster.must_transfer_leader(1, new_peer(1, 1));
 
@@ -378,8 +377,8 @@
 //         LocksStatus::TransferringLeader
 //     );
 
-//     // After several ticks, in-memory pessimistic locks should become available
-//     // again.
+//     // After several ticks, in-memory pessimistic locks should become
+// available     // again.
 //     thread::sleep(Duration::from_secs(1));
 //     assert_eq!(txn_ext.pessimistic_locks.read().status, LocksStatus::Normal);
 //     cluster.reset_leader_of_region(1);

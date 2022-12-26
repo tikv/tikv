@@ -2,7 +2,8 @@
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
+    time::Duration,
 };
 
 use collections::{HashMap, HashSet};
@@ -10,13 +11,22 @@ use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{RaftEngineReadOnly, TabletRegistry};
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::{
+    kvrpcpb::ApiVersion,
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    raft_serverpb::RaftMessage,
+};
 use raft::prelude::MessageType;
 use raftstore::{
     coprocessor::CoprocessorHost,
-    store::{GlobalReplicationState, TabletSnapKey, TabletSnapManager, Transport},
+    errors::Error as RaftError,
+    store::{GlobalReplicationState, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport},
+    Result,
 };
-use raftstore_v2::{router::RaftRouter, StoreMeta, StoreRouter, StoreSystem};
+use raftstore_v2::{
+    router::{PeerMsg, RaftRouter},
+    StoreMeta, StoreRouter, StoreSystem,
+};
 use test_pd_client::TestPdClient;
 use test_raftstore::{Config, Filter};
 use tikv::{
@@ -32,7 +42,7 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
 
-use crate::{RaftStoreRouter, SimulateTransport, Simulator};
+use crate::{Cluster, RaftStoreRouter, SimulateTransport, Simulator, SnapshotRouter};
 
 #[derive(Clone)]
 pub struct ChannelTransport {
@@ -165,8 +175,6 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta>>,
-        router: StoreRouter<RocksEngine, RaftTestEngine>,
-        system: StoreSystem<RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
     ) -> ServerResult<u64> {
@@ -212,8 +220,13 @@ impl Simulator for NodeCluster {
             trans.snap_paths[&node_id].clone()
         };
 
+        node.try_bootstrap_store(&cfg.raft_store, &raft_engine)?;
+
+        let raft_router = node.router().clone();
+
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
+        let mut coprocessor_host =
+            CoprocessorHost::new(raft_router.store_router().clone(), cfg.coprocessor.clone());
 
         let cm = ConcurrencyManager::new(1.into());
         self.concurrency_managers.insert(node_id, cm.clone());
@@ -221,8 +234,6 @@ impl Simulator for NodeCluster {
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
 
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
-
-        node.try_bootstrap_store(&cfg.raft_store, &raft_engine)?;
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
@@ -281,4 +292,94 @@ impl Simulator for NodeCluster {
         self.simulate_trans.insert(node_id, simulate_trans);
         Ok(node_id)
     }
+
+    fn snapshot(
+        &mut self,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> std::result::Result<
+        RegionSnapshot<<RocksEngine as engine_traits::KvEngine>::Snapshot>,
+        RaftCmdResponse,
+    > {
+        let node_id = request.get_header().get_peer().get_store_id();
+        if !self
+            .trans
+            .core
+            .lock()
+            .unwrap()
+            .routers
+            .contains_key(&node_id)
+        {
+            let mut resp = RaftCmdResponse::default();
+            let e: RaftError = box_err!("missing sender for store {}", node_id);
+            resp.mut_header().set_error(e.into());
+            return Err(resp);
+        }
+
+        let mut guard = self.trans.core.lock().unwrap();
+        let router = guard.routers.get_mut(&node_id).unwrap();
+        router.snapshot(request, timeout)
+    }
+
+    fn async_peer_msg_on_node(&self, node_id: u64, region_id: u64, msg: PeerMsg) -> Result<()> {
+        if !self
+            .trans
+            .core
+            .lock()
+            .unwrap()
+            .routers
+            .contains_key(&node_id)
+        {
+            return Err(box_err!("missing sender for store {}", node_id));
+        }
+
+        let router = self
+            .trans
+            .core
+            .lock()
+            .unwrap()
+            .routers
+            .get(&node_id)
+            .cloned()
+            .unwrap();
+
+        router.send_peer_msg(region_id, msg)
+    }
+
+    fn stop_node(&mut self, node_id: u64) {
+        if let Some(mut node) = self.nodes.remove(&node_id) {
+            node.stop();
+        }
+        self.trans
+            .core
+            .lock()
+            .unwrap()
+            .routers
+            .remove(&node_id)
+            .unwrap();
+    }
+
+    fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>> {
+        self.nodes
+            .get(&node_id)
+            .map(|node| node.router().store_router().clone())
+    }
+
+    fn get_snap_dir(&self, node_id: u64) -> String {
+        self.trans.core.lock().unwrap().snap_paths[&node_id]
+            .root_path()
+            .to_owned()
+    }
+}
+
+pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
+    let pd_client = Arc::new(TestPdClient::new(id, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+}
+
+pub fn new_incompatible_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
+    let pd_client = Arc::new(TestPdClient::new(id, true));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
