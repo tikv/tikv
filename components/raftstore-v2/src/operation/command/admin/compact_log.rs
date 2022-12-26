@@ -13,7 +13,7 @@
 //! Updates truncated index, and compacts logs if the corresponding changes have
 //! been persisted in kvdb.
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::{
@@ -162,6 +162,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 #[derive(Debug)]
 pub struct CompactLogResult {
+    index: u64,
     compact_index: u64,
     compact_term: u64,
 }
@@ -195,11 +196,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_compact_log(
         &mut self,
         req: &AdminRequest,
-        _log_index: u64,
+        index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         Ok((
             AdminResponse::default(),
             AdminCmdResult::CompactLog(CompactLogResult {
+                index,
                 compact_index: req.get_compact_log().get_compact_index(),
                 compact_term: req.get_compact_log().get_compact_term(),
             }),
@@ -244,6 +246,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .mut_truncated_state()
             .set_term(res.compact_term);
 
+        let region_id = self.region_id();
+        // TODO: get around this clone.
+        let apply_state = self.entry_storage().apply_state().clone();
+        self.state_changes_mut()
+            .put_apply_state(region_id, res.index, &apply_state)
+            .unwrap();
+        self.set_has_extra_write();
+
         self.maybe_compact_log_from_engine(store_ctx);
     }
 
@@ -267,6 +277,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             {
                 error!(self.logger, "failed to compact raft logs"; "err" => ?e);
             } else {
+                self.set_has_extra_write();
                 self.set_last_engine_compact_log_index(compact_index);
 
                 let applied = self.storage().apply_state().get_applied_index();

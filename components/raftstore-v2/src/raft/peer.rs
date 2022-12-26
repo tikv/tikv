@@ -753,6 +753,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.flush_state = Arc::default();
     }
 
+    // Note: Call `set_has_extra_write` after adding new state changes.
     #[inline]
     pub fn state_changes_mut(&mut self) -> &mut ER::LogBatch {
         if self.state_changes.is_none() {

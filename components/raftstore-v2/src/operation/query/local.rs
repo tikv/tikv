@@ -17,9 +17,8 @@ use kvproto::{
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, util::LeaseState, worker::metrics::TLS_LOCAL_READ_METRICS, LocalReadContext,
-        LocalReaderCore, ReadDelegate, ReadExecutor, ReadExecutorProvider, RegionSnapshot,
-        RequestPolicy,
+        cmd_resp, util::LeaseState, LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor,
+        ReadExecutorProvider, RegionSnapshot, RequestPolicy, TLS_LOCAL_READ_METRICS,
     },
     Error, Result,
 };
@@ -472,8 +471,7 @@ mod tests {
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use pd_client::BucketMeta;
     use raftstore::store::{
-        util::Lease, worker::metrics::TLS_LOCAL_READ_METRICS, ReadCallback, ReadProgress,
-        RegionReadProgress, TrackVer, TxnExt,
+        util::Lease, ReadCallback, ReadProgress, RegionReadProgress, TrackVer, TxnExt,
     };
     use slog::o;
     use tempfile::Builder;

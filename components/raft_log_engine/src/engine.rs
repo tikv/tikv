@@ -381,7 +381,8 @@ const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
 const RECOVER_STATE_KEY: &[u8] = &[0x05];
 const FLUSH_STATE_KEY: &[u8] = &[0x06];
-const KEY_PREFIX_LEN: usize = 1;
+// All keys are of the same length.
+const KEY_PREFIX_LEN: usize = RAFT_LOG_STATE_KEY.len();
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -717,9 +718,9 @@ impl RaftEngine for RaftLogEngine {
                             }
                         }
                         FLUSH_STATE_KEY => {
-                            let cf_id =
-                                NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..KEY_PREFIX_LEN + 1]);
-                            if cf_id <= MAX_CF_ID as u64 {
+                            let cf_id = key[KEY_PREFIX_LEN];
+                            let tablet_index = NumberCodec::decode_u64(&key[KEY_PREFIX_LEN + 1..]);
+                            if cf_id <= MAX_CF_ID && tablet_index <= apply_index {
                                 if found_flush_state[cf_id as usize] {
                                     batch.0.delete(raft_group_id, key.to_vec());
                                 } else {
