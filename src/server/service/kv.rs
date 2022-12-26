@@ -945,9 +945,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) {
         let key_range = request.take_key_range();
         let (cb, resp) = paired_future_callback();
-        let check_leader_scheduler = self.check_leader_scheduler.clone();
+        let check_leader_scheduler = match self.check_leader_scheduler.clone() {
+            Some(s) => s,
+            // Avoid print errors if it's not supported.
+            None => return,
+        };
         let task = async move {
-            let Some(check_leader_scheduler) = check_leader_scheduler else { return Err(box_err!("check leader is not supported")) };
             check_leader_scheduler
                 .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
                 .map_err(|e| Error::Other(format!("{}", e).into()))?;
