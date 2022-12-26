@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
-use std::{marker::PhantomData, mem, ops::Deref};
+use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref};
 
 use engine_traits::{CfName, KvEngine};
 use kvproto::{
-    metapb::Region,
+    metapb::{Region, RegionEpoch},
     pdpb::CheckPolicy,
     raft_cmdpb::{ComputeHashRequest, RaftCmdRequest},
 };
@@ -13,8 +13,120 @@ use protobuf::Message;
 use raft::eraftpb;
 use tikv_util::box_try;
 
-use super::*;
-use crate::store::CasualRouter;
+use super::{split_observer::SplitObserver, *};
+use crate::store::BucketRange;
+
+/// A handle for coprocessor to schedule some command back to raftstore.
+pub trait StoreHandle: Clone + Send {
+    fn update_approximate_size(&self, region_id: u64, size: u64);
+    fn update_approximate_keys(&self, region_id: u64, keys: u64);
+    fn ask_split(
+        &self,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: Cow<'static, str>,
+    );
+    fn refresh_region_buckets(
+        &self,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    );
+    fn update_compute_hash_result(
+        &self,
+        region_id: u64,
+        index: u64,
+        context: Vec<u8>,
+        hash: Vec<u8>,
+    );
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SchedTask {
+    UpdateApproximateSize {
+        region_id: u64,
+        size: u64,
+    },
+    UpdateApproximateKeys {
+        region_id: u64,
+        keys: u64,
+    },
+    AskSplit {
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: Cow<'static, str>,
+    },
+    RefreshRegionBuckets {
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    },
+    UpdateComputeHashResult {
+        region_id: u64,
+        index: u64,
+        hash: Vec<u8>,
+        context: Vec<u8>,
+    },
+}
+
+impl StoreHandle for std::sync::mpsc::SyncSender<SchedTask> {
+    fn update_approximate_size(&self, region_id: u64, size: u64) {
+        let _ = self.try_send(SchedTask::UpdateApproximateSize { region_id, size });
+    }
+
+    fn update_approximate_keys(&self, region_id: u64, keys: u64) {
+        let _ = self.try_send(SchedTask::UpdateApproximateKeys { region_id, keys });
+    }
+
+    fn ask_split(
+        &self,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: Cow<'static, str>,
+    ) {
+        let _ = self.try_send(SchedTask::AskSplit {
+            region_id,
+            region_epoch,
+            split_keys,
+            source,
+        });
+    }
+
+    fn refresh_region_buckets(
+        &self,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    ) {
+        let _ = self.try_send(SchedTask::RefreshRegionBuckets {
+            region_id,
+            region_epoch,
+            buckets,
+            bucket_ranges,
+        });
+    }
+
+    fn update_compute_hash_result(
+        &self,
+        region_id: u64,
+        index: u64,
+        context: Vec<u8>,
+        hash: Vec<u8>,
+    ) {
+        let _ = self.try_send(SchedTask::UpdateComputeHashResult {
+            region_id,
+            index,
+            context,
+            hash,
+        });
+    }
+}
 
 struct Entry<T> {
     priority: u32,
@@ -339,10 +451,8 @@ where
 }
 
 impl<E: KvEngine> CoprocessorHost<E> {
-    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(
-        ch: C,
-        cfg: Config,
-    ) -> CoprocessorHost<E> {
+    pub fn new<C: StoreHandle + Clone + Send + 'static>(ch: C, cfg: Config) -> CoprocessorHost<E> {
+        // TODO load coprocessors from configuration
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -357,6 +467,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
         );
+        registry.register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
         CoprocessorHost { registry, cfg }
     }
 

@@ -7,10 +7,16 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletContext, TabletRegistry};
 use kvproto::{metapb, replication_modepb::ReplicationStatus};
 use pd_client::PdClient;
-use raftstore::store::{GlobalReplicationState, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX};
-use raftstore_v2::{router::RaftRouter, Bootstrap, StoreSystem};
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{GlobalReplicationState, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX},
+};
+use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreSystem};
 use slog::{info, o, Logger};
-use tikv_util::{config::VersionTrack, worker::Worker};
+use tikv_util::{
+    config::VersionTrack,
+    worker::{LazyWorker, Worker},
+};
 
 use crate::server::{node::init_store, Result};
 
@@ -18,13 +24,10 @@ use crate::server::{node::init_store, Result};
 pub struct NodeV2<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
-    store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
-    system: StoreSystem<EK, ER>,
+    system: Option<(RaftRouter<EK, ER>, StoreSystem<EK, ER>)>,
     has_started: bool,
 
     pd_client: Arc<C>,
-    state: Arc<Mutex<GlobalReplicationState>>,
-    bg_worker: Worker,
     registry: TabletRegistry<EK>,
     logger: Logger,
 }
@@ -37,12 +40,8 @@ where
 {
     /// Creates a new Node.
     pub fn new(
-        system: StoreSystem<EK, ER>,
         cfg: &crate::server::Config,
-        store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
         pd_client: Arc<C>,
-        state: Arc<Mutex<GlobalReplicationState>>,
-        bg_worker: Worker,
         store: Option<metapb::Store>,
         registry: TabletRegistry<EK>,
     ) -> NodeV2<C, EK, ER> {
@@ -51,18 +50,19 @@ where
         NodeV2 {
             cluster_id: cfg.cluster_id,
             store,
-            store_cfg,
             pd_client,
-            system,
+            system: None,
             has_started: false,
-            state,
-            bg_worker,
             registry,
             logger: slog_global::borrow_global().new(o!()),
         }
     }
 
-    pub fn try_bootstrap_store(&mut self, raft_engine: &ER) -> Result<()> {
+    pub fn try_bootstrap_store(
+        &mut self,
+        cfg: &raftstore_v2::Config,
+        raft_engine: &ER,
+    ) -> Result<()> {
         let store_id = Bootstrap::new(
             raft_engine,
             self.cluster_id,
@@ -71,7 +71,17 @@ where
         )
         .bootstrap_store()?;
         self.store.set_id(store_id);
+        let (router, system) =
+            raftstore_v2::create_store_batch_system(cfg, store_id, self.logger.clone());
+        self.system = Some((
+            RaftRouter::new(store_id, self.registry.clone(), router),
+            system,
+        ));
         Ok(())
+    }
+
+    pub fn router(&self) -> &RaftRouter<EK, ER> {
+        &self.system.as_ref().unwrap().0
     }
 
     /// Starts the Node. It tries to bootstrap cluster if the cluster is not
@@ -81,17 +91,21 @@ where
         &mut self,
         raft_engine: ER,
         trans: T,
-        router: &RaftRouter<EK, ER>,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        coprocessor_host: CoprocessorHost<EK>,
+        background: Worker,
+        pd_worker: LazyWorker<PdTask>,
+        store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
+        state: &Mutex<GlobalReplicationState>,
     ) -> Result<()>
     where
         T: Transport + 'static,
     {
         let store_id = self.id();
         {
-            let mut meta = router.store_meta().lock().unwrap();
+            let mut meta = self.router().store_meta().lock().unwrap();
             meta.store_id = Some(store_id);
         }
         if let Some(region) = Bootstrap::new(
@@ -116,15 +130,18 @@ where
         // Put store only if the cluster is bootstrapped.
         info!(self.logger, "put store to PD"; "store" => ?&self.store);
         let status = self.pd_client.put_store(self.store.clone())?;
-        self.load_all_stores(status);
+        self.load_all_stores(state, status);
 
         self.start_store(
             raft_engine,
             trans,
-            router,
             snap_mgr,
             concurrency_manager,
             causal_ts_provider,
+            coprocessor_host,
+            background,
+            pd_worker,
+            store_cfg,
         )?;
 
         Ok(())
@@ -133,6 +150,10 @@ where
     /// Gets the store id.
     pub fn id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    pub fn logger(&self) -> Logger {
+        self.logger.clone()
     }
 
     /// Gets a copy of Store which is registered to Pd.
@@ -146,13 +167,17 @@ where
     // Do we really need to do the check giving we don't consider support upgrade
     // ATM?
 
-    fn load_all_stores(&mut self, status: Option<ReplicationStatus>) {
+    fn load_all_stores(
+        &mut self,
+        state: &Mutex<GlobalReplicationState>,
+        status: Option<ReplicationStatus>,
+    ) {
         info!(self.logger, "initializing replication mode"; "status" => ?status, "store_id" => self.store.id);
         let stores = match self.pd_client.get_all_stores(false) {
             Ok(stores) => stores,
             Err(e) => panic!("failed to load all stores: {:?}", e),
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = state.lock().unwrap();
         if let Some(s) = status {
             state.set_status(s);
         }
@@ -167,10 +192,13 @@ where
         &mut self,
         raft_engine: ER,
         trans: T,
-        router: &RaftRouter<EK, ER>,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        coprocessor_host: CoprocessorHost<EK>,
+        background: Worker,
+        pd_worker: LazyWorker<PdTask>,
+        store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -182,11 +210,12 @@ where
             return Err(box_err!("{} is already started", store_id));
         }
         self.has_started = true;
-        let cfg = self.store_cfg.clone();
 
-        self.system.start(
+        let (router, system) = self.system.as_mut().unwrap();
+
+        system.start(
             store_id,
-            cfg,
+            store_cfg,
             raft_engine,
             self.registry.clone(),
             trans,
@@ -196,6 +225,9 @@ where
             snap_mgr,
             concurrency_manager,
             causal_ts_provider,
+            coprocessor_host,
+            background,
+            pd_worker,
         )?;
         Ok(())
     }
@@ -203,8 +235,8 @@ where
     /// Stops the Node.
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
+        let Some((_, mut system)) = self.system.take() else { return };
         info!(self.logger, "stop raft store thread"; "store_id" => store_id);
-        self.system.shutdown();
-        self.bg_worker.stop();
+        system.shutdown();
     }
 }

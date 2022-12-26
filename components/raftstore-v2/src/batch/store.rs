@@ -20,10 +20,13 @@ use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType};
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
-use raft::INVALID_ID;
-use raftstore::store::{
-    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
-    StoreWriters, TabletSnapManager, Transport, WriteSenders,
+use raft::{StateRole, INVALID_ID};
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionChangeEvent},
+    store::{
+        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
+        SplitCheckRunner, SplitCheckTask, StoreWriters, TabletSnapManager, Transport, WriteSenders,
+    },
 };
 use slog::Logger;
 use tikv_util::{
@@ -32,7 +35,7 @@ use tikv_util::{
     sys::SysQuota,
     time::Instant as TiInstant,
     timer::SteadyTimer,
-    worker::{Scheduler, Worker},
+    worker::{LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
@@ -50,6 +53,7 @@ use crate::{
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// A logger without any KV. It's clean for creating new PeerFSM.
     pub logger: Logger,
+    pub coprocessor_host: CoprocessorHost<EK>,
     /// The transport for sending messages to peers on other stores.
     pub trans: T,
     pub current_time: Option<Timespec>,
@@ -63,20 +67,17 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub tick_batch: Vec<PeerTickBatch>,
     /// The precise timer for scheduling tick.
     pub timer: SteadyTimer,
-    pub write_senders: WriteSenders<EK, ER>,
+    pub schedulers: Schedulers<EK, ER>,
     /// store meta
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub engine: ER,
     pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
-    pub read_scheduler: Scheduler<ReadTask<EK>>,
 
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
 
     pub snap_mgr: TabletSnapManager,
-    pub pd_scheduler: Scheduler<pd::Task>,
-    pub tablet_gc_scheduler: Scheduler<tablet_gc::Task>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -218,15 +219,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
 
 struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     cfg: Arc<VersionTrack<Config>>,
+    coprocessor_host: CoprocessorHost<EK>,
     store_id: u64,
     engine: ER,
     tablet_registry: TabletRegistry<EK>,
     trans: T,
     router: StoreRouter<EK, ER>,
-    read_scheduler: Scheduler<ReadTask<EK>>,
-    pd_scheduler: Scheduler<pd::Task>,
-    tablet_gc_scheduler: Scheduler<tablet_gc::Task>,
-    write_senders: WriteSenders<EK, ER>,
+    schedulers: Schedulers<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -241,13 +240,11 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         tablet_registry: TabletRegistry<EK>,
         trans: T,
         router: StoreRouter<EK, ER>,
-        read_scheduler: Scheduler<ReadTask<EK>>,
-        pd_scheduler: Scheduler<pd::Task>,
-        tablet_gc_scheduler: Scheduler<tablet_gc::Task>,
-        store_writers: &mut StoreWriters<EK, ER>,
+        schedulers: Schedulers<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta>>,
         snap_mgr: TabletSnapManager,
+        coprocessor_host: CoprocessorHost<EK>,
     ) -> Self {
         let pool_size = cfg.value().apply_batch_system.pool_size;
         let max_pool_size = std::cmp::max(
@@ -266,14 +263,12 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             tablet_registry,
             trans,
             router,
-            read_scheduler,
-            pd_scheduler,
-            tablet_gc_scheduler,
             apply_pool,
             logger,
-            write_senders: store_writers.senders(),
+            schedulers,
             store_meta,
             snap_mgr,
+            coprocessor_host,
         }
     }
 
@@ -289,12 +284,21 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     region_id,
                     self.store_id,
                     self.engine.clone(),
-                    self.read_scheduler.clone(),
+                    self.schedulers.read.clone(),
                     &self.logger,
                 )? {
                     Some(p) => p,
                     None => return Ok(()),
                 };
+
+                if storage.is_initialized() {
+                    self.coprocessor_host.on_region_changed(
+                        storage.region(),
+                        RegionChangeEvent::Create,
+                        StateRole::Follower,
+                    );
+                }
+
                 let (sender, peer_fsm) = PeerFsm::new(&cfg, &self.tablet_registry, storage)?;
                 meta.region_read_progress
                     .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
@@ -340,39 +344,52 @@ where
             router: self.router.clone(),
             tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
             timer: SteadyTimer::default(),
-            write_senders: self.write_senders.clone(),
+            schedulers: self.schedulers.clone(),
             store_meta: self.store_meta.clone(),
             engine: self.engine.clone(),
             tablet_registry: self.tablet_registry.clone(),
             apply_pool: self.apply_pool.clone(),
-            read_scheduler: self.read_scheduler.clone(),
             self_disk_usage: DiskUsage::Normal,
             snap_mgr: self.snap_mgr.clone(),
-            pd_scheduler: self.pd_scheduler.clone(),
-            tablet_gc_scheduler: self.tablet_gc_scheduler.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
     }
 }
 
+#[derive(Clone)]
+pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
+    pub read: Scheduler<ReadTask<EK>>,
+    pub pd: Scheduler<pd::Task>,
+    pub tablet_gc: Scheduler<tablet_gc::Task>,
+    pub write: WriteSenders<EK, ER>,
+
+    // Following is not maintained by raftstore itself.
+    pub split_check: Scheduler<SplitCheckTask>,
+}
+
 /// A set of background threads that will processing offloaded work from
 /// raftstore.
 struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
-    async_read_worker: Worker,
-    pd_worker: Worker,
+    async_read: Worker,
+    pd: LazyWorker<pd::Task>,
     tablet_gc_worker: Worker,
-    store_writers: StoreWriters<EK, ER>,
+    async_write: StoreWriters<EK, ER>,
+
+    // Following is not maintained by raftstore itself.
+    background: Worker,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Default for Workers<EK, ER> {
-    fn default() -> Self {
+impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
+    fn new(background: Worker, pd: LazyWorker<pd::Task>) -> Self {
         Self {
-            async_read_worker: Worker::new("async-read-worker"),
-            pd_worker: Worker::new("pd-worker"),
+            async_read: Worker::new("async-read-worker"),
+            pd,
             tablet_gc_worker: Worker::new("tablet-gc-worker"),
-            store_writers: StoreWriters::default(),
+            async_write: StoreWriters::default(),
+            background,
         }
     }
 }
@@ -399,6 +416,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        coprocessor_host: CoprocessorHost<EK>,
+        background: Worker,
+        pd_worker: LazyWorker<pd::Task>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -412,30 +432,34 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
         });
 
-        let mut workers = Workers::default();
+        let mut workers = Workers::new(background, pd_worker);
         workers
-            .store_writers
+            .async_write
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
 
         let mut read_runner = ReadRunner::new(router.clone(), raft_engine.clone());
         read_runner.set_snap_mgr(snap_mgr.clone());
-        let read_scheduler = workers
-            .async_read_worker
-            .start("async-read-worker", read_runner);
+        let read_scheduler = workers.async_read.start("async-read-worker", read_runner);
 
-        let pd_scheduler = workers.pd_worker.start(
-            "pd-worker",
-            pd::Runner::new(
-                store_id,
-                pd_client,
-                raft_engine.clone(),
+        workers.pd.start(pd::Runner::new(
+            store_id,
+            pd_client,
+            raft_engine.clone(),
+            tablet_registry.clone(),
+            router.clone(),
+            workers.pd.remote(),
+            concurrency_manager,
+            causal_ts_provider,
+            self.logger.clone(),
+            self.shutdown.clone(),
+        ));
+
+        let split_check_scheduler = workers.background.start(
+            "split-check",
+            SplitCheckRunner::with_registry(
                 tablet_registry.clone(),
                 router.clone(),
-                workers.pd_worker.remote(),
-                concurrency_manager,
-                causal_ts_provider,
-                self.logger.clone(),
-                self.shutdown.clone(),
+                coprocessor_host.clone(),
             ),
         );
 
@@ -444,6 +468,14 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             tablet_gc::Runner::new(tablet_registry.clone(), self.logger.clone()),
         );
 
+        let schedulers = Schedulers {
+            read: read_scheduler,
+            pd: workers.pd.scheduler(),
+            tablet_gc: tablet_gc_scheduler,
+            write: workers.async_write.senders(),
+            split_check: split_check_scheduler,
+        };
+
         let builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
@@ -451,13 +483,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             tablet_registry,
             trans,
             router.clone(),
-            read_scheduler,
-            pd_scheduler,
-            tablet_gc_scheduler,
-            &mut workers.store_writers,
+            schedulers,
             self.logger.clone(),
             store_meta.clone(),
             snap_mgr,
+            coprocessor_host,
         );
         self.workers = Some(workers);
         let peers = builder.init()?;
@@ -503,9 +533,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         self.system.shutdown();
 
-        workers.store_writers.shutdown();
-        workers.async_read_worker.stop();
-        workers.pd_worker.stop();
+        workers.async_write.shutdown();
+        workers.async_read.stop();
+        workers.pd.stop();
     }
 }
 

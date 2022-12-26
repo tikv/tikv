@@ -11,6 +11,7 @@ use kvproto::{
 use raftstore::store::{INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 use tikv_util::store::new_peer;
+use txn_types::{Key, TimeStamp};
 
 use crate::cluster::{Cluster, TestRouter};
 
@@ -61,6 +62,7 @@ fn split_region(
     split_peer: metapb::Peer,
     left_key: &[u8],
     right_key: &[u8],
+    propose_key: &[u8],
     split_key: &[u8],
     right_derive: bool,
 ) -> (metapb::Region, metapb::Region) {
@@ -75,7 +77,7 @@ fn split_region(
     split_id.new_region_id = split_region_id;
     split_id.new_peer_ids = vec![split_peer.id];
     let admin_req =
-        new_batch_split_region_request(vec![split_key.to_vec()], vec![split_id], right_derive);
+        new_batch_split_region_request(vec![propose_key.to_vec()], vec![split_id], right_derive);
     req.mut_requests().clear();
     req.set_admin_request(admin_req);
 
@@ -133,7 +135,7 @@ fn test_split() {
     //      Region 1000 ["k22", ""] peer(1, 10)
     let region_state = raft_engine.get_region_state(2, u64::MAX).unwrap().unwrap();
     assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
-    let (left, right) = split_region(
+    let (left, mut right) = split_region(
         router,
         region,
         peer.clone(),
@@ -141,6 +143,7 @@ fn test_split() {
         new_peer(store_id, 10),
         b"k11",
         b"k33",
+        b"k22",
         b"k22",
         false,
     );
@@ -174,6 +177,7 @@ fn test_split() {
         b"k00",
         b"k11",
         b"k11",
+        b"k11",
         false,
     );
     let region_state = raft_engine.get_region_state(2, u64::MAX).unwrap().unwrap();
@@ -205,7 +209,7 @@ fn test_split() {
         .unwrap()
         .unwrap();
     assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
-    let _ = split_region(
+    right = split_region(
         router,
         right,
         new_peer(store_id, 10),
@@ -214,8 +218,10 @@ fn test_split() {
         b"k22",
         b"k33",
         b"k33",
+        b"k33",
         false,
-    );
+    )
+    .1;
     let region_state = raft_engine
         .get_region_state(1000, u64::MAX)
         .unwrap()
@@ -235,6 +241,21 @@ fn test_split() {
         flushed_index >= region_state.get_tablet_index(),
         "{flushed_index} >= {}",
         region_state.get_tablet_index()
+    );
+
+    let split_key = Key::from_raw(b"k44").append_ts(TimeStamp::zero());
+    let actual_split_key = split_key.clone().truncate_ts().unwrap();
+    split_region(
+        router,
+        right,
+        new_peer(store_id, 12),
+        1003,
+        new_peer(store_id, 13),
+        b"k33",
+        b"k55",
+        split_key.as_encoded(),
+        actual_split_key.as_encoded(),
+        false,
     );
 }
 

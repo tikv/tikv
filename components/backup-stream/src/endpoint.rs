@@ -1070,12 +1070,21 @@ pub enum ObserveOp {
 impl std::fmt::Debug for ObserveOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Start { region } => f.debug_struct("Start").field("region", region).finish(),
-            Self::Stop { region } => f.debug_struct("Stop").field("region", region).finish(),
-            Self::Destroy { region } => f.debug_struct("Destroy").field("region", region).finish(),
+            Self::Start { region } => f
+                .debug_struct("Start")
+                .field("region", &utils::debug_region(region))
+                .finish(),
+            Self::Stop { region } => f
+                .debug_struct("Stop")
+                .field("region", &utils::debug_region(region))
+                .finish(),
+            Self::Destroy { region } => f
+                .debug_struct("Destroy")
+                .field("region", &utils::debug_region(region))
+                .finish(),
             Self::RefreshResolver { region } => f
                 .debug_struct("RefreshResolver")
-                .field("region", region)
+                .field("region", &utils::debug_region(region))
                 .finish(),
             Self::NotifyFailToStartObserve {
                 region,
@@ -1083,7 +1092,7 @@ impl std::fmt::Debug for ObserveOp {
                 err,
             } => f
                 .debug_struct("NotifyFailToStartObserve")
-                .field("region", region)
+                .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
                 .finish(),

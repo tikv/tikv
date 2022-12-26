@@ -14,10 +14,14 @@ use engine_traits::{
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
-use raftstore::store::{
-    util::{Lease, RegionReadProgress},
-    Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-    ReadProgress, TxnExt, WriteTask,
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
+    store::{
+        fsm::ApplyMetrics,
+        util::{Lease, RegionReadProgress},
+        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
+        ReadProgress, TxnExt, WriteTask,
+    },
 };
 use slog::Logger;
 
@@ -25,7 +29,9 @@ use super::storage::Storage;
 use crate::{
     batch::StoreContext,
     fsm::ApplyScheduler,
-    operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder},
+    operation::{
+        AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
+    },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
 };
@@ -83,6 +89,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     // Trace which peers have not finished split.
     split_trace: Vec<(u64, HashSet<u64>)>,
+    split_flow_control: SplitFlowControl,
 
     /// Apply related State changes that needs to be persisted to raft engine.
     ///
@@ -90,6 +97,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// advancing apply index.
     state_changes: Option<Box<ER::LogBatch>>,
     flush_state: Arc<FlushState>,
+
+    /// lead_transferee if this peer(leader) is in a leadership transferring.
+    leader_transferee: u64,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -161,6 +171,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             split_trace: vec![],
             state_changes: None,
             flush_state,
+            split_flow_control: SplitFlowControl::default(),
+            leader_transferee: raft::INVALID_ID,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -194,9 +206,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
-        // host: &CoprocessorHost<impl KvEngine>,
+        host: &CoprocessorHost<EK>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
+        reason: RegionChangeReason,
         tablet_index: u64,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -241,7 +254,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pessimistic_locks.version = self.region().get_region_epoch().get_version();
         }
 
-        // TODO: CoprocessorHost
+        if self.serving() {
+            host.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Update(reason),
+                self.state_role(),
+            );
+        }
     }
 
     #[inline]
@@ -340,6 +359,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn self_stat(&self) -> &PeerStat {
         &self.self_stat
+    }
+
+    #[inline]
+    pub fn update_stat(&mut self, metrics: &ApplyMetrics) {
+        self.self_stat.written_bytes += metrics.written_bytes;
+        self.self_stat.written_keys += metrics.written_keys;
     }
 
     /// Mark the peer has a ready so it will be checked at the end of every
@@ -449,6 +474,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: `refill_disk_full_peers`
         down_peers
+    }
+
+    #[inline]
+    pub fn state_role(&self) -> StateRole {
+        self.raft_group.raft.state
     }
 
     #[inline]
@@ -688,5 +718,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         task.extra_write
             .merge_v2(Box::into_inner(self.state_changes.take().unwrap()));
+    }
+
+    #[inline]
+    pub fn split_flow_control_mut(&mut self) -> &mut SplitFlowControl {
+        &mut self.split_flow_control
+    }
+
+    #[inline]
+    pub fn refresh_leader_transferee(&mut self) -> u64 {
+        mem::replace(
+            &mut self.leader_transferee,
+            self.raft_group
+                .raft
+                .lead_transferee
+                .unwrap_or(raft::INVALID_ID),
+        )
     }
 }
