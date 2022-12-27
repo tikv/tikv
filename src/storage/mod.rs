@@ -4136,12 +4136,13 @@ mod tests {
         let engine = {
             let path = "".to_owned();
             let cfg_rocksdb = db_config;
-            let cache = BlockCacheConfig::default().build_shared_cache();
+            let shared =
+                cfg_rocksdb.build_cf_resources(BlockCacheConfig::default().build_shared_cache());
             let cfs_opts = vec![
                 (
                     CF_DEFAULT,
                     cfg_rocksdb.defaultcf.build_opt(
-                        &cache,
+                        &shared,
                         None,
                         ApiVersion::V1,
                         EngineType::RaftKv,
@@ -4149,15 +4150,15 @@ mod tests {
                 ),
                 (
                     CF_LOCK,
-                    cfg_rocksdb.lockcf.build_opt(&cache, EngineType::RaftKv),
+                    cfg_rocksdb.lockcf.build_opt(&shared, EngineType::RaftKv),
                 ),
                 (
                     CF_WRITE,
                     cfg_rocksdb
                         .writecf
-                        .build_opt(&cache, None, EngineType::RaftKv),
+                        .build_opt(&shared, None, EngineType::RaftKv),
                 ),
-                (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&shared)),
             ];
             RocksEngine::new(
                 &path, None, cfs_opts, None, // io_rate_limiter
