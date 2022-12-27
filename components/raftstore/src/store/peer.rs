@@ -3160,9 +3160,8 @@ where
                 "after" => ?peer,
             );
             self.peer = peer;
-            // TODO: set priority for witness
-            // self.raft_group
-            //     .set_priority(if self.peer.is_witness { 0 } else { 1 });
+            self.raft_group
+                .set_priority(if self.peer.is_witness { -1 } else { 0 });
         };
 
         self.activate(ctx);

@@ -5505,8 +5505,7 @@ where
         fail_point!("ignore request snapshot", |_| {
             self.schedule_tick(PeerTick::RequestSnapshot);
         });
-        assert!(!self.fsm.peer.is_leader());
-        if !self.fsm.peer.wait_data {
+        if !self.fsm.peer.wait_data || self.fsm.peer.is_leader() {
             return;
         }
         assert!(self.fsm.peer.request_index != 0);
