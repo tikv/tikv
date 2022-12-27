@@ -626,7 +626,8 @@
 ## RocksDB log levels
 # info-log-level = "info"
 
-## Memory usage limit for Raft Engine. Undersized write buffers will be flushed to satisfy the requirement.
+## Memory usage limit for Raft Engine. Undersized write buffers will be flushed to satisfy the
+## requirement.
 ## No limit when not specified.
 # write-buffer-limit = "1GB"
 
