@@ -33,7 +33,7 @@ use crate::{
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
-    pub fn on_compact_log_tick(&mut self) {
+    pub fn on_compact_log_tick(&mut self, force: bool) {
         if !self.fsm.peer().is_leader() {
             // `compact_cache_to` is called when apply, there is no need to call
             // `compact_to` here, snapshot generating has already been cancelled
@@ -44,7 +44,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
         self.fsm
             .peer_mut()
-            .maybe_propose_compact_log(self.store_ctx);
+            .maybe_propose_compact_log(self.store_ctx, force);
 
         self.on_entry_cache_evict();
     }
@@ -64,7 +64,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // Mirrors v1::on_raft_gc_log_tick.
-    fn maybe_propose_compact_log<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+    fn maybe_propose_compact_log<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        force: bool,
+    ) {
         // As leader, we would not keep caches for the peers that didn't response
         // heartbeat in the last few seconds. That happens probably because
         // another TiKV is down. In this case if we do not clean up the cache,
@@ -122,7 +126,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.entry_storage_mut()
             .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx + 1));
 
-        let mut compact_idx = if applied_idx > first_idx
+        let mut compact_idx = if force && replicated_idx > first_idx {
+            replicated_idx
+        } else if applied_idx > first_idx
             && applied_idx - first_idx >= store_ctx.cfg.raft_log_gc_count_limit()
             || self.approximate_raft_log_size() >= store_ctx.cfg.raft_log_gc_size_limit().0
         {

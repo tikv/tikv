@@ -216,7 +216,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
-            PeerTick::CompactLog => self.on_compact_log_tick(),
+            PeerTick::CompactLog => self.on_compact_log_tick(false),
             PeerTick::SplitRegionCheck => self.on_split_region_check(),
             PeerTick::CheckMerge => unimplemented!(),
             PeerTick::CheckPeerStaleState => unimplemented!(),
@@ -305,6 +305,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         .peer_mut()
                         .on_request_split(self.store_ctx, request, ch)
                 }
+                PeerMsg::ForceCompactLog => self.on_compact_log_tick(true),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }
