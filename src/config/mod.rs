@@ -2441,12 +2441,12 @@ pub struct BackupStreamConfig {
 
 impl BackupStreamConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        let limit = SysQuota::cpu_cores_quota() as usize;
+        let limit = 2 * SysQuota::cpu_cores_quota() as usize;
         let default_cfg = BackupStreamConfig::default();
-        if self.num_threads == 0 || self.num_threads > 2 * limit {
+        if self.num_threads == 0 || self.num_threads > limit {
             warn!(
                 "log_backup.num_threads cannot be 0 or larger than {}, change it to {}",
-                limit, default_cfg.num_threads * 2
+                limit, default_cfg.num_threads
             );
             self.num_threads = default_cfg.num_threads;
         }
