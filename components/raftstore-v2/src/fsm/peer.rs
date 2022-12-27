@@ -197,7 +197,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         // Unlike v1, it's a must to set ready when there are pending entries. Otherwise
         // it may block for ever when there is unapplied conf change.
         let entry_storage = self.fsm.peer.storage().entry_storage();
-        if entry_storage.commit_index() > entry_storage.applied_index() || self.fsm.peer.is_leader()
+        if entry_storage.commit_index() > entry_storage.applied_index()
+            // Speed up setup if there is only one peer.
+            || self.fsm.peer.is_leader()
         {
             self.fsm.peer.set_has_ready();
         }
