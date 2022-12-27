@@ -370,7 +370,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             removed += 1;
         }
-        self.pending_tombstone_tablets.drain(..removed)
+        self.pending_tombstone_tablets.drain(..removed);
         removed > 0
     }
 
