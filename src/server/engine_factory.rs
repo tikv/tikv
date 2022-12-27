@@ -26,8 +26,8 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
-    shared_between_tablets: DbResources,
-    shared_between_cfs: CfResources,
+    db_resources: DbResources,
+    cf_resources: CfResources,
     state_storage: Option<Arc<dyn StateStorage>>,
     lite: bool,
 }
@@ -46,8 +46,8 @@ impl KvEngineFactoryBuilder {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                shared_between_tablets: config.rocksdb.build_resources(env),
-                shared_between_cfs: config.rocksdb.build_cf_resources(cache),
+                db_resources: config.rocksdb.build_resources(env),
+                cf_resources: config.rocksdb.build_cf_resources(cache),
                 state_storage: None,
                 lite: false,
             },
@@ -131,7 +131,7 @@ impl KvEngineFactory {
     }
 
     pub fn rocks_statistics(&self) -> Arc<RocksStatistics> {
-        self.inner.shared_between_tablets.statistics.clone()
+        self.inner.db_resources.statistics.clone()
     }
 
     fn db_opts(&self) -> RocksDbOptions {
@@ -139,7 +139,7 @@ impl KvEngineFactory {
         let mut db_opts = self
             .inner
             .rocksdb_config
-            .build_opt(&self.inner.shared_between_tablets);
+            .build_opt(&self.inner.db_resources);
         if !self.inner.lite {
             db_opts.add_event_listener(RocksEventListener::new(
                 "kv",
@@ -154,7 +154,7 @@ impl KvEngineFactory {
 
     fn cf_opts(&self, for_engine: EngineType) -> Vec<(&str, RocksCfOptions)> {
         self.inner.rocksdb_config.build_cf_opts(
-            &self.inner.shared_between_cfs,
+            &self.inner.cf_resources,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
             for_engine,
@@ -162,7 +162,7 @@ impl KvEngineFactory {
     }
 
     pub fn block_cache(&self) -> &Cache {
-        &self.inner.shared_between_cfs.cache
+        &self.inner.cf_resources.cache
     }
 
     /// Create a shared db.
