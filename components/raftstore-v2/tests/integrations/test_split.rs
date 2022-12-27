@@ -2,7 +2,7 @@
 
 use std::{thread, time::Duration};
 
-use engine_traits::{RaftEngineReadOnly, CF_DEFAULT, CF_RAFT};
+use engine_traits::{Peekable, RaftEngineReadOnly, CF_DEFAULT, CF_RAFT};
 use futures::executor::block_on;
 use kvproto::{
     metapb, pdpb,
@@ -257,6 +257,26 @@ fn test_split() {
         actual_split_key.as_encoded(),
         false,
     );
+
+    // Split should survive restart.
+    drop(raft_engine);
+    cluster.restart(0);
+    let region_and_key = vec![
+        (2, b"k00"),
+        (1000, b"k22"),
+        (1001, b"k11"),
+        (1002, b"k33"),
+        (1003, b"k55"),
+    ];
+    for (region_id, key) in region_and_key {
+        let snapshot = cluster.routers[0].stale_snapshot(region_id);
+        assert!(
+            snapshot.get_value(key).unwrap().is_some(),
+            "{} {:?}",
+            region_id,
+            key
+        );
+    }
 }
 
 // TODO: test split race with

@@ -962,7 +962,7 @@ where
             self.resolver.clone().unwrap(),
             Either::Left(snap_mgr.clone()),
             gc_worker.clone(),
-            Some(check_leader_scheduler),
+            check_leader_scheduler,
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
