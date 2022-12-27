@@ -1122,6 +1122,8 @@ where
                     store.apply_state(),
                     self.fsm.hibernate_state.group_state(),
                     peer.raft_group.status(),
+                    peer.raft_group.raft.raft_log.last_index(),
+                    peer.raft_group.raft.raft_log.persisted,
                 ))
             }
             CasualMessage::QueryRegionLeaderResp { region, leader } => {
