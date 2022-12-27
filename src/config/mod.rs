@@ -1225,16 +1225,21 @@ impl DbConfig {
     }
 
     pub fn build_resources(&self, env: Arc<Env>) -> DbResources {
-        DbResources {
-            env,
-            statistics: Arc::new(RocksStatistics::new_titan()),
-            rate_limiter: Some(Arc::new(RateLimiter::new_writeampbased_with_auto_tuned(
+        let rate_limiter = if self.rate_bytes_per_sec.0 > 0 {
+            Some(Arc::new(RateLimiter::new_writeampbased_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
                 (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
                 10, // fairness
                 self.rate_limiter_mode,
                 self.rate_limiter_auto_tuned,
-            ))),
+            )))
+        } else {
+            None
+        };
+        DbResources {
+            env,
+            statistics: Arc::new(RocksStatistics::new_titan()),
+            rate_limiter,
             write_buffer_manager: self.write_buffer_limit.map(|limit| {
                 Arc::new(WriteBufferManager::new(
                     limit.0 as usize,
@@ -4382,6 +4387,15 @@ mod tests {
         tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::kb(10);
         tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_rocks_rate_limit_zero() {
+        let mut tikv_cfg = TikvConfig::default();
+        tikv_cfg.rocksdb.rate_bytes_per_sec = ReadableSize(0);
+        tikv_cfg
+            .rocksdb
+            .build_opt(&tikv_cfg.rocksdb.build_resources(Arc::new(Env::default())));
     }
 
     #[test]
