@@ -106,7 +106,7 @@ use crate::{
 type Key = Vec<u8>;
 
 pub const PENDING_MSG_CAP: usize = 100;
-const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
+pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
 pub struct StoreInfo<EK, ER> {
