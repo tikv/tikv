@@ -8,38 +8,31 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
+use engine_traits::{
+    CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
+};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
-        fsm::Proposal,
+        fsm::ApplyMetrics,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
-        TxnExt,
+        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
+        ReadProgress, TxnExt, WriteTask,
     },
-    Error,
 };
-use slog::{debug, error, info, o, warn, Logger};
-use tikv_util::{
-    box_err,
-    config::ReadableSize,
-    time::{monotonic_raw_now, Instant as TiInstant},
-    worker::Scheduler,
-    Either,
-};
-use time::Timespec;
+use slog::Logger;
 
-use super::{storage::Storage, Apply};
+use super::storage::Storage;
 use crate::{
     batch::StoreContext,
-    fsm::{ApplyFsm, ApplyScheduler},
-    operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
-    router::{CmdResChannel, QueryResChannel},
-    tablet::CachedTablet,
-    worker::PdTask,
+    fsm::ApplyScheduler,
+    operation::{
+        AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
+    },
+    router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
 };
 
@@ -60,14 +53,20 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Statistics for other peers, only maintained when self is the leader.
     peer_heartbeats: HashMap<u64, Instant>,
 
+    /// For raft log compaction.
+    skip_compact_log_ticks: usize,
+    approximate_raft_log_size: u64,
+
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
-    raw_write_encoder: Option<SimpleWriteEncoder>,
+    raw_write_encoder: Option<SimpleWriteReqEncoder>,
     proposals: ProposalQueue<Vec<CmdResChannel>>,
     apply_scheduler: Option<ApplyScheduler>,
 
     /// Set to true if any side effect needs to be handled.
     has_ready: bool,
+    /// Sometimes there is no ready at all, but we need to trigger async write.
+    has_extra_write: bool,
     /// Writer for persisting side effects asynchronously.
     pub(crate) async_writer: AsyncWriter<EK, ER>,
 
@@ -86,11 +85,24 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 
+    pending_ticks: Vec<PeerTick>,
+
     /// Check whether this proposal can be proposed based on its epoch.
     proposal_control: ProposalControl,
 
     // Trace which peers have not finished split.
     split_trace: Vec<(u64, HashSet<u64>)>,
+    split_flow_control: SplitFlowControl,
+
+    /// Apply related State changes that needs to be persisted to raft engine.
+    ///
+    /// To make recovery correct, we need to persist all state changes before
+    /// advancing apply index.
+    state_changes: Option<Box<ER::LogBatch>>,
+    flush_state: Arc<FlushState>,
+
+    /// lead_transferee if this peer(leader) is in a leadership transferring.
+    leader_transferee: u64,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -99,7 +111,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// If peer is destroyed, `None` is returned.
     pub fn new(
         cfg: &Config,
-        tablet_factory: &dyn TabletFactory<EK>,
+        tablet_registry: &TabletRegistry<EK>,
         storage: Storage<EK, ER>,
     ) -> Result<Self> {
         let logger = storage.logger().clone();
@@ -110,41 +122,36 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
-        // Another option is always create tablet even if tablet index is 0. But this
-        // can introduce race when gc old tablet and create new peer.
-        let tablet = if tablet_index != 0 {
-            if !tablet_factory.exists(region_id, tablet_index) {
-                return Err(box_err!(
-                    "missing tablet {} for region {}",
-                    tablet_index,
-                    region_id
-                ));
-            }
-            // TODO: Perhaps we should stop create the tablet automatically.
-            Some(tablet_factory.open_tablet(
-                region_id,
-                Some(tablet_index),
-                OpenOptions::default().set_create(true),
-            )?)
-        } else {
-            None
-        };
-
-        let tablet = CachedTablet::new(tablet);
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
+
+        let cached_tablet = tablet_registry.get_or_default(region_id);
+        let flush_state: Arc<FlushState> = Arc::default();
+        // We can't create tablet if tablet index is 0. It can introduce race when gc
+        // old tablet and create new peer. We also can't get the correct range of the
+        // region, which is required for kv data gc.
+        if tablet_index != 0 {
+            let mut ctx = TabletContext::new(&region, Some(tablet_index));
+            ctx.flush_state = Some(flush_state.clone());
+            // TODO: Perhaps we should stop create the tablet automatically.
+            tablet_registry.load(ctx, false)?;
+        }
+
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
-            tablet,
+            tablet: cached_tablet,
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
+            skip_compact_log_ticks: 0,
+            approximate_raft_log_size: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
             apply_scheduler: None,
             has_ready: false,
+            has_extra_write: false,
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
@@ -164,7 +171,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             proposal_control: ProposalControl::new(0),
+            pending_ticks: Vec::new(),
             split_trace: vec![],
+            state_changes: None,
+            flush_state,
+            split_flow_control: SplitFlowControl::default(),
+            leader_transferee: raft::INVALID_ID,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -198,7 +210,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
-        // host: &CoprocessorHost<impl KvEngine>,
+        host: &CoprocessorHost<EK>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
         reason: RegionChangeReason,
@@ -246,7 +258,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pessimistic_locks.version = self.region().get_region_epoch().get_version();
         }
 
-        // TODO: CoprocessorHost
+        if self.serving() {
+            host.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Update(reason),
+                self.state_role(),
+            );
+        }
     }
 
     #[inline]
@@ -344,6 +362,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.self_stat
     }
 
+    #[inline]
+    pub fn update_stat(&mut self, metrics: &ApplyMetrics) {
+        self.self_stat.written_bytes += metrics.written_bytes;
+        self.self_stat.written_keys += metrics.written_keys;
+    }
+
     /// Mark the peer has a ready so it will be checked at the end of every
     /// processing round.
     #[inline]
@@ -355,6 +379,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn reset_has_ready(&mut self) -> bool {
         mem::take(&mut self.has_ready)
+    }
+
+    #[inline]
+    pub fn set_has_extra_write(&mut self) {
+        self.set_has_ready();
+        self.has_extra_write = true;
+    }
+
+    #[inline]
+    pub fn reset_has_extra_write(&mut self) -> bool {
+        mem::take(&mut self.has_extra_write)
     }
 
     #[inline]
@@ -421,6 +456,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.peer_heartbeats.remove(&peer_id);
     }
 
+    /// Returns whether or not the peer sent heartbeat after the provided
+    /// deadline time.
+    #[inline]
+    pub fn peer_heartbeat_is_fresh(&self, peer_id: u64, deadline: &Instant) -> bool {
+        matches!(
+            self.peer_heartbeats.get(&peer_id),
+            Some(last_heartbeat) if *last_heartbeat >= *deadline
+        )
+    }
+
     pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
         let mut down_peers = Vec::new();
         let now = Instant::now();
@@ -440,6 +485,36 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: `refill_disk_full_peers`
         down_peers
+    }
+
+    #[inline]
+    pub fn reset_skip_compact_log_ticks(&mut self) {
+        self.skip_compact_log_ticks = 0;
+    }
+
+    #[inline]
+    pub fn maybe_skip_compact_log(&mut self, max_skip_ticks: usize) -> bool {
+        if self.skip_compact_log_ticks < max_skip_ticks {
+            self.skip_compact_log_ticks += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    pub fn approximate_raft_log_size(&self) -> u64 {
+        self.approximate_raft_log_size
+    }
+
+    #[inline]
+    pub fn update_approximate_raft_log_size(&mut self, f: impl Fn(u64) -> u64) {
+        self.approximate_raft_log_size = f(self.approximate_raft_log_size);
+    }
+
+    #[inline]
+    pub fn state_role(&self) -> StateRole {
+        self.raft_group.raft.state
     }
 
     #[inline]
@@ -498,17 +573,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub(crate) fn has_applied_to_current_term(&self) -> bool {
-        self.entry_storage().applied_term() == self.term()
-    }
-
-    #[inline]
-    pub fn simple_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
+    pub fn simple_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteReqEncoder> {
         &mut self.raw_write_encoder
     }
 
     #[inline]
-    pub fn simple_write_encoder(&self) -> &Option<SimpleWriteEncoder> {
+    pub fn simple_write_encoder(&self) -> &Option<SimpleWriteReqEncoder> {
         &self.raw_write_encoder
     }
 
@@ -527,13 +597,58 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.proposals
     }
 
-    pub fn apply_scheduler(&self) -> &ApplyScheduler {
-        self.apply_scheduler.as_ref().unwrap()
+    pub fn apply_scheduler(&self) -> Option<&ApplyScheduler> {
+        self.apply_scheduler.as_ref()
     }
 
     #[inline]
     pub fn set_apply_scheduler(&mut self, apply_scheduler: ApplyScheduler) {
         self.apply_scheduler = Some(apply_scheduler);
+    }
+
+    #[inline]
+    pub fn clear_apply_scheduler(&mut self) {
+        self.apply_scheduler.take();
+    }
+
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
+    #[inline]
+    pub fn is_handling_snapshot(&self) -> bool {
+        // todo: This method may be unnecessary now?
+        false
+    }
+
+    /// Returns `true` if the raft group has replicated a snapshot but not
+    /// committed it yet.
+    #[inline]
+    pub fn has_pending_snapshot(&self) -> bool {
+        self.raft_group().snap().is_some()
+    }
+
+    #[inline]
+    pub fn add_pending_tick(&mut self, tick: PeerTick) {
+        self.pending_ticks.push(tick);
+    }
+
+    #[inline]
+    pub fn take_pending_ticks(&mut self) -> Vec<PeerTick> {
+        mem::take(&mut self.pending_ticks)
+    }
+
+    pub fn activate_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.status = LocksStatus::Normal;
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
+    }
+
+    pub fn clear_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.status = LocksStatus::NotLeader;
+        pessimistic_locks.clear();
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
     }
 
     #[inline]
@@ -613,5 +728,48 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn split_trace_mut(&mut self) -> &mut Vec<(u64, HashSet<u64>)> {
         &mut self.split_trace
+    }
+
+    #[inline]
+    pub fn flush_state(&self) -> &Arc<FlushState> {
+        &self.flush_state
+    }
+
+    pub fn reset_flush_state(&mut self) {
+        self.flush_state = Arc::default();
+    }
+
+    // Note: Call `set_has_extra_write` after adding new state changes.
+    #[inline]
+    pub fn state_changes_mut(&mut self) -> &mut ER::LogBatch {
+        if self.state_changes.is_none() {
+            self.state_changes = Some(Box::new(self.entry_storage().raft_engine().log_batch(0)));
+        }
+        self.state_changes.as_mut().unwrap()
+    }
+
+    #[inline]
+    pub fn merge_state_changes_to(&mut self, task: &mut WriteTask<EK, ER>) {
+        if self.state_changes.is_none() {
+            return;
+        }
+        task.extra_write
+            .merge_v2(Box::into_inner(self.state_changes.take().unwrap()));
+    }
+
+    #[inline]
+    pub fn split_flow_control_mut(&mut self) -> &mut SplitFlowControl {
+        &mut self.split_flow_control
+    }
+
+    #[inline]
+    pub fn refresh_leader_transferee(&mut self) -> u64 {
+        mem::replace(
+            &mut self.leader_transferee,
+            self.raft_group
+                .raft
+                .lead_transferee
+                .unwrap_or(raft::INVALID_ID),
+        )
     }
 }

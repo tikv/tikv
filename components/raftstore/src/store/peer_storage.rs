@@ -2124,7 +2124,8 @@ pub mod tests {
         assert!(build_storage().is_err());
 
         // It should not recover if corresponding log doesn't exist.
-        engines.raft.gc(1, 14, 15).unwrap();
+        engines.raft.gc(1, 14, 15, &mut lb).unwrap();
+        engines.raft.consume(&mut lb, false).unwrap();
         apply_state.set_commit_index(14);
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
         engines
@@ -2136,7 +2137,7 @@ pub mod tests {
         let entries = (14..=20)
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
-        engines.raft.gc(1, 0, 21).unwrap();
+        engines.raft.gc(1, 0, 21, &mut lb).unwrap();
         lb.append(1, entries).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
         raft_state.mut_hard_state().set_commit(14);
@@ -2164,7 +2165,7 @@ pub mod tests {
         assert!(build_storage().is_err());
 
         // last index < recorded_commit_index is invalid.
-        engines.raft.gc(1, 0, 21).unwrap();
+        engines.raft.gc(1, 0, 21, &mut lb).unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.set_last_index(13);
         lb.append(1, vec![new_entry(13, RAFT_INIT_LOG_TERM)])

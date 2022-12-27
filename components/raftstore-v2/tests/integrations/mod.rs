@@ -15,3 +15,5 @@ mod test_pd_heartbeat;
 mod test_read;
 mod test_split;
 mod test_status;
+mod test_trace_apply;
+mod test_transfer_leader;

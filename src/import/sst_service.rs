@@ -185,6 +185,17 @@ where
                 .ingest_maybe_slowdown_writes(CF_WRITE)
                 .expect("cf")
         {
+            match self.engine.get_sst_key_ranges(CF_WRITE, 0) {
+                Ok(l0_sst_ranges) => {
+                    warn!(
+                        "sst ingest is too slow";
+                        "sst_ranges" => ?l0_sst_ranges,
+                    );
+                }
+                Err(e) => {
+                    error!("get sst key ranges failed"; "err" => ?e);
+                }
+            }
             let mut errorpb = errorpb::Error::default();
             let err = "too many sst files are ingesting";
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
@@ -1064,7 +1075,7 @@ where
     Box::new(move |k: Vec<u8>, v: Vec<u8>| {
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
-        if k.is_empty() || v.is_empty() {
+        if k.is_empty() || (!is_delete && v.is_empty()) {
             return;
         }
 
