@@ -548,6 +548,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
                     self.region_heartbeat_pd(ctx);
                     self.add_pending_tick(PeerTick::CompactLog);
+                    self.add_pending_tick(PeerTick::SplitRegionCheck);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
