@@ -38,7 +38,7 @@ use raftstore::{
 };
 use raftstore_v2::{
     create_store_batch_system,
-    router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
+    router::{DebugInfoChannel, FlushChannel, PeerMsg, PeerTick, QueryResult, RaftRouter},
     Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
 use slog::{debug, o, Logger};
@@ -109,6 +109,8 @@ impl TestRouter {
     ) -> Option<RaftCmdResponse> {
         let (msg, sub) = PeerMsg::simple_write(header, write.encode());
         self.send(region_id, msg).unwrap();
+        self.send(region_id, PeerMsg::Tick(PeerTick::FlushPendingWrite))
+            .unwrap();
         block_on(sub.result())
     }
 

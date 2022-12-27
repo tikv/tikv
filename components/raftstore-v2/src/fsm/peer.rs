@@ -214,7 +214,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => unimplemented!(),
             PeerTick::CheckLongUncommitted => unimplemented!(),
-            PeerTick::ProposePendingWrite => self.on_propose_pending_write(),
+            PeerTick::FlushPendingWrite => self.on_propose_pending_write(),
         }
     }
 
@@ -294,15 +294,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             }
         }
         if let Some(write) = self.fsm.peer.simple_write_encoder_mut() {
-            if write.need_schedule() {
-                self.fsm.peer.propose_pending_writes(self.store_ctx);
-            } else {
-                self.schedule_tick(PeerTick::ProposePendingWrite);
+            if !write.ticked() {
+                write.enabled_ticked();
+                self.schedule_tick(PeerTick::FlushPendingWrite);
             }
         }
-        // // TODO: instead of propose pending commands immediately, we should
-        // use timeout. self.fsm.peer.propose_pending_writes(self.
-        // store_ctx);
     }
 
     pub fn on_reactivate_memory_lock_tick(&mut self) {

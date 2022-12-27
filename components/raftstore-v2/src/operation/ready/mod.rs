@@ -73,6 +73,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         }
         self.schedule_tick(PeerTick::Raft);
     }
+
+    pub fn on_propose_pending_write(&mut self) {
+        let peer = self.fsm.peer_mut();
+        if peer.simple_write_encoder().is_some() {
+            peer.propose_pending_writes(self.store_ctx);
+        }
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
