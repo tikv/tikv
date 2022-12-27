@@ -8,6 +8,7 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry};
+use kvproto::metapb::Region;
 use slog::{warn, Logger};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
@@ -18,8 +19,8 @@ pub enum Task<EK> {
         end_key: Box<[u8]>,
     },
     PrepareDestroy {
-        region_id: u64,
         tablet: EK,
+        region_id: u64,
         wait_for_persisted: u64,
     },
     Destroy {
@@ -30,8 +31,63 @@ pub enum Task<EK> {
 
 impl<EK> Display for Task<EK> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        // TODO
-        write!(f, "TabletGcTask")
+        match *self {
+            Task::Trim {
+                ref start_key,
+                ref end_key,
+                ..
+            } => write!(
+                f,
+                "trim tablet for start_key {}, end_key {}",
+                log_wrappers::Value::key(start_key),
+                log_wrappers::Value::key(end_key),
+            ),
+            Task::PrepareDestroy {
+                region_id,
+                wait_for_persisted,
+                ..
+            } => write!(
+                f,
+                "prepare destroy tablet for region_id {}, wait_for_persisted {}",
+                region_id, wait_for_persisted,
+            ),
+            Task::Destroy {
+                region_id,
+                persisted_index,
+            } => write!(
+                f,
+                "destroy tablet for region_id {} persisted_index {}",
+                region_id, persisted_index,
+            ),
+        }
+    }
+}
+
+impl<EK> Task<EK> {
+    #[inline]
+    pub fn trim(tablet: EK, region: &Region) -> Self {
+        Task::Trim {
+            tablet,
+            start_key: region.get_start_key().into(),
+            end_key: region.get_end_key().into(),
+        }
+    }
+
+    #[inline]
+    pub fn prepare_destroy(tablet: EK, region_id: u64, wait_for_persisted: u64) -> Self {
+        Task::PrepareDestroy {
+            tablet,
+            region_id,
+            wait_for_persisted,
+        }
+    }
+
+    #[inline]
+    pub fn destroy(region_id: u64, persisted_index: u64) -> Self {
+        Task::Destroy {
+            region_id,
+            persisted_index,
+        }
     }
 }
 
@@ -39,17 +95,9 @@ pub struct Runner<EK: KvEngine> {
     tablet_registry: TabletRegistry<EK>,
     logger: Logger,
 
-    pending_trim_tasks: Vec<InternalTrimTask<EK>>,
     // region_id -> [(tablet_path, wait_for_persisted)].
     waiting_destroy_tasks: HashMap<u64, Vec<(PathBuf, u64)>>,
     pending_destroy_tasks: Vec<PathBuf>,
-}
-
-struct InternalTrimTask<EK> {
-    tablet: EK,
-    start_key: Box<[u8]>,
-    end_key: Box<[u8]>,
-    arrival_seqno: u64,
 }
 
 impl<EK: KvEngine> Runner<EK> {
@@ -57,30 +105,28 @@ impl<EK: KvEngine> Runner<EK> {
         Self {
             tablet_registry,
             logger,
-            pending_trim_tasks: Vec::new(),
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
         }
     }
 
     /// Returns true if task is consumed. Failure is considered consumed.
-    fn process_trim_task(task: &InternalTrimTask<EK>) -> bool {
-        if task
-            .tablet
-            .get_oldest_snapshot_sequence_number()
-            .map_or(true, |s| s >= task.arrival_seqno)
-        {
-            let range1 = Range::new(&[], &task.start_key);
-            let range2 = Range::new(&task.end_key, &[0xFF, 0xFF]);
-            task.tablet
-                .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2])
+    fn trim(tablet: &EK, start_key: &[u8], end_key: &[u8]) {
+        let start_key = keys::data_key(start_key);
+        let end_key = keys::data_end_key(end_key);
+        let range1 = Range::new(&[], &start_key);
+        let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
+        tablet
+            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2])
+            .unwrap();
+        tablet
+            .delete_ranges_cfs(DeleteStrategy::DeleteByRange, &[range1, range2])
+            .unwrap();
+        for r in [range1, range2] {
+            tablet
+                .compact_range(Some(r.start_key), Some(r.end_key), false, 1)
                 .unwrap();
-            task.tablet
-                .delete_ranges_cfs(DeleteStrategy::DeleteByRange, &[range1, range2])
-                .unwrap();
-            return true;
         }
-        false
     }
 
     fn prepare_destroy(&mut self, region_id: u64, tablet: EK, wait_for_persisted: u64) {
@@ -148,13 +194,7 @@ where
                 start_key,
                 end_key,
             } => {
-                let arrival_seqno = tablet.get_latest_sequence_number();
-                self.pending_trim_tasks.push(InternalTrimTask {
-                    tablet,
-                    start_key,
-                    end_key,
-                    arrival_seqno,
-                });
+                Self::trim(&tablet, &start_key, &end_key);
             }
             Task::PrepareDestroy {
                 region_id,
@@ -174,8 +214,6 @@ where
     EK: KvEngine,
 {
     fn on_timeout(&mut self) {
-        self.pending_trim_tasks
-            .retain(|task| !Self::process_trim_task(task));
         self.pending_destroy_tasks
             .retain(|task| !Self::process_destroy_task(&self.logger, &self.tablet_registry, task));
     }

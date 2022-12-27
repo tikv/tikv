@@ -17,7 +17,7 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::{
-    store::{fsm::new_admin_request, needs_evict_entry_cache, Transport},
+    store::{fsm::new_admin_request, needs_evict_entry_cache, Transport, WriteTask},
     Result,
 };
 use slog::{debug, error, info};
@@ -257,6 +257,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         old_persisted: u64,
+        task: &mut WriteTask<EK, ER>,
     ) {
         let new_persisted = self.storage().apply_trace().persisted_apply_index();
         if old_persisted < new_persisted {
@@ -273,13 +274,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.maybe_compact_log_from_engine(store_ctx, Either::Left(old_persisted));
             if self.remove_tombstone_tablets_before(new_persisted) {
-                let _ = store_ctx
-                    .schedulers
-                    .tablet_gc
-                    .schedule(tablet_gc::Task::Destroy {
-                        region_id,
-                        persisted_index: new_persisted,
-                    });
+                let sched = store_ctx.schedulers.tablet_gc.clone();
+                task.persisted_cbs.push(Box::new(move || {
+                    let _ = sched.schedule(tablet_gc::Task::destroy(region_id, new_persisted));
+                }))
             }
         }
     }

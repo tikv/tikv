@@ -341,7 +341,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn record_tombstone_tablet<T>(
+    pub fn record_tablet_as_tombstone_and_refresh<T>(
         &mut self,
         new_tablet_index: u64,
         ctx: &StoreContext<EK, ER, T>,
@@ -351,13 +351,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let _ = ctx
                 .schedulers
                 .tablet_gc
-                .schedule(tablet_gc::Task::PrepareDestroy {
-                    region_id: self.region_id(),
-                    tablet: old_tablet.clone(),
-                    wait_for_persisted: new_tablet_index,
-                });
+                .schedule(tablet_gc::Task::prepare_destroy(
+                    old_tablet.clone(),
+                    self.region_id(),
+                    new_tablet_index,
+                ));
         }
-        self.tablet.latest();
+        // TODO: Handle race between split and snapshot. So that we can assert
+        // `self.tablet.refresh() == 1`
+        assert!(self.tablet.refresh() > 0);
     }
 
     /// Returns if there's any tombstone being removed.
