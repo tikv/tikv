@@ -1223,7 +1223,7 @@ impl DbConfig {
                 self.enable_multi_batch_write.get_or_insert(false);
                 self.allow_concurrent_memtable_write.get_or_insert(false);
                 let total_mem = SysQuota::memory_limit_in_bytes() as f64;
-                self.write_buffer_limit = Some(ReadableSize(
+                self.write_buffer_limit.get_or_insert(ReadableSize(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                 ));
             }
