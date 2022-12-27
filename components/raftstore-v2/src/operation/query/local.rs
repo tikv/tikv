@@ -17,9 +17,11 @@ use kvproto::{
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, util::LeaseState, worker_metrics::TLS_LOCAL_READ_METRICS, LocalReadContext,
-        LocalReaderCore, ReadDelegate, ReadExecutor, ReadExecutorProvider, RegionSnapshot,
-        RequestPolicy,
+        cmd_resp,
+        util::LeaseState,
+        worker_metrics::{self, TLS_LOCAL_READ_METRICS},
+        LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor, ReadExecutorProvider,
+        RegionSnapshot, RequestPolicy,
     },
     Error, Result,
 };
@@ -95,6 +97,8 @@ where
                 Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
                 Ok(RequestPolicy::StaleRead) => Ok(Some((delegate, RequestPolicy::StaleRead))),
                 // It can not handle other policies.
+                // TODO: we should only abort when lease expires. For other cases we should retry
+                // infinitely.
                 Ok(_) => Ok(None),
                 Err(e) => Err(e),
             }
@@ -180,33 +184,46 @@ where
             Ok(None) => Either::Right((self.try_to_renew_lease(region_id, &req), self.clone())),
         };
 
+        worker_metrics::maybe_tls_local_read_metrics_flush();
+
         async move {
             match res {
-                Either::Left(Ok(Some(snap))) => return Ok(snap),
-                Either::Left(Err(e)) => return Err(e),
+                Either::Left(Ok(Some(snap))) => Ok(snap),
+                Either::Left(Err(e)) => Err(e),
                 Either::Right((fut, mut reader)) => {
-                    if let Some(query_res) = fut.await?
-                        && query_res.read().is_some()
-                    {
-                        // If query successful, try again.
-                            req.mut_header().set_read_quorum(false);
-                            if let Some(snap) = reader.try_get_snapshot(&req)? {
-                                return Ok(snap);
+                    let err = match fut.await? {
+                        Some(query_res) => {
+                            if query_res.read().is_some() {
+                                // If query successful, try again.
+                                req.mut_header().set_read_quorum(false);
+                                if let Some(snap) = reader.try_get_snapshot(&req)? {
+                                    return Ok(snap);
+                                } else {
+                                    let mut err = errorpb::Error::default();
+                                    err.set_message(format!("no delegate found for {}", region_id));
+                                    err
+                                }
+                            } else {
+                                let QueryResult::Response(res) = query_res else { unreachable!() };
+                                assert!(res.get_header().has_error(), "{:?}", res);
+                                return Err(res);
                             }
-                    }
+                        }
+                        None => {
+                            let mut err = errorpb::Error::default();
+                            err.set_message(format!(
+                                "failed to extend lease: canceled: {}",
+                                region_id
+                            ));
+                            err
+                        }
+                    };
+                    let mut resp = RaftCmdResponse::default();
+                    resp.mut_header().set_error(err);
+                    Err(resp)
                 }
                 Either::Left(Ok(None)) => unreachable!(),
             }
-
-            let mut err = errorpb::Error::default();
-            err.set_message(format!(
-                "Fail to get snapshot from LocalReader for region {}. \
-                Maybe due to `not leader`, `region not found` or `not applied to the current term`",
-                region_id
-            ));
-            let mut resp = RaftCmdResponse::default();
-            resp.mut_header().set_error(err);
-            Err(resp)
         }
     }
 
@@ -217,7 +234,12 @@ where
         region_id: u64,
         req: &RaftCmdRequest,
     ) -> impl Future<Output = std::result::Result<Option<QueryResult>, RaftCmdResponse>> {
-        let (msg, sub) = PeerMsg::raft_query(req.clone());
+        let mut req = req.clone();
+        // Remote lease is updated step by step. It's possible local reader expires
+        // while the raftstore doesn't. So we need to trigger an update
+        // explicitly. TODO: find a way to reduce the triggered heartbeats.
+        req.mut_header().set_read_quorum(true);
+        let (msg, sub) = PeerMsg::raft_query(req);
         let res = match MsgRouter::send(&self.router, region_id, msg) {
             Ok(()) => Ok(sub),
             Err(TrySendError::Full(_)) => {
@@ -553,13 +575,16 @@ mod tests {
 
                 match msg {
                     // send the result back to local reader
-                    PeerMsg::RaftQuery(query) => ReadCallback::set_result(
-                        query.ch,
-                        QueryResult::Read(ReadResponse {
-                            read_index: 0,
-                            txn_extra_op: Default::default(),
-                        }),
-                    ),
+                    PeerMsg::RaftQuery(query) => {
+                        assert!(query.request.get_header().get_read_quorum());
+                        ReadCallback::set_result(
+                            query.ch,
+                            QueryResult::Read(ReadResponse {
+                                read_index: 0,
+                                txn_extra_op: Default::default(),
+                            }),
+                        )
+                    }
                     _ => unreachable!(),
                 }
                 ch_tx.send(rx).unwrap();
