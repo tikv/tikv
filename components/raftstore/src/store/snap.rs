@@ -2005,7 +2005,8 @@ impl TabletSnapManager {
                 match e.and_then(|e| e.metadata()) {
                     Ok(m) => total_size += m.len(),
                     Err(e) if e.kind() == ErrorKind::NotFound || e.kind() == ErrorKind::Other => {
-                        // Other(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })
+                        // Other(Os { code: 2, kind: NotFound, message: \"No such file or
+                        // directory\" })
                         continue;
                     }
                     Err(e) => return Err(Error::from(e)),
