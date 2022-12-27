@@ -103,6 +103,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         let opt: RocksWriteOptions = opts.into();
         let mut seq = 0;
         if self.support_write_batch_vec {
+            // FIXME(tabokie): Callback for empty write batch won't be called.
             self.get_db()
                 .multi_batch_write_callback(self.as_inner(), &opt.into_raw(), |s| seq = s)
                 .map_err(r2e)?;
@@ -111,7 +112,6 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
                 .write_callback(&self.wbs[0], &opt.into_raw(), |s| seq = s)
                 .map_err(r2e)?;
         }
-        debug_assert!(seq > 0);
         Ok(seq)
     }
 
