@@ -16,7 +16,7 @@ use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
 use crate::{
-    config::{DbConfig, SharedBetweenCfs, SharedBetweenDbs, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    config::{CfResources, DbConfig, DbResources, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
     storage::config::EngineType,
 };
 
@@ -26,8 +26,8 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
-    shared_between_tablets: SharedBetweenDbs,
-    shared_between_cfs: SharedBetweenCfs,
+    shared_between_tablets: DbResources,
+    shared_between_cfs: CfResources,
     state_storage: Option<Arc<dyn StateStorage>>,
     lite: bool,
 }
@@ -46,8 +46,8 @@ impl KvEngineFactoryBuilder {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                shared_between_tablets: config.rocksdb.build_shared(env),
-                shared_between_cfs: config.rocksdb.build_cf_shared(cache),
+                shared_between_tablets: config.rocksdb.build_resources(env),
+                shared_between_cfs: config.rocksdb.build_cf_resources(cache),
                 state_storage: None,
                 lite: false,
             },

@@ -615,7 +615,7 @@ macro_rules! build_cf_opt {
     }};
 }
 
-pub struct SharedBetweenCfs {
+pub struct CfResources {
     pub cache: Cache,
     pub compaction_thread_limiters: HashMap<&'static str, ConcurrentTaskLimiter>,
 }
@@ -687,7 +687,7 @@ impl Default for DefaultCfConfig {
 impl DefaultCfConfig {
     pub fn build_opt(
         &self,
-        shared: &SharedBetweenCfs,
+        shared: &CfResources,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
         for_engine: EngineType,
@@ -812,7 +812,7 @@ impl Default for WriteCfConfig {
 impl WriteCfConfig {
     pub fn build_opt(
         &self,
-        shared: &SharedBetweenCfs,
+        shared: &CfResources,
         region_info_accessor: Option<&RegionInfoAccessor>,
         for_engine: EngineType,
     ) -> RocksCfOptions {
@@ -916,7 +916,7 @@ impl Default for LockCfConfig {
 }
 
 impl LockCfConfig {
-    pub fn build_opt(&self, shared: &SharedBetweenCfs, for_engine: EngineType) -> RocksCfOptions {
+    pub fn build_opt(&self, shared: &CfResources, for_engine: EngineType) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(
             self,
@@ -999,7 +999,7 @@ impl Default for RaftCfConfig {
 }
 
 impl RaftCfConfig {
-    pub fn build_opt(&self, shared: &SharedBetweenCfs) -> RocksCfOptions {
+    pub fn build_opt(&self, shared: &CfResources) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(
             self,
@@ -1150,7 +1150,7 @@ pub struct DbConfig {
 }
 
 #[derive(Clone)]
-pub struct SharedBetweenDbs {
+pub struct DbResources {
     // DB Options.
     pub env: Arc<Env>,
     pub statistics: Arc<RocksStatistics>,
@@ -1224,8 +1224,8 @@ impl DbConfig {
         }
     }
 
-    pub fn build_shared(&self, env: Arc<Env>) -> SharedBetweenDbs {
-        SharedBetweenDbs {
+    pub fn build_resources(&self, env: Arc<Env>) -> DbResources {
+        DbResources {
             env,
             statistics: Arc::new(RocksStatistics::new_titan()),
             rate_limiter: Some(Arc::new(RateLimiter::new_writeampbased_with_auto_tuned(
@@ -1245,7 +1245,7 @@ impl DbConfig {
         }
     }
 
-    pub fn build_opt(&self, shared: &SharedBetweenDbs) -> RocksDbOptions {
+    pub fn build_opt(&self, shared: &DbResources) -> RocksDbOptions {
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -1303,7 +1303,7 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_shared(&self, cache: Cache) -> SharedBetweenCfs {
+    pub fn build_cf_resources(&self, cache: Cache) -> CfResources {
         let mut compaction_thread_limiters = HashMap::new();
         if self.defaultcf.max_compactions > 0 {
             compaction_thread_limiters.insert(
@@ -1329,7 +1329,7 @@ impl DbConfig {
                 ConcurrentTaskLimiter::new(CF_RAFT, self.raftcf.max_compactions),
             );
         }
-        SharedBetweenCfs {
+        CfResources {
             cache,
             compaction_thread_limiters,
         }
@@ -1337,7 +1337,7 @@ impl DbConfig {
 
     pub fn build_cf_opts(
         &self,
-        shared: &SharedBetweenCfs,
+        shared: &CfResources,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
         for_engine: EngineType,
@@ -4546,11 +4546,11 @@ mod tests {
             &cfg.storage.data_dir,
             Some(
                 cfg.rocksdb
-                    .build_opt(&cfg.rocksdb.build_shared(Arc::new(Env::default()))),
+                    .build_opt(&cfg.rocksdb.build_resources(Arc::new(Env::default()))),
             ),
             cfg.rocksdb.build_cf_opts(
                 &cfg.rocksdb
-                    .build_cf_shared(cfg.storage.block_cache.build_shared_cache()),
+                    .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
                 None,
                 cfg.storage.api_version(),
                 cfg.storage.engine,
