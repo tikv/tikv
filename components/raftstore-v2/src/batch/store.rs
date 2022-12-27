@@ -46,7 +46,7 @@ use crate::{
     operation::SPLIT_PREFIX,
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::pd,
+    worker::{pd, tablet_gc},
     Error, Result,
 };
 
@@ -391,6 +391,7 @@ where
 pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub read: Scheduler<ReadTask<EK>>,
     pub pd: Scheduler<pd::Task>,
+    pub tablet_gc: Scheduler<tablet_gc::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
 
     // Following is not maintained by raftstore itself.
@@ -403,6 +404,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
     async_read: Worker,
     pd: LazyWorker<pd::Task>,
+    tablet_gc_worker: Worker,
     async_write: StoreWriters<EK, ER>,
 
     // Following is not maintained by raftstore itself.
@@ -414,6 +416,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
+            tablet_gc_worker: Worker::new("tablet-gc-worker"),
             async_write: StoreWriters::default(),
             background,
         }
@@ -489,9 +492,15 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
+        let tablet_gc_scheduler = workers.tablet_gc_worker.start(
+            "tablet-gc-worker",
+            tablet_gc::Runner::new(tablet_registry.clone(), self.logger.clone()),
+        );
+
         let schedulers = Schedulers {
             read: read_scheduler,
             pd: workers.pd.scheduler(),
+            tablet_gc: tablet_gc_scheduler,
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
         };
