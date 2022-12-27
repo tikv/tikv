@@ -45,6 +45,7 @@ use crate::{
     fsm::ApplyResReporter,
     operation::command::SPLIT_PREFIX,
     raft::{Apply, Peer, Storage},
+    worker::tablet_gc,
     Result, StoreContext,
 };
 
@@ -162,7 +163,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Use a new FlushState to avoid conflicts with the old one.
             tablet_ctx.flush_state = Some(flush_state);
             ctx.tablet_registry.load(tablet_ctx, false).unwrap();
-            self.refresh_tablet();
+            self.record_tombstone_tablet(persisted_index, ctx);
             self.schedule_apply_fsm(ctx);
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);
@@ -184,6 +185,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             if let Some(init) = split {
                 info!(self.logger, "init with snapshot finished");
+                let _ = ctx.schedulers.tablet_gc.schedule(tablet_gc::Task::Trim {
+                    tablet: self.tablet().unwrap().clone(),
+                    start_key: keys::data_key(self.region().get_start_key()).into_boxed_slice(),
+                    end_key: keys::data_key(self.region().get_end_key()).into_boxed_slice(),
+                });
                 self.post_split_init(ctx, init);
             }
         }

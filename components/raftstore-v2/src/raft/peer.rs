@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::VecDeque,
     mem,
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
@@ -33,6 +34,7 @@ use crate::{
         AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
+    worker::tablet_gc,
     Result,
 };
 
@@ -42,7 +44,11 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
-    tombstone_tablet: Option<EK>,
+    /// Tombstone tablets can only be destroyed when the tablet that replaces it
+    /// is persisted. This is a list of tablet index that awaits to be
+    /// persisted. When persisted_apply is advanced, we need to notify tablet_gc
+    /// worker to destroy them.
+    pending_tombstone_tablets: VecDeque<u64>,
 
     /// Statistics for self.
     self_stat: PeerStat,
@@ -127,7 +133,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
 
-        let cached_tablet = tablet_registry.get_or_default(region_id);
         let flush_state: Arc<FlushState> = Arc::default();
         // We can't create tablet if tablet index is 0. It can introduce race when gc
         // old tablet and create new peer. We also can't get the correct range of the
@@ -138,11 +143,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // TODO: Perhaps we should stop create the tablet automatically.
             tablet_registry.load(ctx, false)?;
         }
+        let cached_tablet = tablet_registry.get_or_default(region_id);
 
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: cached_tablet,
-            tombstone_tablet: None,
+            pending_tombstone_tablets: VecDeque::new(),
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
@@ -330,16 +336,41 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn refresh_tablet(&mut self) {
-        // If the tablet isn't updated, we will hold duplicate references, which is
-        // fine.
-        self.tombstone_tablet = self.tablet.cache().cloned();
-        self.tablet.latest();
+    pub fn tablet(&mut self) -> Option<&EK> {
+        self.tablet.latest()
     }
 
     #[inline]
-    pub fn retire_tombstone_tablet(&mut self) {
-        self.tombstone_tablet.take();
+    pub fn record_tombstone_tablet<T>(
+        &mut self,
+        new_tablet_index: u64,
+        ctx: &StoreContext<EK, ER, T>,
+    ) {
+        if let Some(old_tablet) = self.tablet.cache() {
+            self.pending_tombstone_tablets.push_back(new_tablet_index);
+            let _ = ctx
+                .schedulers
+                .tablet_gc
+                .schedule(tablet_gc::Task::PrepareDestroy {
+                    region_id: self.region_id(),
+                    tablet: old_tablet.clone(),
+                    wait_for_persisted: new_tablet_index,
+                });
+        }
+        self.tablet.latest();
+    }
+
+    /// Returns if there's any tombstone being removed.
+    #[inline]
+    pub fn remove_tombstone_tablets_before(&mut self, persisted: u64) -> bool {
+        let mut removed = false;
+        while let Some(i) = self.pending_tombstone_tablets.front()
+            && *i <= persisted
+        {
+            self.pending_tombstone_tablets.pop_front();
+            removed = true;
+        }
+        removed
     }
 
     #[inline]

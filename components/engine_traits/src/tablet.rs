@@ -177,7 +177,6 @@ impl<EK: Clone + Send + Sync> TabletFactory<EK> for SingletonFactory<EK> {
 struct TabletRegistryInner<EK> {
     // region_id, suffix -> tablet
     tablets: Mutex<HashMap<u64, CachedTablet<EK>>>,
-    tombstone: Mutex<Vec<EK>>,
     factory: Box<dyn TabletFactory<EK>>,
     root: PathBuf,
 }
@@ -205,7 +204,6 @@ impl<EK> TabletRegistry<EK> {
                 tablets: Mutex::new(HashMap::default()),
                 factory,
                 root,
-                tombstone: Mutex::default(),
             }),
         })
     }
@@ -271,16 +269,8 @@ impl<EK> TabletRegistry<EK> {
         }
         let tablet = self.tablets.factory.open_tablet(ctx, &path)?;
         let mut cached = self.get_or_default(id);
-        let old_tablet = cached.set(tablet);
-        if let Some(t) = old_tablet {
-            self.tablets.tombstone.lock().unwrap().push(t);
-        }
+        cached.set(tablet);
         Ok(cached)
-    }
-
-    #[inline]
-    pub fn take_tombstone_tablets(&self) -> Vec<EK> {
-        std::mem::take(&mut self.tablets.tombstone.lock().unwrap())
     }
 
     /// Loop over all opened tablets. Note, it's possible that the visited

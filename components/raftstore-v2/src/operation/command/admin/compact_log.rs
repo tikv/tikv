@@ -29,6 +29,7 @@ use crate::{
     operation::AdminCmdResult,
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerTick},
+    worker::tablet_gc,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
@@ -259,9 +260,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         let new_persisted = self.storage().apply_trace().persisted_apply_index();
         if old_persisted < new_persisted {
+            let region_id = self.region_id();
             // TODO: batch it.
             if let Err(e) = store_ctx.engine.delete_all_but_one_states_before(
-                self.region_id(),
+                region_id,
                 new_persisted,
                 self.state_changes_mut(),
             ) {
@@ -270,6 +272,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.set_has_extra_write();
             }
             self.maybe_compact_log_from_engine(store_ctx, Either::Left(old_persisted));
+            if self.remove_tombstone_tablets_before(new_persisted) {
+                let _ = store_ctx
+                    .schedulers
+                    .tablet_gc
+                    .schedule(tablet_gc::Task::Destroy {
+                        region_id,
+                        persisted_index: new_persisted,
+                    });
+            }
         }
     }
 

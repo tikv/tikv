@@ -59,6 +59,7 @@ use crate::{
     operation::AdminCmdResult,
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
+    worker::tablet_gc,
     Error,
 };
 
@@ -439,6 +440,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
 
+        self.record_tombstone_tablet(res.tablet_index, store_ctx);
+        let _ = store_ctx
+            .schedulers
+            .tablet_gc
+            .schedule(tablet_gc::Task::Trim {
+                tablet: self.tablet().unwrap().clone(),
+                start_key: keys::data_key(derived.get_start_key()).into_boxed_slice(),
+                end_key: keys::data_key(derived.get_end_key()).into_boxed_slice(),
+            });
+
         let last_region_id = res.regions.last().unwrap().get_id();
         let mut new_ids = HashSet::default();
         for (new_region, locks) in res.regions.into_iter().zip(region_locks) {
@@ -491,6 +502,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         let region_id = split_init.region.id;
         if self.storage().is_initialized() && self.persisted_index() >= RAFT_INIT_LOG_INDEX {
+            // The initial split tablet will eventually be deleted. We don't trim it.
             let _ = store_ctx
                 .router
                 .force_send(split_init.source_id, PeerMsg::SplitInitFinish(region_id));

@@ -363,7 +363,7 @@ where
 pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub read: Scheduler<ReadTask<EK>>,
     pub pd: Scheduler<pd::Task>,
-    pub tablet_gc: Scheduler<tablet_gc::Task>,
+    pub tablet_gc: Scheduler<tablet_gc::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
 
     // Following is not maintained by raftstore itself.
