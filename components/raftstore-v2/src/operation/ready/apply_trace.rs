@@ -173,7 +173,7 @@ pub struct ApplyTrace {
 }
 
 impl ApplyTrace {
-    fn recover_meta(region_id: u64, engine: &impl RaftEngine) -> Result<(Self, RegionLocalState)> {
+    fn recover(region_id: u64, engine: &impl RaftEngine) -> Result<(Self, RegionLocalState)> {
         let mut trace = ApplyTrace::default();
         // Get all the recorded apply index from data CFs.
         for (off, cf) in DATA_CFS.iter().enumerate() {
@@ -346,7 +346,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             return Ok(None);
         }
 
-        let (trace, region_state) = ApplyTrace::recover_meta(region_id, &engine)?;
+        let (trace, region_state) = ApplyTrace::recover(region_id, &engine)?;
 
         let raft_state = match engine.get_raft_state(region_id) {
             Ok(Some(s)) => s,
