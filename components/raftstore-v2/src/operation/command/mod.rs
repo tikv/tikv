@@ -507,10 +507,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
     #[inline]
     pub fn flush(&mut self) {
+        let (index, term) = self.apply_progress();
+        let flush_state = self.flush_state().clone();
         if let Some(wb) = &mut self.write_batch && !wb.is_empty() {
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);
-            if let Err(e) = wb.write_opt(&write_opt) {
+            if let Err(e) = wb.write_callback_opt(&write_opt, || {
+                flush_state.set_applied_index(index);
+            }) {
                 panic!("failed to write data: {:?}: {:?}", self.logger.list(), e);
             }
             self.metrics.written_bytes += wb.data_size() as u64;
@@ -529,7 +533,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             callbacks.shrink_to(SHRINK_PENDING_CMD_QUEUE_CAP);
         }
         let mut apply_res = ApplyRes::default();
-        let (index, term) = self.apply_progress();
         apply_res.applied_index = index;
         apply_res.applied_term = term;
         apply_res.admin_result = self.take_admin_result().into_boxed_slice();
