@@ -188,6 +188,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     fn on_start(&mut self) {
         self.schedule_tick(PeerTick::Raft);
+        self.schedule_tick(PeerTick::SplitRegionCheck);
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
         }
@@ -242,6 +243,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         write.data,
                         write.ch,
                     );
+                }
+                PeerMsg::UnsafeWrite(write) => {
+                    self.on_receive_command(write.send_time);
+                    self.fsm
+                        .peer_mut()
+                        .on_unsafe_write(self.store_ctx, write.data);
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),
