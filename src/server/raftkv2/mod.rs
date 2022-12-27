@@ -20,7 +20,7 @@ use raftstore_v2::{
     router::{
         message::SimpleWrite, CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter,
     },
-    SimpleWriteEncoder,
+    SimpleWriteBinary, SimpleWriteEncoder,
 };
 use tikv_kv::{Modify, WriteEvent};
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
@@ -67,6 +67,26 @@ impl Stream for Transform {
     }
 }
 
+fn modifies_to_simple_write(modifies: Vec<Modify>) -> SimpleWriteBinary {
+    let mut encoder = SimpleWriteEncoder::with_capacity(128);
+    for m in modifies {
+        match m {
+            Modify::Put(cf, k, v) => encoder.put(cf, k.as_encoded(), &v),
+            Modify::Delete(cf, k) => encoder.delete(cf, k.as_encoded()),
+            Modify::PessimisticLock(k, lock) => {
+                encoder.put(CF_LOCK, k.as_encoded(), &lock.into_lock().to_bytes())
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => encoder.delete_range(
+                cf,
+                start_key.as_encoded(),
+                end_key.as_encoded(),
+                notify_only,
+            ),
+        }
+    }
+    encoder.encode()
+}
+
 #[derive(Clone)]
 pub struct RaftKv2<EK: KvEngine, ER: RaftEngine> {
     router: RaftRouter<EK, ER>,
@@ -109,9 +129,12 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
 
     fn modify_on_kv_engine(
         &self,
-        _region_modifies: collections::HashMap<u64, Vec<tikv_kv::Modify>>,
+        region_modifies: collections::HashMap<u64, Vec<tikv_kv::Modify>>,
     ) -> tikv_kv::Result<()> {
-        // TODO
+        for (region_id, batch) in region_modifies {
+            let bin = modifies_to_simple_write(batch);
+            let _ = self.router.send(region_id, PeerMsg::unsafe_write(bin));
+        }
         Ok(())
     }
 
@@ -202,23 +225,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         header.set_flags(flags);
 
         self.schedule_txn_extra(batch.extra);
-        let mut encoder = SimpleWriteEncoder::with_capacity(128);
-        for m in batch.modifies {
-            match m {
-                Modify::Put(cf, k, v) => encoder.put(cf, k.as_encoded(), &v),
-                Modify::Delete(cf, k) => encoder.delete(cf, k.as_encoded()),
-                Modify::PessimisticLock(k, lock) => {
-                    encoder.put(CF_LOCK, k.as_encoded(), &lock.into_lock().to_bytes())
-                }
-                Modify::DeleteRange(cf, start_key, end_key, notify_only) => encoder.delete_range(
-                    cf,
-                    start_key.as_encoded(),
-                    end_key.as_encoded(),
-                    notify_only,
-                ),
-            }
-        }
-        let data = encoder.encode();
+        let data = modifies_to_simple_write(batch.modifies);
         let mut builder = CmdResChannelBuilder::default();
         if WriteEvent::subscribed_proposed(subscribed) {
             builder.subscribe_proposed();

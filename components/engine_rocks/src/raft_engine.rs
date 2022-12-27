@@ -3,8 +3,8 @@
 // #[PerformanceCriticalPath]
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, WriteBatch, WriteBatchExt,
-    WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
+    RaftEngineReadOnly, RaftLogBatch, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
+    RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::{
     metapb::Region,
@@ -298,27 +298,18 @@ impl RaftEngine for RocksEngine {
         Ok(())
     }
 
-    fn batch_gc(&self, groups: Vec<RaftLogGcTask>) -> Result<usize> {
-        let mut total = 0;
-        let mut raft_wb = self.write_batch_with_cap(4 * 1024);
-        for task in groups {
-            total += self.gc_impl(task.raft_group_id, task.from, task.to, &mut raft_wb)?;
-        }
-        // TODO: disable WAL here.
-        if !WriteBatch::is_empty(&raft_wb) {
-            raft_wb.write()?;
-        }
-        Ok(total)
+    fn gc(&self, raft_group_id: u64, from: u64, to: u64, batch: &mut Self::LogBatch) -> Result<()> {
+        self.gc_impl(raft_group_id, from, to, batch)?;
+        Ok(())
     }
 
-    fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
-        let mut raft_wb = self.write_batch_with_cap(1024);
-        let total = self.gc_impl(raft_group_id, from, to, &mut raft_wb)?;
-        // TODO: disable WAL here.
-        if !WriteBatch::is_empty(&raft_wb) {
-            raft_wb.write()?;
-        }
-        Ok(total)
+    fn delete_all_but_one_states_before(
+        &self,
+        _raft_group_id: u64,
+        _apply_index: u64,
+        _batch: &mut Self::LogBatch,
+    ) -> Result<()> {
+        panic!()
     }
 
     fn flush_metrics(&self, instance: &str) {

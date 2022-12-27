@@ -294,8 +294,6 @@ pub trait ReadExecutorProvider: Send + Clone + 'static {
     /// get the ReadDelegate with region_id and the number of delegates in the
     /// StoreMeta
     fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>);
-
-    fn store_meta(&self) -> &Self::StoreMeta;
 }
 
 #[derive(Clone)]
@@ -345,10 +343,6 @@ where
             );
         }
         (meta.readers.len(), None)
-    }
-
-    fn store_meta(&self) -> &Self::StoreMeta {
-        &self.store_meta
     }
 }
 
@@ -716,8 +710,8 @@ where
         }
     }
 
-    pub fn store_meta(&self) -> &S::StoreMeta {
-        self.store_meta.store_meta()
+    pub fn store_meta(&self) -> &S {
+        &self.store_meta
     }
 
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the

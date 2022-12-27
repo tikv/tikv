@@ -54,7 +54,7 @@ use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     store::{find_peer, is_learner, region_on_same_stores},
-    sys::{disk::DiskUsage, memory_usage_reaches_high_water},
+    sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
     trace, warn,
     worker::{ScheduleError, Scheduler},
@@ -1122,6 +1122,8 @@ where
                     store.apply_state(),
                     self.fsm.hibernate_state.group_state(),
                     peer.raft_group.status(),
+                    peer.raft_group.raft.raft_log.last_index(),
+                    peer.raft_group.raft.raft_log.persisted,
                 ))
             }
             CasualMessage::QueryRegionLeaderResp { region, leader } => {
@@ -5423,12 +5425,9 @@ where
         fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
-        }
-        let mut _usage = 0;
-        if memory_usage_reaches_high_water(&mut _usage)
-            && !self.fsm.peer.get_store().is_entry_cache_empty()
-        {
-            self.register_entry_cache_evict_tick();
+            if !self.fsm.peer.get_store().is_entry_cache_empty() {
+                self.register_entry_cache_evict_tick();
+            }
         }
     }
 

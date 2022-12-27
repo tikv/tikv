@@ -3114,6 +3114,10 @@ impl TikvConfig {
                 .to_owned();
         }
 
+        if self.storage.engine == EngineType::RaftKv2 {
+            self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
+        }
+
         self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
         self.raft_engine.config.dir = self.infer_raft_engine_path(None)?;
 
@@ -3140,12 +3144,18 @@ impl TikvConfig {
             return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
         }
 
+        let kv_data_exists = if self.storage.engine == EngineType::RaftKv {
+            RocksEngine::exists(&kv_db_path)
+        } else {
+            Path::new(&self.storage.data_dir).join("tablets").exists()
+        };
+
         RaftDataStateMachine::new(
             &self.storage.data_dir,
             &self.raft_store.raftdb_path,
             &self.raft_engine.config.dir,
         )
-        .validate(RocksEngine::exists(&kv_db_path))?;
+        .validate(kv_data_exists)?;
 
         // Check blob file dir is empty when titan is disabled
         if !self.rocksdb.titan.enabled {

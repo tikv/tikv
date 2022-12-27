@@ -188,6 +188,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     fn on_start(&mut self) {
         self.schedule_tick(PeerTick::Raft);
+        self.schedule_tick(PeerTick::SplitRegionCheck);
+        self.schedule_tick(PeerTick::PdHeartbeat);
+        self.schedule_tick(PeerTick::CompactLog);
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
         }
@@ -205,11 +208,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
-            PeerTick::RaftLogGc => unimplemented!(),
+            PeerTick::CompactLog => self.on_compact_log_tick(),
             PeerTick::SplitRegionCheck => self.on_split_region_check(),
             PeerTick::CheckMerge => unimplemented!(),
             PeerTick::CheckPeerStaleState => unimplemented!(),
-            PeerTick::EntryCacheEvict => unimplemented!(),
+            PeerTick::EntryCacheEvict => self.on_entry_cache_evict(),
             PeerTick::CheckLeaderLease => unimplemented!(),
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => unimplemented!(),
@@ -242,6 +245,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         write.data,
                         write.ch,
                     );
+                }
+                PeerMsg::UnsafeWrite(write) => {
+                    self.on_receive_command(write.send_time);
+                    self.fsm
+                        .peer_mut()
+                        .on_unsafe_write(self.store_ctx, write.data);
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),

@@ -35,7 +35,7 @@ use tikv_util::{
     sys::SysQuota,
     time::Instant as TiInstant,
     timer::SteadyTimer,
-    worker::{Scheduler, Worker},
+    worker::{LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
@@ -276,7 +276,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
     fn init(&self) -> Result<HashMap<u64, SenderFsmPair<EK, ER>>> {
         let mut regions = HashMap::default();
         let cfg = self.cfg.value();
-        let meta = self.store_meta.lock().unwrap();
+        let mut meta = self.store_meta.lock().unwrap();
         self.engine
             .for_each_raft_group::<Error, _>(&mut |region_id| {
                 assert_ne!(region_id, INVALID_ID);
@@ -298,6 +298,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                         StateRole::Follower,
                     );
                 }
+                meta.set_region(storage.region(), storage.is_initialized(), &self.logger);
 
                 let (sender, peer_fsm) = PeerFsm::new(&cfg, &self.tablet_registry, storage)?;
                 meta.region_read_progress
@@ -373,7 +374,7 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
 struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
     async_read: Worker,
-    pd: Worker,
+    pd: LazyWorker<pd::Task>,
     async_write: StoreWriters<EK, ER>,
 
     // Following is not maintained by raftstore itself.
@@ -381,10 +382,10 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
-    fn new(background: Worker) -> Self {
+    fn new(background: Worker, pd: LazyWorker<pd::Task>) -> Self {
         Self {
             async_read: Worker::new("async-read-worker"),
-            pd: Worker::new("pd-worker"),
+            pd,
             async_write: StoreWriters::default(),
             background,
         }
@@ -415,6 +416,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
         background: Worker,
+        pd_worker: LazyWorker<pd::Task>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -428,7 +430,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
         });
 
-        let mut workers = Workers::new(background);
+        let mut workers = Workers::new(background, pd_worker);
         workers
             .async_write
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
@@ -437,21 +439,18 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         read_runner.set_snap_mgr(snap_mgr.clone());
         let read_scheduler = workers.async_read.start("async-read-worker", read_runner);
 
-        let pd_scheduler = workers.pd.start(
-            "pd-worker",
-            pd::Runner::new(
-                store_id,
-                pd_client,
-                raft_engine.clone(),
-                tablet_registry.clone(),
-                router.clone(),
-                workers.pd.remote(),
-                concurrency_manager,
-                causal_ts_provider,
-                self.logger.clone(),
-                self.shutdown.clone(),
-            ),
-        );
+        workers.pd.start(pd::Runner::new(
+            store_id,
+            pd_client,
+            raft_engine.clone(),
+            tablet_registry.clone(),
+            router.clone(),
+            workers.pd.remote(),
+            concurrency_manager,
+            causal_ts_provider,
+            self.logger.clone(),
+            self.shutdown.clone(),
+        ));
 
         let split_check_scheduler = workers.background.start(
             "split-check",
@@ -464,7 +463,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let schedulers = Schedulers {
             read: read_scheduler,
-            pd: pd_scheduler,
+            pd: workers.pd.scheduler(),
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
         };

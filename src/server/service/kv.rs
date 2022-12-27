@@ -65,6 +65,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     store_id: u64,
     /// Used to handle requests related to GC.
+    // TODO: make it Some after GC is supported for v2.
     gc_worker: GcWorker<E>,
     // For handling KV requests.
     storage: Storage<E, L, F>,

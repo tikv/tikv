@@ -347,17 +347,23 @@ where
     };
     tls_cell.with(|c| {
         let mut c = c.borrow_mut();
-        let perf_context = c.get_or_insert_with(|| {
-            with_tls_engine(|engine: &mut E| {
-                Box::new(engine.kv_engine().unwrap().get_perf_context(
-                    PerfLevel::Uninitialized,
-                    PerfContextKind::Storage(cmd.get_str()),
-                ))
-            })
-        });
-        perf_context.start_observe();
+        if c.is_none() {
+            *c = with_tls_engine(|engine: &mut E| {
+                engine.kv_engine().map(|c| {
+                    Box::new(c.get_perf_context(
+                        PerfLevel::Uninitialized,
+                        PerfContextKind::Storage(cmd.get_str()),
+                    )) as Box<dyn PerfContext>
+                })
+            });
+        };
+        if let Some(c) = &mut *c {
+            c.start_observe();
+        }
         let res = f();
-        perf_context.report_metrics(&[get_tls_tracker_token()]);
+        if let Some(c) = &mut *c {
+            c.report_metrics(&[get_tls_tracker_token()]);
+        }
         res
     })
 }
