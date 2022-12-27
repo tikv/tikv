@@ -20,7 +20,7 @@ use raftstore::{
         fsm::ApplyMetrics,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-        ReadProgress, TxnExt, WriteTask,
+        ReadProgress, TabletSnapManager, TxnExt, WriteTask,
     },
 };
 use slog::Logger;
@@ -118,6 +118,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_registry: &TabletRegistry<EK>,
+        snap_mgr: &TabletSnapManager,
         storage: Storage<EK, ER>,
     ) -> Result<Self> {
         let logger = storage.logger().clone();
@@ -137,6 +138,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.
         if tablet_index != 0 {
+            raft_group.store().recover_tablet(tablet_registry, snap_mgr);
             let mut ctx = TabletContext::new(&region, Some(tablet_index));
             ctx.flush_state = Some(flush_state.clone());
             // TODO: Perhaps we should stop create the tablet automatically.
