@@ -268,15 +268,18 @@ pub struct RoleChange {
     pub prev_lead_transferee: u64,
     /// Which peer is voted by itself.
     pub vote: u64,
+    pub initialized: bool,
 }
 
 impl RoleChange {
+    #[cfg(feature = "testexport")]
     pub fn new(state: StateRole) -> Self {
         RoleChange {
             state,
             leader_id: raft::INVALID_ID,
             prev_lead_transferee: raft::INVALID_ID,
             vote: raft::INVALID_ID,
+            initialized: true,
         }
     }
 }
