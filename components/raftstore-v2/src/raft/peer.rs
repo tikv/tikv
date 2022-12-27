@@ -73,6 +73,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     has_ready: bool,
     /// Sometimes there is no ready at all, but we need to trigger async write.
     has_extra_write: bool,
+    pause_for_recovery: bool,
     /// Writer for persisting side effects asynchronously.
     pub(crate) async_writer: AsyncWriter<EK, ER>,
 
@@ -161,6 +162,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_scheduler: None,
             has_ready: false,
             has_extra_write: false,
+            pause_for_recovery: false,
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
@@ -429,6 +431,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn reset_has_extra_write(&mut self) -> bool {
         mem::take(&mut self.has_extra_write)
+    }
+
+    #[inline]
+    pub fn set_pause_for_recovery(&mut self, pause: bool) {
+        self.pause_for_recovery = pause;
+    }
+
+    #[inline]
+    pub fn pause_for_recovery(&self) -> bool {
+        self.pause_for_recovery
     }
 
     #[inline]

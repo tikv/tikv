@@ -125,9 +125,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let log_recovery = self.log_recovery.as_ref().unwrap();
         if log_recovery.iter().all(|v| index >= *v) {
             self.log_recovery.take();
-            // Now all logs are recovered, flush them to avoid recover again
-            // and again.
-            let _ = self.tablet.flush_cfs(&[], false);
         }
     }
 

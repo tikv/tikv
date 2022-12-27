@@ -76,6 +76,25 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn maybe_pause_for_recovery(&mut self) -> bool {
+        let entry_storage = self.storage().entry_storage();
+        let committed_index = entry_storage.commit_index();
+        let applied_index = entry_storage.applied_index();
+        if committed_index > applied_index {
+            // Unlike v1, it's a must to set ready when there are pending entries. Otherwise
+            // it may block for ever when there is unapplied conf change.
+            self.set_has_ready();
+        }
+        if committed_index > applied_index + 128 {
+            // If there are too many pending entries, pause  to avoid
+            // too much memory usage.
+            self.set_pause_for_recovery(true);
+            true
+        } else {
+            false
+        }
+    }
+
     #[inline]
     fn tick(&mut self) -> bool {
         self.raft_group_mut().tick()
@@ -107,6 +126,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
+        if self.pause_for_recovery() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+            ctx.raft_metrics.message_dropped.recovery.inc();
+            return;
+        }
         if !self.serving() {
             return;
         }

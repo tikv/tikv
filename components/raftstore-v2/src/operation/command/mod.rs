@@ -38,13 +38,14 @@ use raftstore::{
     },
     Error, Result,
 };
+use slog::warn;
 use tikv_util::{box_err, time::monotonic_raw_now};
 
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter},
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel},
+    router::{ApplyRes, ApplyTask, CmdResChannel, PeerTick},
 };
 
 mod admin;
@@ -301,6 +302,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_res.applied_index,
             progress_to_be_updated,
         );
+        if self.pause_for_recovery()
+            && self.storage().entry_storage().commit_index() <= apply_res.applied_index
+        {
+            self.set_pause_for_recovery(false);
+            // Flush to avoid recover again and again.
+            if let Some(scheduler) = self.apply_scheduler() {
+                scheduler.send(ApplyTask::ManualFlush);
+            }
+            self.add_pending_tick(PeerTick::Raft);
+        }
     }
 }
 
@@ -339,6 +350,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     );
                 }
             }
+        }
+    }
+
+    pub fn on_manual_flush(&mut self) {
+        self.flush();
+        if let Err(e) = self.tablet().flush_cfs(&[], false) {
+            warn!(self.logger, "failed to flush: {:?}", e);
         }
     }
 
@@ -507,6 +525,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
     #[inline]
     pub fn flush(&mut self) {
+        // TODO: maybe we should check whether there is anything to flush.
         let (index, term) = self.apply_progress();
         let flush_state = self.flush_state().clone();
         if let Some(wb) = &mut self.write_batch && !wb.is_empty() {
