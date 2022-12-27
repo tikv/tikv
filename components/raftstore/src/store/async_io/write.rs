@@ -718,6 +718,11 @@ where
 
         self.batch.after_write_to_raft_db(&self.metrics);
 
+        fail_point!(
+            "async_write_before_cb",
+            !self.batch.persisted_cbs.is_empty(),
+            |_| ()
+        );
         self.batch.after_write_all();
 
         fail_point!("raft_before_follower_send");

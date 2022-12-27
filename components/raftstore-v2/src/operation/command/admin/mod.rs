@@ -13,7 +13,7 @@ use protobuf::Message;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
 use split::SplitResult;
-pub use split::{RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
+pub use split::{temp_split_path, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
 use tikv_util::box_err;
 use txn_types::WriteBatchFlags;
 

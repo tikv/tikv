@@ -229,7 +229,7 @@ impl Store {
             ctx.schedulers.read.clone(),
             &ctx.logger,
         )
-        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, s))
+        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, &ctx.snap_mgr, s))
         {
             Ok(p) => p,
             res => {
