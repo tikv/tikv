@@ -51,9 +51,7 @@ mod admin;
 mod control;
 mod write;
 
-pub use admin::{
-    AdminCmdResult, RequestSplit, SplitFlowControl, SplitInit, SplitResult, SPLIT_PREFIX,
-};
+pub use admin::{AdminCmdResult, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
 pub use control::ProposalControl;
 pub use write::{
     SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
@@ -267,17 +265,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::ConfChange(conf_change) => {
                     self.on_apply_res_conf_change(ctx, conf_change)
                 }
-                AdminCmdResult::SplitRegion(SplitResult {
-                    regions,
-                    derived_index,
-                    tablet_index,
-                }) => {
+                AdminCmdResult::SplitRegion(res) => {
                     self.storage_mut()
                         .apply_trace_mut()
-                        .on_admin_modify(tablet_index);
-                    self.on_apply_res_split(ctx, derived_index, tablet_index, regions)
+                        .on_admin_modify(res.tablet_index);
+                    self.on_apply_res_split(ctx, res)
                 }
                 AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
+                AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
             }
         }
 
@@ -446,7 +441,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
-                AdminCmdType::CompactLog => unimplemented!(),
+                AdminCmdType::CompactLog => self.apply_compact_log(admin_req, entry.index)?,
                 AdminCmdType::Split => self.apply_split(admin_req, log_index)?,
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index)?,
                 AdminCmdType::PrepareMerge => unimplemented!(),
