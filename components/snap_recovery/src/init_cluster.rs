@@ -328,8 +328,7 @@ pub fn create_local_engine_service(
     // init raft engine, either is rocksdb or raft engine
     if !config.raft_engine.enable {
         // rocksdb
-        let mut raft_db_opts = config.raftdb.build_opt();
-        raft_db_opts.set_env(env);
+        let raft_db_opts = config.raftdb.build_opt(env, None);
         let raft_db_cf_opts = config.raftdb.build_cf_opts(factory.block_cache());
         let raft_path = config
             .infer_raft_db_path(None)
