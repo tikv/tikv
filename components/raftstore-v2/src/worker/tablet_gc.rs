@@ -9,7 +9,7 @@ use std::{
 use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry};
 use kvproto::metapb::Region;
-use slog::{warn, Logger};
+use slog::{error, warn, Logger};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 pub enum Task<EK> {
@@ -110,27 +110,22 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
-    /// Returns true if task is consumed. Failure is considered consumed.
-    fn trim(tablet: &EK, start_key: &[u8], end_key: &[u8]) {
+    fn trim(tablet: &EK, start_key: &[u8], end_key: &[u8]) -> engine_traits::Result<()> {
         let start_key = keys::data_key(start_key);
         let end_key = keys::data_end_key(end_key);
         let range1 = Range::new(&[], &start_key);
         let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
-        tablet
-            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2])
-            .unwrap();
-        tablet
-            .delete_ranges_cfs(DeleteStrategy::DeleteByRange, &[range1, range2])
-            .unwrap();
+        tablet.delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2])?;
+        // TODO: Avoid this after compaction filter is ready.
+        tablet.delete_ranges_cfs(DeleteStrategy::DeleteByRange, &[range1, range2])?;
         for r in [range1, range2] {
-            tablet
-                .compact_range(Some(r.start_key), Some(r.end_key), false, 1)
-                .unwrap();
+            tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1)?;
         }
+        Ok(())
     }
 
     fn prepare_destroy(&mut self, region_id: u64, tablet: EK, wait_for_persisted: u64) {
-        // TODO: pause background work?
+        let _ = tablet.pause_background_work();
         self.waiting_destroy_tasks
             .entry(region_id)
             .or_default()
@@ -194,7 +189,15 @@ where
                 start_key,
                 end_key,
             } => {
-                Self::trim(&tablet, &start_key, &end_key);
+                if let Err(e) = Self::trim(&tablet, &start_key, &end_key) {
+                    error!(
+                        self.logger,
+                        "failed to trim tablet";
+                        "start_key" => log_wrappers::Value::key(&start_key),
+                        "end_key" => log_wrappers::Value::key(&end_key),
+                        "err" => %e,
+                    );
+                }
             }
             Task::PrepareDestroy {
                 region_id,

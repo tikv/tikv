@@ -273,6 +273,11 @@ impl MiscExt for RocksEngine {
         self.as_inner().sync_wal().map_err(r2e)
     }
 
+    fn pause_background_work(&self) -> Result<()> {
+        self.as_inner().pause_bg_work();
+        Ok(())
+    }
+
     fn exists(path: &str) -> bool {
         crate::util::db_exist(path)
     }
