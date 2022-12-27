@@ -237,6 +237,10 @@ impl Store {
                 return;
             }
         };
+        ctx.store_meta
+            .lock()
+            .unwrap()
+            .set_region(fsm.peer().region(), false, fsm.logger());
         let mailbox = BasicMailbox::new(tx, fsm, ctx.router.state_cnt().clone());
         if ctx
             .router
