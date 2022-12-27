@@ -25,11 +25,13 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{borrow::Cow, cmp};
+use std::{borrow::Cow, cmp, path::PathBuf};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
-use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext};
+use engine_traits::{
+    Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
+};
 use fail::fail_point;
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
@@ -115,6 +117,11 @@ pub struct SplitFlowControl {
     size_diff_hint: i64,
     skip_split_count: u64,
     may_skip_split_check: bool,
+}
+
+pub fn temp_split_path<EK>(registry: &TabletRegistry<EK>, region_id: u64) -> PathBuf {
+    let tablet_name = registry.tablet_name(SPLIT_PREFIX, region_id, RAFT_INIT_LOG_INDEX);
+    registry.tablet_root().join(tablet_name)
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
@@ -328,8 +335,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 continue;
             }
 
-            let name = reg.tablet_name(SPLIT_PREFIX, new_region_id, RAFT_INIT_LOG_INDEX);
-            let split_temp_path = reg.tablet_root().join(name);
+            let split_temp_path = temp_split_path(reg, new_region_id);
             checkpointer
                 .create_at(&split_temp_path, None, 0)
                 .unwrap_or_else(|e| {
@@ -343,16 +349,19 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
 
         let derived_path = self.tablet_registry().tablet_path(region_id, log_index);
-        checkpointer
-            .create_at(&derived_path, None, 0)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fails to create checkpoint with path {:?}: {:?}",
-                    self.logger.list(),
-                    derived_path,
-                    e
-                )
-            });
+        // If it's recovered from restart, it's possible the target path exists already.
+        if !derived_path.exists() {
+            checkpointer
+                .create_at(&derived_path, None, 0)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{:?} fails to create checkpoint with path {:?}: {:?}",
+                        self.logger.list(),
+                        derived_path,
+                        e
+                    )
+                });
+        }
         // Remove the old write batch.
         self.write_batch.take();
         let reg = self.tablet_registry();

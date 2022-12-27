@@ -51,7 +51,9 @@ mod admin;
 mod control;
 mod write;
 
-pub use admin::{AdminCmdResult, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
+pub use admin::{
+    temp_split_path, AdminCmdResult, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
+};
 pub use control::ProposalControl;
 pub use write::{
     SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,

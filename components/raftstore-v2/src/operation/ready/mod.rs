@@ -23,7 +23,6 @@ mod snapshot;
 
 use std::{cmp, time::Instant};
 
-pub use apply_trace::{cf_offset, write_initial_states, ApplyTrace, DataTrace, StateStorage};
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
@@ -40,6 +39,7 @@ use tikv_util::{
 };
 
 pub use self::{
+    apply_trace::{cf_offset, write_initial_states, ApplyTrace, DataTrace, StateStorage},
     async_writer::AsyncWriter,
     snapshot::{GenSnapTask, SnapState},
 };

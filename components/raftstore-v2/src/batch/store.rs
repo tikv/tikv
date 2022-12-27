@@ -43,6 +43,7 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
+    operation::SPLIT_PREFIX,
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
     worker::pd,
@@ -300,7 +301,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 }
                 meta.set_region(storage.region(), storage.is_initialized(), &self.logger);
 
-                let (sender, peer_fsm) = PeerFsm::new(&cfg, &self.tablet_registry, storage)?;
+                let (sender, peer_fsm) =
+                    PeerFsm::new(&cfg, &self.tablet_registry, &self.snap_mgr, storage)?;
                 meta.region_read_progress
                     .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
 
@@ -318,7 +320,33 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         Ok(regions)
     }
 
-    fn clean_up_tablets(&self, _peers: &HashMap<u64, SenderFsmPair<EK, ER>>) -> Result<()> {
+    fn clean_up_tablets(&self, peers: &HashMap<u64, SenderFsmPair<EK, ER>>) -> Result<()> {
+        for entry in file_system::read_dir(self.tablet_registry.tablet_root())? {
+            let entry = entry?;
+            let path = entry.path();
+            let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
+            let fsm = match peers.get(&region_id) {
+                Some((_, fsm)) => fsm,
+                None => {
+                    // The peer is either destroyed or not created yet. It will be
+                    // recovered by leader heartbeats.
+                    file_system::remove_dir_all(&path)?;
+                    continue;
+                }
+            };
+            // Valid split tablet should be installed during recovery.
+            if prefix == SPLIT_PREFIX {
+                file_system::remove_dir_all(&path)?;
+                continue;
+            }
+            if prefix.is_empty() {
+                // Stale split data can be deleted.
+                if fsm.peer().storage().tablet_index() > tablet_index {
+                    file_system::remove_dir_all(&path)?;
+                }
+            }
+            // TODO: handle other prefix
+        }
         // TODO: list all available tablets and destroy those which are not in the
         // peers.
         Ok(())

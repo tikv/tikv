@@ -218,6 +218,15 @@ impl<EK> TabletRegistry<EK> {
         format!("{}{}_{}", prefix, id, suffix)
     }
 
+    pub fn parse_tablet_name<'a>(&self, path: &'a Path) -> Option<(&'a str, u64, u64)> {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let mut parts = name.rsplit('_');
+        let suffix = parts.next()?.parse().ok()?;
+        let id = parts.next()?.parse().ok()?;
+        let prefix = parts.as_str();
+        Some((prefix, id, suffix))
+    }
+
     pub fn tablet_root(&self) -> &Path {
         &self.tablets.root
     }

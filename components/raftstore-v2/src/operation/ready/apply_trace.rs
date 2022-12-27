@@ -30,18 +30,24 @@
 use std::{cmp, sync::Mutex};
 
 use engine_traits::{
-    FlushProgress, KvEngine, RaftEngine, RaftLogBatch, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+    FlushProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use kvproto::{
     metapb::Region,
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
-use raftstore::store::{ReadTask, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use raftstore::store::{
+    ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+};
 use slog::Logger;
 use tikv_util::{box_err, worker::Scheduler};
 
 use crate::{
+    operation::{
+        command::temp_split_path,
+        ready::snapshot::{install_tablet, recv_snap_path},
+    },
     raft::{Peer, Storage},
     router::PeerMsg,
     Result, StoreRouter,
@@ -167,7 +173,7 @@ pub struct ApplyTrace {
 }
 
 impl ApplyTrace {
-    fn recover(region_id: u64, engine: &impl RaftEngine) -> Result<(Self, RegionLocalState)> {
+    fn recover_meta(region_id: u64, engine: &impl RaftEngine) -> Result<(Self, RegionLocalState)> {
         let mut trace = ApplyTrace::default();
         // Get all the recorded apply index from data CFs.
         for (off, cf) in DATA_CFS.iter().enumerate() {
@@ -340,7 +346,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             return Ok(None);
         }
 
-        let (trace, region_state) = ApplyTrace::recover(region_id, &engine)?;
+        let (trace, region_state) = ApplyTrace::recover_meta(region_id, &engine)?;
 
         let raft_state = match engine.get_raft_state(region_id) {
             Ok(Some(s)) => s,
@@ -370,6 +376,51 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             logger,
         )
         .map(Some)
+    }
+
+    /// Region state is written before actually moving data. It's possible that
+    /// the tablet is missing after restart. We need to move the data again
+    /// after being restarted.
+    pub fn recover_tablet(&self, registry: &TabletRegistry<EK>, snap_mgr: &TabletSnapManager) {
+        let tablet_index = self.region_state().get_tablet_index();
+        if tablet_index == 0 {
+            // It's an uninitialized peer, nothing to recover.
+            return;
+        }
+        let region_id = self.region().get_id();
+        let target_path = registry.tablet_path(region_id, tablet_index);
+        if target_path.exists() {
+            // Move data succeeded before restart, nothing to recover.
+            return;
+        }
+        if tablet_index == RAFT_INIT_LOG_INDEX {
+            // Its data may come from split or snapshot. Try split first.
+            let split_path = temp_split_path(registry, region_id);
+            if install_tablet(registry, &split_path, region_id, tablet_index) {
+                return;
+            }
+        }
+        let truncated_index = self.entry_storage().truncated_index();
+        if truncated_index == tablet_index {
+            // Try snapshot.
+            let peer_id = self.peer().get_id();
+            let snap_path = recv_snap_path(
+                snap_mgr,
+                region_id,
+                peer_id,
+                self.entry_storage().truncated_term(),
+                tablet_index,
+            );
+            if install_tablet(registry, &snap_path, region_id, tablet_index) {
+                return;
+            }
+        }
+        panic!(
+            "{:?} data loss detected: {}_{} not found",
+            self.logger().list(),
+            region_id,
+            tablet_index
+        );
     }
 
     /// Write initial persist trace for uninit peer.
