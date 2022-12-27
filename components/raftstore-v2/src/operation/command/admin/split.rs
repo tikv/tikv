@@ -350,6 +350,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let derived_path = self.tablet_registry().tablet_path(region_id, log_index);
         // If it's recovered from restart, it's possible the target path exists already.
+        // And because checkpoint is atomic, so we don't need to worry about corruption.
+        // And it's also wrong to delete it and remake as it may has applied and flushed
+        // some data to the new checkpoint before being restarted.
         if !derived_path.exists() {
             checkpointer
                 .create_at(&derived_path, None, 0)

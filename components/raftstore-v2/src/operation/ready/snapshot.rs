@@ -136,7 +136,6 @@ pub fn install_tablet<EK>(
     region_id: u64,
     tablet_index: u64,
 ) -> bool {
-    let target_path = registry.tablet_path(region_id, tablet_index);
     if !source.exists() {
         return false;
     }
@@ -147,6 +146,7 @@ pub fn install_tablet<EK>(
     //     source.display(),
     //     target_path.display()
     // );
+    let target_path = registry.tablet_path(region_id, tablet_index);
     if let Err(e) = fs::rename(source, &target_path) {
         panic!(
             "failed to rename tablet {} => {}: {:?}",
