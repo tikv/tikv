@@ -252,7 +252,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             match state {
                 SnapState::Generating { ref canceled, .. } => {
                     if canceled.load(Ordering::SeqCst) {
-                        self.cancel_generating_snap(Some(to), None);
+                        self.cancel_generating_snap(Some(to));
                     } else {
                         return Err(raft::Error::Store(
                             raft::StorageError::SnapshotTemporarilyUnavailable,
@@ -337,33 +337,48 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         true
     }
 
-    pub fn cancel_generating_snap(&self, to: Option<u64>, compact_to: Option<u64>) {
-        if let Some(id) = to {
+    pub fn cancel_generating_snap(&self, to_peer: Option<u64>) {
+        if let Some(id) = to_peer {
             let mut states = self.snap_states.borrow_mut();
-            if let Some(state) = states.get(&id) {
-                let SnapState::Generating {
-                    ref index,
-                    ..
-                } = *state else { return };
-                if let Some(idx) = compact_to {
-                    let snap_index = index.load(Ordering::SeqCst);
-                    if snap_index == 0 || idx <= snap_index + 1 {
-                        return;
-                    }
-                }
+            if let Some(state) = states.get(&id)
+                && matches!(*state, SnapState::Generating { .. })
+            {
                 info!(
                     self.logger(),
                     "snapshot is canceled";
-                    "compact_to" => compact_to,
+                    "to_peer" => to_peer,
                 );
-                self.cancel_snap_task(to);
+                self.cancel_snap_task(to_peer);
                 states.remove(&id);
             }
         } else {
-            self.cancel_snap_task(to);
+            self.cancel_snap_task(to_peer);
             self.snap_states.borrow_mut().clear();
         }
         STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.cancel.inc();
+    }
+
+    pub fn cancel_generating_snap_due_to_compacted(&self, compact_to: u64) {
+        let mut states = self.snap_states.borrow_mut();
+        states.retain(|id, state| {
+            let SnapState::Generating {
+                ref index,
+                ..
+            } = *state else { return true; };
+            let snap_index = index.load(Ordering::SeqCst);
+            if snap_index == 0 || compact_to <= snap_index + 1 {
+                return true;
+            }
+            info!(
+                self.logger(),
+                "snapshot is canceled";
+                "compact_to" => compact_to,
+                "to_peer" => id,
+            );
+            self.cancel_snap_task(Some(*id));
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.cancel.inc();
+            false
+        });
     }
 
     /// Try to switch snap state to generated. only `Generating` can switch to
@@ -371,7 +386,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     ///  TODO: make the snap state more clearer, the snapshot must be consumed.
     pub fn on_snapshot_generated(&self, res: GenSnapRes) -> bool {
         if res.is_none() {
-            self.cancel_generating_snap(None, None);
+            self.cancel_generating_snap(None);
             return false;
         }
         let (snapshot, to_peer_id) = *res.unwrap();

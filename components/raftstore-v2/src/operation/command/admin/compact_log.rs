@@ -230,7 +230,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.entry_storage_mut()
             .compact_entry_cache(res.compact_index);
         self.storage_mut()
-            .cancel_generating_snap(Some(res.compact_index));
+            .cancel_generating_snap_due_to_compacted(res.compact_index);
 
         let truncated_state = self
             .entry_storage_mut()

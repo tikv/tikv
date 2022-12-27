@@ -474,7 +474,7 @@ mod tests {
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let _res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        s.cancel_generating_snap(None, None);
+        s.cancel_generating_snap(None);
         assert!(s.snap_states.borrow().get(&to_peer_id).is_none());
 
         // Test get twice snapshot and cancel once.
@@ -485,7 +485,7 @@ mod tests {
         apply.set_apply_progress(1, 5);
         apply.schedule_gen_snapshot(gen_task_a);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        s.cancel_generating_snap(None, None);
+        s.cancel_generating_snap(None);
         // cancel get snapshot a, try get snaphsot b
         let snap = s.snapshot(0, 0);
         assert_eq!(snap.unwrap_err(), unavailable);
