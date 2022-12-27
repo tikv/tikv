@@ -1985,7 +1985,10 @@ impl TabletSnapManager {
         for entry in file_system::read_dir(&self.base)? {
             let entry = match entry {
                 Ok(e) => e,
-                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) if e.kind() == ErrorKind::NotFound || e.kind() == ErrorKind::Other => {
+                    // Other(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })
+                    continue;
+                }
                 Err(e) => return Err(Error::from(e)),
             };
 
@@ -2001,7 +2004,10 @@ impl TabletSnapManager {
             for e in file_system::read_dir(path)? {
                 match e.and_then(|e| e.metadata()) {
                     Ok(m) => total_size += m.len(),
-                    Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                    Err(e) if e.kind() == ErrorKind::NotFound || e.kind() == ErrorKind::Other => {
+                        // Other(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })
+                        continue;
+                    }
                     Err(e) => return Err(Error::from(e)),
                 }
             }

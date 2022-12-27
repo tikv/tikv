@@ -313,7 +313,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let applied = self.storage().apply_state().get_applied_index();
             let total_cnt = applied - self.storage().entry_storage().first_index() + 1;
             let remain_cnt = applied - compact_index;
-            self.update_approximate_raft_log_size(|s| s * remain_cnt / total_cnt);
+            self.update_approximate_raft_log_size(|s| {
+                if total_cnt != 0 {
+                    s * remain_cnt / total_cnt
+                } else {
+                    0
+                }
+            });
         }
     }
 }
