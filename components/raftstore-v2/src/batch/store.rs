@@ -276,7 +276,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
     fn init(&self) -> Result<HashMap<u64, SenderFsmPair<EK, ER>>> {
         let mut regions = HashMap::default();
         let cfg = self.cfg.value();
-        let meta = self.store_meta.lock().unwrap();
+        let mut meta = self.store_meta.lock().unwrap();
         self.engine
             .for_each_raft_group::<Error, _>(&mut |region_id| {
                 assert_ne!(region_id, INVALID_ID);
@@ -298,6 +298,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                         StateRole::Follower,
                     );
                 }
+                meta.set_region(storage.region(), storage.is_initialized(), &self.logger);
 
                 let (sender, peer_fsm) = PeerFsm::new(&cfg, &self.tablet_registry, storage)?;
                 meta.region_read_progress

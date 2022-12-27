@@ -54,6 +54,10 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Statistics for other peers, only maintained when self is the leader.
     peer_heartbeats: HashMap<u64, Instant>,
 
+    /// For raft log compaction.
+    skip_compact_log_ticks: usize,
+    approximate_raft_log_size: u64,
+
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
     raw_write_encoder: Option<SimpleWriteReqEncoder>,
@@ -142,6 +146,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
+            skip_compact_log_ticks: 0,
+            approximate_raft_log_size: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
@@ -455,6 +461,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.peer_heartbeats.remove(&peer_id);
     }
 
+    /// Returns whether or not the peer sent heartbeat after the provided
+    /// deadline time.
+    #[inline]
+    pub fn peer_heartbeat_is_fresh(&self, peer_id: u64, deadline: &Instant) -> bool {
+        matches!(
+            self.peer_heartbeats.get(&peer_id),
+            Some(last_heartbeat) if *last_heartbeat >= *deadline
+        )
+    }
+
     pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
         let mut down_peers = Vec::new();
         let now = Instant::now();
@@ -474,6 +490,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: `refill_disk_full_peers`
         down_peers
+    }
+
+    #[inline]
+    pub fn reset_skip_compact_log_ticks(&mut self) {
+        self.skip_compact_log_ticks = 0;
+    }
+
+    #[inline]
+    pub fn maybe_skip_compact_log(&mut self, max_skip_ticks: usize) -> bool {
+        if self.skip_compact_log_ticks < max_skip_ticks {
+            self.skip_compact_log_ticks += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    pub fn approximate_raft_log_size(&self) -> u64 {
+        self.approximate_raft_log_size
+    }
+
+    #[inline]
+    pub fn update_approximate_raft_log_size(&mut self, f: impl Fn(u64) -> u64) {
+        self.approximate_raft_log_size = f(self.approximate_raft_log_size);
     }
 
     #[inline]
@@ -703,6 +744,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.flush_state = Arc::default();
     }
 
+    // Note: Call `set_has_extra_write` after adding new state changes.
     #[inline]
     pub fn state_changes_mut(&mut self) -> &mut ER::LogBatch {
         if self.state_changes.is_none() {

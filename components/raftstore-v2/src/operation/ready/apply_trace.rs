@@ -6,7 +6,7 @@
 //!
 //! In summary, we trace the persist progress by recording flushed event.
 //! Because memtable is flushed one by one, so a flushed memtable must contain
-//! all the data within the CF before some certain apply index. So the minimun
+//! all the data within the CF before certain apply index. So the minimun
 //! flushed apply index + 1 of all data CFs is the recovery start point. In
 //! some cases, a CF may not have any updates at all for a long time. In some
 //! cases, we may still need to recover from smaller index even if flushed
@@ -121,7 +121,7 @@ impl<EK: KvEngine, ER: RaftEngine> engine_traits::StateStorage for StateStorage<
     }
 }
 
-/// An alias of frequent use type that each data cf has a u64.
+/// Mapping from data cf to an u64 index.
 pub type DataTrace = [u64; DATA_CFS_LEN];
 
 #[derive(Clone, Copy, Default)]
@@ -211,7 +211,7 @@ impl ApplyTrace {
         self.admin.last_modified = index;
     }
 
-    fn persisted_apply_index(&self) -> u64 {
+    pub fn persisted_apply_index(&self) -> u64 {
         self.admin.flushed
     }
 
@@ -237,7 +237,7 @@ impl ApplyTrace {
         let candidate = cmp::min(mem_index, min_flushed.unwrap_or(u64::MAX));
         if candidate > self.admin.flushed {
             self.admin.flushed = candidate;
-            if candidate > self.persisted_applied + 100 {
+            if self.admin.flushed > self.persisted_applied + 100 {
                 self.try_persist = true;
             }
         }

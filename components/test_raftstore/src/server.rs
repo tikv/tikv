@@ -525,7 +525,7 @@ impl ServerCluster {
                 resolver.clone(),
                 tikv_util::Either::Left(snap_mgr.clone()),
                 gc_worker.clone(),
-                Some(check_leader_scheduler.clone()),
+                check_leader_scheduler.clone(),
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
