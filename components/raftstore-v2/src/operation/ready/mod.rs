@@ -528,7 +528,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
-                    self.storage_mut().cancel_generating_snap(None);
+                    self.storage_mut().cancel_generating_snap(None, None);
                     self.clear_in_memory_pessimistic_locks();
                 }
                 _ => {}

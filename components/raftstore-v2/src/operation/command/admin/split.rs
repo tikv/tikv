@@ -412,6 +412,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
+            meta.set_region(derived, true, &self.logger);
             let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
             self.set_region(
                 &store_ctx.coprocessor_host,
