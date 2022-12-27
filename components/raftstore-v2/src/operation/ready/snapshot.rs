@@ -19,6 +19,7 @@
 //!   peer fsm, then Raft will get the snapshot.
 
 use std::{
+    assert_matches::assert_matches,
     fmt::{self, Debug},
     fs,
     path::{Path, PathBuf},
@@ -130,7 +131,7 @@ pub fn recv_snap_path(
 /// Move the tablet from `source` to managed path.
 ///
 /// Returns false if `source` doesn't exist.
-pub fn install_tablet<EK>(
+pub fn install_tablet<EK: KvEngine>(
     registry: &TabletRegistry<EK>,
     source: &Path,
     region_id: u64,
@@ -139,14 +140,14 @@ pub fn install_tablet<EK>(
     if !source.exists() {
         return false;
     }
-    // TODO: uncomment following.
-    // assert!(
-    //     !EK::is_locked(source),
-    //     "source is locked: {} => {}",
-    //     source.display(),
-    //     target_path.display()
-    // );
     let target_path = registry.tablet_path(region_id, tablet_index);
+    assert_matches!(
+        EK::locked(source.to_str().unwrap()),
+        Ok(false),
+        "source is locked: {} => {}",
+        source.display(),
+        target_path.display()
+    );
     if let Err(e) = fs::rename(source, &target_path) {
         panic!(
             "failed to rename tablet {} => {}: {:?}",
