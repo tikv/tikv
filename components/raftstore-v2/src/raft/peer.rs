@@ -1,7 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::VecDeque,
     mem,
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
@@ -48,7 +47,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// is persisted. This is a list of tablet index that awaits to be
     /// persisted. When persisted_apply is advanced, we need to notify tablet_gc
     /// worker to destroy them.
-    pending_tombstone_tablets: VecDeque<u64>,
+    pending_tombstone_tablets: Vec<u64>,
 
     /// Statistics for self.
     self_stat: PeerStat,
@@ -148,7 +147,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: cached_tablet,
-            pending_tombstone_tablets: VecDeque::new(),
+            pending_tombstone_tablets: Vec::new(),
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
@@ -347,7 +346,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &StoreContext<EK, ER, T>,
     ) {
         if let Some(old_tablet) = self.tablet.cache() {
-            self.pending_tombstone_tablets.push_back(new_tablet_index);
+            self.pending_tombstone_tablets.push(new_tablet_index);
             let _ = ctx
                 .schedulers
                 .tablet_gc
@@ -365,14 +364,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Returns if there's any tombstone being removed.
     #[inline]
     pub fn remove_tombstone_tablets_before(&mut self, persisted: u64) -> bool {
-        let mut removed = false;
-        while let Some(i) = self.pending_tombstone_tablets.front()
+        let mut removed = 0;
+        while let Some(i) = self.pending_tombstone_tablets.first()
             && *i <= persisted
         {
-            self.pending_tombstone_tablets.pop_front();
-            removed = true;
+            removed += 1;
         }
-        removed
+        self.pending_tombstone_tablets.drain(..removed)
+        removed > 0
     }
 
     #[inline]
