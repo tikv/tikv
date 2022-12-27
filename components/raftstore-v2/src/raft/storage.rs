@@ -5,6 +5,7 @@ use std::{
     fmt::{self, Debug, Formatter},
 };
 
+use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb,
@@ -37,8 +38,8 @@ pub struct Storage<EK: KvEngine, ER> {
     logger: Logger,
 
     /// Snapshot part.
-    snap_state: RefCell<SnapState>,
-    gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
+    pub snap_states: RefCell<HashMap<u64, SnapState>>,
+    pub gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
     split_init: Option<Box<SplitInit>>,
     /// The flushed index of all CFs.
     apply_trace: ApplyTrace,
@@ -87,13 +88,23 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     }
 
     #[inline]
-    pub fn snap_state_mut(&self) -> RefMut<'_, SnapState> {
-        self.snap_state.borrow_mut()
+    pub fn gen_snap_task_mut(&self) -> RefMut<'_, Box<Option<GenSnapTask>>> {
+        self.gen_snap_task.borrow_mut()
     }
 
     #[inline]
-    pub fn gen_snap_task_mut(&self) -> RefMut<'_, Box<Option<GenSnapTask>>> {
-        self.gen_snap_task.borrow_mut()
+    pub fn cancel_snap_task(&self, to_peer_id: Option<u64>) {
+        if to_peer_id.is_none() {
+            self.gen_snap_task.borrow_mut().take();
+            return;
+        }
+        let to = to_peer_id.unwrap();
+        let mut task = self.gen_snap_task.borrow_mut();
+        if let Some(t) = &**task {
+            if to == t.to_peer() {
+                *task = Box::new(None);
+            };
+        }
     }
 
     #[inline]
@@ -143,7 +154,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             region_state,
             ever_persisted: persisted,
             logger,
-            snap_state: RefCell::new(SnapState::Relax),
+            snap_states: RefCell::new(HashMap::default()),
             gen_snap_task: RefCell::new(Box::new(None)),
             split_init: None,
             apply_trace,
@@ -435,14 +446,17 @@ mod tests {
         );
 
         // Test get snapshot
-        let snap = s.snapshot(0, 7);
+        let to_peer_id = 7;
+        let snap = s.snapshot(0, to_peer_id);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.on_snapshot_generated(res);
-        let snap = match *s.snap_state.borrow() {
+        assert_eq!(s.snapshot(0, 8).unwrap_err(), unavailable);
+        assert!(s.snap_states.borrow().get(&8).is_some());
+        let snap = match *s.snap_states.borrow().get(&to_peer_id).unwrap() {
             SnapState::Generated(ref snap) => *snap.clone(),
             ref s => panic!("unexpected state: {:?}", s),
         };
@@ -452,16 +466,16 @@ mod tests {
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
         let checkpointer_path = mgr.tablet_gen_path(&snap_key);
         assert!(checkpointer_path.exists());
-        s.snapshot(0, 7).unwrap();
+        s.snapshot(0, to_peer_id).unwrap();
 
         // Test cancel snapshot
-        let snap = s.snapshot(0, 0);
+        let snap = s.snapshot(0, 7);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
-        rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        s.cancel_generating_snap(None);
-        assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
+        let _res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        s.cancel_generating_snap(None, None);
+        assert!(s.snap_states.borrow().get(&to_peer_id).is_none());
 
         // Test get twice snapshot and cancel once.
         // get snapshot a
@@ -471,7 +485,7 @@ mod tests {
         apply.set_apply_progress(1, 5);
         apply.schedule_gen_snapshot(gen_task_a);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        s.cancel_generating_snap(None);
+        s.cancel_generating_snap(None, None);
         // cancel get snapshot a, try get snaphsot b
         let snap = s.snapshot(0, 0);
         assert_eq!(snap.unwrap_err(), unavailable);
