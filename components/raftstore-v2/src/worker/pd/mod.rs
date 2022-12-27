@@ -11,12 +11,18 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
-use raftstore::store::{util::KeysInfoFormatter, TxnExt};
+use raftstore::store::{util::KeysInfoFormatter, FlowStatsReporter, ReadStats, TxnExt, WriteStats};
 use slog::{error, info, Logger};
-use tikv_util::{time::UnixSecs, worker::Runnable};
+use tikv_util::{
+    time::UnixSecs,
+    worker::{Runnable, Scheduler},
+};
 use yatp::{task::future::TaskCell, Remote};
 
-use crate::{batch::StoreRouter, router::PeerMsg};
+use crate::{
+    batch::StoreRouter,
+    router::{CmdResChannel, PeerMsg},
+};
 
 mod region_heartbeat;
 mod split;
@@ -39,6 +45,7 @@ pub enum Task {
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+        ch: CmdResChannel,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -174,7 +181,8 @@ where
                 split_keys,
                 peer,
                 right_derive,
-            } => self.handle_ask_batch_split(region, split_keys, peer, right_derive),
+                ch,
+            } => self.handle_ask_batch_split(region, split_keys, peer, right_derive, ch),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::UpdateMaxTimestamp {
                 region_id,
@@ -201,6 +209,29 @@ where
     }
 }
 
+#[derive(Clone)]
+pub struct FlowReporter {
+    _scheduler: Scheduler<Task>,
+}
+
+impl FlowReporter {
+    pub fn new(scheduler: Scheduler<Task>) -> Self {
+        FlowReporter {
+            _scheduler: scheduler,
+        }
+    }
+}
+
+impl FlowStatsReporter for FlowReporter {
+    fn report_read_stats(&self, _read_stats: ReadStats) {
+        // TODO
+    }
+
+    fn report_write_stats(&self, _write_stats: WriteStats) {
+        // TODO
+    }
+}
+
 mod requests {
     use kvproto::raft_cmdpb::{
         AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
@@ -208,6 +239,7 @@ mod requests {
     use raft::eraftpb::ConfChangeType;
 
     use super::*;
+    use crate::router::RaftRequest;
 
     pub fn send_admin_request<EK, ER>(
         logger: &Logger,
@@ -216,6 +248,7 @@ mod requests {
         epoch: metapb::RegionEpoch,
         peer: metapb::Peer,
         request: AdminRequest,
+        ch: Option<CmdResChannel>,
     ) where
         EK: KvEngine,
         ER: RaftEngine,
@@ -228,7 +261,10 @@ mod requests {
         req.mut_header().set_peer(peer);
         req.set_admin_request(request);
 
-        let (msg, _) = PeerMsg::raft_command(req);
+        let msg = match ch {
+            Some(ch) => PeerMsg::AdminCommand(RaftRequest::new(req, ch)),
+            None => PeerMsg::admin_command(req).0,
+        };
         if let Err(e) = router.send(region_id, msg) {
             error!(
                 logger,

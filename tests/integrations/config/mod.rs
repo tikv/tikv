@@ -289,7 +289,7 @@ fn test_serde_custom_tikv_config() {
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
-        enable_statistics: false,
+        enable_statistics: true,
         stats_dump_period: ReadableDuration::minutes(12),
         compaction_readahead_size: ReadableSize::kb(1),
         info_log_max_size: ReadableSize::kb(1),
@@ -312,6 +312,9 @@ fn test_serde_custom_tikv_config() {
         paranoid_checks: None,
         allow_concurrent_memtable_write: Some(false),
         enable_unordered_write: true,
+        write_buffer_limit: Some(ReadableSize::gb(1)),
+        write_buffer_stall_ratio: 0.0,
+        write_buffer_flush_oldest_first: false,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -365,6 +368,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -433,6 +437,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -501,6 +506,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -569,6 +575,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         titan: titan_db_config.clone(),
     };
@@ -584,7 +591,7 @@ fn test_serde_custom_tikv_config() {
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
-        enable_statistics: false,
+        enable_statistics: true,
         stats_dump_period: ReadableDuration::minutes(12),
         compaction_readahead_size: ReadableSize::kb(1),
         info_log_max_size: ReadableSize::kb(1),
@@ -652,6 +659,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         titan: titan_db_config,
     };

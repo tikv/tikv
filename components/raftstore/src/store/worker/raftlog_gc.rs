@@ -3,10 +3,9 @@
 use std::{
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    sync::mpsc::Sender,
 };
 
-use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogGcTask};
+use engine_traits::{Engines, KvEngine, RaftEngine};
 use file_system::{IoType, WithIoType};
 use thiserror::Error;
 use tikv_util::{
@@ -73,7 +72,6 @@ enum Error {
 pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     tasks: Vec<Task>,
     engines: Engines<EK, ER>,
-    gc_entries: Option<Sender<usize>>,
     compact_sync_interval: Duration,
 }
 
@@ -82,25 +80,15 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         Runner {
             engines,
             tasks: vec![],
-            gc_entries: None,
             compact_sync_interval: compact_log_interval,
         }
     }
 
-    /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log(&mut self, regions: Vec<RaftLogGcTask>) -> Result<usize, Error> {
-        fail::fail_point!("worker_gc_raft_log", |s| {
-            Ok(s.and_then(|s| s.parse().ok()).unwrap_or(0))
-        });
-        let deleted = box_try!(self.engines.raft.batch_gc(regions));
-        fail::fail_point!("worker_gc_raft_log_finished", |_| { Ok(deleted) });
-        Ok(deleted)
-    }
-
-    fn report_collected(&self, collected: usize) {
-        if let Some(ref ch) = self.gc_entries {
-            ch.send(collected).unwrap();
-        }
+    fn raft_log_gc(&mut self, mut batch: ER::LogBatch) -> Result<(), Error> {
+        fail::fail_point!("worker_gc_raft_log", |_| Ok(()));
+        box_try!(self.engines.raft.consume(&mut batch, false));
+        fail::fail_point!("worker_gc_raft_log_finished");
+        Ok(())
     }
 
     fn flush(&mut self) {
@@ -115,9 +103,11 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
         });
         RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+
         let tasks = std::mem::take(&mut self.tasks);
-        let mut groups = Vec::with_capacity(tasks.len());
         let mut cbs = Vec::new();
+        let mut batch = self.engines.raft.log_batch(tasks.len());
+        let start = Instant::now();
         for t in tasks {
             debug!("gc raft log"; "region_id" => t.region_id, "start_index" => t.start_idx, "end_index" => t.end_idx);
             if let Some(cb) = t.cb {
@@ -137,28 +127,22 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     "end_index" => t.end_idx,
                 );
             }
-            groups.push(RaftLogGcTask {
-                raft_group_id: t.region_id,
-                from: t.start_idx,
-                to: t.end_idx,
-            });
-        }
-        let start = Instant::now();
-        match self.gc_raft_log(groups) {
-            Err(e) => {
+            if let Err(e) = self
+                .engines
+                .raft
+                .gc(t.region_id, t.start_idx, t.end_idx, &mut batch)
+            {
                 error!("failed to gc"; "err" => %e);
-                self.report_collected(0);
                 RAFT_LOG_GC_FAILED.inc();
             }
-            Ok(n) => {
-                debug!("gc log entries";  "entry_count" => n);
-                self.report_collected(n);
-                RAFT_LOG_GC_DELETED_KEYS_HISTOGRAM.observe(n as f64);
-            }
+        }
+        if let Err(e) = self.raft_log_gc(batch) {
+            error!("failed to write gc task"; "err" => %e);
+            RAFT_LOG_GC_FAILED.inc();
         }
         RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
         for cb in cbs {
-            cb()
+            cb();
         }
     }
 }
@@ -201,7 +185,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc, time::Duration};
+    use std::time::Duration;
 
     use engine_traits::{RaftEngine, RaftLogBatch, ALL_CFS};
     use raft::eraftpb::Entry;
@@ -218,9 +202,7 @@ mod tests {
         let kv_db = engine_test::kv::new_engine(path_raft.to_str().unwrap(), ALL_CFS).unwrap();
         let engines = Engines::new(kv_db, raft_db.clone());
 
-        let (tx, rx) = mpsc::channel();
         let mut runner = Runner {
-            gc_entries: Some(tx),
             engines,
             tasks: vec![],
             compact_sync_interval: Duration::from_secs(5),
@@ -237,17 +219,15 @@ mod tests {
         raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
 
         let tbls = vec![
-            (Task::gc(region_id, 0, 10), 10, (0, 10), (10, 100)),
-            (Task::gc(region_id, 0, 50), 40, (0, 50), (50, 100)),
-            (Task::gc(region_id, 50, 50), 0, (0, 50), (50, 100)),
-            (Task::gc(region_id, 50, 60), 10, (0, 60), (60, 100)),
+            (Task::gc(region_id, 0, 10), (0, 10), (10, 100)),
+            (Task::gc(region_id, 0, 50), (0, 50), (50, 100)),
+            (Task::gc(region_id, 50, 50), (0, 50), (50, 100)),
+            (Task::gc(region_id, 50, 60), (0, 60), (60, 100)),
         ];
 
-        for (task, expected_collectd, not_exist_range, exist_range) in tbls {
+        for (task, not_exist_range, exist_range) in tbls {
             runner.run(task);
             runner.flush();
-            let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-            assert_eq!(res, expected_collectd);
             raft_log_must_not_exist(&raft_db, 1, not_exist_range.0, not_exist_range.1);
             raft_log_must_exist(&raft_db, 1, exist_range.0, exist_range.1);
         }

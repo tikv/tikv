@@ -147,7 +147,11 @@ impl<E: Engine> Tracker<E> {
             _ => unreachable!(),
         }
 
-        self.with_perf_context(|perf_context| perf_context.start_observe());
+        self.with_perf_context(|perf_context| {
+            if let Some(c) = perf_context {
+                c.start_observe();
+            }
+        });
         self.current_stage = TrackerState::ItemBegan(now);
     }
 
@@ -160,7 +164,9 @@ impl<E: Engine> Tracker<E> {
                 self.total_storage_stats.add(&storage_stats);
             }
             self.with_perf_context(|perf_context| {
-                perf_context.report_metrics(&[get_tls_tracker_token()])
+                if let Some(c) = perf_context {
+                    c.report_metrics(&[get_tls_tracker_token()]);
+                }
             });
             self.current_stage = TrackerState::ItemFinished(now);
         } else {
@@ -355,7 +361,7 @@ impl<E: Engine> Tracker<E> {
 
     fn with_perf_context<F, T>(&self, f: F) -> T
     where
-        F: FnOnce(&mut Box<dyn PerfContext>) -> T,
+        F: FnOnce(&mut Option<Box<dyn PerfContext>>) -> T,
     {
         thread_local! {
             static SELECT: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
@@ -379,15 +385,19 @@ impl<E: Engine> Tracker<E> {
         };
         tls_cell.with(|c| {
             let mut c = c.borrow_mut();
-            let perf_context = c.get_or_insert_with(|| unsafe {
-                with_tls_engine::<E, _, _>(|engine| {
-                    Box::new(engine.kv_engine().unwrap().get_perf_context(
-                        PerfLevel::Uninitialized,
-                        PerfContextKind::Coprocessor(self.req_ctx.tag.get_str()),
-                    ))
-                })
-            });
-            f(perf_context)
+            if c.is_none() {
+                *c = unsafe {
+                    with_tls_engine::<E, _, _>(|engine| {
+                        engine.kv_engine().map(|engine| {
+                            Box::new(engine.get_perf_context(
+                                PerfLevel::Uninitialized,
+                                PerfContextKind::Coprocessor(self.req_ctx.tag.get_str()),
+                            )) as Box<dyn PerfContext>
+                        })
+                    })
+                };
+            }
+            f(&mut c)
         })
     }
 }

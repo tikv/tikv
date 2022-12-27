@@ -201,7 +201,7 @@ where
     ER: RaftEngine,
 {
     fn write_senders(&self) -> &WriteSenders<EK, ER> {
-        &self.write_senders
+        &self.schedulers.write
     }
 
     fn config(&self) -> &Config {

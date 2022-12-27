@@ -25,26 +25,29 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::cmp;
+use std::{borrow::Cow, cmp};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
-use engine_traits::{Checkpointer, KvEngine, RaftEngine, TabletContext};
+use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext};
 use fail::fail_point;
 use kvproto::{
-    metapb::{self, Region},
+    metapb::{self, Region, RegionEpoch},
+    pdpb::CheckPolicy,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
     raft_serverpb::RaftSnapshotData,
 };
 use protobuf::Message;
 use raft::{prelude::Snapshot, INVALID_ID};
 use raftstore::{
+    coprocessor::RegionChangeReason,
     store::{
-        fsm::apply::validate_batch_split,
+        cmd_resp,
+        fsm::{apply::validate_batch_split, ApplyMetrics},
         metrics::PEER_ADMIN_CMD_COUNTER,
         snap::TABLET_SNAPSHOT_VERSION,
         util::{self, KeysInfoFormatter},
-        PeerPessimisticLocks, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        PeerPessimisticLocks, SplitCheckTask, Transport, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
     Result,
 };
@@ -52,10 +55,11 @@ use slog::info;
 
 use crate::{
     batch::StoreContext,
-    fsm::ApplyResReporter,
+    fsm::{ApplyResReporter, PeerFsmDelegate},
     operation::AdminCmdResult,
     raft::{Apply, Peer},
-    router::{PeerMsg, StoreMsg},
+    router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
+    Error,
 };
 
 pub const SPLIT_PREFIX: &str = "split_";
@@ -99,7 +103,103 @@ impl SplitInit {
     }
 }
 
+#[derive(Debug)]
+pub struct RequestSplit {
+    pub epoch: RegionEpoch,
+    pub split_keys: Vec<Vec<u8>>,
+    pub source: Cow<'static, str>,
+}
+
+#[derive(Default, Debug)]
+pub struct SplitFlowControl {
+    size_diff_hint: i64,
+    skip_split_count: u64,
+    may_skip_split_check: bool,
+}
+
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
+    pub fn on_split_region_check(&mut self) {
+        if !self.fsm.peer_mut().on_split_region_check(self.store_ctx) {
+            self.schedule_tick(PeerTick::SplitRegionCheck)
+        }
+    }
+}
+
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    /// Handle split check.
+    ///
+    /// Returns true means the check tick is consumed, no need to schedule
+    /// another tick.
+    pub fn on_split_region_check<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) -> bool {
+        if !self.is_leader() {
+            return true;
+        }
+        let is_generating_snapshot = self.storage().is_generating_snapshot();
+        let control = self.split_flow_control_mut();
+        if control.may_skip_split_check
+            && control.size_diff_hint < ctx.cfg.region_split_check_diff().0 as i64
+        {
+            return true;
+        }
+        if ctx.schedulers.split_check.is_busy() {
+            return false;
+        }
+        if is_generating_snapshot && control.skip_split_count < 3 {
+            control.skip_split_count += 1;
+            return false;
+        }
+        let task =
+            SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan, None);
+        if let Err(e) = ctx.schedulers.split_check.schedule(task) {
+            info!(self.logger, "failed to schedule split check"; "err" => ?e);
+        }
+        let control = self.split_flow_control_mut();
+        control.may_skip_split_check = true;
+        control.size_diff_hint = 0;
+        control.skip_split_count = 0;
+        false
+    }
+
+    pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics) {
+        let control = self.split_flow_control_mut();
+        control.size_diff_hint += metrics.size_diff_hint;
+    }
+
+    pub fn on_request_split<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        rs: RequestSplit,
+        ch: CmdResChannel,
+    ) {
+        info!(
+            self.logger,
+            "on split";
+            "split_keys" => %KeysInfoFormatter(rs.split_keys.iter()),
+            "source" => %&rs.source,
+        );
+        if !self.is_leader() {
+            // region on this store is no longer leader, skipped.
+            info!(self.logger, "not leader, skip.");
+            ch.set_result(cmd_resp::new_error(Error::NotLeader(
+                self.region_id(),
+                self.leader(),
+            )));
+            return;
+        }
+        if let Err(e) = util::validate_split_region(
+            self.region_id(),
+            self.peer_id(),
+            self.region(),
+            &rs.epoch,
+            &rs.split_keys,
+        ) {
+            info!(self.logger, "invalid split request"; "err" => ?e, "source" => %&rs.source);
+            ch.set_result(cmd_resp::new_error(e));
+            return;
+        }
+        self.ask_batch_split_pd(ctx, rs.split_keys, ch);
+    }
+
     pub fn propose_split<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -253,12 +353,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     e
                 )
             });
-        let reg = self.tablet_registry();
-        let path = reg.tablet_path(region_id, log_index);
-        let ctx = TabletContext::new(&regions[derived_index], Some(log_index));
-        let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
         // Remove the old write batch.
         self.write_batch.take();
+        let reg = self.tablet_registry();
+        let path = reg.tablet_path(region_id, log_index);
+        let mut ctx = TabletContext::new(&regions[derived_index], Some(log_index));
+        // Now the tablet is flushed, so all previous states should be persisted.
+        // Reusing the tablet should not be a problem.
+        // TODO: Should we avoid flushing for the old tablet?
+        ctx.flush_state = Some(self.flush_state().clone());
+        let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
         self.publish_tablet(tablet);
 
         self.region_state_mut()
@@ -284,13 +388,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_split<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        derived_index: usize,
-        tablet_index: u64,
-        regions: Vec<Region>,
+        res: SplitResult,
     ) {
         fail_point!("on_split", self.peer().get_store_id() == 3, |_| {});
 
-        let derived = &regions[derived_index];
+        let derived = &res.regions[res.derived_index];
         let derived_epoch = derived.get_region_epoch().clone();
         let region_id = derived.get_id();
 
@@ -304,14 +406,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Update the version so the concurrent reader will fail due to EpochNotMatch
             // instead of PessimisticLockNotFound.
             pessimistic_locks.version = derived_epoch.get_version();
-            pessimistic_locks.group_by_regions(&regions, derived)
+            pessimistic_locks.group_by_regions(&res.regions, derived)
         };
         fail_point!("on_split_invalidate_locks");
 
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
+            meta.set_region(derived, true, &self.logger);
             let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
-            self.set_region(reader, derived.clone(), tablet_index);
+            self.set_region(
+                &store_ctx.coprocessor_host,
+                reader,
+                derived.clone(),
+                RegionChangeReason::Split,
+                res.tablet_index,
+            );
         }
 
         self.post_split();
@@ -322,18 +431,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             info!(
                 self.logger,
                 "notify pd with split";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
-                "split_count" => regions.len(),
+                "split_count" => res.regions.len(),
             );
             // Now pd only uses ReportBatchSplit for history operation show,
             // so we send it independently here.
-            self.report_batch_split_pd(store_ctx, regions.to_vec());
+            self.report_batch_split_pd(store_ctx, res.regions.to_vec());
+            self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
 
-        let last_region_id = regions.last().unwrap().get_id();
+        let last_region_id = res.regions.last().unwrap().get_id();
         let mut new_ids = HashSet::default();
-        for (new_region, locks) in regions.into_iter().zip(region_locks) {
+        for (new_region, locks) in res.regions.into_iter().zip(region_locks) {
             let new_region_id = new_region.get_id();
             if new_region_id == region_id {
                 continue;
@@ -368,7 +476,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 _ => unreachable!(),
             }
         }
-        self.split_trace_mut().push((tablet_index, new_ids));
+        self.split_trace_mut().push((res.tablet_index, new_ids));
+        let region_state = self.storage().region_state().clone();
+        self.state_changes_mut()
+            .put_region_state(region_id, res.tablet_index, &region_state)
+            .unwrap();
+        self.set_has_extra_write();
     }
 
     pub fn on_split_init<T>(
@@ -434,7 +547,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_id = self.region_id();
 
         if split_init.check_split {
-            // TODO: check if the last region needs to split again
+            self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
         let _ = store_ctx
             .router
@@ -463,17 +576,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if off > 0 {
             // There should be very few elements in the vector.
             split_trace.drain(..off);
-            // TODO: save admin_flushed.
             assert_ne!(admin_flushed, 0);
+            self.storage_mut()
+                .apply_trace_mut()
+                .on_admin_flush(admin_flushed);
             // Persist admin flushed.
-            self.set_has_ready();
+            self.set_has_extra_write();
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    };
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
@@ -638,6 +756,8 @@ mod test {
             reporter,
             reg,
             read_scheduler,
+            Arc::default(),
+            None,
             logger.clone(),
         );
 
@@ -811,14 +931,14 @@ mod test {
 
         // Split will create checkpoint tablet, so if there are some writes before
         // split, they should be flushed immediately.
-        apply.apply_put(CF_DEFAULT, b"k04", b"v4").unwrap();
+        apply.apply_put(CF_DEFAULT, 50, b"k04", b"v4").unwrap();
         assert!(!WriteBatch::is_empty(apply.write_batch.as_ref().unwrap()));
         splits.mut_requests().clear();
         splits
             .mut_requests()
             .push(new_split_req(b"k05", 70, vec![71, 72, 73]));
         req.set_splits(splits);
-        apply.apply_batch_split(&req, 50).unwrap();
+        apply.apply_batch_split(&req, 51).unwrap();
         assert!(apply.write_batch.is_none());
         assert_eq!(
             apply

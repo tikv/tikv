@@ -2,7 +2,10 @@
 
 use std::{sync::Arc, time::Duration};
 
-use dashmap::{mapref::one::RefMut, DashMap};
+use dashmap::{
+    mapref::{entry::Entry, one::RefMut},
+    DashMap,
+};
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
 use resolved_ts::Resolver;
@@ -57,6 +60,63 @@ impl RegionSubscription {
     }
 }
 
+#[derive(PartialEq, Eq)]
+pub enum CheckpointType {
+    MinTs,
+    StartTsOfInitialScan,
+    StartTsOfTxn(Option<Arc<[u8]>>),
+}
+
+impl std::fmt::Debug for CheckpointType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MinTs => write!(f, "MinTs"),
+            Self::StartTsOfInitialScan => write!(f, "StartTsOfInitialScan"),
+            Self::StartTsOfTxn(arg0) => f
+                .debug_tuple("StartTsOfTxn")
+                .field(&format_args!(
+                    "{}",
+                    utils::redact(&arg0.as_ref().map(|x| x.as_ref()).unwrap_or(&[]))
+                ))
+                .finish(),
+        }
+    }
+}
+
+pub struct ResolveResult {
+    pub region: Region,
+    pub checkpoint: TimeStamp,
+    pub checkpoint_type: CheckpointType,
+}
+
+impl std::fmt::Debug for ResolveResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolveResult")
+            .field("region", &self.region.get_id())
+            .field("checkpoint", &self.checkpoint)
+            .field("checkpoint_type", &self.checkpoint_type)
+            .finish()
+    }
+}
+
+impl ResolveResult {
+    fn resolve(sub: &mut RegionSubscription, min_ts: TimeStamp) -> Self {
+        let ts = sub.resolver.resolve(min_ts);
+        let ty = if ts == min_ts {
+            CheckpointType::MinTs
+        } else if sub.resolver.in_phase_one() {
+            CheckpointType::StartTsOfInitialScan
+        } else {
+            CheckpointType::StartTsOfTxn(sub.resolver.sample_far_lock())
+        };
+        Self {
+            region: sub.meta.clone(),
+            checkpoint: ts,
+            checkpoint_type: ty,
+        }
+    }
+}
+
 impl SubscriptionTracer {
     /// clear the current `SubscriptionTracer`.
     pub fn clear(&self) {
@@ -91,11 +151,11 @@ impl SubscriptionTracer {
 
     /// try advance the resolved ts with the min ts of in-memory locks.
     /// returns the regions and theirs resolved ts.
-    pub fn resolve_with(&self, min_ts: TimeStamp) -> Vec<(Region, TimeStamp)> {
+    pub fn resolve_with(&self, min_ts: TimeStamp) -> Vec<ResolveResult> {
         self.0
             .iter_mut()
             // Don't advance the checkpoint ts of removed region.
-            .map(|mut s| (s.meta.clone(), s.resolver.resolve(min_ts)))
+            .map(|mut s| ResolveResult::resolve(s.value_mut(), min_ts))
             .collect()
     }
 
@@ -128,21 +188,19 @@ impl SubscriptionTracer {
         if_cond: impl FnOnce(&RegionSubscription, &Region) -> bool,
     ) -> bool {
         let region_id = region.get_id();
-        let remove_result = self.0.remove(&region_id);
+        let remove_result = self.0.entry(region_id);
         match remove_result {
-            Some((_, mut v)) => {
-                if if_cond(&v, region) {
+            Entry::Occupied(mut x) => {
+                if if_cond(x.get(), region) {
                     TRACK_REGION.dec();
-                    v.stop();
+                    x.get_mut().stop();
+                    let v = x.remove();
                     info!("stop listen stream from store"; "observer" => ?v, "region_id"=> %region_id);
                     return true;
                 }
                 false
             }
-            None => {
-                warn!("trying to deregister region not registered"; "region_id" => %region_id);
-                false
-            }
+            Entry::Vacant(_) => false,
         }
     }
 
@@ -156,7 +214,7 @@ impl SubscriptionTracer {
         let mut sub = match self.get_subscription_of(new_region.get_id()) {
             Some(sub) => sub,
             None => {
-                warn!("backup stream observer refreshing void subscription."; "new_region" => ?new_region);
+                warn!("backup stream observer refreshing void subscription."; utils::slog_region(new_region));
                 return true;
             }
         };
@@ -258,6 +316,12 @@ impl std::fmt::Debug for FutureLock {
 }
 
 impl TwoPhaseResolver {
+    /// try to get one of the key of the oldest lock in the resolver.
+    pub fn sample_far_lock(&self) -> Option<Arc<[u8]>> {
+        let (_, keys) = self.resolver.locks().first_key_value()?;
+        keys.iter().next().cloned()
+    }
+
     pub fn in_phase_one(&self) -> bool {
         self.stable_ts.is_some()
     }
@@ -348,6 +412,8 @@ impl std::fmt::Debug for TwoPhaseResolver {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use kvproto::metapb::{Region, RegionEpoch};
     use raftstore::coprocessor::ObserveHandle;
     use txn_types::TimeStamp;
@@ -433,15 +499,24 @@ mod test {
         subs.deregister_region_if(&region(5, 8, 1), |_, _| true);
         drop(region4_sub);
 
-        let mut rs = subs.resolve_with(TimeStamp::new(1000));
+        let mut rs = subs
+            .resolve_with(TimeStamp::new(1000))
+            .into_iter()
+            .map(|r| (r.region, r.checkpoint, r.checkpoint_type))
+            .collect::<Vec<_>>();
         rs.sort_by_key(|k| k.0.get_id());
+        use crate::subscription_track::CheckpointType::*;
         assert_eq!(
             rs,
             vec![
-                (region(1, 1, 1), TimeStamp::new(42)),
-                (region(2, 2, 1), TimeStamp::new(1000)),
-                (region(3, 4, 1), TimeStamp::new(1000)),
-                (region(4, 8, 1), TimeStamp::new(128)),
+                (region(1, 1, 1), 42.into(), StartTsOfInitialScan),
+                (region(2, 2, 1), 1000.into(), MinTs),
+                (region(3, 4, 1), 1000.into(), MinTs),
+                (
+                    region(4, 8, 1),
+                    128.into(),
+                    StartTsOfTxn(Some(Arc::from(b"Alpi".as_slice())))
+                ),
             ]
         );
     }

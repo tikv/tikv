@@ -12,7 +12,7 @@ use crate::{
     batch::StoreContext,
     fsm::{PeerFsmDelegate, Store, StoreFsmDelegate},
     raft::Peer,
-    router::{PeerTick, StoreTick},
+    router::{CmdResChannel, PeerTick, StoreTick},
     worker::pd,
 };
 
@@ -53,7 +53,7 @@ impl Store {
         // stats.set_query_stats(query_stats);
 
         let task = pd::Task::StoreHeartbeat { stats };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(self.logger(), "notify pd failed";
                 "store_id" => self.store_id(),
                 "err" => ?e
@@ -89,12 +89,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             approximate_keys: None,
             wait_data_peers: Vec::new(),
         });
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
                 "err" => ?e,
             );
             return;
@@ -148,8 +146,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     error!(
                         self.logger,
                         "failed to get peer from cache";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.peer_id(),
                         "get_peer_id" => id,
                     );
                 }
@@ -163,31 +159,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let task = pd::Task::DestroyPeer {
             region_id: self.region_id(),
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with DestroyPeer";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
                 "err" => %e,
             );
         }
     }
 
     #[inline]
-    pub fn ask_batch_split_pd<T>(&self, ctx: &StoreContext<EK, ER, T>, split_keys: Vec<Vec<u8>>) {
+    pub fn ask_batch_split_pd<T>(
+        &self,
+        ctx: &StoreContext<EK, ER, T>,
+        split_keys: Vec<Vec<u8>>,
+        ch: CmdResChannel,
+    ) {
         let task = pd::Task::AskBatchSplit {
             region: self.region().clone(),
             split_keys,
             peer: self.peer().clone(),
             right_derive: ctx.cfg.right_derive_when_split,
+            ch,
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with AskBatchSplit";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
                 "err" => %e,
             );
         }
@@ -200,7 +198,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         regions: Vec<metapb::Region>,
     ) {
         let task = pd::Task::ReportBatchSplit { regions };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with ReportBatchSplit";
@@ -216,7 +214,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             initial_status,
             txn_ext: self.txn_ext().clone(),
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with UpdateMaxTimestamp";

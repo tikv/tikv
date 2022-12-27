@@ -1,14 +1,20 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::mem;
+use std::{mem, sync::Arc};
 
-use engine_traits::{CachedTablet, KvEngine, TabletRegistry, WriteBatch};
+use engine_traits::{CachedTablet, FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_LEN};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
-use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
+use raftstore::store::{
+    fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
+    ReadTask,
+};
 use slog::Logger;
 use tikv_util::worker::Scheduler;
 
-use crate::{operation::AdminCmdResult, router::CmdResChannel};
+use crate::{
+    operation::{AdminCmdResult, DataTrace},
+    router::CmdResChannel,
+};
 
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine, R> {
@@ -27,14 +33,23 @@ pub struct Apply<EK: KvEngine, R> {
     /// A flag indicates whether the peer is destroyed by applying admin
     /// command.
     tombstone: bool,
-    applied_index: u64,
     applied_term: u64,
+    /// The largest index that have modified each column family.
+    modifications: DataTrace,
     admin_cmd_result: Vec<AdminCmdResult>,
+    flush_state: Arc<FlushState>,
+    /// The flushed indexes of each column family before being restarted.
+    ///
+    /// If an apply index is less than the flushed index, the log can be
+    /// skipped. `None` means logs should apply to all required column
+    /// families.
+    log_recovery: Option<Box<DataTrace>>,
 
     region_state: RegionLocalState,
 
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
+    pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
 }
 
@@ -46,6 +61,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        flush_state: Arc<FlushState>,
+        log_recovery: Option<Box<DataTrace>>,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -58,14 +75,17 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             write_batch: None,
             callbacks: vec![],
             tombstone: false,
-            applied_index: 0,
             applied_term: 0,
+            modifications: [0; DATA_CFS_LEN],
             admin_cmd_result: vec![],
             region_state,
             tablet_registry,
             read_scheduler,
             key_buffer: vec![],
             res_reporter,
+            flush_state,
+            log_recovery,
+            metrics: ApplyMetrics::default(),
             logger,
         }
     }
@@ -95,13 +115,20 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
     #[inline]
     pub fn set_apply_progress(&mut self, index: u64, term: u64) {
-        self.applied_index = index;
+        self.flush_state.set_applied_index(index);
         self.applied_term = term;
+        if self.log_recovery.is_none() {
+            return;
+        }
+        let log_recovery = self.log_recovery.as_ref().unwrap();
+        if log_recovery.iter().all(|v| index >= *v) {
+            self.log_recovery.take();
+        }
     }
 
     #[inline]
     pub fn apply_progress(&self) -> (u64, u64) {
-        (self.applied_index, self.applied_term)
+        (self.flush_state.applied_index(), self.applied_term)
     }
 
     #[inline]
@@ -170,5 +197,20 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         if self.write_batch.as_ref().map_or(false, |wb| wb.is_empty()) {
             self.write_batch = None;
         }
+    }
+
+    #[inline]
+    pub fn modifications_mut(&mut self) -> &mut DataTrace {
+        &mut self.modifications
+    }
+
+    #[inline]
+    pub fn flush_state(&self) -> &Arc<FlushState> {
+        &self.flush_state
+    }
+
+    #[inline]
+    pub fn log_recovery(&self) -> &Option<Box<DataTrace>> {
+        &self.log_recovery
     }
 }

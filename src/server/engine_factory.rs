@@ -3,31 +3,32 @@
 use std::{path::Path, sync::Arc};
 
 use engine_rocks::{
-    raw::{Cache, Env, Statistics},
+    raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
-    RocksDbOptions, RocksEngine, RocksEventListener,
+    RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
 };
 use engine_traits::{
-    CompactionJobInfo, MiscExt, Result, TabletContext, TabletFactory, CF_DEFAULT, CF_WRITE,
+    CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
+    TabletFactory, CF_DEFAULT, CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
 use crate::{
-    config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    config::{CfResources, DbConfig, DbResources, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
     storage::config::EngineType,
 };
 
 struct FactoryInner {
-    env: Arc<Env>,
     region_info_accessor: Option<RegionInfoAccessor>,
-    block_cache: Cache,
     rocksdb_config: Arc<DbConfig>,
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
-    statistics: Statistics,
+    db_resources: DbResources,
+    cf_resources: CfResources,
+    state_storage: Option<Arc<dyn StateStorage>>,
     lite: bool,
 }
 
@@ -40,14 +41,14 @@ impl KvEngineFactoryBuilder {
     pub fn new(env: Arc<Env>, config: &TikvConfig, cache: Cache) -> Self {
         Self {
             inner: FactoryInner {
-                env,
                 region_info_accessor: None,
-                block_cache: cache,
                 rocksdb_config: Arc::new(config.rocksdb.clone()),
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                statistics: Statistics::new_titan(),
+                db_resources: config.rocksdb.build_resources(env),
+                cf_resources: config.rocksdb.build_cf_resources(cache),
+                state_storage: None,
                 lite: false,
             },
             compact_event_sender: None,
@@ -82,6 +83,13 @@ impl KvEngineFactoryBuilder {
     /// In lite mode, most listener/filters will not be installed.
     pub fn lite(mut self, lite: bool) -> Self {
         self.inner.lite = lite;
+        self
+    }
+
+    /// A storage for persisting flush states, which is used for recovering when
+    /// disable WAL. Only work for v2.
+    pub fn state_storage(mut self, storage: Arc<dyn StateStorage>) -> Self {
+        self.inner.state_storage = Some(storage);
         self
     }
 
@@ -122,13 +130,16 @@ impl KvEngineFactory {
         ))
     }
 
+    pub fn rocks_statistics(&self) -> Arc<RocksStatistics> {
+        self.inner.db_resources.statistics.clone()
+    }
+
     fn db_opts(&self) -> RocksDbOptions {
         // Create kv engine.
         let mut db_opts = self
             .inner
             .rocksdb_config
-            .build_opt(Some(&self.inner.statistics));
-        db_opts.set_env(self.inner.env.clone());
+            .build_opt(&self.inner.db_resources);
         if !self.inner.lite {
             db_opts.add_event_listener(RocksEventListener::new(
                 "kv",
@@ -143,7 +154,7 @@ impl KvEngineFactory {
 
     fn cf_opts(&self, for_engine: EngineType) -> Vec<(&str, RocksCfOptions)> {
         self.inner.rocksdb_config.build_cf_opts(
-            &self.inner.block_cache,
+            &self.inner.cf_resources,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
             for_engine,
@@ -151,7 +162,7 @@ impl KvEngineFactory {
     }
 
     pub fn block_cache(&self) -> &Cache {
-        &self.inner.block_cache
+        &self.inner.cf_resources.cache
     }
 
     /// Create a shared db.
@@ -180,6 +191,16 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         let cf_opts = self.cf_opts(EngineType::RaftKv2);
         if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
             db_opts.add_event_listener(listener.clone_with(ctx.id, suffix));
+        }
+        if let Some(storage) = &self.inner.state_storage
+            && let Some(flush_state) = ctx.flush_state {
+            let listener = PersistenceListener::new(
+                ctx.id,
+                ctx.suffix.unwrap(),
+                flush_state,
+                storage.clone(),
+            );
+            db_opts.add_event_listener(RocksPersistenceListener::new(listener));
         }
         let kv_engine =
             engine_rocks::util::new_engine_opt(path.to_str().unwrap(), db_opts, cf_opts);

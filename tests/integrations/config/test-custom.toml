@@ -252,7 +252,6 @@ max-background-flushes = 4
 max-manifest-file-size = "12MB"
 create-if-missing = false
 max-open-files = 12345
-enable-statistics = false
 stats-dump-period = "12m"
 compaction-readahead-size = "1KB"
 info-log-max-size = "1KB"
@@ -272,6 +271,7 @@ enable-pipelined-write = false
 enable-multi-batch-write = true
 enable-unordered-write = true
 allow-concurrent-memtable-write = false
+write-buffer-limit = "1GB"
 
 [rocksdb.titan]
 enabled = true
@@ -332,6 +332,7 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+max-compactions = 3
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -394,6 +395,7 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+max-compactions = 3
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -443,6 +445,7 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+max-compactions = 3
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -492,6 +495,7 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+max-compactions = 3
 
 [raftdb]
 wal-recovery-mode = "skip-any-corrupted-records"
@@ -504,7 +508,6 @@ max-background-flushes = 4
 max-manifest-file-size = "12MB"
 create-if-missing = false
 max-open-files = 12345
-enable-statistics = false
 stats-dump-period = "12m"
 compaction-readahead-size = "1KB"
 info-log-max-size = "1KB"
@@ -574,6 +577,7 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+max-compactions = 3
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"

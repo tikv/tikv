@@ -84,7 +84,7 @@ pub enum Error {
     Timeout(Duration),
 }
 
-fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
+pub fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
     match *e {
         KvError(box KvErrorInner::Request(ref header)) => {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
@@ -364,8 +364,8 @@ where
 
     type RaftExtension = RaftRouterWrap<S, E>;
     #[inline]
-    fn raft_extension(&self) -> &Self::RaftExtension {
-        &self.router
+    fn raft_extension(&self) -> Self::RaftExtension {
+        self.router.clone()
     }
 
     fn modify_on_kv_engine(

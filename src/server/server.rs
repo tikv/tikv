@@ -13,7 +13,7 @@ use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
-use raftstore::store::{CheckLeaderTask, SnapManager};
+use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
 use security::SecurityManager;
 use tikv_util::{
     config::VersionTrack,
@@ -39,7 +39,7 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2,
     read_pool::ReadPool,
-    server::{gc_worker::GcWorker, Proxy},
+    server::{gc_worker::GcWorker, tablet_snap::TabletRunner, Proxy},
     storage::{lock_manager::LockManager, Engine, Storage},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
@@ -67,7 +67,7 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     trans: ServerTransport<E::RaftExtension, S>,
     raft_router: E::RaftExtension,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager,
+    snap_mgr: Either<SnapManager, TabletSnapManager>,
     snap_worker: LazyWorker<SnapTask>,
 
     // Currently load statistics is done in the thread.
@@ -94,7 +94,7 @@ where
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
         resolver: S,
-        snap_mgr: SnapManager,
+        snap_mgr: Either<SnapManager, TabletSnapManager>,
         gc_worker: GcWorker<E>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         env: Arc<Environment>,
@@ -122,7 +122,7 @@ where
 
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
-        let raft_ext = storage.get_engine().raft_extension().clone();
+        let raft_ext = storage.get_engine().raft_extension();
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
@@ -252,14 +252,28 @@ where
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
     ) -> Result<()> {
-        let snap_runner = SnapHandler::new(
-            Arc::clone(&self.env),
-            self.snap_mgr.clone(),
-            self.raft_router.clone(),
-            security_mgr,
-            Arc::clone(&cfg),
-        );
-        self.snap_worker.start(snap_runner);
+        match self.snap_mgr.clone() {
+            Either::Left(mgr) => {
+                let snap_runner = SnapHandler::new(
+                    self.env.clone(),
+                    mgr,
+                    self.raft_router.clone(),
+                    security_mgr,
+                    cfg,
+                );
+                self.snap_worker.start(snap_runner);
+            }
+            Either::Right(mgr) => {
+                let snap_runner = TabletRunner::new(
+                    self.env.clone(),
+                    mgr,
+                    self.raft_router.clone(),
+                    security_mgr,
+                    cfg,
+                );
+                self.snap_worker.start(snap_runner);
+            }
+        }
 
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         info!("listening on addr"; "addr" => &self.local_addr);
@@ -564,7 +578,7 @@ mod tests {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            SnapManager::new(""),
+            Either::Left(SnapManager::new("")),
             gc_worker,
             check_leader_scheduler,
             env,
