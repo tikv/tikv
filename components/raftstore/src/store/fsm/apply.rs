@@ -120,17 +120,17 @@ impl<C> PendingCmd<C> {
     }
 }
 
-// impl<C> Drop for PendingCmd<C> {
-//     fn drop(&mut self) {
-// if self.cb.is_some() {
-// safe_panic!(
-// "callback of pending command at [index: {}, term: {}] is leak",
-// self.index,
-// self.term
-// );
-// }
-// }
-// }
+impl<C> Drop for PendingCmd<C> {
+    fn drop(&mut self) {
+        if self.cb.is_some() {
+            safe_panic!(
+                "callback of pending command at [index: {}, term: {}] is leak",
+                self.index,
+                self.term
+            );
+        }
+    }
+}
 
 impl<C> Debug for PendingCmd<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -1586,6 +1586,9 @@ where
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
             notify_stale_command(region_id, peer_id, self.term, cmd);
         }
+        for cmd in self.pending_cmds.compacts.drain(..) {
+            notify_region_removed(self.region.get_id(), peer_id, cmd);
+        }
     }
 
     fn clear_all_commands_silently(&mut self) {
@@ -1593,6 +1596,9 @@ where
             cmd.cb.take();
         }
         if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
+            cmd.cb.take();
+        }
+        for mut cmd in self.pending_cmds.compacts.drain(..) {
             cmd.cb.take();
         }
     }
