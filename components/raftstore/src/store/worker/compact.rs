@@ -108,7 +108,7 @@ where
             .start_coarse_timer();
         box_try!(
             self.engine
-                .compact_range(cf_name, start_key, end_key, false, 1 /* threads */,)
+                .compact_range_cf(cf_name, start_key, end_key, false, 1 /* threads */,)
         );
         compact_range_timer.observe_duration();
         info!(

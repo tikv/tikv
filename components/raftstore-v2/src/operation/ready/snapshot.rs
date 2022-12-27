@@ -162,6 +162,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Use a new FlushState to avoid conflicts with the old one.
             tablet_ctx.flush_state = Some(flush_state);
             ctx.tablet_registry.load(tablet_ctx, false).unwrap();
+            self.record_tablet_as_tombstone_and_refresh(persisted_index, ctx);
             self.schedule_apply_fsm(ctx);
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);
@@ -504,7 +505,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 let _ = fs::remove_dir_all(path);
             }
         };
-        task.persisted_cb = Some(Box::new(hook));
+        task.persisted_cbs.push(Box::new(hook));
         task.has_snapshot = true;
         Ok(())
     }
