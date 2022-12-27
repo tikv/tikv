@@ -31,7 +31,7 @@ use protobuf::Message as _;
 use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
-    store::{util, FetchedLogs, ReadProgress, Transport, WriteTask},
+    store::{needs_evict_entry_cache, util, FetchedLogs, ReadProgress, Transport, WriteTask},
 };
 use slog::{debug, error, trace, warn};
 use tikv_util::{
@@ -275,7 +275,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // asynchronously.
         if self.is_leader() {
             for entry in committed_entries.iter().rev() {
-                // TODO: handle raft_log_size_hint
+                self.update_approximate_raft_log_size(|s| s + entry.get_data().len() as u64);
                 let propose_time = self
                     .proposals()
                     .find_propose_time(entry.get_term(), entry.get_index());
@@ -292,6 +292,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     break;
                 }
             }
+        }
+        if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
+            // Compact all cached entries instead of half evict.
+            self.entry_storage_mut().evict_entry_cache(false);
         }
         self.schedule_apply_committed_entries(committed_entries);
     }
@@ -375,9 +379,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
+        let prev_persisted = self.storage().apply_trace().persisted_apply_index();
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
+        self.on_advance_persisted_apply_index(ctx, prev_persisted);
+
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready
                 .take_persisted_messages()
@@ -517,10 +524,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
 
                     self.region_heartbeat_pd(ctx);
+                    self.add_pending_tick(PeerTick::CompactLog);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
-                    self.storage_mut().cancel_generating_snap(None, None);
+                    self.storage_mut().cancel_generating_snap(None);
                     self.clear_in_memory_pessimistic_locks();
                 }
                 _ => {}
