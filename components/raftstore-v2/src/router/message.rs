@@ -181,6 +181,7 @@ pub enum PeerMsg {
         request: RequestSplit,
         ch: CmdResChannel,
     },
+    ForceCompactLog,
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
