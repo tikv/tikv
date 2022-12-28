@@ -89,7 +89,8 @@ impl StoreMeta {
                     data_end_key(prev.get_end_key()),
                     prev.get_region_epoch().get_version(),
                 );
-                self.region_ranges.remove(&key);
+                let prev_id = self.region_ranges.remove(&key);
+                assert_eq!(prev_id, Some(prev.get_id()));
             }
         }
     }
