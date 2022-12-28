@@ -280,10 +280,9 @@ impl RunningState {
         let store_meta = router.store_meta().clone();
         let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap()).unwrap();
 
-        let coprocessor_host = CoprocessorHost::new(
-            router.store_router().clone(),
-            raftstore::coprocessor::Config::default(),
-        );
+        let mut coprocessor = raftstore::coprocessor::Config::default();
+        coprocessor.enable_region_bucket = true;
+        let coprocessor_host = CoprocessorHost::new(router.store_router().clone(), coprocessor);
         let background = Worker::new("background");
         let pd_worker = LazyWorker::new("pd-worker");
         system

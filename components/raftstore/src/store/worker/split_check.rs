@@ -291,6 +291,11 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             let mut bucket_region = region.clone();
             bucket_region.set_start_key(bucket_range.0.clone());
             bucket_region.set_end_key(bucket_range.1.clone());
+            println!(
+                "on buckets created,start:{},end:{}",
+                log_wrappers::Value::key(bucket_region.get_start_key()),
+                log_wrappers::Value::key(bucket_region.get_end_key())
+            );
             let adjusted_keys = std::mem::take(&mut bucket.keys)
                 .into_iter()
                 .enumerate()
@@ -667,6 +672,10 @@ where
             ),
             Task::ChangeConfig(c) => self.change_cfg(c),
             Task::ApproximateBuckets(region) => {
+                println!(
+                    "handle approximate buckets, enable_region_buckets:{}",
+                    self.coprocessor.cfg.enable_region_bucket
+                );
                 if self.coprocessor.cfg.enable_region_bucket {
                     let mut cached;
                     let tablet = match &self.engine {

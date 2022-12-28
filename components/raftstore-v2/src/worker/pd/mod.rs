@@ -10,8 +10,10 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
-use pd_client::PdClient;
-use raftstore::store::{util::KeysInfoFormatter, FlowStatsReporter, ReadStats, TxnExt, WriteStats};
+use pd_client::{BucketStat, PdClient};
+use raftstore::store::{
+    util::KeysInfoFormatter, FlowStatsReporter, ReadStats, ReportBucket, TxnExt, WriteStats,
+};
 use slog::{error, info, Logger};
 use tikv_util::{
     time::UnixSecs,
@@ -25,6 +27,7 @@ use crate::{
 };
 
 mod region_heartbeat;
+mod report_buckets;
 mod split;
 mod store_heartbeat;
 mod update_max_timestamp;
@@ -55,6 +58,7 @@ pub enum Task {
         initial_status: u64,
         txn_ext: Arc<TxnExt>,
     },
+    ReportBuckets(BucketStat),
 }
 
 impl Display for Task {
@@ -88,6 +92,7 @@ impl Display for Task {
                 "update the max timestamp for region {} in the concurrency manager",
                 region_id
             ),
+            Task::ReportBuckets(ref buckets) => write!(f, "report buckets: {:?}", buckets),
         }
     }
 }
@@ -107,7 +112,7 @@ where
     remote: Remote<TaskCell>,
 
     region_peers: HashMap<u64, region_heartbeat::PeerStat>,
-
+    region_buckets: HashMap<u64, ReportBucket>,
     // For store_heartbeat.
     start_ts: UnixSecs,
     store_stat: store_heartbeat::StoreStat,
@@ -150,6 +155,7 @@ where
             router,
             remote,
             region_peers: HashMap::default(),
+            region_buckets: HashMap::default(),
             start_ts: UnixSecs::zero(),
             store_stat: store_heartbeat::StoreStat::default(),
             region_cpu_records: HashMap::default(),
@@ -189,6 +195,7 @@ where
                 initial_status,
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
+            Task::ReportBuckets(buckets) => self.handle_report_region_buckets(buckets),
         }
     }
 }

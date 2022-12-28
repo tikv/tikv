@@ -5,6 +5,7 @@
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
+use pd_client::new_bucket_stats;
 use raftstore::store::Transport;
 use slog::error;
 
@@ -72,9 +73,34 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         // TODO: hibernate region
         self.schedule_tick(PeerTick::PdHeartbeat);
     }
+
+    #[inline]
+    pub fn on_report_region_buckets_tick(&mut self) {
+        if !self.fsm.peer().is_leader() || self.fsm.peer().region_buckets().is_none() {
+            return;
+        }
+        self.fsm.peer_mut().report_region_buckets_pd(self.store_ctx);
+        self.schedule_tick(PeerTick::ReportBuckets);
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    #[inline]
+    pub fn report_region_buckets_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
+        let region_buckets = self.region_buckets_mut();
+        let task = pd::Task::ReportBuckets(region_buckets.clone());
+        // let logger = self.logger.clone();
+        if let Err(_e) = ctx.schedulers.pd.schedule(task) {
+            // error!(
+            //     logger,
+            //     "failed to report buckets to pd";
+            //     "err" => ?e,
+            // );
+            return;
+        }
+        region_buckets.stats = new_bucket_stats(&region_buckets.meta);
+    }
+
     #[inline]
     pub fn region_heartbeat_pd<T>(&self, ctx: &StoreContext<EK, ER, T>) {
         let task = pd::Task::RegionHeartbeat(pd::RegionHeartbeatTask {

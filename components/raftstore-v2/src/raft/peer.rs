@@ -20,7 +20,7 @@ use raftstore::{
         fsm::ApplyMetrics,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-        ReadProgress, TxnExt, WriteTask,
+        ReadProgress, SplitCheckTask, TxnExt, WriteTask,
     },
 };
 use slog::Logger;
@@ -192,6 +192,38 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         peer.proposal_control.maybe_update_term(term);
 
         Ok(peer)
+    }
+
+    pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &StoreContext<EK, ER, T>) {
+        println!(
+            "may gen buckets approximate buckets,enable_buckets:{}",
+            ctx.coprocessor_host.cfg.enable_region_bucket
+        );
+        if ctx.coprocessor_host.cfg.enable_region_bucket && !self.region().get_peers().is_empty() {
+            if let Err(_e) = ctx
+                .schedulers
+                .split_check
+                .schedule(SplitCheckTask::ApproximateBuckets(self.region().clone()))
+            {
+                // error!(
+                //     self.logger(),
+                //     "failed to schedule check approximate buckets";
+                //     "region_id" => self.region().get_id(),
+                //     "peer_id" => self.peer_id(),
+                //     "err" => %e,
+                // );
+            }
+        }
+    }
+
+    #[inline]
+    pub fn region_buckets_mut(&mut self) -> &mut BucketStat {
+        self.region_buckets.as_mut().unwrap()
+    }
+
+    #[inline]
+    pub fn region_buckets(&self) -> &Option<BucketStat> {
+        &self.region_buckets
     }
 
     #[inline]

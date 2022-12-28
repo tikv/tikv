@@ -26,7 +26,7 @@ pub use self::{
     compact::{Runner as CompactRunner, Task as CompactTask},
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
     pd::{
-        new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
+        new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask, ReportBucket,
         Runner as PdRunner, Task as PdTask,
     },
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},

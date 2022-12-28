@@ -181,6 +181,13 @@ pub enum PeerMsg {
         request: RequestSplit,
         ch: CmdResChannel,
     },
+
+    RefreshRegionBuckets {
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),

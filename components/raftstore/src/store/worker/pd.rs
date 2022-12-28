@@ -274,14 +274,22 @@ pub struct ReportBucket {
 }
 
 impl ReportBucket {
-    fn new(current_stat: BucketStat) -> Self {
+    pub fn new(current_stat: BucketStat) -> Self {
         Self {
             current_stat,
             ..Default::default()
         }
     }
 
-    fn new_report(&mut self, report_ts: UnixSecs) -> BucketStat {
+    pub fn last_report_ts(&self) -> UnixSecs {
+        self.last_report_ts.clone()
+    }
+
+    pub fn current_stat_mut(&mut self)->&mut BucketStat{
+        &mut self.current_stat
+    }
+
+    pub fn new_report(&mut self, report_ts: UnixSecs) -> BucketStat {
         self.last_report_ts = report_ts;
         match self.last_report_stat.replace(self.current_stat.clone()) {
             Some(last) => {

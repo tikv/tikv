@@ -194,6 +194,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
         }
+        self.fsm.peer.maybe_gen_approximate_buckets(self.store_ctx)
     }
 
     #[inline]
@@ -215,7 +216,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict(),
             PeerTick::CheckLeaderLease => unimplemented!(),
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
-            PeerTick::ReportBuckets => unimplemented!(),
+            PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => unimplemented!(),
         }
     }
@@ -297,6 +298,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         .peer_mut()
                         .on_request_split(self.store_ctx, request, ch)
                 }
+                PeerMsg::RefreshRegionBuckets{
+                    region_id,
+                    region_epoch
+                    buckets
+                    bucket_ranges:
+                } => {
+
+                }
+
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }
