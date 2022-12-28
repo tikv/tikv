@@ -168,8 +168,9 @@ pub struct ApplyTrace {
     admin: Progress,
     /// Index that is issued to be written. It may not be truely persisted.
     persisted_applied: u64,
-    /// Flush will be triggered explicitly when there are too many pending writes.
-    /// It marks the last index that is flushed to avoid too many flushes.
+    /// Flush will be triggered explicitly when there are too many pending
+    /// writes. It marks the last index that is flushed to avoid too many
+    /// flushes.
     last_flush_trigger: u64,
     /// `true` means the raft cf record should be persisted in next ready.
     try_persist: bool,
@@ -230,13 +231,17 @@ impl ApplyTrace {
             // It's waiting for other peers, flush will not help.
             return false;
         }
-        let last_modified = self.data_cfs.iter().filter_map(|pr| {
-            if pr.last_modified != pr.flushed {
-                Some(pr.last_modified)
-            } else {
-                None
-            }
-        }).max();
+        let last_modified = self
+            .data_cfs
+            .iter()
+            .filter_map(|pr| {
+                if pr.last_modified != pr.flushed {
+                    Some(pr.last_modified)
+                } else {
+                    None
+                }
+            })
+            .max();
         if let Some(m) = last_modified && m >= self.admin.flushed + 512 && m >= self.last_flush_trigger + 512 {
             self.last_flush_trigger = m;
             true
