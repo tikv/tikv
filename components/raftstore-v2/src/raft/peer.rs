@@ -370,14 +370,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Returns if there's any tombstone being removed.
     #[inline]
     pub fn remove_tombstone_tablets_before(&mut self, persisted: u64) -> bool {
-        let mut removed = 0;
-        while let Some(i) = self.pending_tombstone_tablets.first()
-            && *i <= persisted
-        {
-            removed += 1;
+        let removed = self
+            .pending_tombstone_tablets
+            .iter()
+            .take_while(|i| **i <= persisted)
+            .count();
+        if removed > 0 {
+            self.pending_tombstone_tablets.drain(..removed);
+            true
+        } else {
+            false
         }
-        self.pending_tombstone_tablets.drain(..removed);
-        removed > 0
     }
 
     #[inline]

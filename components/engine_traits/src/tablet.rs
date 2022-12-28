@@ -228,11 +228,12 @@ impl<EK> TabletRegistry<EK> {
 
     pub fn parse_tablet_name<'a>(&self, path: &'a Path) -> Option<(&'a str, u64, u64)> {
         let name = path.file_name().unwrap().to_str().unwrap();
-        let mut parts = name.rsplit('_');
-        let suffix = parts.next()?.parse().ok()?;
-        let id = parts.next()?.parse().ok()?;
-        let prefix = parts.as_str();
-        Some((prefix, id, suffix))
+        let (rest, suffix) = name.rsplit_once('_')?;
+        let (prefix, id) = match rest.rfind('_') {
+            Some(idx) => unsafe { (rest.get_unchecked(..=idx), rest.get_unchecked(idx + 1..)) },
+            None => ("", rest),
+        };
+        Some((prefix, id.parse().ok()?, suffix.parse().ok()?))
     }
 
     pub fn tablet_root(&self) -> &Path {
@@ -468,5 +469,14 @@ mod tests {
         let normal_name = registry.tablet_name("", 20, 15);
         let normal_tablet_path = registry.tablet_path(20, 15);
         assert_eq!(registry.tablet_root().join(normal_name), normal_tablet_path);
+
+        let full_prefix_path = registry.tablet_root().join(name);
+        let res = registry.parse_tablet_name(&full_prefix_path);
+        assert_eq!(res, Some(("prefix_", 12, 30)));
+        let res = registry.parse_tablet_name(&normal_tablet_path);
+        assert_eq!(res, Some(("", 20, 15)));
+        let invalid_path = registry.tablet_root().join("invalid_12");
+        let res = registry.parse_tablet_name(&invalid_path);
+        assert_eq!(res, None);
     }
 }

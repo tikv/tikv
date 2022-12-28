@@ -40,7 +40,7 @@ use kvproto::{
 use raftstore::store::{
     ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
-use slog::Logger;
+use slog::{info, Logger};
 use tikv_util::{box_err, worker::Scheduler};
 
 use crate::{
@@ -130,7 +130,7 @@ impl<EK: KvEngine, ER: RaftEngine> engine_traits::StateStorage for StateStorage<
 /// Mapping from data cf to an u64 index.
 pub type DataTrace = [u64; DATA_CFS_LEN];
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct Progress {
     flushed: u64,
     /// The index of last entry that has modification to the CF.
@@ -154,7 +154,7 @@ pub fn cf_offset(cf: &str) -> usize {
 ///   interact with other peers will be traced.
 /// - support query the flushed progress without actually scanning raft engine,
 ///   which is useful for cleaning up stale flush records.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ApplyTrace {
     /// The modified indexes and flushed index of each data CF.
     data_cfs: Box<[Progress; DATA_CFS_LEN]>,
@@ -485,6 +485,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_data_flushed(&mut self, cf: &str, tablet_index: u64, index: u64) {
+        info!(self.logger, "data flushed"; "cf" => cf, "tablet_index" => tablet_index, "index" => index);
         if tablet_index < self.storage().tablet_index() {
             // Stale tablet.
             return;

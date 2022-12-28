@@ -317,7 +317,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(self.logger, "failed to compact raft logs"; "err" => ?e);
         } else {
             // TODO: make this debug when stable.
-            info!(self.logger, "compact log"; "index" => compact_index);
+            info!(self.logger, "compact log";
+                "index" => compact_index,
+                "apply_trace" => ?self.storage().apply_trace(),
+                "truncated" => ?self.entry_storage().apply_state());
             self.set_has_extra_write();
         }
     }
