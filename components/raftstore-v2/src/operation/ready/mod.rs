@@ -32,7 +32,7 @@ use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{needs_evict_entry_cache, util, FetchedLogs, ReadProgress, Transport, WriteTask},
 };
-use slog::{debug, error, trace, warn};
+use slog::{debug, error, info, trace, warn};
 use tikv_util::{
     store::find_peer,
     time::{duration_to_sec, monotonic_raw_now},
@@ -88,6 +88,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if committed_index > applied_index + 128 {
             // If there are too many pending entries, pause  to avoid
             // too much memory usage.
+            info!(self.logger, "pause for recovery"; "applied" => applied_index, "committed" => committed_index);
             self.set_pause_for_recovery(true);
             true
         } else {

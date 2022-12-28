@@ -38,7 +38,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::warn;
+use slog::{info, warn};
 use tikv_util::{box_err, time::monotonic_raw_now};
 
 use crate::{
@@ -311,6 +311,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.pause_for_recovery()
             && self.storage().entry_storage().commit_index() <= apply_res.applied_index
         {
+            info!(self.logger, "recovery completed"; "apply_index" => apply_res.applied_index);
             self.set_pause_for_recovery(false);
             // Flush to avoid recover again and again.
             if let Some(scheduler) = self.apply_scheduler() {

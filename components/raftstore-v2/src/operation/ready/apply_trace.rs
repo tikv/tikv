@@ -40,7 +40,7 @@ use kvproto::{
 use raftstore::store::{
     ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
-use slog::{info, Logger};
+use slog::{trace, Logger};
 use tikv_util::{box_err, worker::Scheduler};
 
 use crate::{
@@ -227,7 +227,7 @@ impl ApplyTrace {
     }
 
     pub fn should_flush(&mut self) -> bool {
-        if self.admin.flushed != self.admin.last_modified {
+        if self.admin.flushed < self.admin.last_modified {
             // It's waiting for other peers, flush will not help.
             return false;
         }
@@ -485,7 +485,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_data_flushed(&mut self, cf: &str, tablet_index: u64, index: u64) {
-        info!(self.logger, "data flushed"; "cf" => cf, "tablet_index" => tablet_index, "index" => index);
+        trace!(self.logger, "data flushed"; "cf" => cf, "tablet_index" => tablet_index, "index" => index, "trace" => ?self.storage().apply_trace());
         if tablet_index < self.storage().tablet_index() {
             // Stale tablet.
             return;
@@ -497,6 +497,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_data_modified(&mut self, modification: DataTrace) {
+        trace!(self.logger, "on data modified"; "modification" => ?modification, "trace" => ?self.storage().apply_trace());
         let apply_index = self.storage().entry_storage().applied_index();
         let apply_trace = self.storage_mut().apply_trace_mut();
         for (cf, index) in DATA_CFS.iter().zip(modification) {
