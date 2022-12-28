@@ -64,6 +64,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         read_scheduler: Scheduler<ReadTask<EK>>,
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
+        applied_index: u64,
+        applied_term: u64,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -76,8 +78,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             write_batch: None,
             callbacks: vec![],
             tombstone: false,
-            applied_term: 0,
-            applied_index: flush_state.applied_index(),
+            applied_term,
+            applied_index,
             modifications: [0; DATA_CFS_LEN],
             admin_cmd_result: vec![],
             region_state,

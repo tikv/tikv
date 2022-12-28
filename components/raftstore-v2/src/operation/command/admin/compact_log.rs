@@ -257,7 +257,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // All logs < perssited_apply will be deleted, so should check with +1.
         if old_truncated + 1 < self.storage().apply_trace().persisted_apply_index() {
-            self.maybe_compact_log_from_engine(store_ctx);
+            self.compact_log_from_engine(store_ctx);
         }
 
         let applied = *self.last_applying_index_mut();
@@ -287,7 +287,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.set_has_extra_write();
             }
             if old_persisted < self.entry_storage().truncated_index() + 1 {
-                self.maybe_compact_log_from_engine(store_ctx);
+                self.compact_log_from_engine(store_ctx);
             }
             if self.remove_tombstone_tablets_before(new_persisted) {
                 let sched = store_ctx.schedulers.tablet_gc.clone();
@@ -298,7 +298,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    fn maybe_compact_log_from_engine<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+    fn compact_log_from_engine<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let truncated = self.entry_storage().truncated_index();
         // We need to keep at lease one log at apply index.
         let persisted_applied = self
@@ -316,7 +316,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             error!(self.logger, "failed to compact raft logs"; "err" => ?e);
         } else {
-            debug!(self.logger, "compact log"; "index" => compact_index);
+            // TODO: make this debug when stable.
+            info!(self.logger, "compact log"; "index" => compact_index);
             self.set_has_extra_write();
         }
     }

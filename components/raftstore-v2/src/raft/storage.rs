@@ -442,6 +442,8 @@ mod tests {
             sched,
             Arc::default(),
             None,
+            5,
+            5,
             logger,
         );
 
@@ -460,8 +462,8 @@ mod tests {
             SnapState::Generated(ref snap) => *snap.clone(),
             ref s => panic!("unexpected state: {:?}", s),
         };
-        assert_eq!(snap.get_metadata().get_index(), 0);
-        assert_eq!(snap.get_metadata().get_term(), 0);
+        assert_eq!(snap.get_metadata().get_index(), 5);
+        assert_eq!(snap.get_metadata().get_term(), 5);
         assert_eq!(snap.get_data().is_empty(), false);
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
         let checkpointer_path = mgr.tablet_gen_path(&snap_key);

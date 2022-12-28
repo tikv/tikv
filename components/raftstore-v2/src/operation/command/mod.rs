@@ -112,6 +112,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             read_scheduler,
             self.flush_state().clone(),
             self.storage().apply_trace().log_recovery(),
+            self.entry_storage().applied_index(),
+            self.entry_storage().applied_term(),
             logger,
         );
 

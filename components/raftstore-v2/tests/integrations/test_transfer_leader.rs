@@ -34,7 +34,7 @@ fn put_data(
 
     let header = Box::new(router.new_request_for(region_id).take_header());
     let mut put = SimpleWriteEncoder::with_capacity(64);
-    put.put(CF_DEFAULT, &key, b"value");
+    put.put(CF_DEFAULT, key, b"value");
     let (msg, mut sub) = PeerMsg::simple_write(header, put.encode());
     router.send(region_id, msg).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(10));

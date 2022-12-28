@@ -789,6 +789,8 @@ mod test {
             read_scheduler,
             Arc::default(),
             None,
+            0,
+            0,
             logger.clone(),
         );
 
