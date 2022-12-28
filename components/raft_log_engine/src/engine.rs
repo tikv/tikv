@@ -11,8 +11,8 @@ use codec::number::NumberCodec;
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
     CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
-    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGcTask, Result, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
@@ -301,6 +301,7 @@ fn cf_to_id(cf: &str) -> u8 {
         _ => panic!("unrecognized cf {}", cf),
     }
 }
+const MAX_CF_ID: u8 = 3;
 
 /// Encode a key in the format `{prefix}{num}`.
 fn encode_key(prefix: &'static [u8], num: u64) -> [u8; 9] {
@@ -380,6 +381,8 @@ const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
 const RECOVER_STATE_KEY: &[u8] = &[0x05];
 const FLUSH_STATE_KEY: &[u8] = &[0x06];
+// All keys are of the same length.
+const KEY_PREFIX_LEN: usize = RAFT_LOG_STATE_KEY.len();
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -658,34 +661,80 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
-        self.batch_gc(vec![RaftLogGcTask {
-            raft_group_id,
-            from,
-            to,
-        }])
+    fn gc(
+        &self,
+        raft_group_id: u64,
+        _from: u64,
+        to: u64,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()> {
+        batch
+            .0
+            .add_command(raft_group_id, Command::Compact { index: to });
+        Ok(())
     }
 
-    fn batch_gc(&self, tasks: Vec<RaftLogGcTask>) -> Result<usize> {
-        let mut batch = self.log_batch(tasks.len());
-        let mut old_first_index = Vec::with_capacity(tasks.len());
-        for task in &tasks {
-            batch
-                .0
-                .add_command(task.raft_group_id, Command::Compact { index: task.to });
-            old_first_index.push(self.0.first_index(task.raft_group_id));
-        }
+    fn delete_all_but_one_states_before(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()> {
+        // Makes sure REGION_STATE_KEY is the smallest and FLUSH_STATE_KEY is the
+        // largest.
+        debug_assert!(REGION_STATE_KEY < APPLY_STATE_KEY);
+        debug_assert!(APPLY_STATE_KEY < FLUSH_STATE_KEY);
 
-        self.consume(&mut batch, false)?;
-
-        let mut total = 0;
-        for (old_first_index, task) in old_first_index.iter().zip(tasks) {
-            let new_first_index = self.0.first_index(task.raft_group_id);
-            if let (Some(old), Some(new)) = (old_first_index, new_first_index) {
-                total += new.saturating_sub(*old);
-            }
-        }
-        Ok(total as usize)
+        let mut end = [0; KEY_PREFIX_LEN + 1];
+        end[..KEY_PREFIX_LEN].copy_from_slice(FLUSH_STATE_KEY);
+        end[KEY_PREFIX_LEN] = MAX_CF_ID + 1;
+        let mut found_region_state = false;
+        let mut found_apply_state = false;
+        let mut found_flush_state = [false; MAX_CF_ID as usize + 1];
+        self.0
+            .scan_raw_messages(
+                raft_group_id,
+                Some(REGION_STATE_KEY),
+                Some(&end),
+                true,
+                |key, _| {
+                    match &key[..KEY_PREFIX_LEN] {
+                        REGION_STATE_KEY
+                            if NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]) <= apply_index =>
+                        {
+                            if found_region_state {
+                                batch.0.delete(raft_group_id, key.to_vec());
+                            } else {
+                                found_region_state = true;
+                            }
+                        }
+                        APPLY_STATE_KEY
+                            if NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]) <= apply_index =>
+                        {
+                            if found_apply_state {
+                                batch.0.delete(raft_group_id, key.to_vec());
+                            } else {
+                                found_apply_state = true;
+                            }
+                        }
+                        FLUSH_STATE_KEY => {
+                            let cf_id = key[KEY_PREFIX_LEN];
+                            let tablet_index = NumberCodec::decode_u64(&key[KEY_PREFIX_LEN + 1..]);
+                            if cf_id <= MAX_CF_ID && tablet_index <= apply_index {
+                                if found_flush_state[cf_id as usize] {
+                                    batch.0.delete(raft_group_id, key.to_vec());
+                                } else {
+                                    found_flush_state[cf_id as usize] = true;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    true
+                },
+            )
+            .map_err(transfer_error)?;
+        Ok(())
     }
 
     fn need_manual_purge(&self) -> bool {

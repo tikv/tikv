@@ -23,13 +23,15 @@ mod snapshot;
 
 use std::{cmp, time::Instant};
 
-pub use apply_trace::{cf_offset, write_initial_states, ApplyTrace, DataTrace, StateStorage};
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use protobuf::Message as _;
 use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
-use raftstore::store::{util, FetchedLogs, ReadProgress, Transport, WriteTask};
+use raftstore::{
+    coprocessor::{RegionChangeEvent, RoleChange},
+    store::{needs_evict_entry_cache, util, FetchedLogs, ReadProgress, Transport, WriteTask},
+};
 use slog::{debug, error, trace, warn};
 use tikv_util::{
     store::find_peer,
@@ -37,6 +39,7 @@ use tikv_util::{
 };
 
 pub use self::{
+    apply_trace::{cf_offset, write_initial_states, ApplyTrace, DataTrace, StateStorage},
     async_writer::AsyncWriter,
     snapshot::{GenSnapTask, SnapState},
 };
@@ -272,7 +275,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // asynchronously.
         if self.is_leader() {
             for entry in committed_entries.iter().rev() {
-                // TODO: handle raft_log_size_hint
+                self.update_approximate_raft_log_size(|s| s + entry.get_data().len() as u64);
                 let propose_time = self
                     .proposals()
                     .find_propose_time(entry.get_term(), entry.get_index());
@@ -289,6 +292,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     break;
                 }
             }
+        }
+        if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
+            // Compact all cached entries instead of half evict.
+            self.entry_storage_mut().evict_entry_cache(false);
         }
         self.schedule_apply_committed_entries(committed_entries);
     }
@@ -372,9 +379,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
+        let prev_persisted = self.storage().apply_trace().persisted_apply_index();
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
+        self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
+
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready
                 .take_persisted_messages()
@@ -384,6 +394,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if !self.serving() {
             self.start_destroy(&mut write_task);
+            ctx.coprocessor_host.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Destroy,
+                self.raft_group().raft.state,
+            );
         }
         // Ready number should increase monotonically.
         assert!(self.async_writer.known_largest_number() < ready.number());
@@ -509,6 +524,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
 
                     self.region_heartbeat_pd(ctx);
+                    self.add_pending_tick(PeerTick::CompactLog);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
@@ -517,6 +533,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
+            let target = self.refresh_leader_transferee();
+            ctx.coprocessor_host.on_role_change(
+                self.region(),
+                RoleChange {
+                    state: ss.raft_state,
+                    leader_id: ss.leader_id,
+                    prev_lead_transferee: target,
+                    vote: self.raft_group().raft.vote,
+                    initialized: self.storage().is_initialized(),
+                },
+            );
             self.proposal_control_mut().maybe_update_term(term);
         }
     }

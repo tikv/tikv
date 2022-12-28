@@ -226,10 +226,10 @@ impl Store {
             self.store_id(),
             region,
             ctx.engine.clone(),
-            ctx.read_scheduler.clone(),
+            ctx.schedulers.read.clone(),
             &ctx.logger,
         )
-        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, s))
+        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, &ctx.snap_mgr, s))
         {
             Ok(p) => p,
             res => {
@@ -237,6 +237,10 @@ impl Store {
                 return;
             }
         };
+        ctx.store_meta
+            .lock()
+            .unwrap()
+            .set_region(fsm.peer().region(), false, fsm.logger());
         let mailbox = BasicMailbox::new(tx, fsm, ctx.router.state_cnt().clone());
         if ctx
             .router

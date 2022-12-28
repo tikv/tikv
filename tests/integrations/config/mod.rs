@@ -313,6 +313,9 @@ fn test_serde_custom_tikv_config() {
         paranoid_checks: None,
         allow_concurrent_memtable_write: Some(false),
         enable_unordered_write: true,
+        write_buffer_limit: Some(ReadableSize::gb(1)),
+        write_buffer_stall_ratio: 0.0,
+        write_buffer_flush_oldest_first: false,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -366,6 +369,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -434,6 +438,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -502,6 +507,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -570,6 +576,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         titan: titan_db_config.clone(),
     };
@@ -653,6 +660,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         titan: titan_db_config,
     };

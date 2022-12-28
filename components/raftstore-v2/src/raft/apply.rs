@@ -4,7 +4,10 @@ use std::{mem, sync::Arc};
 
 use engine_traits::{CachedTablet, FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_LEN};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
-use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
+use raftstore::store::{
+    fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
+    ReadTask,
+};
 use slog::Logger;
 use tikv_util::worker::Scheduler;
 
@@ -31,6 +34,7 @@ pub struct Apply<EK: KvEngine, R> {
     /// command.
     tombstone: bool,
     applied_term: u64,
+    applied_index: u64,
     /// The largest index that have modified each column family.
     modifications: DataTrace,
     admin_cmd_result: Vec<AdminCmdResult>,
@@ -46,6 +50,7 @@ pub struct Apply<EK: KvEngine, R> {
 
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
+    pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
 }
 
@@ -72,6 +77,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             callbacks: vec![],
             tombstone: false,
             applied_term: 0,
+            applied_index: flush_state.applied_index(),
             modifications: [0; DATA_CFS_LEN],
             admin_cmd_result: vec![],
             region_state,
@@ -81,6 +87,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             res_reporter,
             flush_state,
             log_recovery,
+            metrics: ApplyMetrics::default(),
             logger,
         }
     }
@@ -110,7 +117,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
     #[inline]
     pub fn set_apply_progress(&mut self, index: u64, term: u64) {
-        self.flush_state.set_applied_index(index);
+        self.applied_index = index;
         self.applied_term = term;
         if self.log_recovery.is_none() {
             return;
@@ -118,12 +125,15 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let log_recovery = self.log_recovery.as_ref().unwrap();
         if log_recovery.iter().all(|v| index >= *v) {
             self.log_recovery.take();
+            // Now all logs are recovered, flush them to avoid recover again
+            // and again.
+            let _ = self.tablet.flush_cfs(&[], false);
         }
     }
 
     #[inline]
     pub fn apply_progress(&self) -> (u64, u64) {
-        (self.flush_state.applied_index(), self.applied_term)
+        (self.applied_index, self.applied_term)
     }
 
     #[inline]
