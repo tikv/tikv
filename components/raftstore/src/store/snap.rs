@@ -1982,13 +1982,19 @@ impl TabletSnapManager {
 
     pub fn total_snap_size(&self) -> Result<u64> {
         let mut total_size = 0;
-        for entry in file_system::read_dir(&self.base)? {
+        let dirs = file_system::read_dir(&self.base);
+        if dirs.is_err() {
+            error!(
+                "total_snap_size failed";
+                "path" => %self.base.display(),
+                "err" => ?dirs.err(),
+            );
+            return Ok(0);
+        }
+        for entry in dirs.unwrap() {
             let entry = match entry {
                 Ok(e) => e,
-                Err(e) if e.kind() == ErrorKind::NotFound || e.kind() == ErrorKind::Other => {
-                    // Other(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })
-                    continue;
-                }
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
                 Err(e) => return Err(Error::from(e)),
             };
 
@@ -2001,14 +2007,19 @@ impl TabletSnapManager {
             {
                 continue;
             }
-            for e in file_system::read_dir(path)? {
+            let snap_dir = file_system::read_dir(path);
+            if snap_dir.is_err() {
+                error!(
+                    "total_snap_size failed";
+                    "path" => %entry.path().display(),
+                    "err" => ?snap_dir.err(),
+                );
+                continue;
+            }
+            for e in snap_dir.unwrap() {
                 match e.and_then(|e| e.metadata()) {
                     Ok(m) => total_size += m.len(),
-                    Err(e) if e.kind() == ErrorKind::NotFound || e.kind() == ErrorKind::Other => {
-                        // Other(Os { code: 2, kind: NotFound, message: \"No such file or
-                        // directory\" })
-                        continue;
-                    }
+                    Err(e) if e.kind() == ErrorKind::NotFound => continue,
                     Err(e) => return Err(Error::from(e)),
                 }
             }
