@@ -630,7 +630,7 @@ mod test {
         kv::TestTabletFactory,
     };
     use engine_traits::{
-        Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
+        FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
     };
     use kvproto::{
         metapb::RegionEpoch,
@@ -788,9 +788,8 @@ mod test {
             reporter,
             reg,
             read_scheduler,
-            Arc::default(),
+            Arc::new(FlushState::new(0)),
             None,
-            0,
             0,
             logger.clone(),
         );

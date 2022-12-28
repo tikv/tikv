@@ -201,7 +201,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let first_index = self.entry_storage().first_index();
         if first_index == persisted_index + 1 {
             let region_id = self.region_id();
-            self.reset_flush_state();
+            self.reset_flush_state(persisted_index);
             let flush_state = self.flush_state().clone();
             let mut tablet_ctx = TabletContext::new(self.region(), Some(persisted_index));
             // Use a new FlushState to avoid conflicts with the old one.

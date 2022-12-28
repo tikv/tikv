@@ -34,6 +34,9 @@ pub struct Apply<EK: KvEngine, R> {
     /// command.
     tombstone: bool,
     applied_term: u64,
+    // Apply progress is set after every command in case there is a flush. But it's
+    // wrong to update flush_state immediately as a manual flush from other thread
+    // can fetch the wrong apply index from flush_state.
     applied_index: u64,
     /// The largest index that have modified each column family.
     modifications: DataTrace,
@@ -64,7 +67,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         read_scheduler: Scheduler<ReadTask<EK>>,
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
-        applied_index: u64,
         applied_term: u64,
         logger: Logger,
     ) -> Self {
@@ -79,7 +81,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             callbacks: vec![],
             tombstone: false,
             applied_term,
-            applied_index,
+            applied_index: flush_state.applied_index(),
             modifications: [0; DATA_CFS_LEN],
             admin_cmd_result: vec![],
             region_state,

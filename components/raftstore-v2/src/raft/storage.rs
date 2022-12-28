@@ -298,7 +298,9 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::TestTabletFactory,
     };
-    use engine_traits::{RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS};
+    use engine_traits::{
+        FlushState, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
+    };
     use kvproto::{
         metapb::{Peer, Region},
         raft_serverpb::PeerState,
@@ -440,9 +442,8 @@ mod tests {
             router,
             reg,
             sched,
-            Arc::default(),
+            Arc::new(FlushState::new(5)),
             None,
-            5,
             5,
             logger,
         );

@@ -65,7 +65,6 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         read_scheduler: Scheduler<ReadTask<EK>>,
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
-        applied_index: u64,
         applied_term: u64,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
@@ -78,7 +77,6 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             read_scheduler,
             flush_state,
             log_recovery,
-            applied_index,
             applied_term,
             logger,
         );
