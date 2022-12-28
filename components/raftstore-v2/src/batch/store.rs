@@ -535,6 +535,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             causal_ts_provider,
             self.logger.clone(),
             self.shutdown.clone(),
+            cfg.clone(),
         ));
 
         let split_check_scheduler = workers.background.start(
