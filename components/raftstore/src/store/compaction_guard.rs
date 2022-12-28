@@ -455,7 +455,7 @@ mod tests {
         db.put(b"zc5", &value).unwrap();
         db.put(b"zc6", &value).unwrap();
         db.flush_cfs(&[], true /* wait */).unwrap();
-        db.compact_range(
+        db.compact_range_cf(
             CF_DEFAULT, None,  // start_key
             None,  // end_key
             false, // exclusive_manual

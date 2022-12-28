@@ -23,7 +23,6 @@ mod snapshot;
 
 use std::{cmp, time::Instant};
 
-pub use apply_trace::{cf_offset, write_initial_states, ApplyTrace, DataTrace, StateStorage};
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
@@ -40,6 +39,7 @@ use tikv_util::{
 };
 
 pub use self::{
+    apply_trace::{cf_offset, write_initial_states, ApplyTrace, DataTrace, StateStorage},
     async_writer::AsyncWriter,
     snapshot::{GenSnapTask, SnapState},
 };
@@ -383,7 +383,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
-        self.on_advance_persisted_apply_index(ctx, prev_persisted);
+        self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
 
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready

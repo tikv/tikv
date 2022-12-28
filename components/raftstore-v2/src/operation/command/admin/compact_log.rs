@@ -17,7 +17,7 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::{
-    store::{fsm::new_admin_request, needs_evict_entry_cache, Transport},
+    store::{fsm::new_admin_request, needs_evict_entry_cache, Transport, WriteTask},
     Result,
 };
 use slog::{debug, error, info};
@@ -29,10 +29,11 @@ use crate::{
     operation::AdminCmdResult,
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerTick},
+    worker::tablet_gc,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
-    pub fn on_compact_log_tick(&mut self) {
+    pub fn on_compact_log_tick(&mut self, force: bool) {
         if !self.fsm.peer().is_leader() {
             // `compact_cache_to` is called when apply, there is no need to call
             // `compact_to` here, snapshot generating has already been cancelled
@@ -43,7 +44,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
         self.fsm
             .peer_mut()
-            .maybe_propose_compact_log(self.store_ctx);
+            .maybe_propose_compact_log(self.store_ctx, force);
 
         self.on_entry_cache_evict();
     }
@@ -63,7 +64,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // Mirrors v1::on_raft_gc_log_tick.
-    fn maybe_propose_compact_log<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+    fn maybe_propose_compact_log<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        force: bool,
+    ) {
         // As leader, we would not keep caches for the peers that didn't response
         // heartbeat in the last few seconds. That happens probably because
         // another TiKV is down. In this case if we do not clean up the cache,
@@ -121,7 +126,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.entry_storage_mut()
             .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx + 1));
 
-        let mut compact_idx = if applied_idx > first_idx
+        let mut compact_idx = if force && replicated_idx > first_idx {
+            replicated_idx
+        } else if applied_idx > first_idx
             && applied_idx - first_idx >= store_ctx.cfg.raft_log_gc_count_limit()
             || self.approximate_raft_log_size() >= store_ctx.cfg.raft_log_gc_size_limit().0
         {
@@ -256,12 +263,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         old_persisted: u64,
+        task: &mut WriteTask<EK, ER>,
     ) {
         let new_persisted = self.storage().apply_trace().persisted_apply_index();
         if old_persisted < new_persisted {
+            let region_id = self.region_id();
             // TODO: batch it.
             if let Err(e) = store_ctx.engine.delete_all_but_one_states_before(
-                self.region_id(),
+                region_id,
                 new_persisted,
                 self.state_changes_mut(),
             ) {
@@ -270,6 +279,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.set_has_extra_write();
             }
             self.maybe_compact_log_from_engine(store_ctx, Either::Left(old_persisted));
+            if self.remove_tombstone_tablets_before(new_persisted) {
+                let sched = store_ctx.schedulers.tablet_gc.clone();
+                task.persisted_cbs.push(Box::new(move || {
+                    let _ = sched.schedule(tablet_gc::Task::destroy(region_id, new_persisted));
+                }))
+            }
         }
     }
 

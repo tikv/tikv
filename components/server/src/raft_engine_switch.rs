@@ -251,7 +251,7 @@ mod tests {
             // Prepare some data for the RocksEngine.
             let raftdb = engine_rocks::util::new_engine_opt(
                 &cfg.raft_store.raftdb_path,
-                cfg.raftdb.build_opt(),
+                cfg.raftdb.build_opt(Default::default(), None),
                 cfg.raftdb.build_cf_opts(&cache),
             )
             .unwrap();

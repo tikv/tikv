@@ -2,7 +2,10 @@
 
 use std::{sync::Arc, time::Duration};
 
-use dashmap::{mapref::one::RefMut, DashMap};
+use dashmap::{
+    mapref::{entry::Entry, one::RefMut},
+    DashMap,
+};
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
 use resolved_ts::Resolver;
@@ -185,21 +188,19 @@ impl SubscriptionTracer {
         if_cond: impl FnOnce(&RegionSubscription, &Region) -> bool,
     ) -> bool {
         let region_id = region.get_id();
-        let remove_result = self.0.remove(&region_id);
+        let remove_result = self.0.entry(region_id);
         match remove_result {
-            Some((_, mut v)) => {
-                if if_cond(&v, region) {
+            Entry::Occupied(mut x) => {
+                if if_cond(x.get(), region) {
                     TRACK_REGION.dec();
-                    v.stop();
+                    x.get_mut().stop();
+                    let v = x.remove();
                     info!("stop listen stream from store"; "observer" => ?v, "region_id"=> %region_id);
                     return true;
                 }
                 false
             }
-            None => {
-                debug!("trying to deregister region not registered"; "region_id" => %region_id);
-                false
-            }
+            Entry::Vacant(_) => false,
         }
     }
 

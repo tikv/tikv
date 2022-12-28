@@ -25,11 +25,13 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{borrow::Cow, cmp};
+use std::{borrow::Cow, cmp, path::PathBuf};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
-use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext};
+use engine_traits::{
+    Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
+};
 use fail::fail_point;
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
@@ -59,6 +61,7 @@ use crate::{
     operation::AdminCmdResult,
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
+    worker::tablet_gc,
     Error,
 };
 
@@ -115,6 +118,11 @@ pub struct SplitFlowControl {
     size_diff_hint: i64,
     skip_split_count: u64,
     may_skip_split_check: bool,
+}
+
+pub fn temp_split_path<EK>(registry: &TabletRegistry<EK>, region_id: u64) -> PathBuf {
+    let tablet_name = registry.tablet_name(SPLIT_PREFIX, region_id, RAFT_INIT_LOG_INDEX);
+    registry.tablet_root().join(tablet_name)
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
@@ -328,8 +336,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 continue;
             }
 
-            let name = reg.tablet_name(SPLIT_PREFIX, new_region_id, RAFT_INIT_LOG_INDEX);
-            let split_temp_path = reg.tablet_root().join(name);
+            let split_temp_path = temp_split_path(reg, new_region_id);
             checkpointer
                 .create_at(&split_temp_path, None, 0)
                 .unwrap_or_else(|e| {
@@ -343,16 +350,22 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
 
         let derived_path = self.tablet_registry().tablet_path(region_id, log_index);
-        checkpointer
-            .create_at(&derived_path, None, 0)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fails to create checkpoint with path {:?}: {:?}",
-                    self.logger.list(),
-                    derived_path,
-                    e
-                )
-            });
+        // If it's recovered from restart, it's possible the target path exists already.
+        // And because checkpoint is atomic, so we don't need to worry about corruption.
+        // And it's also wrong to delete it and remake as it may has applied and flushed
+        // some data to the new checkpoint before being restarted.
+        if !derived_path.exists() {
+            checkpointer
+                .create_at(&derived_path, None, 0)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{:?} fails to create checkpoint with path {:?}: {:?}",
+                        self.logger.list(),
+                        derived_path,
+                        e
+                    )
+                });
+        }
         // Remove the old write batch.
         self.write_batch.take();
         let reg = self.tablet_registry();
@@ -439,6 +452,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
 
+        self.record_tablet_as_tombstone_and_refresh(res.tablet_index, store_ctx);
+        let _ = store_ctx
+            .schedulers
+            .tablet_gc
+            .schedule(tablet_gc::Task::trim(
+                self.tablet().unwrap().clone(),
+                derived,
+            ));
+
         let last_region_id = res.regions.last().unwrap().get_id();
         let mut new_ids = HashSet::default();
         for (new_region, locks) in res.regions.into_iter().zip(region_locks) {
@@ -491,6 +513,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         let region_id = split_init.region.id;
         if self.storage().is_initialized() && self.persisted_index() >= RAFT_INIT_LOG_INDEX {
+            // Race with split operation. The tablet created by split will eventually be
+            // deleted (TODO). We don't trim it.
             let _ = store_ctx
                 .router
                 .force_send(split_init.source_id, PeerMsg::SplitInitFinish(region_id));
@@ -532,6 +556,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         split_init: Box<SplitInit>,
     ) {
+        let _ = store_ctx
+            .schedulers
+            .tablet_gc
+            .schedule(tablet_gc::Task::trim(
+                self.tablet().unwrap().clone(),
+                self.region(),
+            ));
         if split_init.source_leader
             && self.leader_id() == INVALID_ID
             && self.term() == RAFT_INIT_LOG_TERM

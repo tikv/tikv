@@ -19,8 +19,10 @@
 //!   peer fsm, then Raft will get the snapshot.
 
 use std::{
+    assert_matches::assert_matches,
     fmt::{self, Debug},
     fs,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
@@ -43,7 +45,7 @@ use tikv_util::box_err;
 
 use crate::{
     fsm::ApplyResReporter,
-    operation::command::SPLIT_PREFIX,
+    operation::command::temp_split_path,
     raft::{Apply, Peer, Storage},
     Result, StoreContext,
 };
@@ -115,6 +117,48 @@ impl Debug for GenSnapTask {
     }
 }
 
+pub fn recv_snap_path(
+    snap_mgr: &TabletSnapManager,
+    region_id: u64,
+    peer_id: u64,
+    term: u64,
+    index: u64,
+) -> PathBuf {
+    let key = TabletSnapKey::new(region_id, peer_id, term, index);
+    snap_mgr.final_recv_path(&key)
+}
+
+/// Move the tablet from `source` to managed path.
+///
+/// Returns false if `source` doesn't exist.
+pub fn install_tablet<EK: KvEngine>(
+    registry: &TabletRegistry<EK>,
+    source: &Path,
+    region_id: u64,
+    tablet_index: u64,
+) -> bool {
+    if !source.exists() {
+        return false;
+    }
+    let target_path = registry.tablet_path(region_id, tablet_index);
+    assert_matches!(
+        EK::locked(source.to_str().unwrap()),
+        Ok(false),
+        "source is locked: {} => {}",
+        source.display(),
+        target_path.display()
+    );
+    if let Err(e) = fs::rename(source, &target_path) {
+        panic!(
+            "failed to rename tablet {} => {}: {:?}",
+            source.display(),
+            target_path.display(),
+            e
+        );
+    }
+    true
+}
+
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_snapshot_generated(&mut self, snapshot: GenSnapRes) {
         if self.storage_mut().on_snapshot_generated(snapshot) {
@@ -162,6 +206,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Use a new FlushState to avoid conflicts with the old one.
             tablet_ctx.flush_state = Some(flush_state);
             ctx.tablet_registry.load(tablet_ctx, false).unwrap();
+            self.record_tablet_as_tombstone_and_refresh(persisted_index, ctx);
             self.schedule_apply_fsm(ctx);
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);
@@ -475,36 +520,33 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let (path, clean_split) = match self.split_init_mut() {
             // If index not match, the peer may accept a newer snapshot after split.
             Some(init) if init.scheduled && last_index == RAFT_INIT_LOG_INDEX => {
-                let name = reg.tablet_name(SPLIT_PREFIX, region_id, last_index);
-                (reg.tablet_root().join(name), false)
+                (temp_split_path(&reg, region_id), false)
             }
-            si => {
-                let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
-                (snap_mgr.final_recv_path(&key), si.is_some())
-            }
+            si => (
+                recv_snap_path(&snap_mgr, region_id, peer_id, last_term, last_index),
+                si.is_some(),
+            ),
         };
 
         let logger = self.logger().clone();
         // The snapshot require no additional processing such as ingest them to DB, but
         // it should load it into the factory after it persisted.
         let hook = move || {
-            let target_path = reg.tablet_path(region_id, last_index);
-            if let Err(e) = std::fs::rename(&path, &target_path) {
+            if !install_tablet(&reg, &path, region_id, last_index) {
                 panic!(
-                    "{:?} failed to load tablet, path: {} -> {}, {:?}",
+                    "{:?} failed to install tablet, path: {}, region_id: {}, tablet_index: {}",
                     logger.list(),
                     path.display(),
-                    target_path.display(),
-                    e
+                    region_id,
+                    last_index
                 );
             }
             if clean_split {
-                let name = reg.tablet_name(SPLIT_PREFIX, region_id, last_index);
-                let path = reg.tablet_root().join(name);
+                let path = temp_split_path(&reg, region_id);
                 let _ = fs::remove_dir_all(path);
             }
         };
-        task.persisted_cb = Some(Box::new(hook));
+        task.persisted_cbs.push(Box::new(hook));
         task.has_snapshot = true;
         Ok(())
     }
