@@ -272,8 +272,11 @@ where
             Ok(stats) => stats,
         };
         let disk_cap = disk_stats.total_space();
-        // TODO: custom capacity.
-        let capacity = disk_cap;
+        let capacity = if self.cfg.value().capacity.0 == 0 {
+            disk_cap
+        } else {
+            std::cmp::min(disk_cap, self.cfg.value().capacity.0)
+        };
         // TODO: accurate snapshot size and kv engines size.
         let snap_size = 0;
         let kv_size = 0;

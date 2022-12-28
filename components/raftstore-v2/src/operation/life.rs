@@ -331,6 +331,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn finish_destroy<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         info!(self.logger, "peer destroyed");
         ctx.router.close(self.region_id());
+        {
+            ctx.store_meta
+                .lock()
+                .unwrap()
+                .remove_region(self.region_id());
+        }
         if let Some(msg) = self.destroy_progress_mut().finish() {
             // The message will be dispatched to store fsm, which will create a
             // new peer. Ignore error as it's just a best effort.
