@@ -223,7 +223,7 @@ impl ApplyTrace {
     }
 
     pub fn persisted_apply_index(&self) -> u64 {
-        self.admin.flushed
+        self.persisted_applied
     }
 
     pub fn should_flush(&mut self) -> bool {
@@ -586,22 +586,22 @@ mod tests {
     #[test]
     fn test_apply_trace() {
         let mut trace = ApplyTrace::default();
-        assert_eq!(0, trace.persisted_apply_index());
+        assert_eq!(0, trace.admin.flushed);
         // If there is no modifications, index should be advanced anyway.
         trace.maybe_advance_admin_flushed(2);
-        assert_eq!(2, trace.persisted_apply_index());
+        assert_eq!(2, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_modify(cf, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // Modification is not flushed.
-        assert_eq!(2, trace.persisted_apply_index());
+        assert_eq!(2, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_flush(cf, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // No admin is recorded, index should be advanced.
-        assert_eq!(3, trace.persisted_apply_index());
+        assert_eq!(3, trace.admin.flushed);
         trace.on_admin_modify(4);
         for cf in DATA_CFS {
             trace.on_flush(cf, 4);
@@ -611,25 +611,25 @@ mod tests {
         }
         trace.maybe_advance_admin_flushed(4);
         // Unflushed admin modification should hold index.
-        assert_eq!(3, trace.persisted_apply_index());
+        assert_eq!(3, trace.admin.flushed);
         trace.on_admin_flush(4);
         trace.maybe_advance_admin_flushed(4);
         // Admin is flushed, index should be advanced.
-        assert_eq!(4, trace.persisted_apply_index());
+        assert_eq!(4, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_flush(cf, 5);
         }
         trace.maybe_advance_admin_flushed(4);
         // Though all data CFs are flushed, but index should not be
         // advanced as we don't know whether there is admin modification.
-        assert_eq!(4, trace.persisted_apply_index());
+        assert_eq!(4, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_modify(cf, 5);
         }
         trace.maybe_advance_admin_flushed(5);
         // Because modify is recorded, so we know there should be no admin
         // modification and index can be advanced.
-        assert_eq!(5, trace.persisted_apply_index());
+        assert_eq!(5, trace.admin.flushed);
     }
 
     #[test]

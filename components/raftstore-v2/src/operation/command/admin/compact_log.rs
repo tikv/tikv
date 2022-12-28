@@ -300,10 +300,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     fn compact_log_from_engine<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let truncated = self.entry_storage().truncated_index() + 1;
-        let persisted_applied = self
-            .storage()
-            .apply_trace()
-            .persisted_apply_index();
+        let persisted_applied = self.storage().apply_trace().persisted_apply_index();
         let compact_index = std::cmp::min(truncated, persisted_applied);
         // Raft Engine doesn't care about first index.
         if let Err(e) =
