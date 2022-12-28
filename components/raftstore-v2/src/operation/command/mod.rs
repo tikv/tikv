@@ -312,6 +312,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.add_pending_tick(PeerTick::Raft);
         }
+        if !self.pause_for_recovery() && self.storage_mut().apply_trace_mut().should_flush() {
+            if let Some(scheduler) = self.apply_scheduler() {
+                scheduler.send(ApplyTask::ManualFlush);
+            }
+        }
     }
 }
 

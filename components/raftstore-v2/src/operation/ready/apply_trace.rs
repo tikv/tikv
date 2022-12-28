@@ -168,6 +168,9 @@ pub struct ApplyTrace {
     admin: Progress,
     /// Index that is issued to be written. It may not be truely persisted.
     persisted_applied: u64,
+    /// Flush will be triggered explicitly when there are too many pending writes.
+    /// It marks the last index that is flushed to avoid too many flushes.
+    last_flush_trigger: u64,
     /// `true` means the raft cf record should be persisted in next ready.
     try_persist: bool,
 }
@@ -187,6 +190,7 @@ impl ApplyTrace {
         trace.admin.flushed = i;
         trace.admin.last_modified = i;
         trace.persisted_applied = i;
+        trace.last_flush_trigger = i;
         let applied_region_state = engine
             .get_region_state(region_id, trace.admin.flushed)?
             .unwrap();
@@ -219,6 +223,26 @@ impl ApplyTrace {
 
     pub fn persisted_apply_index(&self) -> u64 {
         self.admin.flushed
+    }
+
+    pub fn should_flush(&mut self) -> bool {
+        if self.admin.flushed != self.admin.last_modified {
+            // It's waiting for other peers, flush will not help.
+            return false;
+        }
+        let last_modified = self.data_cfs.iter().filter_map(|pr| {
+            if pr.last_modified != pr.flushed {
+                Some(pr.last_modified)
+            } else {
+                None
+            }
+        }).max();
+        if let Some(m) = last_modified && m >= self.admin.flushed + 512 && m >= self.last_flush_trigger + 512 {
+            self.last_flush_trigger = m;
+            true
+        } else {
+            false
+        }
     }
 
     // All events before `mem_index` must be consumed before calling this function.
