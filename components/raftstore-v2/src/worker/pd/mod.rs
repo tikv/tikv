@@ -166,10 +166,6 @@ where
             cfg,
         }
     }
-
-    pub fn cfg(&self) -> &Arc<VersionTrack<Config>> {
-        &self.cfg
-    }
 }
 
 impl<EK, ER, T> Runnable for Runner<EK, ER, T>
