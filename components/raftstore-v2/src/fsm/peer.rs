@@ -43,7 +43,11 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
         storage: Storage<EK, ER>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let peer = Peer::new(cfg, tablet_registry, snap_mgr, storage)?;
-        info!(peer.logger, "create peer");
+        info!(peer.logger, "create peer";
+            "raft_state" => ?peer.storage().raft_state(),
+            "apply_state" => ?peer.storage().apply_state(),
+            "region_state" => ?peer.storage().region_state()
+        );
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(PeerFsm {
             peer,
