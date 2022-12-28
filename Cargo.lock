@@ -1037,7 +1037,7 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "criterion",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.0.0",
  "fail",
  "futures 0.3.15",
  "kvproto",
@@ -1212,7 +1212,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.3",
  "lazy_static",
- "memoffset",
+ "memoffset 0.6.4",
  "scopeguard",
 ]
 
@@ -1226,7 +1226,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.8",
  "lazy_static",
- "memoffset",
+ "memoffset 0.6.4",
  "scopeguard",
 ]
 
@@ -1238,8 +1238,20 @@ dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.11",
- "memoffset",
+ "memoffset 0.6.4",
  "once_cell",
+ "scopeguard",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.13"
+source = "git+https://github.com/crossbeam-rs/crossbeam#8903ff063216f815f9ee4dcc1a715a88b5806007"
+dependencies = [
+ "autocfg",
+ "cfg-if 1.0.0",
+ "crossbeam-utils 0.8.14",
+ "memoffset 0.7.1",
  "scopeguard",
 ]
 
@@ -1261,6 +1273,29 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch 0.9.3",
  "crossbeam-utils 0.8.3",
+ "scopeguard",
+]
+
+[[package]]
+name = "crossbeam-skiplist"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af28cff91e276c27eb739e14b0dda13dfd4cbab8364ebdb8d517a4c5454a227a"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-epoch 0.9.8",
+ "crossbeam-utils 0.8.8",
+ "scopeguard",
+]
+
+[[package]]
+name = "crossbeam-skiplist"
+version = "0.1.0"
+source = "git+https://github.com/crossbeam-rs/crossbeam#8903ff063216f815f9ee4dcc1a715a88b5806007"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-epoch 0.9.13",
+ "crossbeam-utils 0.8.14",
  "scopeguard",
 ]
 
@@ -1302,6 +1337,14 @@ source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2
 dependencies = [
  "cfg-if 1.0.0",
  "once_cell",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.14"
+source = "git+https://github.com/crossbeam-rs/crossbeam#8903ff063216f815f9ee4dcc1a715a88b5806007"
+dependencies = [
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -2747,7 +2790,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#ae3b086b09afbb26cebcd4c1fe14b82bbe1f0796"
+source = "git+https://github.com/pingcap/kvproto.git#22819f5b377aea4f273354ac0dc4fadddce0bdc1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3057,6 +3100,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "memoffset"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "memory_trace_macros"
 version = "0.1.0"
 dependencies = [
@@ -3257,7 +3309,7 @@ dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
  "libc 0.2.132",
- "memoffset",
+ "memoffset 0.6.4",
 ]
 
 [[package]]
@@ -3270,7 +3322,7 @@ dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
  "libc 0.2.132",
- "memoffset",
+ "memoffset 0.6.4",
  "pin-utils",
 ]
 
@@ -4678,6 +4730,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "resource_control"
+version = "0.0.1"
+dependencies = [
+ "byteorder",
+ "crossbeam-skiplist 0.1.0 (git+https://github.com/crossbeam-rs/crossbeam)",
+ "dashmap",
+ "kvproto",
+ "lazy_static",
+ "online_config",
+ "pin-project",
+ "prometheus",
+ "serde",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "yatp",
+]
+
+[[package]]
 name = "resource_metering"
 version = "0.0.1"
 dependencies = [
@@ -5230,6 +5301,7 @@ dependencies = [
  "raftstore-v2",
  "rand 0.8.5",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "serde_json",
@@ -6311,6 +6383,7 @@ dependencies = [
  "rand 0.7.3",
  "regex",
  "reqwest",
+ "resource_control",
  "resource_metering",
  "rev_lines",
  "seahash",
@@ -7382,9 +7455,11 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#39cb495953d40a7e846363c06090755c2eac65fa"
+source = "git+https://github.com/glorv/yatp?branch=priority#9dcf235aa99ea800225cb653fe79c7c0e3dfed53"
 dependencies = [
  "crossbeam-deque",
+ "crossbeam-skiplist 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-utils 0.8.8",
  "dashmap",
  "fail",
  "lazy_static",
