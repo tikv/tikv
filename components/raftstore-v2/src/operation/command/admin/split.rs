@@ -171,6 +171,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics) {
         let control = self.split_flow_control_mut();
         control.size_diff_hint += metrics.size_diff_hint;
+        if self.is_leader() {
+            self.add_pending_tick(PeerTick::SplitRegionCheck);
+        }
     }
 
     pub fn on_request_split<T>(
@@ -450,6 +453,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Now pd only uses ReportBatchSplit for history operation show,
             // so we send it independently here.
             self.report_batch_split_pd(store_ctx, res.regions.to_vec());
+            // After split, the peer may need to update its metrics.
+            self.split_flow_control_mut().may_skip_split_check = false;
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
 
