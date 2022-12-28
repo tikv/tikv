@@ -62,6 +62,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// For raft log compaction.
     skip_compact_log_ticks: usize,
     approximate_raft_log_size: u64,
+    last_applying_index: u64,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -156,6 +157,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_heartbeats: HashMap::default(),
             skip_compact_log_ticks: 0,
             approximate_raft_log_size: 0,
+            last_applying_index: raft_group.store().apply_state().get_applied_index(),
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
@@ -561,6 +563,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn update_approximate_raft_log_size(&mut self, f: impl Fn(u64) -> u64) {
         self.approximate_raft_log_size = f(self.approximate_raft_log_size);
+    }
+
+    pub fn last_applying_index_mut(&mut self) -> &mut u64 {
+        &mut self.last_applying_index
     }
 
     #[inline]

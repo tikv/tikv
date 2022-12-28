@@ -197,7 +197,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             StateRole::Follower,
         );
         let persisted_index = self.persisted_index();
-        let first_index = self.storage().entry_storage().first_index();
+        *self.last_applying_index_mut() = persisted_index;
+        let first_index = self.entry_storage().first_index();
         if first_index == persisted_index + 1 {
             let region_id = self.region_id();
             self.reset_flush_state();

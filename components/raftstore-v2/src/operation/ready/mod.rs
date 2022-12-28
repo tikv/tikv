@@ -296,31 +296,44 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         // TODO: skip handling committed entries if a snapshot is being applied
         // asynchronously.
-        if self.is_leader() {
+        let mut update_lease = self.is_leader();
+        if update_lease {
             for entry in committed_entries.iter().rev() {
                 self.update_approximate_raft_log_size(|s| s + entry.get_data().len() as u64);
-                let propose_time = self
-                    .proposals()
-                    .find_propose_time(entry.get_term(), entry.get_index());
-                if let Some(propose_time) = propose_time {
-                    // We must renew current_time because this value may be created a long time ago.
-                    // If we do not renew it, this time may be smaller than propose_time of a
-                    // command, which was proposed in another thread while this thread receives its
-                    // AppendEntriesResponse and is ready to calculate its commit-log-duration.
-                    ctx.current_time.replace(monotonic_raw_now());
-                    ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                        (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
-                    ));
-                    self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
-                    break;
+                if update_lease {
+                    let propose_time = self
+                        .proposals()
+                        .find_propose_time(entry.get_term(), entry.get_index());
+                    if let Some(propose_time) = propose_time {
+                        // We must renew current_time because this value may be created a long time
+                        // ago. If we do not renew it, this time may be
+                        // smaller than propose_time of a command, which was
+                        // proposed in another thread while this thread receives its
+                        // AppendEntriesResponse and is ready to calculate its commit-log-duration.
+                        ctx.current_time.replace(monotonic_raw_now());
+                        ctx.raft_metrics.commit_log.observe(duration_to_sec(
+                            (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
+                        ));
+                        self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
+                        update_lease = false;
+                    }
                 }
             }
         }
+        let applying_index = committed_entries.last().unwrap().index;
+        let commit_to_current_term = committed_entries.last().unwrap().term == self.term();
+        *self.last_applying_index_mut() = applying_index;
         if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
             // Compact all cached entries instead of half evict.
             self.entry_storage_mut().evict_entry_cache(false);
         }
         self.schedule_apply_committed_entries(committed_entries);
+        if self.is_leader()
+            && commit_to_current_term
+            && !self.proposal_control().has_uncommitted_admin()
+        {
+            self.raft_group_mut().skip_bcast_commit(true);
+        }
     }
 
     /// Processing the ready of raft. A detail description of how it's handled

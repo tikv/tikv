@@ -110,9 +110,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         };
         match &res {
-            Ok(index) => self
-                .proposal_control_mut()
-                .record_proposed_admin(cmd_type, *index),
+            Ok(index) => {
+                self.proposal_control_mut()
+                    .record_proposed_admin(cmd_type, *index);
+                self.raft_group_mut().skip_bcast_commit(true);
+            }
             Err(e) => {
                 info!(
                     self.logger,
