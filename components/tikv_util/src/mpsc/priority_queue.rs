@@ -9,6 +9,9 @@ use crossbeam::channel::{RecvError, SendError, TryRecvError, TrySendError};
 use crossbeam_skiplist::SkipMap;
 use parking_lot::{Condvar, Mutex};
 
+// Create a priority based channel. Sender can send message with priority of
+// u64, and receiver will receive messages in ascending order of priority. For
+// two messages of same priority, the receiving order follows FIFO.
 pub fn unbounded<T: Send>() -> (Sender<T>, Receiver<T>) {
     let queue = Arc::new(PriorityQueue::new());
     let sender = Sender {
@@ -54,7 +57,6 @@ struct PriorityQueue<T> {
     disconnected: Mutex<bool>,
     available: Condvar,
 
-    // cap: AtomicUsize,
     sequencer: AtomicU64,
 
     senders: AtomicUsize,
