@@ -2172,24 +2172,6 @@ where
             return;
         }
 
-        // Keep ticking if there are disk full peers for the Region.
-        if !self.fsm.peer.disk_full_peers.is_empty() {
-            self.register_raft_base_tick();
-            return;
-        }
-
-        // Keep ticking if there are non-witness peers waiting for snapshot.
-        if !self.fsm.peer.wait_data_peers.is_empty() {
-            self.register_raft_base_tick();
-            return;
-        }
-
-        // Keep ticking if is waiting for snapshot.
-        if self.fsm.peer.wait_data {
-            self.register_raft_base_tick();
-            return;
-        }
-
         debug!("stop ticking"; "res" => ?res,
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),

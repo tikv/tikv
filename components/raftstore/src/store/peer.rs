@@ -1596,6 +1596,14 @@ where
             res.reason = "replication mode";
             return res;
         }
+        if !self.disk_full_peers.is_empty() {
+            res.reason = "has disk full peers";
+            return res;
+        }
+        if !self.wait_data_peers.is_empty() {
+            res.reason = "has wait data peers";
+            return res;
+        }
         res.up_to_date = true;
         res
     }
@@ -1621,6 +1629,8 @@ where
                 && !self.has_unresolved_reads()
                 // If it becomes leader, the stats is not valid anymore.
                 && !self.is_leader()
+                // Keep ticking if it's waiting for snapshot.
+                && !self.wait_data
         }
     }
 
@@ -2650,7 +2660,7 @@ where
             msg.wait_data = false;
             self.send_extra_message(msg, &mut ctx.trans, &leader);
             info!(
-                "notify leader the leader is available";
+                "notify leader the peer is available";
                 "region id" => self.region().get_id(),
                 "peer id" => self.peer.id
             );

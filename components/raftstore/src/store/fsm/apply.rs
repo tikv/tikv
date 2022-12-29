@@ -3234,6 +3234,7 @@ where
         info!(
             "exec BatchSwitchWitness";
             "region_id" => self.region_id(),
+            "peer_id" => self.id(),
             "epoch" => ?self.region.get_region_epoch(),
         );
 
@@ -3241,20 +3242,29 @@ where
         for s in switches.as_slice() {
             PEER_ADMIN_CMD_COUNTER.batch_switch_witness.all.inc();
             let (peer_id, is_witness) = (s.get_peer_id(), s.get_is_witness());
+            let mut peer_is_exist = false;
             for p in region.mut_peers().iter_mut() {
                 if p.id == peer_id {
                     if p.is_witness == is_witness {
                         return Err(box_err!(
-                            "can't duplicated switch peer {:?} on region {:?}",
-                            find_peer_by_id(&self.region, peer_id),
-                            region
+                            "switch peer {:?} on region {:?} is no-op",
+                            p,
+                            self.region
                         ));
                     }
                     p.is_witness = is_witness;
-                    PEER_ADMIN_CMD_COUNTER.batch_switch_witness.success.inc();
+                    peer_is_exist = true;
                     break;
                 }
             }
+            if !peer_is_exist {
+                return Err(box_err!(
+                    "switch peer {} on region {:?} failed: peer does not exist",
+                    peer_id,
+                    self.region
+                ));
+            }
+            PEER_ADMIN_CMD_COUNTER.batch_switch_witness.success.inc();
             if self.id() == peer_id && !is_witness {
                 self.wait_data = true;
                 self.peer.is_witness = false;
