@@ -7455,7 +7455,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/glorv/yatp?branch=priority#9dcf235aa99ea800225cb653fe79c7c0e3dfed53"
+source = "git+https://github.com/tikv/yatp.git?branch=master#bcf431a2619c06ab7fa0c72073a0c775646c484f"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
