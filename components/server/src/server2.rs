@@ -647,7 +647,10 @@ where
         let engines = self.engines.as_ref().unwrap();
 
         let pd_worker = LazyWorker::new("pd-worker");
-        let pd_sender = raftstore_v2::FlowReporter::new(pd_worker.scheduler());
+        let pd_sender = raftstore_v2::FlowReporter::new(
+            pd_worker.scheduler(),
+            slog_global::borrow_global().new(slog::o!()),
+        );
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             Some(build_yatp_read_pool(

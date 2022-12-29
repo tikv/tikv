@@ -1516,7 +1516,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
-        let purge_worker = if engines.raft.need_manual_purge() {
+        let purge_worker = if engines.raft.need_manual_purge()
+            && !cfg.value().raft_engine_purge_interval.0.is_zero()
+        {
             let worker = Worker::new("purge-worker");
             let raft_clone = engines.raft.clone();
             let router_clone = self.router();
@@ -1735,7 +1737,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             Arc::clone(&pd_client),
             self.router.clone(),
             workers.pd_worker.scheduler(),
-            cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
             concurrency_manager,
             snap_mgr,

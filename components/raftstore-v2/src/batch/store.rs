@@ -26,8 +26,8 @@ use raftstore::{
     store::{
         fsm::store::{PeerTickBatch, ENTRY_CACHE_EVICT_TICK_DURATION},
         local_metrics::RaftMetrics,
-        Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask, StoreWriters,
-        TabletSnapManager, Transport, WriteSenders,
+        Config, PdStatsMonitor, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask,
+        StoreWriters, TabletSnapManager, Transport, WriteSenders,
     },
 };
 use slog::{warn, Logger};
@@ -493,7 +493,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
         });
 
-        let purge_worker = if raft_engine.need_manual_purge() {
+        let purge_worker = if raft_engine.need_manual_purge()
+            && !cfg.value().raft_engine_purge_interval.0.is_zero()
+        {
             let worker = Worker::new("purge-worker");
             let raft_clone = raft_engine.clone();
             let logger = self.logger.clone();
@@ -524,12 +526,21 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         read_runner.set_snap_mgr(snap_mgr.clone());
         let read_scheduler = workers.async_read.start("async-read-worker", read_runner);
 
+        let stats_monitor = PdStatsMonitor::new(
+            // FIXME: Why 2?
+            cfg.value().pd_store_heartbeat_tick_interval.0 / 2,
+            cfg.value().report_min_resolved_ts_interval.0,
+            pd::StoreReporter::new(workers.pd.scheduler(), self.logger.clone()),
+        );
+        // TODO: start stats_monitor.
+
         workers.pd.start(pd::Runner::new(
             store_id,
             pd_client,
             raft_engine.clone(),
             tablet_registry.clone(),
             router.clone(),
+            stats_monitor,
             workers.pd.remote(),
             concurrency_manager,
             causal_ts_provider,

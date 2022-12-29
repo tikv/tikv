@@ -76,9 +76,9 @@ pub use self::{
     worker::{
         metrics as worker_metrics, AutoSplitController, Bucket, BucketRange, CachedReadDelegate,
         CheckLeaderRunner, CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry,
-        LocalReadContext, LocalReader, LocalReaderCore, PdTask, ReadDelegate, ReadExecutor,
-        ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
-        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, StoreMetaDelegate,
-        TrackVer, WriteStats,
+        LocalReadContext, LocalReader, LocalReaderCore, PdStatsMonitor, PdTask, ReadDelegate,
+        ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
+        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
+        StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
     },
 };

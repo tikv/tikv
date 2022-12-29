@@ -76,7 +76,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
-    pub fn region_heartbeat_pd<T>(&self, ctx: &StoreContext<EK, ER, T>) {
+    pub fn region_heartbeat_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
         let task = pd::Task::RegionHeartbeat(pd::RegionHeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
@@ -85,8 +85,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.self_stat().written_bytes,
             written_keys: self.self_stat().written_keys,
-            approximate_size: None,
-            approximate_keys: None,
+            approximate_size: self.tablet().map(|e| e.get_engine_used_size().unwrap()),
+            approximate_keys: self.tablet().map(|e| e.get_num_keys().unwrap()),
             wait_data_peers: Vec::new(),
         });
         if let Err(e) = ctx.schedulers.pd.schedule(task) {

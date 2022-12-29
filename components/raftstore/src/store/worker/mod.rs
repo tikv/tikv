@@ -27,7 +27,7 @@ pub use self::{
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
-        Runner as PdRunner, Task as PdTask,
+        Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,
     },
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
     read::{
@@ -44,5 +44,5 @@ pub use self::{
         Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
     },
     split_config::{SplitConfig, SplitConfigManager},
-    split_controller::{AutoSplitController, ReadStats, SplitConfigChange, WriteStats},
+    split_controller::{AutoSplitController, ReadStats, SplitConfigChange, SplitInfo, WriteStats},
 };
