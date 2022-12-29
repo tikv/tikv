@@ -614,9 +614,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // leader apply the split command or an election timeout is passed since split
         // is committed. We already forbid renewing lease after committing split, and
         // original leader will update the reader delegate with latest epoch after
-        // applying split before the split peer starts campaign, so here the only thing
-        // we need to do is marking split is committed (which is done by `commit_to`
-        // above). It's correct to allow local read during split.
+        // applying split before the split peer starts campaign, so what needs to be
+        // done are 1. mark split is committed, which is done by `commit_to` above,
+        // 2. make sure split result is invisible until epoch is updated or reader may
+        // miss data from the new tablet. This is done by always publish tablet in
+        // `on_apply_res_split`. So it's correct to allow local read during split.
         //
         // - For merge, after the prepare merge command is committed, the target peers
         // may apply commit merge at any time, so we need to forbid any type of read

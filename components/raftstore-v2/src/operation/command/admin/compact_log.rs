@@ -17,7 +17,9 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::{
-    store::{fsm::new_admin_request, needs_evict_entry_cache, Transport, WriteTask},
+    store::{
+        fsm::new_admin_request, needs_evict_entry_cache, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
+    },
     Result,
 };
 use slog::{debug, error, info};
@@ -32,6 +34,7 @@ use crate::{
     worker::tablet_gc,
 };
 
+#[derive(Debug)]
 pub struct CompactLogContext {
     skip_compact_log_ticks: usize,
     approximate_raft_log_size: u64,
@@ -399,6 +402,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let truncated = self.entry_storage().truncated_index() + 1;
         let persisted_applied = self.storage().apply_trace().persisted_apply_index();
         let compact_index = std::cmp::min(truncated, persisted_applied);
+        if compact_index == RAFT_INIT_LOG_INDEX + 1 {
+            // There is no logs at RAFT_INIT_LOG_INDE, nothing to delete.
+            return;
+        }
         // Raft Engine doesn't care about first index.
         if let Err(e) =
             store_ctx
