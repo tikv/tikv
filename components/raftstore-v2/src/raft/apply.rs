@@ -73,6 +73,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let mut remote_tablet = tablet_registry
             .get(region_state.get_region().get_id())
             .unwrap();
+        assert_ne!(applied_term, 0, "{:?}", logger.list());
+        let applied_index = flush_state.applied_index();
+        assert_ne!(applied_index, 0, "{:?}", logger.list());
         Apply {
             peer,
             tablet: remote_tablet.latest().unwrap().clone(),
