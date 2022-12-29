@@ -47,7 +47,7 @@ pub enum Task {
         read_io_rates: RecordPairVec,
         write_io_rates: RecordPairVec,
     },
-    // In region_heartbeat.rs.
+    // In region.rs.
     RegionHeartbeat(RegionHeartbeatTask),
     ReportRegionBuckets(BucketStat),
     UpdateReadStats(ReadStats),
