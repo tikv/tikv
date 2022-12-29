@@ -800,7 +800,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -1037,11 +1037,11 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "criterion",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.0.0",
  "fail",
  "futures 0.3.15",
  "kvproto",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "rand 0.8.5",
  "tikv_alloc",
  "tikv_util",
@@ -1212,7 +1212,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.3",
  "lazy_static",
- "memoffset",
+ "memoffset 0.6.4",
  "scopeguard",
 ]
 
@@ -1226,7 +1226,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.8",
  "lazy_static",
- "memoffset",
+ "memoffset 0.6.4",
  "scopeguard",
 ]
 
@@ -1238,8 +1238,20 @@ dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.11",
- "memoffset",
+ "memoffset 0.6.4",
  "once_cell",
+ "scopeguard",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.13"
+source = "git+https://github.com/crossbeam-rs/crossbeam#960c08abad54c835b1a871ba3d8b02073fc53763"
+dependencies = [
+ "autocfg",
+ "cfg-if 1.0.0",
+ "crossbeam-utils 0.8.14",
+ "memoffset 0.7.1",
  "scopeguard",
 ]
 
@@ -1261,6 +1273,17 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch 0.9.3",
  "crossbeam-utils 0.8.3",
+ "scopeguard",
+]
+
+[[package]]
+name = "crossbeam-skiplist"
+version = "0.1.1"
+source = "git+https://github.com/crossbeam-rs/crossbeam#960c08abad54c835b1a871ba3d8b02073fc53763"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-epoch 0.9.13",
+ "crossbeam-utils 0.8.14",
  "scopeguard",
 ]
 
@@ -1302,6 +1325,14 @@ source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2
 dependencies = [
  "cfg-if 1.0.0",
  "once_cell",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.14"
+source = "git+https://github.com/crossbeam-rs/crossbeam#960c08abad54c835b1a871ba3d8b02073fc53763"
+dependencies = [
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -1379,7 +1410,7 @@ checksum = "c0834a35a3fce649144119e18da2a4d8ed12ef3862f47183fd46f625d072d96c"
 dependencies = [
  "cfg-if 1.0.0",
  "num_cpus",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
 ]
 
 [[package]]
@@ -1867,7 +1898,7 @@ dependencies = [
  "maligned",
  "online_config",
  "openssl",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "prometheus",
  "prometheus-static-metric",
  "rand 0.8.5",
@@ -3057,6 +3088,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "memoffset"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "memory_trace_macros"
 version = "0.1.0"
 dependencies = [
@@ -3257,7 +3297,7 @@ dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
  "libc 0.2.132",
- "memoffset",
+ "memoffset 0.6.4",
 ]
 
 [[package]]
@@ -3270,7 +3310,7 @@ dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
  "libc 0.2.132",
- "memoffset",
+ "memoffset 0.6.4",
  "pin-utils",
 ]
 
@@ -3650,9 +3690,9 @@ dependencies = [
 
 [[package]]
 name = "parking_lot"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87f5ec2493a61ac0506c0f4199f99070cbe83857b0337006a30f3e6719b8ef58"
+checksum = "3742b2c103b9f06bc9fff0a37ff4912935851bee6d36f3c02bcc755bcfec228f"
 dependencies = [
  "lock_api",
  "parking_lot_core 0.9.1",
@@ -3929,7 +3969,7 @@ dependencies = [
  "log",
  "nix 0.24.1",
  "once_cell",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "protobuf",
  "protobuf-codegen-pure",
  "smallvec",
@@ -4214,7 +4254,7 @@ dependencies = [
  "nix 0.25.0",
  "num-derive",
  "num-traits",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -4312,7 +4352,7 @@ dependencies = [
  "openssl",
  "ordered-float",
  "panic_hook",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -4362,7 +4402,7 @@ dependencies = [
  "keys",
  "kvproto",
  "log_wrappers",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
  "protobuf",
@@ -6294,7 +6334,7 @@ dependencies = [
  "online_config",
  "openssl",
  "panic_hook",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "paste",
  "pd_client",
  "pin-project",
@@ -6515,6 +6555,7 @@ dependencies = [
  "cpu-time",
  "crc32fast",
  "crossbeam",
+ "crossbeam-skiplist 0.1.1",
  "derive_more",
  "error_code",
  "fail",
@@ -6536,6 +6577,7 @@ dependencies = [
  "openssl",
  "page_size",
  "panic_hook",
+ "parking_lot 0.12.1",
  "pin-project",
  "procfs",
  "procinfo",
@@ -6620,7 +6662,7 @@ dependencies = [
  "memchr",
  "mio 0.8.5",
  "num_cpus",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -6874,7 +6916,7 @@ dependencies = [
  "crossbeam-utils 0.8.8",
  "kvproto",
  "lazy_static",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pin-project",
  "prometheus",
  "slab",

@@ -20,6 +20,8 @@ cpu-time = "1.0.0"
 crc32fast = "1.2"
 crossbeam = "0.8"
 derive_more = "0.99.3"
+crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
+parking_lot = "0.12.1"
 error_code = { workspace = true }
 fail = "0.5"
 futures = { version = "0.3", features = ["compat", "thread-pool"] }
