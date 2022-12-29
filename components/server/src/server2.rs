@@ -55,7 +55,10 @@ use raftstore::{
         BoxConsistencyCheckObserver, ConsistencyCheckMethod, CoprocessorHost,
         RawConsistencyCheckObserver,
     },
-    store::{memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE, SplitConfigManager, TabletSnapManager},
+    store::{
+        memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE, CheckLeaderRunner, SplitConfigManager,
+        TabletSnapManager,
+    },
     RegionInfoAccessor,
 };
 use security::SecurityManager;
@@ -214,6 +217,7 @@ struct TikvServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
@@ -297,6 +301,10 @@ where
             info!("Causal timestamp provider startup.");
         }
 
+        // Run check leader in a dedicate thread, because it is time sensitive
+        // and crucial to TiCDC replication lag.
+        let check_leader_worker = WorkerBuilder::new("check_leader").thread_count(1).create();
+
         TikvServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -318,6 +326,7 @@ where
             concurrency_manager,
             env,
             background_worker,
+            check_leader_worker,
             flow_info_sender: None,
             flow_info_receiver: None,
             sst_worker: None,
@@ -764,6 +773,14 @@ where
             cop_read_pools.handle()
         };
 
+        let check_leader_runner = CheckLeaderRunner::new(
+            self.node.as_ref().unwrap().router().store_meta().clone(),
+            self.coprocessor_host.clone().unwrap(),
+        );
+        let check_leader_scheduler = self
+            .check_leader_worker
+            .start("check-leader", check_leader_runner);
+
         let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
 
         self.config
@@ -797,7 +814,7 @@ where
             self.resolver.clone().unwrap(),
             Either::Right(snap_mgr.clone()),
             gc_worker.clone(),
-            None,
+            check_leader_scheduler,
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
@@ -1306,10 +1323,8 @@ impl ConfiguredRaftEngine for RocksEngine {
 
         let raft_db_path = &config.raft_store.raftdb_path;
         let config_raftdb = &config.raftdb;
-        let mut raft_db_opts = config_raftdb.build_opt();
-        raft_db_opts.set_env(env.clone());
         let statistics = Arc::new(RocksStatistics::new_titan());
-        raft_db_opts.set_statistics(statistics.as_ref());
+        let raft_db_opts = config_raftdb.build_opt(env.clone(), Some(&statistics));
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
         let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
             .expect("failed to open raftdb");
@@ -1359,8 +1374,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
 
         if should_dump {
             let config_raftdb = &config.raftdb;
-            let mut raft_db_opts = config_raftdb.build_opt();
-            raft_db_opts.set_env(env.clone());
+            let raft_db_opts = config_raftdb.build_opt(env.clone(), None);
             let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
             let raftdb = engine_rocks::util::new_engine_opt(
                 &config.raft_store.raftdb_path,

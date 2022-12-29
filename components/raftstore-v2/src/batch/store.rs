@@ -24,11 +24,13 @@ use raft::{StateRole, INVALID_ID};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent},
     store::{
-        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
-        SplitCheckRunner, SplitCheckTask, StoreWriters, TabletSnapManager, Transport, WriteSenders,
+        fsm::store::{PeerTickBatch, ENTRY_CACHE_EVICT_TICK_DURATION},
+        local_metrics::RaftMetrics,
+        Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask, StoreWriters,
+        TabletSnapManager, Transport, WriteSenders,
     },
 };
-use slog::Logger;
+use slog::{warn, Logger};
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
@@ -43,9 +45,10 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
+    operation::SPLIT_PREFIX,
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::pd,
+    worker::{pd, tablet_gc},
     Error, Result,
 };
 
@@ -78,6 +81,32 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub self_disk_usage: DiskUsage,
 
     pub snap_mgr: TabletSnapManager,
+}
+
+impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
+    pub fn update_ticks_timeout(&mut self) {
+        self.tick_batch[PeerTick::Raft as usize].wait_duration = self.cfg.raft_base_tick_interval.0;
+        self.tick_batch[PeerTick::CompactLog as usize].wait_duration =
+            self.cfg.raft_log_gc_tick_interval.0;
+        self.tick_batch[PeerTick::EntryCacheEvict as usize].wait_duration =
+            ENTRY_CACHE_EVICT_TICK_DURATION;
+        self.tick_batch[PeerTick::PdHeartbeat as usize].wait_duration =
+            self.cfg.pd_heartbeat_tick_interval.0;
+        self.tick_batch[PeerTick::SplitRegionCheck as usize].wait_duration =
+            self.cfg.split_region_check_tick_interval.0;
+        self.tick_batch[PeerTick::CheckPeerStaleState as usize].wait_duration =
+            self.cfg.peer_stale_state_check_interval.0;
+        self.tick_batch[PeerTick::CheckMerge as usize].wait_duration =
+            self.cfg.merge_check_tick_interval.0;
+        self.tick_batch[PeerTick::CheckLeaderLease as usize].wait_duration =
+            self.cfg.check_leader_lease_interval.0;
+        self.tick_batch[PeerTick::ReactivateMemoryLock as usize].wait_duration =
+            self.cfg.reactive_memory_lock_tick_interval.0;
+        self.tick_batch[PeerTick::ReportBuckets as usize].wait_duration =
+            self.cfg.report_region_buckets_tick_interval.0;
+        self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
+            self.cfg.check_long_uncommitted_interval.0;
+    }
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -152,6 +181,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
                 self.apply_buf_capacity();
             }
             update_cfg(&self.poll_ctx.cfg.store_batch_system);
+            self.poll_ctx.update_ticks_timeout();
         }
     }
 
@@ -276,7 +306,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
     fn init(&self) -> Result<HashMap<u64, SenderFsmPair<EK, ER>>> {
         let mut regions = HashMap::default();
         let cfg = self.cfg.value();
-        let meta = self.store_meta.lock().unwrap();
+        let mut meta = self.store_meta.lock().unwrap();
         self.engine
             .for_each_raft_group::<Error, _>(&mut |region_id| {
                 assert_ne!(region_id, INVALID_ID);
@@ -298,8 +328,10 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                         StateRole::Follower,
                     );
                 }
+                meta.set_region(storage.region(), storage.is_initialized(), &self.logger);
 
-                let (sender, peer_fsm) = PeerFsm::new(&cfg, &self.tablet_registry, storage)?;
+                let (sender, peer_fsm) =
+                    PeerFsm::new(&cfg, &self.tablet_registry, &self.snap_mgr, storage)?;
                 meta.region_read_progress
                     .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
 
@@ -317,7 +349,33 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         Ok(regions)
     }
 
-    fn clean_up_tablets(&self, _peers: &HashMap<u64, SenderFsmPair<EK, ER>>) -> Result<()> {
+    fn clean_up_tablets(&self, peers: &HashMap<u64, SenderFsmPair<EK, ER>>) -> Result<()> {
+        for entry in file_system::read_dir(self.tablet_registry.tablet_root())? {
+            let entry = entry?;
+            let path = entry.path();
+            let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
+            let fsm = match peers.get(&region_id) {
+                Some((_, fsm)) => fsm,
+                None => {
+                    // The peer is either destroyed or not created yet. It will be
+                    // recovered by leader heartbeats.
+                    file_system::remove_dir_all(&path)?;
+                    continue;
+                }
+            };
+            // Valid split tablet should be installed during recovery.
+            if prefix == SPLIT_PREFIX {
+                file_system::remove_dir_all(&path)?;
+                continue;
+            }
+            if prefix.is_empty() {
+                // Stale split data can be deleted.
+                if fsm.peer().storage().tablet_index() > tablet_index {
+                    file_system::remove_dir_all(&path)?;
+                }
+            }
+            // TODO: handle other prefix
+        }
         // TODO: list all available tablets and destroy those which are not in the
         // peers.
         Ok(())
@@ -334,7 +392,7 @@ where
 
     fn build(&mut self, _priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
-        let poll_ctx = StoreContext {
+        let mut poll_ctx = StoreContext {
             logger: self.logger.clone(),
             trans: self.trans.clone(),
             current_time: None,
@@ -353,6 +411,7 @@ where
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
         };
+        poll_ctx.update_ticks_timeout();
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
     }
@@ -362,6 +421,7 @@ where
 pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub read: Scheduler<ReadTask<EK>>,
     pub pd: Scheduler<pd::Task>,
+    pub tablet_gc: Scheduler<tablet_gc::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
 
     // Following is not maintained by raftstore itself.
@@ -374,18 +434,22 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
     async_read: Worker,
     pd: LazyWorker<pd::Task>,
+    tablet_gc_worker: Worker,
     async_write: StoreWriters<EK, ER>,
+    purge: Option<Worker>,
 
     // Following is not maintained by raftstore itself.
     background: Worker,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
-    fn new(background: Worker, pd: LazyWorker<pd::Task>) -> Self {
+    fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
+            tablet_gc_worker: Worker::new("tablet-gc-worker"),
             async_write: StoreWriters::default(),
+            purge,
             background,
         }
     }
@@ -429,7 +493,29 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
         });
 
-        let mut workers = Workers::new(background, pd_worker);
+        let purge_worker = if raft_engine.need_manual_purge() {
+            let worker = Worker::new("purge-worker");
+            let raft_clone = raft_engine.clone();
+            let logger = self.logger.clone();
+            let router = router.clone();
+            worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                match raft_clone.manual_purge() {
+                    Ok(regions) => {
+                        for r in regions {
+                            let _ = router.send(r, PeerMsg::ForceCompactLog);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(logger, "purge expired files"; "err" => %e);
+                    }
+                };
+            });
+            Some(worker)
+        } else {
+            None
+        };
+
+        let mut workers = Workers::new(background, pd_worker, purge_worker);
         workers
             .async_write
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
@@ -449,6 +535,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             causal_ts_provider,
             self.logger.clone(),
             self.shutdown.clone(),
+            cfg.clone(),
         ));
 
         let split_check_scheduler = workers.background.start(
@@ -460,9 +547,15 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
+        let tablet_gc_scheduler = workers.tablet_gc_worker.start(
+            "tablet-gc-worker",
+            tablet_gc::Runner::new(tablet_registry.clone(), self.logger.clone()),
+        );
+
         let schedulers = Schedulers {
             read: read_scheduler,
             pd: workers.pd.scheduler(),
+            tablet_gc: tablet_gc_scheduler,
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
         };
@@ -527,6 +620,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         workers.async_write.shutdown();
         workers.async_read.stop();
         workers.pd.stop();
+        if let Some(w) = workers.purge {
+            w.stop();
+        }
     }
 }
 

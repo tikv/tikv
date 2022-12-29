@@ -22,7 +22,7 @@ use crate::operation::{RequestSplit, SimpleWriteBinary, SplitInit};
 #[repr(u8)]
 pub enum PeerTick {
     Raft = 0,
-    RaftLogGc = 1,
+    CompactLog = 1,
     SplitRegionCheck = 2,
     PdHeartbeat = 3,
     CheckMerge = 4,
@@ -41,7 +41,7 @@ impl PeerTick {
     pub fn tag(self) -> &'static str {
         match self {
             PeerTick::Raft => "raft",
-            PeerTick::RaftLogGc => "raft_log_gc",
+            PeerTick::CompactLog => "compact_log",
             PeerTick::SplitRegionCheck => "split_region_check",
             PeerTick::PdHeartbeat => "pd_heartbeat",
             PeerTick::CheckMerge => "check_merge",
@@ -57,7 +57,7 @@ impl PeerTick {
     pub const fn all_ticks() -> &'static [PeerTick] {
         const TICKS: &[PeerTick] = &[
             PeerTick::Raft,
-            PeerTick::RaftLogGc,
+            PeerTick::CompactLog,
             PeerTick::SplitRegionCheck,
             PeerTick::PdHeartbeat,
             PeerTick::CheckMerge,
@@ -181,6 +181,7 @@ pub enum PeerMsg {
         request: RequestSplit,
         ch: CmdResChannel,
     },
+    ForceCompactLog,
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),

@@ -273,8 +273,18 @@ impl MiscExt for RocksEngine {
         self.as_inner().sync_wal().map_err(r2e)
     }
 
+    fn pause_background_work(&self) -> Result<()> {
+        self.as_inner().pause_bg_work();
+        Ok(())
+    }
+
     fn exists(path: &str) -> bool {
         crate::util::db_exist(path)
+    }
+
+    fn locked(path: &str) -> Result<bool> {
+        let env = rocksdb::Env::default();
+        env.is_db_locked(path).map_err(r2e)
     }
 
     fn dump_stats(&self) -> Result<String> {
@@ -659,7 +669,7 @@ mod tests {
         ];
         assert_eq!(sst_range, expected);
 
-        db.compact_range(cf, None, None, false, 1).unwrap();
+        db.compact_range_cf(cf, None, None, false, 1).unwrap();
         let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
         assert_eq!(sst_range.len(), 0);
         let sst_range = db.get_sst_key_ranges(cf, 1).unwrap();

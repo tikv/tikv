@@ -1,19 +1,22 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod compact_log;
 mod conf_change;
 mod split;
 mod transfer_leader;
 
+use compact_log::CompactLogResult;
+use conf_change::ConfChangeResult;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
-pub use split::{RequestSplit, SplitFlowControl, SplitInit, SplitResult, SPLIT_PREFIX};
+use split::SplitResult;
+pub use split::{temp_split_path, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
 use tikv_util::box_err;
 use txn_types::WriteBatchFlags;
 
-use self::conf_change::ConfChangeResult;
 use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
 
 #[derive(Debug)]
@@ -23,6 +26,7 @@ pub enum AdminCmdResult {
     SplitRegion(SplitResult),
     ConfChange(ConfChangeResult),
     TransferLeader(u64),
+    CompactLog(CompactLogResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -93,7 +97,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL)
                     {
                         let data = req.write_to_bytes().unwrap();
-                        self.propose_with_ctx(ctx, data, vec![])
+                        self.propose(ctx, data)
                     } else {
                         if self.propose_transfer_leader(ctx, req, ch) {
                             self.set_has_ready();
@@ -101,6 +105,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         return;
                     }
                 }
+                AdminCmdType::CompactLog => self.propose_compact_log(ctx, req),
                 _ => unimplemented!(),
             }
         };

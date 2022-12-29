@@ -229,7 +229,7 @@ impl Store {
             ctx.schedulers.read.clone(),
             &ctx.logger,
         )
-        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, s))
+        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, &ctx.snap_mgr, s))
         {
             Ok(p) => p,
             res => {
@@ -237,6 +237,10 @@ impl Store {
                 return;
             }
         };
+        ctx.store_meta
+            .lock()
+            .unwrap()
+            .set_region(fsm.peer().region(), false, fsm.logger());
         let mailbox = BasicMailbox::new(tx, fsm, ctx.router.state_cnt().clone());
         if ctx
             .router
@@ -327,6 +331,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn finish_destroy<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         info!(self.logger, "peer destroyed");
         ctx.router.close(self.region_id());
+        {
+            ctx.store_meta
+                .lock()
+                .unwrap()
+                .remove_region(self.region_id());
+        }
         if let Some(msg) = self.destroy_progress_mut().finish() {
             // The message will be dispatched to store fsm, which will create a
             // new peer. Ignore error as it's just a best effort.

@@ -6,7 +6,7 @@
 //!
 //! In summary, we trace the persist progress by recording flushed event.
 //! Because memtable is flushed one by one, so a flushed memtable must contain
-//! all the data within the CF before some certain apply index. So the minimun
+//! all the data within the CF before certain apply index. So the minimun
 //! flushed apply index + 1 of all data CFs is the recovery start point. In
 //! some cases, a CF may not have any updates at all for a long time. In some
 //! cases, we may still need to recover from smaller index even if flushed
@@ -30,18 +30,24 @@
 use std::{cmp, sync::Mutex};
 
 use engine_traits::{
-    FlushProgress, KvEngine, RaftEngine, RaftLogBatch, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+    FlushProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use kvproto::{
     metapb::Region,
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
-use raftstore::store::{ReadTask, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use raftstore::store::{
+    ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+};
 use slog::Logger;
 use tikv_util::{box_err, worker::Scheduler};
 
 use crate::{
+    operation::{
+        command::temp_split_path,
+        ready::snapshot::{install_tablet, recv_snap_path},
+    },
     raft::{Peer, Storage},
     router::PeerMsg,
     Result, StoreRouter,
@@ -121,7 +127,7 @@ impl<EK: KvEngine, ER: RaftEngine> engine_traits::StateStorage for StateStorage<
     }
 }
 
-/// An alias of frequent use type that each data cf has a u64.
+/// Mapping from data cf to an u64 index.
 pub type DataTrace = [u64; DATA_CFS_LEN];
 
 #[derive(Clone, Copy, Default)]
@@ -211,7 +217,7 @@ impl ApplyTrace {
         self.admin.last_modified = index;
     }
 
-    fn persisted_apply_index(&self) -> u64 {
+    pub fn persisted_apply_index(&self) -> u64 {
         self.admin.flushed
     }
 
@@ -237,7 +243,7 @@ impl ApplyTrace {
         let candidate = cmp::min(mem_index, min_flushed.unwrap_or(u64::MAX));
         if candidate > self.admin.flushed {
             self.admin.flushed = candidate;
-            if candidate > self.persisted_applied + 100 {
+            if self.admin.flushed > self.persisted_applied + 100 {
                 self.try_persist = true;
             }
         }
@@ -370,6 +376,51 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             logger,
         )
         .map(Some)
+    }
+
+    /// Region state is written before actually moving data. It's possible that
+    /// the tablet is missing after restart. We need to move the data again
+    /// after being restarted.
+    pub fn recover_tablet(&self, registry: &TabletRegistry<EK>, snap_mgr: &TabletSnapManager) {
+        let tablet_index = self.region_state().get_tablet_index();
+        if tablet_index == 0 {
+            // It's an uninitialized peer, nothing to recover.
+            return;
+        }
+        let region_id = self.region().get_id();
+        let target_path = registry.tablet_path(region_id, tablet_index);
+        if target_path.exists() {
+            // Move data succeeded before restart, nothing to recover.
+            return;
+        }
+        if tablet_index == RAFT_INIT_LOG_INDEX {
+            // Its data may come from split or snapshot. Try split first.
+            let split_path = temp_split_path(registry, region_id);
+            if install_tablet(registry, &split_path, region_id, tablet_index) {
+                return;
+            }
+        }
+        let truncated_index = self.entry_storage().truncated_index();
+        if truncated_index == tablet_index {
+            // Try snapshot.
+            let peer_id = self.peer().get_id();
+            let snap_path = recv_snap_path(
+                snap_mgr,
+                region_id,
+                peer_id,
+                self.entry_storage().truncated_term(),
+                tablet_index,
+            );
+            if install_tablet(registry, &snap_path, region_id, tablet_index) {
+                return;
+            }
+        }
+        panic!(
+            "{:?} data loss detected: {}_{} not found",
+            self.logger().list(),
+            region_id,
+            tablet_index
+        );
     }
 
     /// Write initial persist trace for uninit peer.
