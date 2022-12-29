@@ -101,7 +101,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     fn tick(&mut self) -> bool {
-        self.raft_group_mut().tick()
+        // When it's handling snapshot, it's pointless to tick as all the side
+        // affects have to wait till snapshot is applied. On the other hand, ticking
+        // will bring other corner cases like elections.
+        !self.is_handling_snapshot() && self.raft_group_mut().tick()
     }
 
     pub fn on_peer_unreachable(&mut self, to_peer_id: u64) {

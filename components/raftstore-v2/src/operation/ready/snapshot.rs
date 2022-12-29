@@ -198,14 +198,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         let persisted_index = self.persisted_index();
         *self.last_applying_index_mut() = persisted_index;
-        let first_index = self.entry_storage().first_index();
-        assert!(first_index > RAFT_INIT_LOG_INDEX, "{:?}", self.logger);
+        let snapshot_index = self.entry_storage().truncated_index();
+        assert!(snapshot_index >= RAFT_INIT_LOG_INDEX, "{:?}", self.logger);
         // If leader sends a message append to the follower while it's applying
         // snapshot (via split init for example), the persisted_index may be larger
         // than the first index. But as long as first index is not larger, the
         // latest snapshot should be applied.
-        if first_index <= persisted_index + 1 {
-            let snapshot_index = first_index - 1;
+        if snapshot_index <= persisted_index {
             let region_id = self.region_id();
             self.reset_flush_state(snapshot_index);
             let flush_state = self.flush_state().clone();

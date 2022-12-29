@@ -675,8 +675,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// See the comments of `check_snap_status` for more details.
     #[inline]
     pub fn is_handling_snapshot(&self) -> bool {
-        // todo: This method may be unnecessary now?
-        false
+        self.persisted_index() < self.entry_storage().truncated_index()
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not
