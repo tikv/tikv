@@ -28,6 +28,7 @@ use raftstore::{
         local_metrics::RaftMetrics,
         Config, PdStatsMonitor, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask,
         StoreWriters, TabletSnapManager, Transport, WriteSenders,
+        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
     },
 };
 use slog::{warn, Logger};
@@ -527,8 +528,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let read_scheduler = workers.async_read.start("async-read-worker", read_runner);
 
         let stats_monitor = PdStatsMonitor::new(
-            // FIXME: Why 2?
-            cfg.value().pd_store_heartbeat_tick_interval.0 / 2,
+            cfg.value().pd_store_heartbeat_tick_interval.0 / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
             cfg.value().report_min_resolved_ts_interval.0,
             pd::StoreReporter::new(workers.pd.scheduler(), self.logger.clone()),
         );

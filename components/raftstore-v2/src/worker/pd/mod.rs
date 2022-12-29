@@ -36,6 +36,8 @@ mod store;
 
 pub use region::RegionHeartbeatTask;
 
+type RecordPairVec = Vec<pdpb::RecordPair>;
+
 pub enum Task {
     // In store.rs.
     StoreHeartbeat {
@@ -298,9 +300,8 @@ impl FlowStatsReporter for FlowReporter {
     }
 }
 
-type RecordPairVec = Vec<pdpb::RecordPair>;
-
 pub type StoreReporter = SchedulerWithLogger;
+
 impl Collector for StoreReporter {
     fn collect(&self, records: Arc<RawRecords>) {
         self.scheduler
@@ -308,6 +309,7 @@ impl Collector for StoreReporter {
             .ok();
     }
 }
+
 impl StoreStatsReporter for StoreReporter {
     fn report_store_infos(
         &self,
@@ -328,6 +330,7 @@ impl StoreStatsReporter for StoreReporter {
             );
         }
     }
+
     fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
         let task = Task::ReportMinResolvedTs {
             store_id,
@@ -341,6 +344,7 @@ impl StoreStatsReporter for StoreReporter {
             );
         }
     }
+
     fn auto_split(&self, split_infos: Vec<SplitInfo>) {
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = self.scheduler.schedule(task) {

@@ -80,5 +80,6 @@ pub use self::{
         ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
         SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
         StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
+        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
     },
 };

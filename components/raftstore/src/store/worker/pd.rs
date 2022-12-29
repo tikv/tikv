@@ -69,6 +69,8 @@ use crate::{
     },
 };
 
+pub const NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT: u32 = 2;
+
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
 #[derive(Default, Debug, Clone)]
@@ -516,6 +518,7 @@ where
             );
         }
     }
+
     fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
         let task = Task::ReportMinResolvedTs {
             store_id,
@@ -528,6 +531,7 @@ where
             );
         }
     }
+
     fn auto_split(&self, split_infos: Vec<SplitInfo>) {
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = self.0.schedule(task) {
@@ -584,9 +588,7 @@ where
         collector_reg_handle: CollectorRegHandle,
         store_id: u64,
     ) -> Result<(), io::Error> {
-        if self.collect_tick_interval < default_collect_tick_interval()
-            || self.collect_store_infos_interval < self.collect_tick_interval
-        {
+        if self.collect_tick_interval < default_collect_tick_interval() {
             info!(
                 "interval is too small, skip stats monitoring. If we are running tests, it is normal, otherwise a check is needed."
             );
@@ -933,8 +935,6 @@ where
     ER: RaftEngine,
     T: PdClient + 'static,
 {
-    const INTERVAL_DIVISOR: u32 = 2;
-
     pub fn new(
         cfg: &Config,
         store_id: u64,
@@ -952,7 +952,7 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Runner<EK, ER, T> {
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
-        let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
+        let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
         let mut stats_monitor = StatsMonitor::new(
             interval,
             cfg.report_min_resolved_ts_interval.0,
@@ -1834,6 +1834,7 @@ where
         // scheduler. That is, the current node must in `busy` state.
         stats.set_is_busy(true);
 
+        // We do not need to report store_info, so we just set `None` here.
         self.handle_store_heartbeat(stats, None, None, None);
         warn!("scheduling store_heartbeat timeout, force report store slow score to pd.";
             "store_id" => self.store_id,
