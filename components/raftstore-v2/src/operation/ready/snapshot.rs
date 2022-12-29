@@ -509,6 +509,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             // All states are rewritten in the following blocks. Stale states will be
             // cleaned up by compact worker.
             task.cut_logs = Some((0, old_last_index));
+            self.entry_storage_mut().clear();
         }
 
         let last_index = snap.get_metadata().get_index();
