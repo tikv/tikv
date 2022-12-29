@@ -508,7 +508,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         if self.entry_storage().first_index() <= old_last_index {
             // All states are rewritten in the following blocks. Stale states will be
             // cleaned up by compact worker.
-            task.cut_logs = Some((0, old_last_index));
+            task.cut_logs = Some((0, old_last_index + 1));
             self.entry_storage_mut().clear();
         }
 
