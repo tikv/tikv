@@ -31,6 +31,13 @@ pub struct CachedTablet<EK> {
     version: u64,
 }
 
+impl<EK> CachedTablet<EK> {
+    fn release(&mut self) {
+        self.cache = None;
+        self.version = 0;
+    }
+}
+
 impl<EK: Clone> CachedTablet<EK> {
     #[inline]
     fn new(data: Option<EK>) -> Self {
@@ -302,8 +309,10 @@ impl<EK> TabletRegistry<EK> {
         let mut tablets = self.tablets.tablets.lock().unwrap();
         for (id, tablet) in tablets.iter_mut() {
             if !f(*id, tablet) {
+                tablet.release();
                 return;
             }
+            tablet.release();
         }
     }
 }
