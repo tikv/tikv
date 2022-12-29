@@ -219,7 +219,7 @@ impl RequestCollector {
         let mut reqs: Vec<_> = self.write_reqs.drain().map(|(_, (req, _))| req).collect();
         reqs.append(&mut self.default_reqs.drain().map(|(_, req)| req).collect());
         if reqs.is_empty() {
-            error!("unexpected empty requests");
+            debug_assert!(false, "attempt to pack an empty request");
             return;
         }
         cmd.set_requests(reqs.into());
@@ -619,8 +619,7 @@ where
         }
 
         let task = async move {
-            let res = Ok(SwitchModeResponse::default());
-            crate::send_rpc_response!(res, sink, label, timer);
+            crate::send_rpc_response!(Ok(SwitchModeResponse::default()), sink, label, timer);
         };
         ctx.spawn(task);
     }
@@ -700,8 +699,7 @@ where
                 .with_label_values(&[label])
                 .observe(start.saturating_elapsed().as_secs_f64());
 
-            let resp = Ok(resp);
-            crate::send_rpc_response!(resp, sink, label, timer);
+            crate::send_rpc_response!(Ok(resp), sink, label, timer);
         };
         self.threads.spawn(handle_task);
     }
@@ -731,8 +729,7 @@ where
             }
 
             debug!("finished apply kv file with {:?}", resp);
-            let resp = Ok(resp);
-            crate::send_rpc_response!(resp, sink, label, start);
+            crate::send_rpc_response!(Ok(resp), sink, label, start);
         };
         self.block_threads.spawn_ok(handle_task);
     }
@@ -785,8 +782,7 @@ where
                 },
                 Err(e) => resp.set_error(e.into()),
             }
-            let resp = Ok(resp);
-            crate::send_rpc_response!(resp, sink, label, timer);
+            crate::send_rpc_response!(Ok(resp), sink, label, timer);
         };
 
         self.threads.spawn(handle_task);
@@ -955,8 +951,12 @@ where
         });
 
         let ctx_task = async move {
-            let res = Ok(SetDownloadSpeedLimitResponse::default());
-            crate::send_rpc_response!(res, sink, label, timer);
+            crate::send_rpc_response!(
+                Ok(SetDownloadSpeedLimitResponse::default()),
+                sink,
+                label,
+                timer
+            );
         };
 
         ctx.spawn(ctx_task);
