@@ -65,7 +65,7 @@ use crate::{
     Error,
 };
 
-pub const SPLIT_PREFIX: &str = "split_";
+pub const SPLIT_PREFIX: &str = "split";
 
 #[derive(Debug)]
 pub struct SplitResult {

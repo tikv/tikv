@@ -50,6 +50,8 @@ use crate::{
     router::{ApplyTask, PeerMsg, PeerTick},
 };
 
+const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
+
 impl Store {
     pub fn on_store_unreachable<EK, ER, T>(
         &mut self,
@@ -85,9 +87,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // it may block for ever when there is unapplied conf change.
             self.set_has_ready();
         }
-        if committed_index > applied_index + 128 {
-            // If there are too many pending entries, pause  to avoid
-            // too much memory usage.
+        if committed_index > applied_index + PAUSE_FOR_RECOVERY_GAP {
+            // If there are too many the missing logs, we need to skip ticking otherwise
+            // it may block the raftstore thread for a long time in reading logs for
+            // election timeout.
             info!(self.logger, "pause for recovery"; "applied" => applied_index, "committed" => committed_index);
             self.set_pause_for_recovery(true);
             true
