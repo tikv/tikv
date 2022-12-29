@@ -286,7 +286,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     /// Returns if there's any tombstone being removed.
     #[inline]
-    pub fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
+    fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
         let compact_log_context = self.compact_log_context_mut();
         let removed = compact_log_context
             .tombstone_tablets_wait_index
