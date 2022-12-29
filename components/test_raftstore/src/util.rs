@@ -50,9 +50,9 @@ pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
 use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
 use txn_types::Key;
 
-use crate::{Cluster, Config, ServerCluster, Simulator};
+use crate::{Cluster, Config, RawEngine, ServerCluster, Simulator};
 
-pub fn must_get(engine: &RocksEngine, cf: &str, key: &[u8], value: Option<&[u8]>) {
+pub fn must_get(engine: &impl RawEngine, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
         let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
         if let (Some(value), Some(res)) = (value, res.as_ref()) {
@@ -78,19 +78,19 @@ pub fn must_get(engine: &RocksEngine, cf: &str, key: &[u8], value: Option<&[u8]>
     )
 }
 
-pub fn must_get_equal(engine: &RocksEngine, key: &[u8], value: &[u8]) {
+pub fn must_get_equal(engine: &impl RawEngine, key: &[u8], value: &[u8]) {
     must_get(engine, "default", key, Some(value));
 }
 
-pub fn must_get_none(engine: &RocksEngine, key: &[u8]) {
+pub fn must_get_none(engine: &impl RawEngine, key: &[u8]) {
     must_get(engine, "default", key, None);
 }
 
-pub fn must_get_cf_equal(engine: &RocksEngine, cf: &str, key: &[u8], value: &[u8]) {
+pub fn must_get_cf_equal(engine: &impl RawEngine, cf: &str, key: &[u8], value: &[u8]) {
     must_get(engine, cf, key, Some(value));
 }
 
-pub fn must_get_cf_none(engine: &RocksEngine, cf: &str, key: &[u8]) {
+pub fn must_get_cf_none(engine: &impl RawEngine, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
@@ -128,7 +128,7 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
 }
 
 lazy_static! {
-    static ref TEST_CONFIG: TikvConfig = {
+    pub static ref TEST_CONFIG: TikvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
         TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {

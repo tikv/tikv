@@ -12,11 +12,11 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics, RocksDbVector};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
-    WriteBatchExt, CF_DEFAULT, CF_RAFT,
+    WriteBatchExt, CF_DEFAULT, CF_RAFT, SyncMutable,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on};
@@ -1887,3 +1887,7 @@ impl<T: Simulator> Drop for Cluster<T> {
         self.shutdown();
     }
 }
+
+pub trait RawEngine: Peekable<DbVector = RocksDbVector> + SyncMutable {}
+
+impl RawEngine for RocksEngine {}

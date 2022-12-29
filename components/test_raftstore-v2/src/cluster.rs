@@ -10,10 +10,11 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Iterable, KvEngine, MiscExt, RaftEngine, RaftLogBatch, TabletRegistry, CF_DEFAULT,
+    Iterable, KvEngine, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch,
+    ReadOptions, SyncMutable, TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
 use futures::{compat::Future01CompatExt, executor::block_on, select, FutureExt};
@@ -22,14 +23,14 @@ use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::ApiVersion,
     metapb::{self, PeerRole, RegionEpoch},
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request},
-    raft_serverpb::StoreIdent,
+    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response},
+    raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent},
 };
 use pd_client::PdClient;
 use raftstore::{
     store::{
-        initial_region, Callback, RegionSnapshot, WriteResponse, INIT_EPOCH_CONF_VER,
-        INIT_EPOCH_VER,
+        cmd_resp, initial_region, Callback, RegionSnapshot, WriteResponse, INIT_EPOCH_CONF_VER,
+        INIT_EPOCH_VER, util::check_key_in_region,
     },
     Error, Result,
 };
@@ -41,10 +42,11 @@ use slog::o;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
-    is_error_response, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd, new_peer,
-    new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd, new_request, new_snap_cmd,
-    new_status_request, new_store, new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms,
-    Config, Filter, FilterFactory, PartitionFilterFactory,
+    is_error_response, new_admin_request, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd,
+    new_peer, new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd, new_request,
+    new_snap_cmd, new_status_request, new_store, new_tikv_config_with_api_ver,
+    new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
+    RawEngine,
 };
 use tikv::server::Result as ServerResult;
 use tikv_util::{
@@ -81,7 +83,65 @@ pub trait Simulator {
     fn get_snap_dir(&self, node_id: u64) -> String;
 
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
-        unimplemented!()
+        let node_id = request.get_header().get_peer().get_store_id();
+        let region_id = request.get_header().get_region_id();
+
+        let mut req_clone = request.clone();
+        req_clone.clear_requests();
+        req_clone.mut_requests().push(new_snap_cmd());
+        match self.snapshot(req_clone, timeout) {
+            Ok(snap) => {
+                let requests = request.get_requests();
+                let mut response = RaftCmdResponse::default();
+                let mut responses = Vec::with_capacity(requests.len());
+                for req in requests {
+                    let cmd_type = req.get_cmd_type();
+                    match cmd_type {
+                        CmdType::Get => {
+                            let mut resp = Response::default();
+                            let key = req.get_get().get_key();
+                            let cf = req.get_get().get_cf();
+                            let region = snap.get_region();
+
+                            if let Err(e) = check_key_in_region(key, region) {
+                                return Ok(cmd_resp::new_error(e));
+                            }
+
+                            let res = if cf.is_empty() {
+                                snap.get_value(key).unwrap_or_else(|e| {
+                                    panic!(
+                                        "[region {}] failed to get {} with cf {}: {:?}",
+                                        snap.get_region().get_id(),
+                                        log_wrappers::Value::key(key),
+                                        cf,
+                                        e
+                                    )
+                                })
+                            } else {
+                                snap.get_value_cf(cf, key).unwrap_or_else(|e| {
+                                    panic!(
+                                        "[region {}] failed to get {}: {:?}",
+                                        snap.get_region().get_id(),
+                                        log_wrappers::Value::key(key),
+                                        e
+                                    )
+                                })
+                            };
+                            if let Some(res) = res {
+                                resp.mut_get().set_value(res.to_vec());
+                            }
+                            resp.set_cmd_type(cmd_type);
+                            responses.push(resp);
+                        }
+                        _ => unimplemented!(),
+                    }
+                }
+                response.set_responses(responses.into());
+
+                Ok(response)
+            }
+            Err(e) => Ok(e),
+        }
     }
 
     fn snapshot(
@@ -442,13 +502,13 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    // pub fn get_engine(&self, node_id: u64) -> WrapFactory {
-    //     WrapFactory::new(
-    //         self.pd_client.clone(),
-    //         self.raft_engines[&node_id].clone(),
-    //         self.tablet_factories[&node_id].clone(),
-    //     )
-    // }
+    pub fn get_engine(&self, node_id: u64) -> WrapFactory {
+        WrapFactory::new(
+            self.pd_client.clone(),
+            self.raft_engines[&node_id].clone(),
+            self.tablet_registries[&node_id].clone(),
+        )
+    }
 
     pub fn call_command(
         &mut self,
@@ -466,12 +526,10 @@ impl<T: Simulator> Cluster<T> {
         }
         let ret = if is_read {
             self.sim.wl().read(request.clone(), timeout)
+        } else if request.has_status_request() {
+            self.sim.wl().call_query(request.clone(), timeout)
         } else {
-            if request.has_status_request() {
-                self.sim.wl().call_query(request.clone(), timeout)
-            } else {
-                self.sim.wl().call_command(request.clone(), timeout)
-            }
+            self.sim.wl().call_command(request.clone(), timeout)
         };
         match ret {
             Err(e) => {
@@ -880,6 +938,111 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn must_delete(&mut self, key: &[u8]) {
+        self.must_delete_cf(CF_DEFAULT, key)
+    }
+
+    pub fn must_delete_cf(&mut self, cf: &str, key: &[u8]) {
+        let resp = self.request(
+            key,
+            vec![new_delete_cmd(cf, key)],
+            false,
+            Duration::from_secs(5),
+        );
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
+    }
+
+    pub fn must_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
+        let resp = self.request(
+            start,
+            vec![new_delete_range_cmd(cf, start, end)],
+            false,
+            Duration::from_secs(5),
+        );
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
+    }
+
+    pub fn must_notify_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
+        let mut req = new_delete_range_cmd(cf, start, end);
+        req.mut_delete_range().set_notify_only(true);
+        let resp = self.request(start, vec![req], false, Duration::from_secs(5));
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
+    }
+
+    pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
+        unimplemented!()
+    }
+
+    pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            for filter in factory.generate(node_id) {
+                sim.add_send_filter(node_id, filter);
+            }
+        }
+    }
+
+    pub fn clear_send_filters(&self) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            sim.clear_send_filters(node_id);
+        }
+    }
+
+    // it's so common that we provide an API for it
+    pub fn partition(&mut self, s1: Vec<u64>, s2: Vec<u64>) {
+        self.add_send_filter(PartitionFilterFactory::new(s1, s2));
+    }
+
+    pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
+        let epoch = self.get_region_epoch(region_id);
+        let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
+        let resp = self
+            .call_command_on_leader(transfer_leader, Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(
+            resp.get_admin_response().get_cmd_type(),
+            AdminCmdType::TransferLeader,
+            "{:?}",
+            resp
+        );
+    }
+
+    pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
+        let timer = Instant::now();
+        loop {
+            self.reset_leader_of_region(region_id);
+            let cur_leader = self.leader_of_region(region_id);
+            if let Some(ref cur_leader) = cur_leader {
+                if cur_leader.get_id() == leader.get_id()
+                    && cur_leader.get_store_id() == leader.get_store_id()
+                {
+                    return;
+                }
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!(
+                    "failed to transfer leader to [{}] {:?}, current leader: {:?}",
+                    region_id, leader, cur_leader
+                );
+            }
+            self.transfer_leader(region_id, leader.clone());
+        }
+    }
+
+    pub fn try_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) -> RaftCmdResponse {
+        let epoch = self.get_region_epoch(region_id);
+        let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
+        self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
+            .unwrap()
+    }
+
     // It's similar to `ask_split`, the difference is the msg, it sends, is
     // `Msg::SplitRegion`, and `region` will not be embedded to that msg.
     // Caller must ensure that the `split_key` is in the `region`.
@@ -1029,3 +1192,121 @@ pub fn bootstrap_store<ER: RaftEngine>(
 
     Ok(())
 }
+
+pub struct WrapFactory {
+    pd_client: Arc<TestPdClient>,
+    raft_engine: RaftTestEngine,
+    tablet_registry: TabletRegistry<RocksEngine>,
+}
+
+impl WrapFactory {
+    pub fn new(
+        pd_client: Arc<TestPdClient>,
+        raft_engine: RaftTestEngine,
+        tablet_registry: TabletRegistry<RocksEngine>,
+    ) -> Self {
+        Self {
+            raft_engine,
+            tablet_registry,
+            pd_client,
+        }
+    }
+
+    fn get_tablet(&self, key: &[u8]) -> Option<RocksEngine> {
+        // todo: unwrap
+        let region_id = self.pd_client.get_region(key).unwrap().get_id();
+        self.tablet_registry
+            .get(region_id)
+            .unwrap()
+            .latest()
+            .cloned()
+    }
+
+    pub fn get_region_state(
+        &self,
+        region_id: u64,
+    ) -> engine_traits::Result<Option<RegionLocalState>> {
+        unimplemented!()
+        // self.raft_engine.get_region_state(region_id)
+    }
+}
+
+impl Peekable for WrapFactory {
+    type DbVector = RocksDbVector;
+
+    fn get_value_opt(
+        &self,
+        opts: &ReadOptions,
+        key: &[u8],
+    ) -> engine_traits::Result<Option<Self::DbVector>> {
+        match self.get_tablet(key) {
+            Some(tablet) => tablet.get_value_opt(opts, key),
+            _ => Ok(None),
+        }
+    }
+
+    fn get_value_cf_opt(
+        &self,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+    ) -> engine_traits::Result<Option<Self::DbVector>> {
+        match self.get_tablet(key) {
+            Some(tablet) => tablet.get_value_cf_opt(opts, cf, key),
+            _ => Ok(None),
+        }
+    }
+
+    fn get_msg_cf<M: protobuf::Message + Default>(
+        &self,
+        cf: &str,
+        key: &[u8],
+    ) -> engine_traits::Result<Option<M>> {
+        unimplemented!()
+    }
+}
+
+impl SyncMutable for WrapFactory {
+    fn put(&self, key: &[u8], value: &[u8]) -> engine_traits::Result<()> {
+        match self.get_tablet(key) {
+            Some(tablet) => tablet.put(key, value),
+            _ => unimplemented!(),
+        }
+    }
+
+    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> engine_traits::Result<()> {
+        match self.get_tablet(key) {
+            Some(tablet) => tablet.put_cf(cf, key, value),
+            _ => unimplemented!(),
+        }
+    }
+
+    fn delete(&self, key: &[u8]) -> engine_traits::Result<()> {
+        match self.get_tablet(key) {
+            Some(tablet) => tablet.delete(key),
+            _ => unimplemented!(),
+        }
+    }
+
+    fn delete_cf(&self, cf: &str, key: &[u8]) -> engine_traits::Result<()> {
+        match self.get_tablet(key) {
+            Some(tablet) => tablet.delete_cf(cf, key),
+            _ => unimplemented!(),
+        }
+    }
+
+    fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> engine_traits::Result<()> {
+        unimplemented!()
+    }
+
+    fn delete_range_cf(
+        &self,
+        cf: &str,
+        begin_key: &[u8],
+        end_key: &[u8],
+    ) -> engine_traits::Result<()> {
+        unimplemented!()
+    }
+}
+
+impl RawEngine for WrapFactory {}
