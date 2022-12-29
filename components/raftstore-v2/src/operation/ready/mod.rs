@@ -306,7 +306,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut update_lease = self.is_leader();
         if update_lease {
             for entry in committed_entries.iter().rev() {
-                self.update_approximate_raft_log_size(|s| s + entry.get_data().len() as u64);
+                self.compact_log_context_mut()
+                    .add_log_size(entry.get_data().len() as u64);
                 if update_lease {
                     let propose_time = self
                         .proposals()
@@ -329,7 +330,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let applying_index = committed_entries.last().unwrap().index;
         let commit_to_current_term = committed_entries.last().unwrap().term == self.term();
-        *self.last_applying_index_mut() = applying_index;
+        self.compact_log_context_mut()
+            .set_last_applying_index(applying_index);
         if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
             // Compact all cached entries instead of half evict.
             self.entry_storage_mut().evict_entry_cache(false);
@@ -426,7 +428,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
-        self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
+        self.on_advance_persisted_apply_index(ctx, prev_persisted, Some(&mut write_task));
 
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready

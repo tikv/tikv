@@ -5,6 +5,7 @@ mod conf_change;
 mod split;
 mod transfer_leader;
 
+pub use compact_log::CompactLogContext;
 use compact_log::CompactLogResult;
 use conf_change::ConfChangeResult;
 use engine_traits::{KvEngine, RaftEngine};

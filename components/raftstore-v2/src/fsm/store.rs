@@ -12,9 +12,7 @@ use engine_traits::{KvEngine, RaftEngine};
 use futures::{compat::Future01CompatExt, FutureExt};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
-use raftstore::store::{
-    fsm::store::StoreRegionMeta, Config, ReadDelegate, RegionReadProgressRegistry,
-};
+use raftstore::store::{fsm::store::StoreRegionMeta, Config, RegionReadProgressRegistry};
 use slog::{info, o, Logger};
 use tikv_util::{
     future::poll_future_notify,
@@ -24,13 +22,14 @@ use tikv_util::{
 
 use crate::{
     batch::StoreContext,
+    operation::ReadDelegatePair,
     router::{StoreMsg, StoreTick},
 };
 
-pub struct StoreMeta {
+pub struct StoreMeta<EK> {
     pub store_id: u64,
     /// region_id -> reader
-    pub readers: HashMap<u64, ReadDelegate>,
+    pub readers: HashMap<u64, ReadDelegatePair<EK>>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
     /// (region_end_key, epoch.version) -> region_id
@@ -42,9 +41,9 @@ pub struct StoreMeta {
     pub(crate) regions: HashMap<u64, (Region, bool)>,
 }
 
-impl StoreMeta {
-    pub fn new(store_id: u64) -> StoreMeta {
-        StoreMeta {
+impl<EK> StoreMeta<EK> {
+    pub fn new(store_id: u64) -> Self {
+        Self {
             store_id,
             readers: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::default(),
@@ -96,7 +95,7 @@ impl StoreMeta {
     }
 }
 
-impl StoreRegionMeta for StoreMeta {
+impl<EK: Send> StoreRegionMeta for StoreMeta<EK> {
     #[inline]
     fn store_id(&self) -> u64 {
         self.store_id

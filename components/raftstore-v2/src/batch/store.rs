@@ -45,7 +45,7 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    operation::SPLIT_PREFIX,
+    operation::{SharedReadTablet, SPLIT_PREFIX},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
     worker::{pd, tablet_gc},
@@ -72,7 +72,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub timer: SteadyTimer,
     pub schedulers: Schedulers<EK, ER>,
     /// store meta
-    pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
     pub engine: ER,
     pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
@@ -258,7 +258,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     schedulers: Schedulers<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Arc<Mutex<StoreMeta<EK>>>,
     snap_mgr: TabletSnapManager,
 }
 
@@ -272,7 +272,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         router: StoreRouter<EK, ER>,
         schedulers: Schedulers<EK, ER>,
         logger: Logger,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
         snap_mgr: TabletSnapManager,
         coprocessor_host: CoprocessorHost<EK>,
     ) -> Self {
@@ -473,7 +473,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         trans: T,
         pd_client: Arc<C>,
         router: &StoreRouter<EK, ER>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
@@ -584,9 +584,14 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let mut address = Vec::with_capacity(peers.len());
         {
             let mut meta = store_meta.as_ref().lock().unwrap();
-            for (region_id, (tx, fsm)) in peers {
-                meta.readers
-                    .insert(region_id, fsm.peer().generate_read_delegate());
+            for (region_id, (tx, mut fsm)) in peers {
+                if let Some(tablet) = fsm.peer_mut().tablet() {
+                    let read_tablet = SharedReadTablet::new(tablet.clone());
+                    meta.readers.insert(
+                        region_id,
+                        (fsm.peer().generate_read_delegate(), read_tablet),
+                    );
+                }
 
                 address.push(region_id);
                 mailboxes.push((

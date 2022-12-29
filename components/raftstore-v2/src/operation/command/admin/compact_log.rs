@@ -32,6 +32,46 @@ use crate::{
     worker::tablet_gc,
 };
 
+pub struct CompactLogContext {
+    skip_compact_log_ticks: usize,
+    approximate_raft_log_size: u64,
+    last_applying_index: u64,
+    /// Tombstone tablets can only be destroyed when the tablet that replaces it
+    /// is persisted. This is a list of tablet index that awaits to be
+    /// persisted. When persisted_apply is advanced, we need to notify tablet_gc
+    /// worker to destroy them.
+    tombstone_tablets_wait_index: Vec<u64>,
+}
+
+impl CompactLogContext {
+    pub fn new(last_applying_index: u64) -> CompactLogContext {
+        CompactLogContext {
+            skip_compact_log_ticks: 0,
+            approximate_raft_log_size: 0,
+            last_applying_index,
+            tombstone_tablets_wait_index: vec![],
+        }
+    }
+
+    #[inline]
+    pub fn maybe_skip_compact_log(&mut self, max_skip_ticks: usize) -> bool {
+        if self.skip_compact_log_ticks < max_skip_ticks {
+            self.skip_compact_log_ticks += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn add_log_size(&mut self, size: u64) {
+        self.approximate_raft_log_size += size;
+    }
+
+    pub fn set_last_applying_index(&mut self, index: u64) {
+        self.last_applying_index = index;
+    }
+}
+
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     pub fn on_compact_log_tick(&mut self, force: bool) {
         if !self.fsm.peer().is_leader() {
@@ -130,13 +170,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             replicated_idx
         } else if applied_idx > first_idx
             && applied_idx - first_idx >= store_ctx.cfg.raft_log_gc_count_limit()
-            || self.approximate_raft_log_size() >= store_ctx.cfg.raft_log_gc_size_limit().0
+            || self.compact_log_context().approximate_raft_log_size
+                >= store_ctx.cfg.raft_log_gc_size_limit().0
         {
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx
             || last_idx - first_idx < 3
             || replicated_idx - first_idx < store_ctx.cfg.raft_log_gc_threshold
-                && self.maybe_skip_compact_log(store_ctx.cfg.raft_log_reserve_max_ticks)
+                && self
+                    .compact_log_context_mut()
+                    .maybe_skip_compact_log(store_ctx.cfg.raft_log_reserve_max_ticks)
         {
             return;
         } else {
@@ -163,7 +206,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let (ch, _) = CmdResChannel::pair();
         self.on_admin_command(store_ctx, req, ch);
 
-        self.reset_skip_compact_log_ticks();
+        self.compact_log_context_mut().skip_compact_log_ticks = 0;
     }
 }
 
@@ -217,6 +260,46 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    #[inline]
+    pub fn record_tombstone_tablet<T>(
+        &mut self,
+        ctx: &StoreContext<EK, ER, T>,
+        old_tablet: EK,
+        new_tablet_index: u64,
+    ) {
+        let compact_log_context = self.compact_log_context_mut();
+        compact_log_context
+            .tombstone_tablets_wait_index
+            .push(new_tablet_index);
+        let _ = ctx
+            .schedulers
+            .tablet_gc
+            .schedule(tablet_gc::Task::prepare_destroy(
+                old_tablet,
+                self.region_id(),
+                new_tablet_index,
+            ));
+    }
+
+    /// Returns if there's any tombstone being removed.
+    #[inline]
+    pub fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
+        let compact_log_context = self.compact_log_context_mut();
+        let removed = compact_log_context
+            .tombstone_tablets_wait_index
+            .iter()
+            .take_while(|i| **i <= persisted)
+            .count();
+        if removed > 0 {
+            compact_log_context
+                .tombstone_tablets_wait_index
+                .drain(..removed);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn on_apply_res_compact_log<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -260,18 +343,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.compact_log_from_engine(store_ctx);
         }
 
-        let applied = *self.last_applying_index_mut();
+        let context = self.compact_log_context_mut();
+        let applied = context.last_applying_index;
         let total_cnt = applied - old_truncated;
         let remain_cnt = applied - res.compact_index;
-        self.update_approximate_raft_log_size(|s| s * remain_cnt / total_cnt);
+        context.approximate_raft_log_size = (context.approximate_raft_log_size as f64
+            * (remain_cnt as f64 / total_cnt as f64))
+            as u64;
     }
 
+    /// Called when apply index is persisted. There are two different situation:
+    ///
+    /// Generally, additional writes are triggered to persist apply index. In
+    /// this case task is `Some`. But after applying snapshot, the apply
+    /// index is persisted a head of time. In this case task is `None`.
     #[inline]
     pub fn on_advance_persisted_apply_index<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         old_persisted: u64,
-        task: &mut WriteTask<EK, ER>,
+        task: Option<&mut WriteTask<EK, ER>>,
     ) {
         let new_persisted = self.storage().apply_trace().persisted_apply_index();
         if old_persisted < new_persisted {
@@ -286,14 +377,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             } else {
                 self.set_has_extra_write();
             }
-            if old_persisted < self.entry_storage().truncated_index() + 1 {
+            // If it's snapshot, logs are gc already.
+            if task.is_some() && old_persisted < self.entry_storage().truncated_index() + 1 {
                 self.compact_log_from_engine(store_ctx);
             }
-            if self.remove_tombstone_tablets_before(new_persisted) {
+            if self.remove_tombstone_tablets(new_persisted) {
                 let sched = store_ctx.schedulers.tablet_gc.clone();
-                task.persisted_cbs.push(Box::new(move || {
+                if let Some(task) = task {
+                    task.persisted_cbs.push(Box::new(move || {
+                        let _ = sched.schedule(tablet_gc::Task::destroy(region_id, new_persisted));
+                    }));
+                } else {
+                    // In snapshot, the index is persisted, tablet can be destroyed directly.
                     let _ = sched.schedule(tablet_gc::Task::destroy(region_id, new_persisted));
-                }))
+                }
             }
         }
     }
