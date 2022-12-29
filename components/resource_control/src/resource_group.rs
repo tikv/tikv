@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(group1.current_vt(), 25_000);
 
         let mut extras2 = Extras::single_level();
-        extras1.set_metadata("test2".as_bytes().to_owned());
+        extras2.set_metadata("test2".as_bytes().to_owned());
         assert_eq!(resouce_ctl.priority_of(&extras2), 12_500);
         assert_eq!(group2.current_vt(), 12_500);
 
