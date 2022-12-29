@@ -340,7 +340,7 @@ mod tests {
         let group1 = resouce_ctl.resource_group("test".as_bytes());
         assert_eq!(group1.weight, 500);
         let group2 = resouce_ctl.resource_group("test2".as_bytes());
-        assert_eq!(group1.weight, 250);
+        assert_eq!(group2.weight, 250);
         assert_eq!(group1.current_vt(), 0);
 
         let mut extras1 = Extras::single_level();
