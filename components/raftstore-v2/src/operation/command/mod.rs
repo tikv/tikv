@@ -39,7 +39,6 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::error;
 use tikv_util::{
     box_err,
     time::{duration_to_sec, monotonic_raw_now, Instant},
@@ -83,7 +82,7 @@ pub struct CommittedEntries {
     /// Entries need to be applied. Note some entries may not be included for
     /// flow control.
     entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
-    pub committed_time: Instant,
+    committed_time: Instant,
 }
 
 fn new_response(header: &RaftRequestHeader) -> RaftCmdResponse {
