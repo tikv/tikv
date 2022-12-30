@@ -53,7 +53,7 @@ impl Store {
         // stats.set_query_stats(query_stats);
 
         let task = pd::Task::StoreHeartbeat { stats };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(self.logger(), "notify pd failed";
                 "store_id" => self.store_id(),
                 "err" => ?e
@@ -89,7 +89,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             approximate_keys: None,
             wait_data_peers: Vec::new(),
         });
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd";
@@ -159,7 +159,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let task = pd::Task::DestroyPeer {
             region_id: self.region_id(),
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with DestroyPeer";
@@ -182,7 +182,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             right_derive: ctx.cfg.right_derive_when_split,
             ch,
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with AskBatchSplit";
@@ -198,7 +198,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         regions: Vec<metapb::Region>,
     ) {
         let task = pd::Task::ReportBatchSplit { regions };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with ReportBatchSplit";
@@ -214,7 +214,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             initial_status,
             txn_ext: self.txn_ext().clone(),
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with UpdateMaxTimestamp";

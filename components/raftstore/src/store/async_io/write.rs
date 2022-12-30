@@ -185,7 +185,7 @@ where
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
     // called after writing to kvdb and raftdb.
-    pub persisted_cb: Option<Box<dyn FnOnce() + Send>>,
+    pub persisted_cbs: Vec<Box<dyn FnOnce() + Send>>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
@@ -213,7 +213,7 @@ where
             extra_write: ExtraWrite::None,
             messages: vec![],
             trackers: vec![],
-            persisted_cb: None,
+            persisted_cbs: Vec::new(),
             has_snapshot: false,
         }
     }
@@ -419,9 +419,9 @@ where
                 );
             }
         }
-        if let Some(v) = task.persisted_cb.take() {
+        for v in task.persisted_cbs.drain(..) {
             self.persisted_cbs.push(v);
-        };
+        }
         self.tasks.push(task);
     }
 
@@ -718,6 +718,11 @@ where
 
         self.batch.after_write_to_raft_db(&self.metrics);
 
+        fail_point!(
+            "async_write_before_cb",
+            !self.batch.persisted_cbs.is_empty(),
+            |_| ()
+        );
         self.batch.after_write_all();
 
         fail_point!("raft_before_follower_send");

@@ -19,10 +19,7 @@ use kvproto::{
     metapb::Region,
     raft_serverpb::{PeerState, RaftMessage},
 };
-use raftstore::{
-    coprocessor::RegionChangeEvent,
-    store::{util, WriteTask},
-};
+use raftstore::store::{util, WriteTask};
 use slog::{debug, error, info, warn};
 use tikv_util::store::find_peer;
 
@@ -229,10 +226,10 @@ impl Store {
             self.store_id(),
             region,
             ctx.engine.clone(),
-            ctx.read_scheduler.clone(),
+            ctx.schedulers.read.clone(),
             &ctx.logger,
         )
-        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, s))
+        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, &ctx.snap_mgr, s))
         {
             Ok(p) => p,
             res => {
@@ -240,6 +237,10 @@ impl Store {
                 return;
             }
         };
+        ctx.store_meta
+            .lock()
+            .unwrap()
+            .set_region(fsm.peer().region(), false, fsm.logger());
         let mailbox = BasicMailbox::new(tx, fsm, ctx.router.state_cnt().clone());
         if ctx
             .router
@@ -294,11 +295,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// After destroy is finished, `finish_destroy` should be called to clean up
     /// memory states.
-    pub fn start_destroy<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        write_task: &mut WriteTask<EK, ER>,
-    ) {
+    pub fn start_destroy(&mut self, write_task: &mut WriteTask<EK, ER>) {
         let entry_storage = self.storage().entry_storage();
         if self.postponed_destroy() {
             return;
@@ -326,12 +323,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         lb.put_region_state(region_id, applied_index, &region_state)
             .unwrap();
         self.destroy_progress_mut().start();
-
-        ctx.lock_manager_notifier.on_region_changed(
-            self.region(),
-            RegionChangeEvent::Destroy,
-            self.get_role(),
-        );
     }
 
     /// Do clean up for destroy. The peer is permanently destroyed when
@@ -340,6 +331,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn finish_destroy<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         info!(self.logger, "peer destroyed");
         ctx.router.close(self.region_id());
+        {
+            ctx.store_meta
+                .lock()
+                .unwrap()
+                .remove_region(self.region_id());
+        }
         if let Some(msg) = self.destroy_progress_mut().finish() {
             // The message will be dispatched to store fsm, which will create a
             // new peer. Ignore error as it's just a best effort.

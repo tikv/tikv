@@ -16,7 +16,7 @@ use crate::{
     batch::StoreContext,
     operation::cf_offset,
     raft::{Apply, Peer},
-    router::CmdResChannel,
+    router::{ApplyTask, CmdResChannel},
 };
 
 mod simple_write;
@@ -69,6 +69,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         encoder.add_response_channel(ch);
         self.set_has_ready();
         self.simple_write_encoder_mut().replace(encoder);
+    }
+
+    #[inline]
+    pub fn on_unsafe_write<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        data: SimpleWriteBinary,
+    ) {
+        if !self.serving() {
+            return;
+        }
+        let bin = SimpleWriteReqEncoder::new(
+            Box::<RaftRequestHeader>::default(),
+            data,
+            ctx.cfg.raft_entry_max_size.0 as usize,
+            false,
+        )
+        .encode()
+        .0
+        .into_boxed_slice();
+        if let Some(scheduler) = self.apply_scheduler() {
+            scheduler.send(ApplyTask::UnsafeWrite(bin));
+        }
     }
 
     pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
@@ -139,7 +162,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         fail::fail_point!("APPLY_PUT", |_| Err(raftstore::Error::Other(
             "aborted by failpoint".into()
         )));
-        self.modifications_mut()[off] = index;
+        self.metrics.size_diff_hint += (self.key_buffer.len() + value.len()) as i64;
+        if index != u64::MAX {
+            self.modifications_mut()[off] = index;
+        }
         Ok(())
     }
 
@@ -151,6 +177,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         }
         util::check_key_in_region(key, self.region_state().get_region())?;
         keys::data_key_with_buffer(key, &mut self.key_buffer);
+        self.ensure_write_buffer();
         let res = if cf.is_empty() || cf == CF_DEFAULT {
             // TODO: use write_vector
             self.write_batch.as_mut().unwrap().delete(&self.key_buffer)
@@ -169,7 +196,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 e
             );
         });
-        self.modifications_mut()[off] = index;
+        self.metrics.size_diff_hint -= self.key_buffer.len() as i64;
+        if index != u64::MAX {
+            self.modifications_mut()[off] = index;
+        }
         Ok(())
     }
 

@@ -4,7 +4,10 @@ use std::{mem, sync::Arc};
 
 use engine_traits::{CachedTablet, FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_LEN};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
-use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
+use raftstore::store::{
+    fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
+    ReadTask,
+};
 use slog::Logger;
 use tikv_util::worker::Scheduler;
 
@@ -31,6 +34,10 @@ pub struct Apply<EK: KvEngine, R> {
     /// command.
     tombstone: bool,
     applied_term: u64,
+    // Apply progress is set after every command in case there is a flush. But it's
+    // wrong to update flush_state immediately as a manual flush from other thread
+    // can fetch the wrong apply index from flush_state.
+    applied_index: u64,
     /// The largest index that have modified each column family.
     modifications: DataTrace,
     admin_cmd_result: Vec<AdminCmdResult>,
@@ -46,6 +53,7 @@ pub struct Apply<EK: KvEngine, R> {
 
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
+    pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
 }
 
@@ -59,11 +67,15 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         read_scheduler: Scheduler<ReadTask<EK>>,
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
+        applied_term: u64,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
             .get(region_state.get_region().get_id())
             .unwrap();
+        assert_ne!(applied_term, 0, "{:?}", logger.list());
+        let applied_index = flush_state.applied_index();
+        assert_ne!(applied_index, 0, "{:?}", logger.list());
         Apply {
             peer,
             tablet: remote_tablet.latest().unwrap().clone(),
@@ -71,7 +83,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             write_batch: None,
             callbacks: vec![],
             tombstone: false,
-            applied_term: 0,
+            applied_term,
+            applied_index: flush_state.applied_index(),
             modifications: [0; DATA_CFS_LEN],
             admin_cmd_result: vec![],
             region_state,
@@ -81,6 +94,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             res_reporter,
             flush_state,
             log_recovery,
+            metrics: ApplyMetrics::default(),
             logger,
         }
     }
@@ -110,7 +124,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
     #[inline]
     pub fn set_apply_progress(&mut self, index: u64, term: u64) {
-        self.flush_state.set_applied_index(index);
+        self.applied_index = index;
         self.applied_term = term;
         if self.log_recovery.is_none() {
             return;
@@ -123,7 +137,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
     #[inline]
     pub fn apply_progress(&self) -> (u64, u64) {
-        (self.flush_state.applied_index(), self.applied_term)
+        (self.applied_index, self.applied_term)
     }
 
     #[inline]

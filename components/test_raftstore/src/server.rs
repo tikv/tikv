@@ -523,7 +523,7 @@ impl ServerCluster {
                 copr.clone(),
                 copr_v2.clone(),
                 resolver.clone(),
-                snap_mgr.clone(),
+                tikv_util::Either::Left(snap_mgr.clone()),
                 gc_worker.clone(),
                 check_leader_scheduler.clone(),
                 self.env.clone(),
@@ -794,6 +794,10 @@ impl Cluster<ServerCluster> {
             thread::sleep(Duration::from_millis(200));
         }
         panic!("failed to get snapshot of region {}", region_id);
+    }
+
+    pub fn raft_extension(&self, node_id: u64) -> SimulateRaftExtension {
+        self.sim.rl().storages[&node_id].raft_extension()
     }
 }
 

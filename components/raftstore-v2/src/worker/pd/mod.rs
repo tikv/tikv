@@ -11,9 +11,15 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
 use pd_client::PdClientV2;
-use raftstore::store::{util::KeysInfoFormatter, TxnExt};
+use raftstore::store::{
+    util::KeysInfoFormatter, Config, FlowStatsReporter, ReadStats, TxnExt, WriteStats,
+};
 use slog::{error, info, Logger};
-use tikv_util::{time::UnixSecs, worker::Runnable};
+use tikv_util::{
+    config::VersionTrack,
+    time::UnixSecs,
+    worker::{Runnable, Scheduler},
+};
 use yatp::{task::future::TaskCell, Remote};
 
 use crate::{
@@ -120,6 +126,7 @@ where
 
     logger: Logger,
     shutdown: Arc<AtomicBool>,
+    cfg: Arc<VersionTrack<Config>>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -139,6 +146,7 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         logger: Logger,
         shutdown: Arc<AtomicBool>,
+        cfg: Arc<VersionTrack<Config>>,
     ) -> Self {
         Self {
             store_id,
@@ -157,6 +165,7 @@ where
             tso_transport: None,
             logger,
             shutdown,
+            cfg,
         }
     }
 }
@@ -204,6 +213,29 @@ where
                 info!(self.logger, "remove peer statistic record in pd"; "region_id" => region_id)
             }
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct FlowReporter {
+    _scheduler: Scheduler<Task>,
+}
+
+impl FlowReporter {
+    pub fn new(scheduler: Scheduler<Task>) -> Self {
+        FlowReporter {
+            _scheduler: scheduler,
+        }
+    }
+}
+
+impl FlowStatsReporter for FlowReporter {
+    fn report_read_stats(&self, _read_stats: ReadStats) {
+        // TODO
+    }
+
+    fn report_write_stats(&self, _write_stats: WriteStats) {
+        // TODO
     }
 }
 

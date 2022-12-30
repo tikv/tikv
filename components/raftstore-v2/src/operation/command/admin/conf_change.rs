@@ -147,13 +147,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let remove_self = conf_change.region_state.get_state() == PeerState::Tombstone;
         self.storage_mut()
             .set_region_state(conf_change.region_state);
-
-        ctx.lock_manager_notifier.on_region_changed(
-            self.region(),
-            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
-            self.get_role(),
-        );
-
         if self.is_leader() {
             info!(
                 self.logger,
@@ -190,6 +183,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.set_has_ready();
             }
         }
+        ctx.coprocessor_host.on_region_changed(
+            self.region(),
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
+            self.raft_group().raft.state,
+        );
         if remove_self {
             self.mark_for_destroy(None);
         }
@@ -234,7 +232,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         let region = self.region_state().get_region();
         let change_kind = ConfChangeKind::confchange_kind(changes.len());
-        info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch());
+        info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch(), "index" => index);
         let mut new_region = region.clone();
         match change_kind {
             ConfChangeKind::LeaveJoint => self.apply_leave_joint(&mut new_region),

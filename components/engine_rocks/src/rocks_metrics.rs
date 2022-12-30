@@ -582,12 +582,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .discardable
                 .inc_by(value);
         }
-        TickerType::TitanGcSample => {
-            STORE_ENGINE_BLOB_GC_ACTION
-                .get(name_enum)
-                .sample
-                .inc_by(value);
-        }
         TickerType::TitanGcSmallFile => {
             STORE_ENGINE_BLOB_GC_ACTION
                 .get(name_enum)
@@ -612,6 +606,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .trigger_next
                 .inc_by(value);
         }
+        // TODO: Some tickers are ignored.
         _ => {}
     }
 }
@@ -946,7 +941,7 @@ struct DbStats {
     num_snapshots: Option<u64>,
     oldest_snapshot_time: Option<u64>,
     block_cache_size: Option<u64>,
-    stall_num: Vec<Option<u64>>,
+    stall_num: Option<[u64; ROCKSDB_IOSTALL_KEY.len()]>,
 }
 
 pub struct RocksStatisticsReporter {
@@ -966,8 +961,6 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
 
     fn collect(&mut self, engine: &RocksEngine) {
         let db = engine.as_inner();
-        let stall_num = ROCKSDB_IOSTALL_KEY.len();
-        self.db_stats.stall_num.resize(stall_num, None);
         for cf in db.cf_names() {
             let cf_stats = self.cf_stats.entry(cf.to_owned()).or_default();
             let handle = crate::util::get_cf_handle(db, cf).unwrap();
@@ -1074,9 +1067,9 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             }
 
             if let Some(info) = db.get_map_property_cf(handle, ROCKSDB_CFSTATS) {
-                for i in 0..stall_num {
-                    *self.db_stats.stall_num[i].get_or_insert_default() +=
-                        info.get_property_int_value(ROCKSDB_IOSTALL_KEY[i]);
+                let stall_num = self.db_stats.stall_num.get_or_insert_default();
+                for (key, val) in ROCKSDB_IOSTALL_KEY.iter().zip(stall_num) {
+                    *val += info.get_property_int_value(key);
                 }
             }
         }
@@ -1228,12 +1221,11 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                 .with_label_values(&[&self.name, "all"])
                 .set(v as i64);
         }
-        let stall_num = ROCKSDB_IOSTALL_KEY.len();
-        for i in 0..stall_num {
-            if let Some(v) = self.db_stats.stall_num[i] {
+        if let Some(stall_num) = &self.db_stats.stall_num {
+            for (ty, val) in ROCKSDB_IOSTALL_TYPE.iter().zip(stall_num) {
                 STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
-                    .with_label_values(&[&self.name, ROCKSDB_IOSTALL_TYPE[i]])
-                    .set(v as i64);
+                    .with_label_values(&[&self.name, ty])
+                    .set(*val as i64);
             }
         }
     }

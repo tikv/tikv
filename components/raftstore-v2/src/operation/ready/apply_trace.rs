@@ -6,7 +6,7 @@
 //!
 //! In summary, we trace the persist progress by recording flushed event.
 //! Because memtable is flushed one by one, so a flushed memtable must contain
-//! all the data within the CF before some certain apply index. So the minimun
+//! all the data within the CF before certain apply index. So the minimun
 //! flushed apply index + 1 of all data CFs is the recovery start point. In
 //! some cases, a CF may not have any updates at all for a long time. In some
 //! cases, we may still need to recover from smaller index even if flushed
@@ -30,18 +30,24 @@
 use std::{cmp, sync::Mutex};
 
 use engine_traits::{
-    FlushProgress, KvEngine, RaftEngine, RaftLogBatch, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+    FlushProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use kvproto::{
     metapb::Region,
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
-use raftstore::store::{ReadTask, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
-use slog::Logger;
+use raftstore::store::{
+    ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+};
+use slog::{trace, Logger};
 use tikv_util::{box_err, worker::Scheduler};
 
 use crate::{
+    operation::{
+        command::temp_split_path,
+        ready::snapshot::{install_tablet, recv_snap_path},
+    },
     raft::{Peer, Storage},
     router::PeerMsg,
     Result, StoreRouter,
@@ -121,10 +127,10 @@ impl<EK: KvEngine, ER: RaftEngine> engine_traits::StateStorage for StateStorage<
     }
 }
 
-/// An alias of frequent use type that each data cf has a u64.
+/// Mapping from data cf to an u64 index.
 pub type DataTrace = [u64; DATA_CFS_LEN];
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct Progress {
     flushed: u64,
     /// The index of last entry that has modification to the CF.
@@ -148,7 +154,7 @@ pub fn cf_offset(cf: &str) -> usize {
 ///   interact with other peers will be traced.
 /// - support query the flushed progress without actually scanning raft engine,
 ///   which is useful for cleaning up stale flush records.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ApplyTrace {
     /// The modified indexes and flushed index of each data CF.
     data_cfs: Box<[Progress; DATA_CFS_LEN]>,
@@ -162,6 +168,10 @@ pub struct ApplyTrace {
     admin: Progress,
     /// Index that is issued to be written. It may not be truely persisted.
     persisted_applied: u64,
+    /// Flush will be triggered explicitly when there are too many pending
+    /// writes. It marks the last index that is flushed to avoid too many
+    /// flushes.
+    last_flush_trigger: u64,
     /// `true` means the raft cf record should be persisted in next ready.
     try_persist: bool,
 }
@@ -181,6 +191,7 @@ impl ApplyTrace {
         trace.admin.flushed = i;
         trace.admin.last_modified = i;
         trace.persisted_applied = i;
+        trace.last_flush_trigger = i;
         let applied_region_state = engine
             .get_region_state(region_id, trace.admin.flushed)?
             .unwrap();
@@ -211,8 +222,32 @@ impl ApplyTrace {
         self.admin.last_modified = index;
     }
 
-    fn persisted_apply_index(&self) -> u64 {
-        self.admin.flushed
+    pub fn persisted_apply_index(&self) -> u64 {
+        self.persisted_applied
+    }
+
+    pub fn should_flush(&mut self) -> bool {
+        if self.admin.flushed < self.admin.last_modified {
+            // It's waiting for other peers, flush will not help.
+            return false;
+        }
+        let last_modified = self
+            .data_cfs
+            .iter()
+            .filter_map(|pr| {
+                if pr.last_modified != pr.flushed {
+                    Some(pr.last_modified)
+                } else {
+                    None
+                }
+            })
+            .max();
+        if let Some(m) = last_modified && m >= self.admin.flushed + 4096 && m >= self.last_flush_trigger + 4096 {
+            self.last_flush_trigger = m;
+            true
+        } else {
+            false
+        }
     }
 
     // All events before `mem_index` must be consumed before calling this function.
@@ -237,7 +272,7 @@ impl ApplyTrace {
         let candidate = cmp::min(mem_index, min_flushed.unwrap_or(u64::MAX));
         if candidate > self.admin.flushed {
             self.admin.flushed = candidate;
-            if candidate > self.persisted_applied + 100 {
+            if self.admin.flushed > self.persisted_applied + 100 {
                 self.try_persist = true;
             }
         }
@@ -372,6 +407,51 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         .map(Some)
     }
 
+    /// Region state is written before actually moving data. It's possible that
+    /// the tablet is missing after restart. We need to move the data again
+    /// after being restarted.
+    pub fn recover_tablet(&self, registry: &TabletRegistry<EK>, snap_mgr: &TabletSnapManager) {
+        let tablet_index = self.region_state().get_tablet_index();
+        if tablet_index == 0 {
+            // It's an uninitialized peer, nothing to recover.
+            return;
+        }
+        let region_id = self.region().get_id();
+        let target_path = registry.tablet_path(region_id, tablet_index);
+        if target_path.exists() {
+            // Move data succeeded before restart, nothing to recover.
+            return;
+        }
+        if tablet_index == RAFT_INIT_LOG_INDEX {
+            // Its data may come from split or snapshot. Try split first.
+            let split_path = temp_split_path(registry, region_id);
+            if install_tablet(registry, &split_path, region_id, tablet_index) {
+                return;
+            }
+        }
+        let truncated_index = self.entry_storage().truncated_index();
+        if truncated_index == tablet_index {
+            // Try snapshot.
+            let peer_id = self.peer().get_id();
+            let snap_path = recv_snap_path(
+                snap_mgr,
+                region_id,
+                peer_id,
+                self.entry_storage().truncated_term(),
+                tablet_index,
+            );
+            if install_tablet(registry, &snap_path, region_id, tablet_index) {
+                return;
+            }
+        }
+        panic!(
+            "{:?} data loss detected: {}_{} not found",
+            self.logger().list(),
+            region_id,
+            tablet_index
+        );
+    }
+
     /// Write initial persist trace for uninit peer.
     pub fn init_apply_trace(&self, write_task: &mut WriteTask<EK, ER>) {
         let region_id = self.region().get_id();
@@ -405,6 +485,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_data_flushed(&mut self, cf: &str, tablet_index: u64, index: u64) {
+        trace!(self.logger, "data flushed"; "cf" => cf, "tablet_index" => tablet_index, "index" => index, "trace" => ?self.storage().apply_trace());
         if tablet_index < self.storage().tablet_index() {
             // Stale tablet.
             return;
@@ -416,6 +497,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_data_modified(&mut self, modification: DataTrace) {
+        trace!(self.logger, "on data modified"; "modification" => ?modification, "trace" => ?self.storage().apply_trace());
         let apply_index = self.storage().entry_storage().applied_index();
         let apply_trace = self.storage_mut().apply_trace_mut();
         for (cf, index) in DATA_CFS.iter().zip(modification) {
@@ -505,22 +587,22 @@ mod tests {
     #[test]
     fn test_apply_trace() {
         let mut trace = ApplyTrace::default();
-        assert_eq!(0, trace.persisted_apply_index());
+        assert_eq!(0, trace.admin.flushed);
         // If there is no modifications, index should be advanced anyway.
         trace.maybe_advance_admin_flushed(2);
-        assert_eq!(2, trace.persisted_apply_index());
+        assert_eq!(2, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_modify(cf, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // Modification is not flushed.
-        assert_eq!(2, trace.persisted_apply_index());
+        assert_eq!(2, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_flush(cf, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // No admin is recorded, index should be advanced.
-        assert_eq!(3, trace.persisted_apply_index());
+        assert_eq!(3, trace.admin.flushed);
         trace.on_admin_modify(4);
         for cf in DATA_CFS {
             trace.on_flush(cf, 4);
@@ -530,25 +612,25 @@ mod tests {
         }
         trace.maybe_advance_admin_flushed(4);
         // Unflushed admin modification should hold index.
-        assert_eq!(3, trace.persisted_apply_index());
+        assert_eq!(3, trace.admin.flushed);
         trace.on_admin_flush(4);
         trace.maybe_advance_admin_flushed(4);
         // Admin is flushed, index should be advanced.
-        assert_eq!(4, trace.persisted_apply_index());
+        assert_eq!(4, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_flush(cf, 5);
         }
         trace.maybe_advance_admin_flushed(4);
         // Though all data CFs are flushed, but index should not be
         // advanced as we don't know whether there is admin modification.
-        assert_eq!(4, trace.persisted_apply_index());
+        assert_eq!(4, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_modify(cf, 5);
         }
         trace.maybe_advance_admin_flushed(5);
         // Because modify is recorded, so we know there should be no admin
         // modification and index can be advanced.
-        assert_eq!(5, trace.persisted_apply_index());
+        assert_eq!(5, trace.admin.flushed);
     }
 
     #[test]

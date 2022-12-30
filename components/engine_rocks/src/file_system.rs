@@ -92,7 +92,7 @@ mod tests {
         assert!(stats.fetch(IoType::Flush, IoOp::Write) > value_size * 2);
         assert!(stats.fetch(IoType::Flush, IoOp::Write) < value_size * 2 + amplification_bytes);
         stats.reset();
-        db.compact_range(
+        db.compact_range_cf(
             CF_DEFAULT, None,  // start_key
             None,  // end_key
             false, // exclusive_manual
