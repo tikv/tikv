@@ -36,8 +36,8 @@ use crate::{
 
 #[derive(Debug)]
 pub struct CompactLogContext {
-    skip_compact_log_ticks: usize,
-    approximate_raft_log_size: u64,
+    skipped_ticks: usize,
+    approximate_log_size: u64,
     last_applying_index: u64,
     /// Tombstone tablets can only be destroyed when the tablet that replaces it
     /// is persisted. This is a list of tablet index that awaits to be
@@ -49,8 +49,8 @@ pub struct CompactLogContext {
 impl CompactLogContext {
     pub fn new(last_applying_index: u64) -> CompactLogContext {
         CompactLogContext {
-            skip_compact_log_ticks: 0,
-            approximate_raft_log_size: 0,
+            skipped_ticks: 0,
+            approximate_log_size: 0,
             last_applying_index,
             tombstone_tablets_wait_index: vec![],
         }
@@ -58,8 +58,8 @@ impl CompactLogContext {
 
     #[inline]
     pub fn maybe_skip_compact_log(&mut self, max_skip_ticks: usize) -> bool {
-        if self.skip_compact_log_ticks < max_skip_ticks {
-            self.skip_compact_log_ticks += 1;
+        if self.skipped_ticks < max_skip_ticks {
+            self.skipped_ticks += 1;
             true
         } else {
             false
@@ -67,7 +67,7 @@ impl CompactLogContext {
     }
 
     pub fn add_log_size(&mut self, size: u64) {
-        self.approximate_raft_log_size += size;
+        self.approximate_log_size += size;
     }
 
     pub fn set_last_applying_index(&mut self, index: u64) {
@@ -173,7 +173,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             replicated_idx
         } else if applied_idx > first_idx
             && applied_idx - first_idx >= store_ctx.cfg.raft_log_gc_count_limit()
-            || self.compact_log_context().approximate_raft_log_size
+            || self.compact_log_context().approximate_log_size
                 >= store_ctx.cfg.raft_log_gc_size_limit().0
         {
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
@@ -209,7 +209,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let (ch, _) = CmdResChannel::pair();
         self.on_admin_command(store_ctx, req, ch);
 
-        self.compact_log_context_mut().skip_compact_log_ticks = 0;
+        self.compact_log_context_mut().skipped_ticks = 0;
     }
 }
 
@@ -350,7 +350,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let applied = context.last_applying_index;
         let total_cnt = applied - old_truncated;
         let remain_cnt = applied - res.compact_index;
-        context.approximate_raft_log_size = (context.approximate_raft_log_size as f64
+        context.approximate_log_size = (context.approximate_log_size as f64
             * (remain_cnt as f64 / total_cnt as f64))
             as u64;
     }
