@@ -52,7 +52,7 @@ mod control;
 mod write;
 
 pub use admin::{
-    AdminCmdResult, RequestSplit, SplitFlowControl, SplitInit, SplitResult, SPLIT_PREFIX,
+    temp_split_path, AdminCmdResult, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
 pub use write::{
@@ -245,6 +245,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let apply = CommittedEntries {
             entry_and_proposals,
         };
+        assert!(
+            self.apply_scheduler().is_some(),
+            "apply_scheduler should be something. region_id {}",
+            self.region_id()
+        );
         self.apply_scheduler()
             .unwrap()
             .send(ApplyTask::CommittedEntries(apply));
@@ -267,17 +272,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::ConfChange(conf_change) => {
                     self.on_apply_res_conf_change(ctx, conf_change)
                 }
-                AdminCmdResult::SplitRegion(SplitResult {
-                    regions,
-                    derived_index,
-                    tablet_index,
-                }) => {
+                AdminCmdResult::SplitRegion(res) => {
                     self.storage_mut()
                         .apply_trace_mut()
-                        .on_admin_modify(tablet_index);
-                    self.on_apply_res_split(ctx, derived_index, tablet_index, regions)
+                        .on_admin_modify(res.tablet_index);
+                    self.on_apply_res_split(ctx, res)
                 }
                 AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
+                AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
             }
         }
 
@@ -319,6 +321,32 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
+    pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
+        let decoder = match SimpleWriteReqDecoder::new(&self.logger, &data, u64::MAX, u64::MAX) {
+            Ok(decoder) => decoder,
+            Err(req) => unreachable!("unexpected request: {:?}", req),
+        };
+        for req in decoder {
+            match req {
+                SimpleWrite::Put(put) => {
+                    let _ = self.apply_put(put.cf, u64::MAX, put.key, put.value);
+                }
+                SimpleWrite::Delete(delete) => {
+                    let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
+                }
+                SimpleWrite::DeleteRange(dr) => {
+                    let _ = self.apply_delete_range(
+                        dr.cf,
+                        u64::MAX,
+                        dr.start_key,
+                        dr.end_key,
+                        dr.notify_only,
+                    );
+                }
+            }
+        }
+    }
+
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
@@ -420,7 +448,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
-                AdminCmdType::CompactLog => unimplemented!(),
+                AdminCmdType::CompactLog => self.apply_compact_log(admin_req, entry.index)?,
                 AdminCmdType::Split => self.apply_split(admin_req, log_index)?,
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index)?,
                 AdminCmdType::PrepareMerge => unimplemented!(),
@@ -484,10 +512,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
     #[inline]
     pub fn flush(&mut self) {
+        let (index, term) = self.apply_progress();
+        let flush_state = self.flush_state().clone();
         if let Some(wb) = &mut self.write_batch && !wb.is_empty() {
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);
-            if let Err(e) = wb.write_opt(&write_opt) {
+            if let Err(e) = wb.write_callback_opt(&write_opt, || {
+                flush_state.set_applied_index(index);
+            }) {
                 panic!("failed to write data: {:?}: {:?}", self.logger.list(), e);
             }
             self.metrics.written_bytes += wb.data_size() as u64;
@@ -506,7 +538,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             callbacks.shrink_to(SHRINK_PENDING_CMD_QUEUE_CAP);
         }
         let mut apply_res = ApplyRes::default();
-        let (index, term) = self.apply_progress();
         apply_res.applied_index = index;
         apply_res.applied_term = term;
         apply_res.admin_result = self.take_admin_result().into_boxed_slice();

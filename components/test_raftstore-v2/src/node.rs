@@ -214,7 +214,7 @@ impl Simulator for NodeCluster {
                 .to_str()
                 .unwrap()
                 .to_owned();
-            TabletSnapManager::new(snap_path)
+            TabletSnapManager::new(snap_path)?
         } else {
             let trans = self.trans.core.lock().unwrap();
             trans.snap_paths[&node_id].clone()
@@ -368,6 +368,8 @@ impl Simulator for NodeCluster {
     fn get_snap_dir(&self, node_id: u64) -> String {
         self.trans.core.lock().unwrap().snap_paths[&node_id]
             .root_path()
+            .to_str()
+            .unwrap()
             .to_owned()
     }
 }

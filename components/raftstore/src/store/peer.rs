@@ -939,6 +939,15 @@ where
     /// The index of last compacted raft log. It is used for the next compact
     /// log task.
     pub last_compacted_idx: u64,
+    /// Record the time of the last raft log compact, the witness should query
+    /// the leader periodically whether `voter_replicated_index` is updated
+    /// if CompactLog admin command isn't triggered for a while.
+    pub last_compacted_time: Instant,
+    /// When the peer is witness, and there is any voter lagging behind, the
+    /// log truncation of the witness shouldn't be triggered even if it's
+    /// force mode, and this item will be set to `true`, after all pending
+    /// compact cmds have been handled, it will be set to `false`.
+    pub has_pending_compact_cmd: bool,
     /// The index of the latest urgent proposal index.
     last_urgent_proposal_idx: u64,
     /// The index of the latest committed split command.
@@ -1083,6 +1092,10 @@ where
 
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
+        // In order to avoid excessive log accumulation due to the loss of pending
+        // compaction cmds after the witness is restarted, it will actively pull
+        // voter_request_index once at start.
+        let has_pending_compact_cmd = peer.is_witness;
 
         let mut peer = Peer {
             peer,
@@ -1118,6 +1131,8 @@ where
             tag: tag.clone(),
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
+            last_compacted_time: Instant::now(),
+            has_pending_compact_cmd,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
             last_sent_snapshot_idx: 0,
@@ -2282,6 +2297,7 @@ where
                     leader_id: ss.leader_id,
                     prev_lead_transferee: self.lead_transferee,
                     vote: self.raft_group.raft.vote,
+                    initialized: self.is_initialized(),
                 },
             );
             self.cmd_epoch_checker.maybe_update_term(self.term());

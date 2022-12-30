@@ -962,7 +962,7 @@ where
             self.resolver.clone().unwrap(),
             Either::Left(snap_mgr.clone()),
             gc_worker.clone(),
-            Some(check_leader_scheduler),
+            check_leader_scheduler,
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
@@ -1731,10 +1731,8 @@ impl ConfiguredRaftEngine for RocksEngine {
 
         let raft_db_path = &config.raft_store.raftdb_path;
         let config_raftdb = &config.raftdb;
-        let mut raft_db_opts = config_raftdb.build_opt();
-        raft_db_opts.set_env(env.clone());
         let statistics = Arc::new(RocksStatistics::new_titan());
-        raft_db_opts.set_statistics(statistics.as_ref());
+        let raft_db_opts = config_raftdb.build_opt(env.clone(), Some(&statistics));
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
         let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
             .expect("failed to open raftdb");
@@ -1784,8 +1782,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
 
         if should_dump {
             let config_raftdb = &config.raftdb;
-            let mut raft_db_opts = config_raftdb.build_opt();
-            raft_db_opts.set_env(env.clone());
+            let raft_db_opts = config_raftdb.build_opt(env.clone(), None);
             let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
             let raftdb = engine_rocks::util::new_engine_opt(
                 &config.raft_store.raftdb_path,

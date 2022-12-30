@@ -626,6 +626,11 @@
 ## RocksDB log levels
 # info-log-level = "info"
 
+## Memory usage limit for Raft Engine. Undersized write buffers will be flushed to satisfy the
+## requirement.
+## No limit when not specified.
+# write-buffer-limit = "1GB"
+
 ## Options for `Titan`.
 [rocksdb.titan]
 ## Enables or disables `Titan`. Note that Titan is still an experimental feature. Once
@@ -848,6 +853,9 @@
 ##
 # checksum = "crc32c"
 
+## The maximum number of concurrent compaction tasks. 0 stands for no limit.
+# max-compactions = 0
+
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
@@ -935,6 +943,7 @@
 # format-version = 2
 # prepopulate-block-cache = "disabled"
 # checksum = "crc32c"
+# max-compactions = 0
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -959,6 +968,7 @@
 # format-version = 2
 # prepopulate-block-cache = "disabled"
 # checksum = "crc32c"
+# max-compactions = 0
 
 [raftdb]
 # max-background-jobs = 4
@@ -1020,6 +1030,7 @@
 # format-version = 2
 # prepopulate-block-cache = "disabled"
 # checksum = "crc32c"
+# max-compactions = 0
 
 [raft-engine]
 ## Determines whether to use Raft Engine to store raft logs. When it is

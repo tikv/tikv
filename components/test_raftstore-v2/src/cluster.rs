@@ -29,8 +29,8 @@ use kvproto::{
 use pd_client::PdClient;
 use raftstore::{
     store::{
-        cmd_resp, initial_region, Callback, RegionSnapshot, WriteResponse, INIT_EPOCH_CONF_VER,
-        INIT_EPOCH_VER, util::check_key_in_region,
+        cmd_resp, initial_region, util::check_key_in_region, Callback, RegionSnapshot,
+        WriteResponse, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     },
     Error, Result,
 };
@@ -349,7 +349,7 @@ impl<T: Simulator> Cluster<T> {
                 .bootstrap_store()?;
 
             let key_mgr = self.key_managers.last().unwrap().clone();
-            let store_meta = Arc::new(Mutex::new(StoreMeta::default()));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(id)));
 
             let props = GroupProperties::default();
             tikv_util::thread_group::set_properties(Some(props.clone()));
@@ -386,10 +386,12 @@ impl<T: Simulator> Cluster<T> {
         let store_meta = match self.store_metas.entry(node_id) {
             MapEntry::Occupied(o) => {
                 let mut meta = o.get().lock().unwrap();
-                *meta = StoreMeta::default();
+                *meta = StoreMeta::new(node_id);
                 o.get().clone()
             }
-            MapEntry::Vacant(v) => v.insert(Arc::new(Mutex::new(StoreMeta::default()))).clone(),
+            MapEntry::Vacant(v) => v
+                .insert(Arc::new(Mutex::new(StoreMeta::new(node_id))))
+                .clone(),
         };
 
         let props = GroupProperties::default();
@@ -426,7 +428,7 @@ impl<T: Simulator> Cluster<T> {
             let id = i as u64 + 1;
             self.tablet_registries.insert(id, tablet_registry.clone());
             self.raft_engines.insert(id, raft_engine.clone());
-            let store_meta = Arc::new(Mutex::new(StoreMeta::default()));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(id)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
@@ -463,7 +465,7 @@ impl<T: Simulator> Cluster<T> {
             let id = i as u64 + 1;
             self.tablet_registries.insert(id, factory.clone());
             self.raft_engines.insert(id, raft_engine.clone());
-            let store_meta = Arc::new(Mutex::new(StoreMeta::default()));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(id)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());

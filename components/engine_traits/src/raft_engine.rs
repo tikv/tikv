@@ -74,12 +74,6 @@ pub trait RaftEngineDebug: RaftEngine + Sync + Send + 'static {
     }
 }
 
-pub struct RaftLogGcTask {
-    pub raft_group_id: u64,
-    pub from: u64,
-    pub to: u64,
-}
-
 // TODO: Refactor common methods between Kv and Raft engine into a shared trait.
 pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
@@ -110,17 +104,17 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
         batch: &mut Self::LogBatch,
     ) -> Result<()>;
 
-    /// Like `cut_logs` but the range could be very large. Return the deleted
-    /// count. Generally, `from` can be passed in `0`.
-    fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
+    /// Like `cut_logs` but the range could be very large.
+    fn gc(&self, raft_group_id: u64, from: u64, to: u64, batch: &mut Self::LogBatch) -> Result<()>;
 
-    fn batch_gc(&self, tasks: Vec<RaftLogGcTask>) -> Result<usize> {
-        let mut total = 0;
-        for task in tasks {
-            total += self.gc(task.raft_group_id, task.from, task.to)?;
-        }
-        Ok(total)
-    }
+    /// Delete all but the latest one of states that are associated with smaller
+    /// apply_index.
+    fn delete_all_but_one_states_before(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()>;
 
     fn need_manual_purge(&self) -> bool {
         false

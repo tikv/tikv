@@ -31,7 +31,10 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
-    store::{FlowStatsReporter, ReadStats, RegionSnapshot, TabletSnapManager, WriteStats},
+    store::{
+        CheckLeaderRunner, FlowStatsReporter, ReadStats, RegionSnapshot, TabletSnapManager,
+        WriteStats,
+    },
     RegionInfoAccessor,
 };
 use raftstore_v2::{router::RaftRouter, StoreMeta, StoreRouter, StoreSystem};
@@ -44,9 +47,10 @@ use tikv::{
     coprocessor, coprocessor_v2,
     read_pool::ReadPool,
     server::{
-        gc_worker::GcWorker, load_statistics::ThreadLoadPool, lock_manager::LockManager, resolve,
-        service::DiagnosticsService, ConnectionBuilder, Error, NodeV2, PdStoreAddrResolver,
-        RaftClient, RaftKv2, Result as ServerResult, Server, ServerTransport,
+        gc_worker::GcWorker, load_statistics::ThreadLoadPool, lock_manager::LockManager,
+        raftkv::ReplicaReadLockChecker, resolve, service::DiagnosticsService, ConnectionBuilder,
+        Error, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2, Result as ServerResult, Server,
+        ServerTransport,
     },
     storage::{
         self,
@@ -99,6 +103,7 @@ pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: AddressMap,
     pub storages: HashMap<u64, SimulateEngine>,
+    pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, FakeExtension>,
@@ -140,6 +145,7 @@ impl ServerCluster {
             pd_client,
             security_mgr,
             storages: HashMap::default(),
+            region_info_accessors: HashMap::default(),
             snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
             health_services: HashMap::default(),
@@ -170,7 +176,7 @@ impl ServerCluster {
                 .to_str()
                 .unwrap()
                 .to_owned();
-            TabletSnapManager::new(snap_path)
+            TabletSnapManager::new(snap_path)?
         } else {
             self.snap_mgrs[&node_id].clone()
         };
@@ -270,7 +276,9 @@ impl ServerCluster {
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
-        // todo: check leader runner
+        let check_leader_runner =
+            CheckLeaderRunner::new(store_meta.clone(), coprocessor_host.clone());
+        let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
         let quota_limiter = Arc::new(QuotaLimiter::new(
@@ -301,7 +309,7 @@ impl ServerCluster {
         )?;
         self.storages.insert(node_id, raft_kv_v2);
 
-        // todo: ReplicaReadLockChecker
+        ReplicaReadLockChecker::new(concurrency_manager.clone()).register(&mut coprocessor_host);
 
         // todo: Import Sst Service
 
@@ -359,7 +367,7 @@ impl ServerCluster {
                 resolver.clone(),
                 Either::Right(snap_mgr.clone()),
                 gc_worker.clone(),
-                None,
+                check_leader_scheduler.clone(),
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
@@ -395,7 +403,7 @@ impl ServerCluster {
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
         // Register the role change observer of the lock manager.
-        // lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
+        lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
         node.start(
@@ -413,7 +421,8 @@ impl ServerCluster {
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         self.snap_mgrs.insert(node_id, snap_mgr);
-        // todo: region info accessor
+        self.region_info_accessors
+            .insert(node_id, region_info_accessor);
         // todo: importer
         self.health_services.insert(node_id, health_service);
 
@@ -567,7 +576,11 @@ impl Simulator for ServerCluster {
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
-        self.snap_mgrs[&node_id].root_path().to_owned()
+        self.snap_mgrs[&node_id]
+            .root_path()
+            .to_str()
+            .unwrap()
+            .to_owned()
     }
 }
 

@@ -104,10 +104,6 @@ where
         T: Transport + 'static,
     {
         let store_id = self.id();
-        {
-            let mut meta = self.router().store_meta().lock().unwrap();
-            meta.store_id = Some(store_id);
-        }
         if let Some(region) = Bootstrap::new(
             &raft_engine,
             self.cluster_id,
