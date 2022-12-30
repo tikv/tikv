@@ -9,7 +9,7 @@ use raftstore::store::{
     ReadTask,
 };
 use slog::Logger;
-use tikv_util::worker::Scheduler;
+use tikv_util::{log::SlogFormat, worker::Scheduler};
 
 use crate::{
     operation::{AdminCmdResult, DataTrace},
@@ -73,9 +73,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let mut remote_tablet = tablet_registry
             .get(region_state.get_region().get_id())
             .unwrap();
-        assert_ne!(applied_term, 0, "{:?}", logger.list());
+        assert_ne!(applied_term, 0, "{}", SlogFormat(&logger));
         let applied_index = flush_state.applied_index();
-        assert_ne!(applied_index, 0, "{:?}", logger.list());
+        assert_ne!(applied_index, 0, "{}", SlogFormat(&logger));
         Apply {
             peer,
             tablet: remote_tablet.latest().unwrap().clone(),

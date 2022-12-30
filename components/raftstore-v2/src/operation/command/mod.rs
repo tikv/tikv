@@ -39,7 +39,7 @@ use raftstore::{
     Error, Result,
 };
 use slog::{info, warn};
-use tikv_util::{box_err, time::monotonic_raw_now};
+use tikv_util::{box_err, slog_panic, time::monotonic_raw_now};
 
 use crate::{
     batch::StoreContext,
@@ -66,12 +66,12 @@ fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64,
     let mut m = M::default();
     match m.merge_from_bytes(buf) {
         Ok(()) => m,
-        Err(e) => panic!(
-            "{:?} data is corrupted at [{}] {}: {:?}",
-            logger.list(),
-            term,
-            index,
-            e
+        Err(e) => slog_panic!(
+            logger,
+            "data is corrupted";
+            "term" => term,
+            "index" => index,
+            "error" => ?e,
         ),
     }
 }
@@ -546,7 +546,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             if let Err(e) = wb.write_callback_opt(&write_opt, || {
                 flush_state.set_applied_index(index);
             }) {
-                panic!("failed to write data: {:?}: {:?}", self.logger.list(), e);
+                slog_panic!(self.logger, "failed to write data"; "error" => ?e);
             }
             self.metrics.written_bytes += wb.data_size() as u64;
             self.metrics.written_keys += wb.count() as u64;

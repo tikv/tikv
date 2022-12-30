@@ -30,7 +30,7 @@ use raftstore::{
     Error, Result,
 };
 use slog::{debug, info};
-use tikv_util::box_err;
+use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;
 
 use crate::{
@@ -363,7 +363,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             StatusCmdType::InvalidStatus => {
-                return Err(box_err!("{:?} invalid status command!", self.logger.list()));
+                return Err(box_err!(
+                    "{} invalid status command!",
+                    SlogFormat(&self.logger)
+                ));
             }
         }
 

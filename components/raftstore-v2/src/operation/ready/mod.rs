@@ -34,6 +34,8 @@ use raftstore::{
 };
 use slog::{debug, error, info, trace, warn};
 use tikv_util::{
+    log::SlogFormat,
+    slog_panic,
     store::find_peer,
     time::{duration_to_sec, monotonic_raw_now},
 };
@@ -386,8 +388,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let prev_commit_index = self.entry_storage().commit_index();
             assert!(
                 hs.get_commit() >= prev_commit_index,
-                "{:?} {:?} {}",
-                self.logger.list(),
+                "{} {:?} {}",
+                SlogFormat(&self.logger),
                 hs,
                 prev_commit_index
             );
@@ -454,11 +456,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             if !light_rd.messages().is_empty() || light_rd.commit_index().is_some() {
-                panic!(
-                    "{:?} unexpected messages [{}] commit index [{:?}]",
-                    self.logger.list(),
-                    light_rd.messages().len(),
-                    light_rd.commit_index()
+                slog_panic!(
+                    self.logger,
+                    "unexpected messages";
+                    "messages_count" => ?light_rd.messages().len(),
+                    "commit_index" => ?light_rd.commit_index()
                 );
             }
             if !light_rd.committed_entries().is_empty() {

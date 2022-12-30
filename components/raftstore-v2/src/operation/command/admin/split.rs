@@ -54,6 +54,7 @@ use raftstore::{
     Result,
 };
 use slog::info;
+use tikv_util::{log::SlogFormat, slog_panic};
 
 use crate::{
     batch::StoreContext,
@@ -326,10 +327,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // We will freeze the memtable rather than flush it in the following PR.
         let tablet = self.tablet().clone();
         let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
-            panic!(
-                "{:?} fails to create checkpoint object: {:?}",
-                self.logger.list(),
-                e
+            slog_panic!(
+                self.logger,
+                "ails to create checkpoint object";
+                "error" => ?e
             )
         });
 
@@ -344,11 +345,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             checkpointer
                 .create_at(&split_temp_path, None, 0)
                 .unwrap_or_else(|e| {
-                    panic!(
-                        "{:?} fails to create checkpoint with path {:?}: {:?}",
-                        self.logger.list(),
-                        split_temp_path,
-                        e
+                    slog_panic!(
+                        self.logger,
+                        "fails to create checkpoint";
+                        "path" => %split_temp_path.display(),
+                        "error" => ?e
                     )
                 });
         }
@@ -362,11 +363,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             checkpointer
                 .create_at(&derived_path, None, 0)
                 .unwrap_or_else(|e| {
-                    panic!(
-                        "{:?} fails to create checkpoint with path {:?}: {:?}",
-                        self.logger.list(),
-                        derived_path,
-                        e
+                    slog_panic!(
+                        self.logger,
+                        "fails to create checkpoint";
+                        "path" => %derived_path.display(),
+                        "error" => ?e
                     )
                 });
         }
@@ -494,10 +495,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .router
                         .force_send_control(StoreMsg::SplitInit(msg))
                         .unwrap_or_else(|e| {
-                            panic!(
-                                "{:?} fails to send split peer intialization msg to store : {:?}",
-                                self.logger.list(),
-                                e
+                            slog_panic!(
+                                self.logger,
+                                "fails to send split peer intialization msg to store";
+                                "error" => ?e,
                             )
                         });
                 }
@@ -545,11 +546,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let res = self.raft_group_mut().step(msg);
         let accept_snap = self.raft_group().snap().is_some();
         if res.is_err() || !accept_snap {
-            panic!(
-                "{:?} failed to accept snapshot {:?} with error {}",
-                self.logger.list(),
-                res,
-                accept_snap
+            slog_panic!(
+                self.logger,
+                "failed to accept snapshot";
+                "accept_snapshot" => accept_snap,
+                "res" => ?res,
             );
         }
         let prev = self.storage_mut().split_init_mut().replace(split_init);
@@ -599,7 +600,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 break;
             }
         }
-        assert!(found, "{:?} {}", self.logger.list(), region_id);
+        assert!(found, "{} {}", SlogFormat(&self.logger), region_id);
         let split_trace = self.split_trace_mut();
         let mut off = 0;
         let mut admin_flushed = 0;

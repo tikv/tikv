@@ -41,7 +41,7 @@ use raftstore::{
     },
 };
 use slog::{error, info, warn};
-use tikv_util::box_err;
+use tikv_util::{box_err, log::SlogFormat, slog_panic};
 
 use crate::{
     fsm::ApplyResReporter,
@@ -515,8 +515,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let last_term = snap.get_metadata().get_term();
         assert!(
             last_index >= RAFT_INIT_LOG_INDEX && last_term >= RAFT_INIT_LOG_TERM,
-            "{:?}",
-            self.logger().list()
+            "{}",
+            SlogFormat(self.logger())
         );
         let region_state = self.region_state_mut();
         region_state.set_state(PeerState::Normal);
@@ -560,12 +560,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         // it should load it into the factory after it persisted.
         let hook = move || {
             if !install_tablet(&reg, &path, region_id, last_index) {
-                panic!(
-                    "{:?} failed to install tablet, path: {}, region_id: {}, tablet_index: {}",
-                    logger.list(),
-                    path.display(),
-                    region_id,
-                    last_index
+                slog_panic!(
+                    logger,
+                    "failed to install tablet";
+                    "path" => %path.display(),
+                    "tablet_index" => last_index
                 );
             }
             if clean_split {
