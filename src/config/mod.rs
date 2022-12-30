@@ -98,6 +98,8 @@ pub const MIN_BLOCK_CACHE_SHARD_SIZE: usize = 128 * MIB as usize;
 /// Maximum of 15% of system memory can be used by Raft Engine. Normally its
 /// memory usage is much smaller than that.
 const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
+/// Tentative value.
+const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.25;
 
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
@@ -1220,6 +1222,10 @@ impl DbConfig {
             EngineType::RaftKv2 => {
                 self.enable_multi_batch_write.get_or_insert(false);
                 self.allow_concurrent_memtable_write.get_or_insert(false);
+                let total_mem = SysQuota::memory_limit_in_bytes() as f64;
+                self.write_buffer_limit.get_or_insert(ReadableSize(
+                    (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
+                ));
             }
         }
     }
@@ -3116,6 +3122,9 @@ impl TikvConfig {
 
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
+            if !self.raft_engine.enable {
+                panic!("raft-kv2 only supports raft log engine.");
+            }
         }
 
         self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;

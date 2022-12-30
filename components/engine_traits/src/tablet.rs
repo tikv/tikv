@@ -69,6 +69,19 @@ impl<EK: Clone> CachedTablet<EK> {
         }
         self.cache()
     }
+
+    /// Returns how many versions has passed.
+    #[inline]
+    pub fn refresh(&mut self) -> u64 {
+        let old_version = self.version;
+        if self.latest.version.load(Ordering::Relaxed) > old_version {
+            let latest_data = self.latest.data.lock().unwrap();
+            self.version = self.latest.version.load(Ordering::Relaxed);
+            self.cache = latest_data.clone();
+            return self.version - old_version;
+        }
+        0
+    }
 }
 
 /// Context to be passed to `TabletFactory`.
@@ -178,7 +191,6 @@ impl<EK: Clone + Send + Sync> TabletFactory<EK> for SingletonFactory<EK> {
 struct TabletRegistryInner<EK> {
     // region_id, suffix -> tablet
     tablets: Mutex<HashMap<u64, CachedTablet<EK>>>,
-    tombstone: Mutex<Vec<(u64, u64)>>,
     factory: Box<dyn TabletFactory<EK>>,
     root: PathBuf,
 }
@@ -197,9 +209,6 @@ impl<EK> Clone for TabletRegistry<EK> {
     }
 }
 
-unsafe impl<EK: Send> Send for TabletRegistry<EK> {}
-unsafe impl<EK: Send> Sync for TabletRegistry<EK> {}
-
 impl<EK> TabletRegistry<EK> {
     pub fn new(factory: Box<dyn TabletFactory<EK>>, path: impl Into<PathBuf>) -> Result<Self> {
         let root = path.into();
@@ -209,13 +218,31 @@ impl<EK> TabletRegistry<EK> {
                 tablets: Mutex::new(HashMap::default()),
                 factory,
                 root,
-                tombstone: Mutex::default(),
             }),
         })
     }
 
+    /// Format the name as {prefix}_{id}_{suffix}. If prefix is empty, it will
+    /// be format as {id}_{suffix}.
     pub fn tablet_name(&self, prefix: &str, id: u64, suffix: u64) -> String {
-        format!("{}{}_{}", prefix, id, suffix)
+        format!(
+            "{}{:_<width$}{}_{}",
+            prefix,
+            "",
+            id,
+            suffix,
+            width = !prefix.is_empty() as usize
+        )
+    }
+
+    /// Returns the prefix, id and suffix of the tablet name.
+    pub fn parse_tablet_name<'a>(&self, path: &'a Path) -> Option<(&'a str, u64, u64)> {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let mut parts = name.rsplit('_');
+        let suffix = parts.next()?.parse().ok()?;
+        let id = parts.next()?.parse().ok()?;
+        let prefix = parts.as_str();
+        Some((prefix, id, suffix))
     }
 
     pub fn tablet_root(&self) -> &Path {
@@ -273,15 +300,11 @@ impl<EK> TabletRegistry<EK> {
                 ctx.suffix
             )));
         }
+        // TODO: use compaction filter to trim range.
         let tablet = self.tablets.factory.open_tablet(ctx, &path)?;
         let mut cached = self.get_or_default(id);
         cached.set(tablet);
         Ok(cached)
-    }
-
-    /// Destroy the tablet and its data
-    pub fn mark_tombstone(&self, id: u64, suffix: u64) {
-        self.tablets.tombstone.lock().unwrap().push((id, suffix));
     }
 
     /// Loop over all opened tablets. Note, it's possible that the visited
@@ -450,10 +473,19 @@ mod tests {
         });
         assert_eq!(count, 1);
 
-        let name = registry.tablet_name("prefix_", 12, 30);
+        let name = registry.tablet_name("prefix", 12, 30);
         assert_eq!(name, "prefix_12_30");
         let normal_name = registry.tablet_name("", 20, 15);
         let normal_tablet_path = registry.tablet_path(20, 15);
         assert_eq!(registry.tablet_root().join(normal_name), normal_tablet_path);
+
+        let full_prefix_path = registry.tablet_root().join(name);
+        let res = registry.parse_tablet_name(&full_prefix_path);
+        assert_eq!(res, Some(("prefix", 12, 30)));
+        let res = registry.parse_tablet_name(&normal_tablet_path);
+        assert_eq!(res, Some(("", 20, 15)));
+        let invalid_path = registry.tablet_root().join("invalid_12");
+        let res = registry.parse_tablet_name(&invalid_path);
+        assert_eq!(res, None);
     }
 }

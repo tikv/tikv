@@ -80,6 +80,20 @@ impl StoreMeta {
             );
         }
     }
+
+    pub fn remove_region(&mut self, region_id: u64) {
+        let prev = self.regions.remove(&region_id);
+        if let Some((prev, initialized)) = prev {
+            if initialized {
+                let key = (
+                    data_end_key(prev.get_end_key()),
+                    prev.get_region_epoch().get_version(),
+                );
+                let prev_id = self.region_ranges.remove(&key);
+                assert_eq!(prev_id, Some(prev.get_id()));
+            }
+        }
+    }
 }
 
 impl StoreRegionMeta for StoreMeta {

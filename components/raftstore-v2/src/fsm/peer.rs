@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use raftstore::store::{Config, LocksStatus, Transport};
+use raftstore::store::{Config, LocksStatus, TabletSnapManager, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
@@ -30,7 +30,7 @@ pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
     receiver: Receiver<PeerMsg>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks
     /// twice accidentally.
-    tick_registry: u16,
+    tick_registry: [bool; PeerTick::VARIANT_COUNT],
     is_stopped: bool,
     reactivate_memory_lock_ticks: usize,
 }
@@ -39,16 +39,21 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_registry: &TabletRegistry<EK>,
+        snap_mgr: &TabletSnapManager,
         storage: Storage<EK, ER>,
     ) -> Result<SenderFsmPair<EK, ER>> {
-        let peer = Peer::new(cfg, tablet_registry, storage)?;
-        info!(peer.logger, "create peer");
+        let peer = Peer::new(cfg, tablet_registry, snap_mgr, storage)?;
+        info!(peer.logger, "create peer";
+            "raft_state" => ?peer.storage().raft_state(),
+            "apply_state" => ?peer.storage().apply_state(),
+            "region_state" => ?peer.storage().region_state()
+        );
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(PeerFsm {
             peer,
             mailbox: None,
             receiver: rx,
-            tick_registry: 0,
+            tick_registry: [false; PeerTick::VARIANT_COUNT],
             is_stopped: false,
             reactivate_memory_lock_ticks: 0,
         });
@@ -141,8 +146,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     pub fn schedule_tick(&mut self, tick: PeerTick) {
         assert!(PeerTick::VARIANT_COUNT <= u16::BITS as usize);
         let idx = tick as usize;
-        let key = 1u16 << (idx as u16);
-        if self.fsm.tick_registry & key != 0 {
+        if self.fsm.tick_registry[idx] {
             return;
         }
         if is_zero_duration(&self.store_ctx.tick_batch[idx].wait_duration) {
@@ -167,7 +171,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 return;
             }
         };
-        self.fsm.tick_registry |= key;
+        self.fsm.tick_registry[idx] = true;
         let logger = self.fsm.logger().clone();
         // TODO: perhaps following allocation can be removed.
         let cb = Box::new(move || {
@@ -187,12 +191,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_start(&mut self) {
-        self.schedule_tick(PeerTick::Raft);
+        if !self.fsm.peer.maybe_pause_for_recovery() {
+            self.schedule_tick(PeerTick::Raft);
+        }
         self.schedule_tick(PeerTick::SplitRegionCheck);
         self.schedule_tick(PeerTick::PdHeartbeat);
         self.schedule_tick(PeerTick::CompactLog);
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
+        }
+        // Speed up setup if there is only one peer.
+        if self.fsm.peer.is_leader() {
+            self.fsm.peer.set_has_ready();
         }
     }
 
@@ -205,10 +215,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_tick(&mut self, tick: PeerTick) {
+        self.fsm.tick_registry[tick as usize] = false;
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
-            PeerTick::CompactLog => self.on_compact_log_tick(),
+            PeerTick::CompactLog => self.on_compact_log_tick(false),
             PeerTick::SplitRegionCheck => self.on_split_region_check(),
             PeerTick::CheckMerge => unimplemented!(),
             PeerTick::CheckPeerStaleState => unimplemented!(),
@@ -225,7 +236,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             match msg {
                 PeerMsg::RaftMessage(msg) => {
                     self.fsm.peer.on_raft_message(self.store_ctx, msg);
-                    self.schedule_pending_ticks();
                 }
                 PeerMsg::RaftQuery(cmd) => {
                     self.on_receive_command(cmd.send_time);
@@ -297,12 +307,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         .peer_mut()
                         .on_request_split(self.store_ctx, request, ch)
                 }
+                PeerMsg::ForceCompactLog => self.on_compact_log_tick(true),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.
         self.fsm.peer.propose_pending_writes(self.store_ctx);
+        self.schedule_pending_ticks();
     }
 
     pub fn on_reactivate_memory_lock_tick(&mut self) {
