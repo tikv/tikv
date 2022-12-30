@@ -1037,7 +1037,7 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "criterion",
- "crossbeam-skiplist 0.0.0",
+ "crossbeam-skiplist",
  "fail",
  "futures 0.3.15",
  "kvproto",
@@ -1206,18 +1206,6 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3",
- "lazy_static",
- "memoffset 0.6.4",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-epoch"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1145cf131a2c6ba0615079ab6a638f7e1973ac9c2634fcbeaaad6114246efe8c"
@@ -1226,7 +1214,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.8",
  "lazy_static",
- "memoffset 0.6.4",
+ "memoffset",
  "scopeguard",
 ]
 
@@ -1238,20 +1226,8 @@ dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.11",
- "memoffset 0.6.4",
+ "memoffset",
  "once_cell",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-epoch"
-version = "0.9.13"
-source = "git+https://github.com/crossbeam-rs/crossbeam#960c08abad54c835b1a871ba3d8b02073fc53763"
-dependencies = [
- "autocfg",
- "cfg-if 1.0.0",
- "crossbeam-utils 0.8.14",
- "memoffset 0.7.1",
  "scopeguard",
 ]
 
@@ -1267,23 +1243,13 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-skiplist"
-version = "0.0.0"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.3",
- "crossbeam-utils 0.8.3",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-skiplist"
 version = "0.1.1"
-source = "git+https://github.com/crossbeam-rs/crossbeam#960c08abad54c835b1a871ba3d8b02073fc53763"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "883a5821d7d079fcf34ac55f27a833ee61678110f6b97637cc74513c0d0b42fc"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.13",
- "crossbeam-utils 0.8.14",
+ "crossbeam-epoch 0.9.8",
+ "crossbeam-utils 0.8.8",
  "scopeguard",
 ]
 
@@ -1295,16 +1261,6 @@ checksum = "c3c7c73a2d1e9fc0886a08b93e98eb643461230d5f1925e4036204d5f2e261a8"
 dependencies = [
  "autocfg",
  "cfg-if 0.1.10",
- "lazy_static",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
-dependencies = [
- "autocfg",
- "cfg-if 1.0.0",
  "lazy_static",
 ]
 
@@ -1325,14 +1281,6 @@ source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2
 dependencies = [
  "cfg-if 1.0.0",
  "once_cell",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.14"
-source = "git+https://github.com/crossbeam-rs/crossbeam#960c08abad54c835b1a871ba3d8b02073fc53763"
-dependencies = [
- "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -3088,15 +3036,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "memoffset"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
 name = "memory_trace_macros"
 version = "0.1.0"
 dependencies = [
@@ -3297,7 +3236,7 @@ dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
  "libc 0.2.132",
- "memoffset 0.6.4",
+ "memoffset",
 ]
 
 [[package]]
@@ -3310,7 +3249,7 @@ dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
  "libc 0.2.132",
- "memoffset 0.6.4",
+ "memoffset",
  "pin-utils",
 ]
 
@@ -6555,7 +6494,7 @@ dependencies = [
  "cpu-time",
  "crc32fast",
  "crossbeam",
- "crossbeam-skiplist 0.1.1",
+ "crossbeam-skiplist",
  "derive_more",
  "error_code",
  "fail",

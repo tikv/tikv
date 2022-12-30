@@ -19,7 +19,7 @@ collections = { workspace = true }
 cpu-time = "1.0.0"
 crc32fast = "1.2"
 crossbeam = "0.8"
-crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
+crossbeam-skiplist = "0.1"
 derive_more = "0.99.3"
 error_code = { workspace = true }
 fail = "0.5"
