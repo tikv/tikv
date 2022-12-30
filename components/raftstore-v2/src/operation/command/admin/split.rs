@@ -793,9 +793,9 @@ mod test {
             reporter,
             reg,
             read_scheduler,
-            Arc::new(FlushState::new(0)),
+            Arc::new(FlushState::new(5)),
             None,
-            0,
+            5,
             logger.clone(),
         );
 
@@ -810,7 +810,7 @@ mod test {
 
         splits.mut_requests().clear();
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 0).unwrap_err();
+        let err = apply.apply_batch_split(&req, 6).unwrap_err();
         // Empty requests should be rejected.
         assert!(err.to_string().contains("missing split requests"));
 
@@ -831,7 +831,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 0).unwrap_err();
+        let err = apply.apply_batch_split(&req, 7).unwrap_err();
         // Empty key will not in any region exclusively.
         assert!(err.to_string().contains("missing split key"), "{:?}", err);
 
@@ -843,7 +843,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k1", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 0).unwrap_err();
+        let err = apply.apply_batch_split(&req, 8).unwrap_err();
         // keys should be in ascend order.
         assert!(
             err.to_string().contains("invalid split request"),
@@ -859,7 +859,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k2", 1, vec![11, 12]));
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 0).unwrap_err();
+        let err = apply.apply_batch_split(&req, 9).unwrap_err();
         // All requests should be checked.
         assert!(err.to_string().contains("id count"), "{:?}", err);
 
