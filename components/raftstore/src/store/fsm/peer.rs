@@ -6456,8 +6456,17 @@ where
                 self.fsm.peer.wait_data_peers.push(peer_id);
             }
         }
-        if self.fsm.peer.is_leader() && !self.fsm.peer.wait_data_peers.is_empty() {
-            self.register_check_peers_availability_tick();
+        if self.fsm.peer.is_leader() {
+            info!(
+               "notify pd with change peer region";
+               "region_id" => self.fsm.region_id(),
+               "peer_id" => self.fsm.peer_id(),
+               "region" => ?self.fsm.peer.region(),
+            );
+            self.fsm.peer.heartbeat_pd(self.ctx);
+            if !self.fsm.peer.wait_data_peers.is_empty() {
+                self.register_check_peers_availability_tick();
+            }
         }
     }
 
