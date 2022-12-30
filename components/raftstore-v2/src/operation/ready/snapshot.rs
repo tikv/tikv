@@ -531,8 +531,22 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let old_last_index = self.entry_storage().last_index();
         if self.entry_storage().first_index() <= old_last_index {
             // All states are rewritten in the following blocks. Stale states will be
-            // cleaned up by compact worker.
-            task.cut_logs = Some((0, old_last_index + 1));
+            // cleaned up by compact worker. Have to use raft write batch here becaue
+            // raft log engine expects deletes before writes.
+            let raft_engine = self.entry_storage().raft_engine();
+            if task.raft_wb.is_none() {
+                task.raft_wb = Some(raft_engine.log_batch(64));
+            }
+            let wb = task.raft_wb.as_mut().unwrap();
+            raft_engine
+                .clean(region.get_id(), 0, self.entry_storage().raft_state(), wb)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{:?} failed to clean up region: {:?}",
+                        self.logger().list(),
+                        e
+                    )
+                });
             self.entry_storage_mut().clear();
         }
 
