@@ -1075,9 +1075,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
         self.cache.append(self.region_id, self.peer_id, &entries);
 
-        task.entries = entries;
         // Delete any previously appended log entries which never committed.
-        task.cut_logs = Some((last_index + 1, prev_last_index + 1));
+        task.set_append(Some(prev_last_index + 1), entries);
 
         self.raft_state.set_last_index(last_index);
         self.last_term = last_term;

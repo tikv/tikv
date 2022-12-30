@@ -2082,7 +2082,7 @@ pub mod tests {
         let mut lb = engines.raft.log_batch(4096);
         // last_index < commit_index is invalid.
         raft_state.set_last_index(11);
-        lb.append(1, vec![new_entry(11, RAFT_INIT_LOG_TERM)])
+        lb.append(1, None, vec![new_entry(11, RAFT_INIT_LOG_TERM)])
             .unwrap();
         raft_state.mut_hard_state().set_commit(12);
         lb.put_raft_state(1, &raft_state).unwrap();
@@ -2093,7 +2093,7 @@ pub mod tests {
         let entries = (12..=20)
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
-        lb.append(1, entries).unwrap();
+        lb.append(1, None, entries).unwrap();
         lb.put_raft_state(1, &raft_state).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
         s = build_storage().unwrap();
@@ -2138,7 +2138,7 @@ pub mod tests {
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
         engines.raft.gc(1, 0, 21, &mut lb).unwrap();
-        lb.append(1, entries).unwrap();
+        lb.append(1, None, entries).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
         raft_state.mut_hard_state().set_commit(14);
         s = build_storage().unwrap();
@@ -2150,7 +2150,7 @@ pub mod tests {
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
         entries[0].set_term(RAFT_INIT_LOG_TERM - 1);
-        lb.append(1, entries).unwrap();
+        lb.append(1, None, entries).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
         assert!(build_storage().is_err());
 
@@ -2158,7 +2158,7 @@ pub mod tests {
         let entries = (14..=20)
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
-        lb.append(1, entries).unwrap();
+        lb.append(1, None, entries).unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM - 1);
         lb.put_raft_state(1, &raft_state).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
@@ -2168,7 +2168,7 @@ pub mod tests {
         engines.raft.gc(1, 0, 21, &mut lb).unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.set_last_index(13);
-        lb.append(1, vec![new_entry(13, RAFT_INIT_LOG_TERM)])
+        lb.append(1, None, vec![new_entry(13, RAFT_INIT_LOG_TERM)])
             .unwrap();
         lb.put_raft_state(1, &raft_state).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
