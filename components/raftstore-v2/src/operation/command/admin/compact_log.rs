@@ -350,9 +350,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let applied = context.last_applying_index;
         let total_cnt = applied - old_truncated;
         let remain_cnt = applied - res.compact_index;
-        context.approximate_log_size = (context.approximate_log_size as f64
-            * (remain_cnt as f64 / total_cnt as f64))
-            as u64;
+        context.approximate_log_size =
+            (context.approximate_log_size as f64 * (remain_cnt as f64 / total_cnt as f64)) as u64;
     }
 
     /// Called when apply index is persisted. There are two different situation:
