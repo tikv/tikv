@@ -232,7 +232,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         let region = self.region_state().get_region();
         let change_kind = ConfChangeKind::confchange_kind(changes.len());
-        info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch());
+        info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch(), "index" => index);
         let mut new_region = region.clone();
         match change_kind {
             ConfChangeKind::LeaveJoint => self.apply_leave_joint(&mut new_region),
