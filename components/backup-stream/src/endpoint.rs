@@ -898,13 +898,24 @@ where
         }
     }
 
+    fn min_ts_worker(&self) -> future![()] {
+        let sched = self.scheduler.clone();
+        async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            try_send!(
+                sched,
+                Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve)
+            );
+        }
+    }
+
     pub fn handle_region_checkpoints_op(&mut self, op: RegionCheckpointOperation) {
         match op {
-            RegionCheckpointOperation::Update(u) => {
-                // Let's clear all stale checkpoints first.
-                // Or they may slow down the global checkpoint.
-                self.checkpoint_mgr.clear();
+            RegionCheckpointOperation::Resolved(u) => {
                 self.checkpoint_mgr.update_region_checkpoints(u);
+            }
+            RegionCheckpointOperation::Flush => {
+                self.checkpoint_mgr.flush();
             }
             RegionCheckpointOperation::Get(g, cb) => {
                 let _guard = self.pool.handle().enter();
@@ -931,6 +942,28 @@ where
                         err.report("adding subscription");
                     }
                 });
+            }
+            RegionCheckpointOperation::PrepareMinTsForResolve => {
+                let min_ts = self.pool.block_on(self.prepare_min_ts());
+                try_send!(
+                    self.scheduler,
+                    Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolve { min_ts })
+                );
+            }
+            RegionCheckpointOperation::Resolve { min_ts } => {
+                let sched = self.scheduler.clone();
+                try_send!(
+                    self.scheduler,
+                    Task::ModifyObserve(ObserveOp::ResolveRegions {
+                        callback: Box::new(move |mut resolved| {
+                            let t = Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolved(
+                                resolved.take_region_checkpoints(),
+                            ));
+                            try_send!(sched, t);
+                        }),
+                        min_ts
+                    })
+                );
             }
         }
     }
@@ -976,7 +1009,10 @@ pub enum RegionSet {
 }
 
 pub enum RegionCheckpointOperation {
-    Update(Vec<(Region, TimeStamp)>),
+    Flush,
+    PrepareMinTsForResolve,
+    Resolve { min_ts: TimeStamp },
+    Resolved(Vec<(Region, TimeStamp)>),
     Get(RegionSet, Box<dyn FnOnce(Vec<GetCheckpointResult>) + Send>),
     Subscribe(Subscription),
 }
@@ -984,9 +1020,26 @@ pub enum RegionCheckpointOperation {
 impl fmt::Debug for RegionCheckpointOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Update(arg0) => f.debug_tuple("Update").field(arg0).finish(),
+            Self::Flush => f.debug_tuple("Flush").finish(),
             Self::Get(arg0, _) => f.debug_tuple("Get").field(arg0).finish(),
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
             Self::Subscribe(_) => f.debug_tuple("Subscription").finish(),
+            Self::Resolved(arg0) => f.debug_tuple("Resolve").field(arg0).finish(),
+            Self::PrepareMinTsForResolve => f.debug_tuple("PrepareMinTsForResolve").finish(),
+            Self::Resolve { min_ts } => f.debug_struct("Resolve").field("min_ts", min_ts).finish(),
         }
     }
 }

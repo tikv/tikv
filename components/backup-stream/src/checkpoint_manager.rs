@@ -31,14 +31,15 @@ use crate::{
 /// checkpoint then advancing the global checkpoint.
 #[derive(Default)]
 pub struct CheckpointManager {
-    items: HashMap<u64, LastFlushTsOfRegion>,
+    checkpoint_ts: HashMap<u64, LastFlushTsOfRegion>,
+    resolved_ts: HashMap<u64, LastFlushTsOfRegion>,
     manager_handle: Option<Sender<SubscriptionOp>>,
 }
 
 impl std::fmt::Debug for CheckpointManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CheckpointManager")
-            .field("items", &self.items)
+            .field("items", &self.checkpoint_ts)
             .finish()
     }
 }
@@ -154,11 +155,6 @@ impl GetCheckpointResult {
 }
 
 impl CheckpointManager {
-    /// clear the manager.
-    pub fn clear(&mut self) {
-        self.items.clear();
-    }
-
     pub fn spawn_subscription_mgr(&mut self) -> future![()] {
         let (tx, rx) = async_mpsc::channel(1024);
         let sub = SubscriptionManager {
@@ -173,8 +169,17 @@ impl CheckpointManager {
         for (region, checkpoint) in &region_and_checkpoint {
             self.do_update(region, *checkpoint);
         }
+    }
 
-        self.notify(region_and_checkpoint.into_iter());
+    pub fn flush(&mut self) {
+        self.checkpoint_ts = std::mem::take(&mut self.resolved_ts);
+        let items = self
+            .checkpoint_ts
+            .values()
+            .cloned()
+            .map(|x| (x.region, x.checkpoint))
+            .collect::<Vec<_>>();
+        self.notify(items.into_iter());
     }
 
     /// update a region checkpoint in need.
@@ -187,7 +192,7 @@ impl CheckpointManager {
     pub fn add_subscriber(&mut self, sub: Subscription) -> future![Result<()>] {
         let mgr = self.manager_handle.as_ref().cloned();
         let initial_data = self
-            .items
+            .checkpoint_ts
             .values()
             .map(|v| FlushEvent {
                 start_key: v.region.start_key.clone(),
@@ -249,7 +254,7 @@ impl CheckpointManager {
     }
 
     fn do_update(&mut self, region: &Region, checkpoint: TimeStamp) {
-        let e = self.items.entry(region.get_id());
+        let e = self.resolved_ts.entry(region.get_id());
         e.and_modify(|old_cp| {
             if old_cp.checkpoint < checkpoint
                 && old_cp.region.get_region_epoch().get_version()
@@ -269,7 +274,7 @@ impl CheckpointManager {
 
     /// get checkpoint from a region.
     pub fn get_from_region(&self, region: RegionIdWithVersion) -> GetCheckpointResult {
-        let checkpoint = self.items.get(&region.region_id);
+        let checkpoint = self.checkpoint_ts.get(&region.region_id);
         if checkpoint.is_none() {
             return GetCheckpointResult::not_found(region);
         }
@@ -282,7 +287,7 @@ impl CheckpointManager {
 
     /// get all checkpoints stored.
     pub fn get_all(&self) -> Vec<LastFlushTsOfRegion> {
-        self.items.values().cloned().collect()
+        self.checkpoint_ts.values().cloned().collect()
     }
 }
 
@@ -448,10 +453,13 @@ where
     }
 
     async fn after(&mut self, task: &str, _rts: u64) -> Result<()> {
-        let t = Task::RegionCheckpointsOp(RegionCheckpointOperation::Update(std::mem::take(
-            &mut self.checkpoints,
-        )));
-        try_send!(self.sched, t);
+        let resolve_task = Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolved(
+            std::mem::take(&mut self.checkpoints),
+        ));
+        let flush_task = Task::RegionCheckpointsOp(RegionCheckpointOperation::Flush);
+        try_send!(self.sched, resolve_task);
+        try_send!(self.sched, flush_task);
+
         let global_checkpoint = self.get_checkpoint(task).await?;
         info!("getting global checkpoint from cache for updating."; "checkpoint" => ?global_checkpoint);
         self.baseline
@@ -504,6 +512,7 @@ pub mod tests {
         let mut mgr = super::CheckpointManager::default();
         mgr.update_region_checkpoint(&region(1, 32, 8), TimeStamp::new(8));
         mgr.update_region_checkpoint(&region(2, 34, 8), TimeStamp::new(15));
+        mgr.flush();
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
         let r = mgr.get_from_region(RegionIdWithVersion::new(2, 33));
@@ -515,12 +524,15 @@ pub mod tests {
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
 
         mgr.update_region_checkpoint(&region(1, 30, 8), TimeStamp::new(16));
+        mgr.flush();
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
         mgr.update_region_checkpoint(&region(1, 32, 8), TimeStamp::new(16));
+        mgr.flush();
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 16);
         mgr.update_region_checkpoint(&region(1, 33, 8), TimeStamp::new(24));
+        mgr.flush();
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 33));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 24);
     }
