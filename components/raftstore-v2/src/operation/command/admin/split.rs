@@ -449,7 +449,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Tablet should be updated in lock to match the epoch.
             *read_tablet = SharedReadTablet::new(tablet.clone());
         }
-        if let Some(tablet) = self.reset_tablet(tablet) {
+        if let Some(tablet) = self.set_tablet(tablet) {
             self.record_tombstone_tablet(store_ctx, tablet, res.tablet_index);
         }
 

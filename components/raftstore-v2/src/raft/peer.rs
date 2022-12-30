@@ -336,7 +336,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn reset_tablet(&mut self, tablet: EK) -> Option<EK> {
+    pub fn set_tablet(&mut self, tablet: EK) -> Option<EK> {
         self.tablet.set(tablet)
     }
 

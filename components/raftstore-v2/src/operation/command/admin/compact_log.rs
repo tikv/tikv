@@ -359,7 +359,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// Generally, additional writes are triggered to persist apply index. In
     /// this case task is `Some`. But after applying snapshot, the apply
-    /// index is persisted a head of time. In this case task is `None`.
+    /// index is persisted ahead of time. In this case task is `None`.
     #[inline]
     pub fn on_advance_persisted_apply_index<T>(
         &mut self,
@@ -403,7 +403,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let persisted_applied = self.storage().apply_trace().persisted_apply_index();
         let compact_index = std::cmp::min(truncated, persisted_applied);
         if compact_index == RAFT_INIT_LOG_INDEX + 1 {
-            // There is no logs at RAFT_INIT_LOG_INDE, nothing to delete.
+            // There is no logs at RAFT_INIT_LOG_INDEX, nothing to delete.
             return;
         }
         // Raft Engine doesn't care about first index.

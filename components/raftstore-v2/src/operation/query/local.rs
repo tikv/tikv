@@ -53,8 +53,17 @@ pub type ReadDelegatePair<EK> = (ReadDelegate, SharedReadTablet<EK>);
 
 /// A share struct for local reader.
 ///
-/// Though it looks like `CachedTablet`, but it only stores one version of
-/// tablet. The goal is to release tablet once it is marked as stale.
+/// Though it looks like `CachedTablet`, but there are subtle differences.
+/// 1. `CachedTablet` always hold the latest version of the tablet. But
+/// `SharedReadTablet` should only hold the tablet that matches epoch. So it
+/// will be updated only when the epoch is updated.
+/// 2. `SharedReadTablet` should always hold a tablet and the same tablet. If
+/// tablet is taken, then it should be considered as stale and should check
+/// again epoch to load the new `SharedReadTablet`.
+/// 3. `SharedReadTablet` may be cloned into thread local. So its cache should
+/// be released as soon as possible, so there should be no strong reference
+/// that prevents tablet from being dropped after it's marked as stale by other
+/// threads.
 pub struct SharedReadTablet<EK> {
     tablet: Arc<Mutex<Option<EK>>>,
     cache: Option<EK>,
