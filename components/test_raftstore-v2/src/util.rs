@@ -56,9 +56,11 @@ pub fn create_test_engine(
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut builder =
+    let builder =
         KvEngineFactoryBuilder::new(env, &cfg.tikv, cache).sst_recovery_sender(Some(scheduler));
 
+    cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
+    println!("init addr {:?}", cfg.server.addr);
     let mut node = NodeV2::new(&cfg.server, pd_client.clone(), None);
     node.try_bootstrap_store(&cfg.raft_store, &raft_engine)
         .unwrap();

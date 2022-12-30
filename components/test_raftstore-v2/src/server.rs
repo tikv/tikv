@@ -184,15 +184,7 @@ impl ServerCluster {
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
 
-        if cfg.server.addr == "127.0.0.1:0" {
-            // Now we cache the store address, so here we should re-use last
-            // listening address for the same store.
-            if let Some(addr) = self.addrs.get(node_id) {
-                cfg.server.addr = addr;
-            } else {
-                cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
-            }
-        }
+        cfg.server.addr = node.store().address.clone();
 
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
@@ -269,8 +261,7 @@ impl ServerCluster {
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
-        let check_leader_runner =
-            CheckLeaderRunner::new(store_meta, coprocessor_host.clone());
+        let check_leader_runner = CheckLeaderRunner::new(store_meta, coprocessor_host.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
@@ -390,6 +381,7 @@ impl ServerCluster {
         }
         let mut server = server.unwrap();
         let addr = server.listening_addr();
+        assert_eq!(addr.clone().to_string(), node.store().address);
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);

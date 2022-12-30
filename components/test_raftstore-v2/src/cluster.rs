@@ -362,7 +362,6 @@ impl<T: Simulator> Cluster<T> {
             self.create_engine();
             let (tablet_registry, raft_engine, node) = self.engines.pop().unwrap();
             let id = node.id();
-            println!("id {}", id);
 
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(id)));
