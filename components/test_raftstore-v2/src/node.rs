@@ -175,6 +175,7 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta>>,
+        mut node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
     ) -> ServerResult<u64> {
@@ -190,13 +191,6 @@ impl Simulator for NodeCluster {
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();
-
-        let mut node = NodeV2::new(
-            &cfg.server,
-            Arc::clone(&self.pd_client),
-            None,
-            tablet_registry,
-        );
 
         let snap_mgr = if node_id == 0
             || !self
@@ -220,10 +214,8 @@ impl Simulator for NodeCluster {
             trans.snap_paths[&node_id].clone()
         };
 
-        node.try_bootstrap_store(&cfg.raft_store, &raft_engine)?;
-
-        let raft_router = node.router().clone();
-
+        let raft_router =
+            RaftRouter::new(node.id(), tablet_registry.clone(), node.router().clone());
         // Create coprocessor.
         let mut coprocessor_host =
             CoprocessorHost::new(raft_router.store_router().clone(), cfg.coprocessor.clone());
@@ -239,6 +231,8 @@ impl Simulator for NodeCluster {
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
         node.start(
             raft_engine.clone(),
+            tablet_registry,
+            &raft_router.clone(),
             simulate_trans.clone(),
             snap_mgr.clone(),
             cm,
@@ -360,9 +354,7 @@ impl Simulator for NodeCluster {
     }
 
     fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>> {
-        self.nodes
-            .get(&node_id)
-            .map(|node| node.router().store_router().clone())
+        self.nodes.get(&node_id).map(|node| node.router().clone())
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {

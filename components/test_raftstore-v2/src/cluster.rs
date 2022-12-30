@@ -10,7 +10,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     Iterable, KvEngine, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch,
@@ -48,10 +48,10 @@ use test_raftstore::{
     new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
     RawEngine,
 };
-use tikv::server::Result as ServerResult;
+use tikv::server::{NodeV2, Result as ServerResult};
 use tikv_util::{
     box_err, box_try, debug, error, safe_panic, thread_group::GroupProperties, time::Instant,
-    timer::GLOBAL_TIMER_HANDLE, warn, HandyRwLock,
+    timer::GLOBAL_TIMER_HANDLE, warn, worker::LazyWorker, HandyRwLock,
 };
 
 use crate::create_test_engine;
@@ -71,6 +71,7 @@ pub trait Simulator {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta>>,
+        node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
     ) -> ServerResult<u64>;
@@ -245,18 +246,25 @@ pub struct Cluster<T: Simulator> {
     pub count: usize,
 
     pub paths: Vec<TempDir>,
-    pub dbs: Vec<(TabletRegistry<RocksEngine>, RaftTestEngine)>,
+    pub engines: Vec<(
+        TabletRegistry<RocksEngine>,
+        RaftTestEngine,
+        NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
+    )>,
     pub tablet_registries: HashMap<u64, TabletRegistry<RocksEngine>>,
     pub raft_engines: HashMap<u64, RaftTestEngine>,
+    pub nodes: HashMap<u64, Option<NodeV2<TestPdClient, RocksEngine, RaftTestEngine>>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IoRateLimiter>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     group_props: HashMap<u64, GroupProperties>,
-
-    pub pd_client: Arc<TestPdClient>,
-
+    pub sst_workers: Vec<LazyWorker<String>>,
+    pub sst_workers_map: HashMap<u64, usize>,
+    pub kv_statistics: Vec<Arc<RocksStatistics>>,
+    pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
+    pub pd_client: Arc<TestPdClient>,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -279,8 +287,13 @@ impl<T: Simulator> Cluster<T> {
             raft_engines: HashMap::default(),
             store_metas: HashMap::default(),
             leaders: HashMap::default(),
+            kv_statistics: vec![],
+            raft_statistics: vec![],
+            sst_workers: vec![],
+            sst_workers_map: HashMap::default(),
+            nodes: HashMap::default(),
             paths: vec![],
-            dbs: vec![],
+            engines: vec![],
             key_managers: vec![],
             io_rate_limiter: None,
             sim,
@@ -322,11 +335,14 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn create_engine(&mut self) {
-        let (reg, raft_engine, key_manager, dir) =
-            create_test_engine(self.io_rate_limiter.clone(), &self.cfg);
-        self.dbs.push((reg, raft_engine));
+        let (reg, raft_engine, key_manager, dir, sst_worker, kv_statistics, raft_statistics, node) =
+            create_test_engine(self.io_rate_limiter.clone(), &self.cfg, &self.pd_client);
+        self.engines.push((reg, raft_engine, node));
         self.key_managers.push(key_manager);
         self.paths.push(dir);
+        self.sst_workers.push(sst_worker);
+        self.kv_statistics.push(kv_statistics);
+        self.raft_statistics.push(raft_statistics);
     }
 
     pub fn start(&mut self) -> ServerResult<()> {
@@ -344,9 +360,9 @@ impl<T: Simulator> Cluster<T> {
         for _ in self.raft_engines.len()..self.count {
             let logger = slog_global::borrow_global().new(o!());
             self.create_engine();
-            let (tablet_registry, raft_engine) = self.dbs.last().unwrap().clone();
-            let id = Bootstrap::new(&raft_engine, self.id(), &*self.pd_client, logger.clone())
-                .bootstrap_store()?;
+            let (tablet_registry, raft_engine, node) = self.engines.pop().unwrap();
+            let id = node.id();
+            println!("id {}", id);
 
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(id)));
@@ -360,13 +376,15 @@ impl<T: Simulator> Cluster<T> {
                 id,
                 self.cfg.clone(),
                 store_meta.clone(),
+                node,
                 raft_engine.clone(),
                 tablet_registry.clone(),
             )?;
             assert_eq!(id, node_id);
             self.group_props.insert(node_id, props);
-            self.raft_engines.insert(node_id, raft_engine);
-            self.tablet_registries.insert(node_id, tablet_registry);
+            self.raft_engines.insert(node_id, raft_engine.clone());
+            self.tablet_registries
+                .insert(node_id, tablet_registry.clone());
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
         }
@@ -378,6 +396,7 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let tablet_registry = self.tablet_registries[&node_id].clone();
         let raft_engine = self.raft_engines[&node_id].clone();
+        let node = self.nodes.get_mut(&node_id).unwrap().take().unwrap();
         let cfg = self.cfg.clone();
 
         // if let Some(labels) = self.labels.get(&node_id) {
@@ -401,7 +420,7 @@ impl<T: Simulator> Cluster<T> {
         debug!("calling run node"; "node_id" => node_id);
         self.sim
             .wl()
-            .run_node(node_id, cfg, store_meta, raft_engine, tablet_registry)?;
+            .run_node(node_id, cfg, store_meta, node, raft_engine, tablet_registry)?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -424,15 +443,18 @@ impl<T: Simulator> Cluster<T> {
     ///
     /// Must be called after `create_engines`.
     pub fn bootstrap_region(&mut self) -> Result<()> {
-        for (i, (tablet_registry, raft_engine)) in self.dbs.iter().enumerate() {
-            let id = i as u64 + 1;
-            self.tablet_registries.insert(id, tablet_registry.clone());
-            self.raft_engines.insert(id, raft_engine.clone());
+        let mut i = 0;
+        for (tablet_registry, raft_engine, node) in std::mem::take(&mut self.engines) {
+            let id = node.id();
+            self.tablet_registries.insert(id, tablet_registry);
+            self.raft_engines.insert(id, raft_engine);
+            self.nodes.insert(id, Some(node));
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(id)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
-            // todo: sst workers
+            self.sst_workers_map.insert(id, i);
+            i += 1;
         }
 
         let mut region = metapb::Region::default();
@@ -442,10 +464,9 @@ impl<T: Simulator> Cluster<T> {
         region.mut_region_epoch().set_version(INIT_EPOCH_VER);
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
-        for (&id, raft_engine) in &self.raft_engines {
+        for &id in self.raft_engines.keys() {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(raft_engine, self.id(), id).unwrap();
         }
 
         for raft_engine in self.raft_engines.values() {
@@ -461,15 +482,18 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn bootstrap_conf_change(&mut self) -> u64 {
-        for (i, (factory, raft_engine)) in self.dbs.iter().enumerate() {
-            let id = i as u64 + 1;
-            self.tablet_registries.insert(id, factory.clone());
-            self.raft_engines.insert(id, raft_engine.clone());
+        let mut i = 0;
+        for (tablet_registry, raft_engine, node) in std::mem::take(&mut self.engines) {
+            let id = node.id();
+            self.tablet_registries.insert(id, tablet_registry);
+            self.raft_engines.insert(id, raft_engine);
+            self.nodes.insert(id, Some(node));
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(id)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
-            // todo: sst workers
+            self.sst_workers_map.insert(id, i);
+            i += 1;
         }
 
         for (&id, raft_engine) in &self.raft_engines {

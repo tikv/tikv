@@ -166,6 +166,7 @@ impl ServerCluster {
         node_id: u64,
         mut cfg: Config,
         store_meta: Arc<Mutex<StoreMeta>>,
+        mut node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
     ) -> ServerResult<u64> {
@@ -204,22 +205,14 @@ impl ServerCluster {
             .unwrap();
 
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
-        let mut node = NodeV2::new(
-            &server_cfg.value().clone(),
-            Arc::clone(&self.pd_client),
-            None,
-            tablet_registry,
-        );
-        node.try_bootstrap_store(&raft_store, &raft_engine)?;
-        let node_id = node.id();
 
-        let raft_router = node.router().clone();
+        let node_id = node.id();
+        let raft_router = RaftRouter::new(node_id, tablet_registry.clone(), node.router().clone());
 
         // Create coprocessor.
         let mut coprocessor_host =
             CoprocessorHost::new(raft_router.store_router().clone(), cfg.coprocessor.clone());
 
-        // todo: region info accessor
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
         // todo: simulate transport
@@ -232,7 +225,7 @@ impl ServerCluster {
         let pd_sender = raftstore_v2::FlowReporter::new(pd_worker.scheduler());
         let storage_read_pool = ReadPool::from(storage::build_read_pool(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
-            pd_sender.clone(),
+            pd_sender,
             raft_kv_v2.clone(),
         ));
 
@@ -277,7 +270,7 @@ impl ServerCluster {
             self.init_resource_metering(&cfg.resource_metering);
 
         let check_leader_runner =
-            CheckLeaderRunner::new(store_meta.clone(), coprocessor_host.clone());
+            CheckLeaderRunner::new(store_meta, coprocessor_host.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
@@ -408,6 +401,8 @@ impl ServerCluster {
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
         node.start(
             raft_engine,
+            tablet_registry,
+            &raft_router,
             simulate_trans.clone(),
             snap_mgr.clone(),
             concurrency_manager.clone(),
@@ -516,12 +511,13 @@ impl Simulator for ServerCluster {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta>>,
+        node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
-            self.run_node_impl::<API>(node_id, cfg, store_meta, raft_engine, tablet_registry,)
+            self.run_node_impl::<API>(node_id, cfg, store_meta, node,raft_engine, tablet_registry,)
         )
     }
 
