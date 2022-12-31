@@ -54,8 +54,8 @@ fn test_witness_update_region_in_local_reader() {
         .read(None, request.clone(), Duration::from_millis(100))
         .unwrap();
     assert_eq!(
-        resp.get_header().get_error().get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
+        resp.get_header().get_error().get_is_witness(),
+        &kvproto::errorpb::IsWitness {
             region_id: region.get_id(),
             ..Default::default()
         }
@@ -388,8 +388,8 @@ fn test_non_witness_replica_read() {
         .read(None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(
-        resp.get_header().get_error().get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
+        resp.get_header().get_error().get_is_witness(),
+        &kvproto::errorpb::IsWitness {
             region_id: region.get_id(),
             ..Default::default()
         }

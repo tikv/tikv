@@ -465,15 +465,15 @@ fn test_witness_replica_read() {
         .read(None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(
-        resp.get_header().get_error().get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
+        resp.get_header().get_error().get_is_witness(),
+        &kvproto::errorpb::IsWitness {
             region_id: region.get_id(),
             ..Default::default()
         }
     );
 }
 
-fn must_get_error_recovery_in_progress<T: Simulator>(
+fn must_get_error_is_witness<T: Simulator>(
     cluster: &mut Cluster<T>,
     region: &metapb::Region,
     cmd: kvproto::raft_cmdpb::Request,
@@ -488,8 +488,8 @@ fn must_get_error_recovery_in_progress<T: Simulator>(
         .call_command_on_leader(req, Duration::from_millis(100))
         .unwrap();
     assert_eq!(
-        resp.get_header().get_error().get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
+        resp.get_header().get_error().get_is_witness(),
+        &kvproto::errorpb::IsWitness {
             region_id: region.get_id(),
             ..Default::default()
         },
@@ -536,13 +536,13 @@ fn test_witness_leader_down() {
 
     // forbid writes
     let put = new_put_cmd(b"k3", b"v3");
-    must_get_error_recovery_in_progress(&mut cluster, &region, put);
+    must_get_error_is_witness(&mut cluster, &region, put);
     // forbid reads
     let get = new_get_cmd(b"k1");
-    must_get_error_recovery_in_progress(&mut cluster, &region, get);
+    must_get_error_is_witness(&mut cluster, &region, get);
     // forbid read index
     let read_index = new_read_index_cmd();
-    must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
+    must_get_error_is_witness(&mut cluster, &region, read_index);
 
     let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), peer_on_store3);

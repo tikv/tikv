@@ -814,13 +814,13 @@ where
         // Check witness
         if find_peer_by_id(&delegate.region, delegate.peer_id).map_or(true, |p| p.is_witness) {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
-            return Err(Error::RecoveryInProgress(region_id));
+            return Err(Error::IsWitness(region_id));
         }
 
         // Check non-witness hasn't finish applying snapshot yet.
         if delegate.wait_data {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.wait_data.inc());
-            return Err(Error::RecoveryInProgress(region_id));
+            return Err(Error::IsWitness(region_id));
         }
 
         // Check whether the region is in the flashback state and the local read could
