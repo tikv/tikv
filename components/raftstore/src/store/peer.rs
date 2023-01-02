@@ -4473,13 +4473,10 @@ where
         msg: &eraftpb::Message,
         peer_disk_usage: DiskUsage,
     ) -> bool {
-        if self.is_witness() {
-            // shouldn't transfer leader to witness peer
-            return true;
-        }
-
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
-        if pending_snapshot
+        // shouldn't transfer leader to witness peer or non-witness waiting data
+        if self.is_witness() || self.wait_data
+            || pending_snapshot
             || msg.get_from() != self.leader_id()
             // Transfer leader to node with disk full will lead to write availablity downback.
             // But if the current leader is disk full, and send such request, we should allow it,
@@ -4494,6 +4491,8 @@ where
                 "from" => msg.get_from(),
                 "pending_snapshot" => pending_snapshot,
                 "disk_usage" => ?ctx.self_disk_usage,
+                "is_witness" => self.is_witness(),
+                "wait_data" => self.wait_data,
             );
             return true;
         }
