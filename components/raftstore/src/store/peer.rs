@@ -1098,6 +1098,7 @@ where
 
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
+        let commit_index = raft_group.store().commit_index();
         // In order to avoid excessive log accumulation due to the loss of pending
         // compaction cmds after the witness is restarted, it will actively pull
         // voter_request_index once at start.
@@ -1125,7 +1126,7 @@ where
             leader_unreachable: false,
             pending_remove: false,
             wait_data,
-            request_index: applied_index,
+            request_index: commit_index,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -2599,35 +2600,8 @@ where
                     .update_applied(self.last_applying_idx, &ctx.coprocessor_host);
                 if self.wait_data {
                     self.notify_leader_the_peer_is_available(ctx);
-                    let mut apply = None;
-                    if self.last_applying_idx < self.get_store().commit_index() {
-                        match self.get_store().entries(
-                            self.last_applying_idx + 1,
-                            self.get_store().commit_index() + 1,
-                            NO_LIMIT,
-                            GetEntriesContext::empty(false),
-                        ) {
-                            Ok(entries) => {
-                                let commit_term =
-                                    self.get_store().term(self.last_applying_idx + 1).unwrap();
-                                apply = Some(Apply::new(
-                                    self.peer_id(),
-                                    self.region_id,
-                                    self.term(),
-                                    self.last_applying_idx + 1,
-                                    commit_term,
-                                    entries,
-                                    vec![],
-                                    self.region_buckets.as_ref().map(|b| b.meta.clone()),
-                                ));
-                            }
-                            Err(e) => {
-                                panic!("replay failed to get entries, {:?}", e)
-                            }
-                        }
-                    }
                     ctx.apply_router
-                        .schedule_task(self.region_id, ApplyTask::apply_gap(self.region_id, apply));
+                        .schedule_task(self.region_id, ApplyTask::Recover(self.region_id));
                     self.wait_data = false;
                     return false;
                 }

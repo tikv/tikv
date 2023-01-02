@@ -178,6 +178,7 @@ make_static_metric! {
         region_nonexistent,
         applying_snap,
         disk_full,
+        non_witness,
     }
 
     pub label_enum ProposalType {

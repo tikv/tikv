@@ -3697,11 +3697,7 @@ where
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
     Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
-    ApplyGap {
-        start: Instant,
-        region_id: u64,
-        apply: Option<Apply<Callback<EK::Snapshot>>>,
-    },
+    Recover(u64),
     CheckCompact {
         region_id: u64,
         voter_replicated_index: u64,
@@ -3730,14 +3726,6 @@ where
             merge_from_snapshot,
         })
     }
-
-    pub fn apply_gap(region_id: u64, apply: Option<Apply<Callback<EK::Snapshot>>>) -> Msg<EK> {
-        Msg::ApplyGap {
-            start: Instant::now(),
-            region_id,
-            apply,
-        }
-    }
 }
 
 impl<EK> Debug for Msg<EK>
@@ -3762,7 +3750,7 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
-            Msg::ApplyGap { region_id, .. } => write!(f, "[region {}] replay", region_id),
+            Msg::Recover(region_id) => write!(f, "recover [region {}] apply", region_id),
             Msg::CheckCompact {
                 region_id,
                 voter_replicated_index,
@@ -4320,29 +4308,7 @@ where
                         batch_apply = Some(apply);
                     }
                 }
-                Msg::ApplyGap { start, apply, .. } => {
-                    self.delegate.wait_data = false;
-                    if let Some(apply) = apply {
-                        let apply_wait = start.saturating_elapsed();
-                        apply_ctx.apply_wait.observe(apply_wait.as_secs_f64());
-                        for tracker in apply
-                            .cbs
-                            .iter()
-                            .flat_map(|p| p.cb.write_trackers())
-                            .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
-                        {
-                            GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                                t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
-                            });
-                        }
-                        self.handle_apply(apply_ctx, batch_apply.take().unwrap());
-                        if let Some(ref mut state) = self.delegate.yield_state {
-                            state.pending_msgs.push(Msg::Apply { start, apply });
-                            state.pending_msgs.extend(drainer);
-                            break;
-                        }
-                    }
-                }
+                Msg::Recover(..) => self.delegate.wait_data = false,
                 Msg::Registration(reg) => self.handle_registration(reg),
                 Msg::Destroy(d) => self.handle_destroy(apply_ctx, d),
                 Msg::LogsUpToDate(cul) => self.logs_up_to_date_for_merge(apply_ctx, cul),
@@ -4779,11 +4745,9 @@ where
                 }
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => return,
-                Msg::ApplyGap { region_id, .. } => {
-                    info!(
-                        "target region is not found, drop proposals";
-                        "region_id" => region_id
-                    );
+                Msg::Recover(region_id) => {
+                    info!("recover apply";
+                          "region_id" => region_id);
                     return;
                 }
                 Msg::CheckCompact { region_id, .. } => {
@@ -4923,7 +4887,7 @@ mod memtrace {
                 | Msg::Change { .. } => 0,
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => 0,
-                Msg::ApplyGap { .. } => 0,
+                Msg::Recover(..) => 0,
                 Msg::CheckCompact { .. } => 0,
             }
         }

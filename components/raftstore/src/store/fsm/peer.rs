@@ -2490,6 +2490,14 @@ where
             return Ok(());
         }
 
+        if MessageType::MsgAppend == msg_type && self.fsm.peer.wait_data {
+            debug!("skip {:?} because of non-witness waiting data", msg_type;
+                   "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+            );
+            self.ctx.raft_metrics.message_dropped.non_witness.inc();
+            return Ok(());
+        }
+
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
@@ -6444,7 +6452,7 @@ where
                         .peer
                         .update_read_progress(self.ctx, ReadProgress::WaitData(true));
                     self.fsm.peer.wait_data = true;
-                    self.fsm.peer.request_index = sw.index;
+                    self.fsm.peer.request_index = self.fsm.peer.raft_group.store().commit_index();
                     self.on_request_snapshot_tick();
                 }
                 self.fsm.peer.peer.is_witness = is_witness;
