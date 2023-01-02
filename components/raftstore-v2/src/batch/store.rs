@@ -153,6 +153,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePoller<EK, ER, T> {
 
     fn flush_events(&mut self) {
         self.schedule_ticks();
+        self.poll_ctx.raft_metrics.maybe_flush();
     }
 
     fn schedule_ticks(&mut self) {
@@ -535,6 +536,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             causal_ts_provider,
             self.logger.clone(),
             self.shutdown.clone(),
+            cfg.clone(),
         ));
 
         let split_check_scheduler = workers.background.start(

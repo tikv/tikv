@@ -298,7 +298,9 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::TestTabletFactory,
     };
-    use engine_traits::{RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS};
+    use engine_traits::{
+        FlushState, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
+    };
     use kvproto::{
         metapb::{Peer, Region},
         raft_serverpb::PeerState,
@@ -379,25 +381,25 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let snapshot = new_empty_snapshot(region.clone(), 10, 1, false);
+        let snapshot = new_empty_snapshot(region.clone(), 10, 9, false);
         let mut task = WriteTask::new(region.get_id(), 5, 0);
         s.apply_snapshot(&snapshot, &mut task, mgr, reg).unwrap();
 
         // It can be set before load tablet.
         assert_eq!(PeerState::Normal, s.region_state().get_state());
         assert_eq!(10, s.entry_storage().truncated_index());
-        assert_eq!(1, s.entry_storage().truncated_term());
-        assert_eq!(1, s.entry_storage().last_term());
+        assert_eq!(9, s.entry_storage().truncated_term());
+        assert_eq!(9, s.entry_storage().last_term());
         assert_eq!(10, s.entry_storage().raft_state().last_index);
         // This index can't be set before load tablet.
         assert_ne!(10, s.entry_storage().applied_index());
-        assert_ne!(1, s.entry_storage().applied_term());
+        assert_ne!(9, s.entry_storage().applied_term());
         assert_eq!(10, s.region_state().get_tablet_index());
         assert!(!task.persisted_cbs.is_empty());
 
         s.on_applied_snapshot();
         assert_eq!(10, s.entry_storage().applied_index());
-        assert_eq!(1, s.entry_storage().applied_term());
+        assert_eq!(9, s.entry_storage().applied_term());
         assert_eq!(10, s.region_state().get_tablet_index());
     }
 
@@ -440,8 +442,9 @@ mod tests {
             router,
             reg,
             sched,
-            Arc::default(),
+            Arc::new(FlushState::new(5)),
             None,
+            5,
             logger,
         );
 
@@ -460,8 +463,8 @@ mod tests {
             SnapState::Generated(ref snap) => *snap.clone(),
             ref s => panic!("unexpected state: {:?}", s),
         };
-        assert_eq!(snap.get_metadata().get_index(), 0);
-        assert_eq!(snap.get_metadata().get_term(), 0);
+        assert_eq!(snap.get_metadata().get_index(), 5);
+        assert_eq!(snap.get_metadata().get_term(), 5);
         assert_eq!(snap.get_data().is_empty(), false);
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
         let checkpointer_path = mgr.tablet_gen_path(&snap_key);

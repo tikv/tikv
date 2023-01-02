@@ -179,6 +179,7 @@ make_static_metric! {
         applying_snap,
         disk_full,
         non_witness,
+        recovery,
     }
 
     pub label_enum ProposalType {

@@ -222,10 +222,20 @@ impl<EK> TabletRegistry<EK> {
         })
     }
 
+    /// Format the name as {prefix}_{id}_{suffix}. If prefix is empty, it will
+    /// be format as {id}_{suffix}.
     pub fn tablet_name(&self, prefix: &str, id: u64, suffix: u64) -> String {
-        format!("{}{}_{}", prefix, id, suffix)
+        format!(
+            "{}{:_<width$}{}_{}",
+            prefix,
+            "",
+            id,
+            suffix,
+            width = !prefix.is_empty() as usize
+        )
     }
 
+    /// Returns the prefix, id and suffix of the tablet name.
     pub fn parse_tablet_name<'a>(&self, path: &'a Path) -> Option<(&'a str, u64, u64)> {
         let name = path.file_name().unwrap().to_str().unwrap();
         let mut parts = name.rsplit('_');
@@ -463,10 +473,19 @@ mod tests {
         });
         assert_eq!(count, 1);
 
-        let name = registry.tablet_name("prefix_", 12, 30);
+        let name = registry.tablet_name("prefix", 12, 30);
         assert_eq!(name, "prefix_12_30");
         let normal_name = registry.tablet_name("", 20, 15);
         let normal_tablet_path = registry.tablet_path(20, 15);
         assert_eq!(registry.tablet_root().join(normal_name), normal_tablet_path);
+
+        let full_prefix_path = registry.tablet_root().join(name);
+        let res = registry.parse_tablet_name(&full_prefix_path);
+        assert_eq!(res, Some(("prefix", 12, 30)));
+        let res = registry.parse_tablet_name(&normal_tablet_path);
+        assert_eq!(res, Some(("", 20, 15)));
+        let invalid_path = registry.tablet_root().join("invalid_12");
+        let res = registry.parse_tablet_name(&invalid_path);
+        assert_eq!(res, None);
     }
 }

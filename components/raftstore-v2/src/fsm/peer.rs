@@ -43,7 +43,11 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
         storage: Storage<EK, ER>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let peer = Peer::new(cfg, tablet_registry, snap_mgr, storage)?;
-        info!(peer.logger, "create peer");
+        info!(peer.logger, "create peer";
+            "raft_state" => ?peer.storage().raft_state(),
+            "apply_state" => ?peer.storage().apply_state(),
+            "region_state" => ?peer.storage().region_state()
+        );
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(PeerFsm {
             peer,
@@ -187,20 +191,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_start(&mut self) {
-        self.schedule_tick(PeerTick::Raft);
+        if !self.fsm.peer.maybe_pause_for_recovery() {
+            self.schedule_tick(PeerTick::Raft);
+        }
         self.schedule_tick(PeerTick::SplitRegionCheck);
         self.schedule_tick(PeerTick::PdHeartbeat);
         self.schedule_tick(PeerTick::CompactLog);
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
         }
-        // Unlike v1, it's a must to set ready when there are pending entries. Otherwise
-        // it may block for ever when there is unapplied conf change.
-        let entry_storage = self.fsm.peer.storage().entry_storage();
-        if entry_storage.commit_index() > entry_storage.applied_index()
-            // Speed up setup if there is only one peer.
-            || self.fsm.peer.is_leader()
-        {
+        // Speed up setup if there is only one peer.
+        if self.fsm.peer.is_leader() {
             self.fsm.peer.set_has_ready();
         }
     }
