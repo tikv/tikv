@@ -1998,7 +1998,12 @@ impl TabletSnapManager {
             {
                 continue;
             }
-            for e in file_system::read_dir(path)? {
+            let entries = match file_system::read_dir(path) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
+            for e in entries {
                 match e.and_then(|e| e.metadata()) {
                     Ok(m) => total_size += m.len(),
                     Err(e) if e.kind() == ErrorKind::NotFound => continue,

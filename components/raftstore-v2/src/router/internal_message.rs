@@ -10,6 +10,7 @@ pub enum ApplyTask {
     Snapshot(GenSnapTask),
     /// Writes that doesn't care consistency.
     UnsafeWrite(Box<[u8]>),
+    ManualFlush,
 }
 
 #[derive(Debug, Default)]

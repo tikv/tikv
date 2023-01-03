@@ -62,6 +62,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// For raft log compaction.
     skip_compact_log_ticks: usize,
     approximate_raft_log_size: u64,
+    last_applying_index: u64,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -73,6 +74,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     has_ready: bool,
     /// Sometimes there is no ready at all, but we need to trigger async write.
     has_extra_write: bool,
+    pause_for_recovery: bool,
     /// Writer for persisting side effects asynchronously.
     pub(crate) async_writer: AsyncWriter<EK, ER>,
 
@@ -133,7 +135,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
 
-        let flush_state: Arc<FlushState> = Arc::default();
+        let flush_state: Arc<FlushState> = Arc::new(FlushState::new(applied_index));
         // We can't create tablet if tablet index is 0. It can introduce race when gc
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.
@@ -155,12 +157,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_heartbeats: HashMap::default(),
             skip_compact_log_ticks: 0,
             approximate_raft_log_size: 0,
+            last_applying_index: raft_group.store().apply_state().get_applied_index(),
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
             apply_scheduler: None,
             has_ready: false,
             has_extra_write: false,
+            pause_for_recovery: false,
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
@@ -366,14 +370,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Returns if there's any tombstone being removed.
     #[inline]
     pub fn remove_tombstone_tablets_before(&mut self, persisted: u64) -> bool {
-        let mut removed = 0;
-        while let Some(i) = self.pending_tombstone_tablets.first()
-            && *i <= persisted
-        {
-            removed += 1;
+        let removed = self
+            .pending_tombstone_tablets
+            .iter()
+            .take_while(|i| **i <= persisted)
+            .count();
+        if removed > 0 {
+            self.pending_tombstone_tablets.drain(..removed);
+            true
+        } else {
+            false
         }
-        self.pending_tombstone_tablets.drain(..removed);
-        removed > 0
     }
 
     #[inline]
@@ -429,6 +436,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn reset_has_extra_write(&mut self) -> bool {
         mem::take(&mut self.has_extra_write)
+    }
+
+    #[inline]
+    pub fn set_pause_for_recovery(&mut self, pause: bool) {
+        self.pause_for_recovery = pause;
+    }
+
+    #[inline]
+    pub fn pause_for_recovery(&self) -> bool {
+        self.pause_for_recovery
     }
 
     #[inline]
@@ -551,6 +568,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.approximate_raft_log_size = f(self.approximate_raft_log_size);
     }
 
+    pub fn last_applying_index_mut(&mut self) -> &mut u64 {
+        &mut self.last_applying_index
+    }
+
     #[inline]
     pub fn state_role(&self) -> StateRole {
         self.raft_group.raft.state
@@ -654,8 +675,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// See the comments of `check_snap_status` for more details.
     #[inline]
     pub fn is_handling_snapshot(&self) -> bool {
-        // todo: This method may be unnecessary now?
-        false
+        self.persisted_index() < self.entry_storage().truncated_index()
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not
@@ -774,8 +794,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.flush_state
     }
 
-    pub fn reset_flush_state(&mut self) {
-        self.flush_state = Arc::default();
+    pub fn reset_flush_state(&mut self, index: u64) {
+        self.flush_state = Arc::new(FlushState::new(index));
     }
 
     // Note: Call `set_has_extra_write` after adding new state changes.
