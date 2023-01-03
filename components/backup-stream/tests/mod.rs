@@ -275,7 +275,10 @@ impl Suite {
     /// create a subscription stream. this has simply asserted no error, because
     /// in theory observing flushing should not emit error. change that if
     /// needed.
-    fn flush_stream(&self) -> impl Stream<Item = (u64, SubscribeFlushEventResponse)> {
+    fn flush_stream(
+        &self,
+        panic_while_fail: bool,
+    ) -> impl Stream<Item = (u64, SubscribeFlushEventResponse)> {
         let streams = self
             .log_backup_cli
             .iter()
@@ -288,8 +291,18 @@ impl Suite {
                     })
                     .unwrap_or_else(|err| panic!("failed to subscribe on {} because {}", id, err));
                 let id = *id;
-                stream.map_ok(move |x| (id, x)).map(move |x| {
-                    x.unwrap_or_else(move |err| panic!("failed to rec from {} because {}", id, err))
+                stream.filter_map(move |x| {
+                    futures::future::ready(match x {
+                        Ok(x) => Some((id, x)),
+                        Err(err) => {
+                            if panic_while_fail {
+                                panic!("failed to rec from {} because {}", id, err)
+                            } else {
+                                println!("[WARN] failed to rec from {} because {}", id, err);
+                                None
+                            }
+                        }
+                    })
                 })
             })
             .collect::<Vec<_>>();
@@ -1245,7 +1258,7 @@ mod test {
     #[test]
     fn subscribe_flushing() {
         let mut suite = super::SuiteBuilder::new_named("sub_flush").build();
-        let stream = suite.flush_stream();
+        let stream = suite.flush_stream(true);
         for i in 1..10 {
             let split_key = make_split_key_at_record(1, i * 20);
             suite.must_split(&split_key);
@@ -1285,5 +1298,71 @@ mod test {
             suite.flushed_files.path(),
             round1.union(&round2).map(|x| x.as_slice()),
         ));
+    }
+
+    #[test]
+    fn resolved_follower() {
+        let mut suite = super::SuiteBuilder::new_named("r").build();
+        let round1 = run_async_test(suite.write_records(0, 128, 1));
+        suite.must_register_task(1, "r");
+        suite.run(|| Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve));
+        suite.sync();
+        std::thread::sleep(Duration::from_secs(1));
+
+        let leader = suite.cluster.leader_of_region(1).unwrap();
+        suite.must_shuffle_leader(1);
+        let round2 = run_async_test(suite.write_records(256, 128, 1));
+        suite
+            .endpoints
+            .get(&leader.store_id)
+            .unwrap()
+            .scheduler()
+            .schedule(Task::ForceFlush("r".to_owned()))
+            .unwrap();
+        suite.sync();
+        std::thread::sleep(Duration::from_secs(1));
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.iter().map(|x| x.as_slice()),
+        ));
+        assert!(suite.global_checkpoint() > 256);
+        suite.force_flush_files("r");
+        suite.wait_for_flush();
+        assert!(suite.global_checkpoint() > 512);
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(|x| x.as_slice()),
+        ));
+    }
+
+    #[test]
+    fn final_flush() {
+        test_util::init_log_for_test();
+        let mut suite = super::SuiteBuilder::new_named("f").build();
+        let s = suite.flush_stream(false);
+        let round1 = run_async_test(suite.write_records(0, 128, 1));
+        suite.must_register_task(1, "r");
+        suite.run(|| Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve));
+        suite.sync();
+        std::thread::sleep(Duration::from_secs(1));
+
+        suite.cluster.shutdown();
+        for worker in suite.endpoints.values_mut() {
+            worker.stop();
+        }
+        let collected: Vec<_> = run_async_test(s.collect());
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.iter().map(|x| x.as_slice()),
+        ));
+        assert!(
+            collected
+                .iter()
+                .flat_map(|x| x.1.events.iter().map(|x| x.checkpoint))
+                .min()
+                > Some(256),
+            "{:?}",
+            collected
+        );
     }
 }

@@ -449,7 +449,7 @@ where
                 }
                 ObserveOp::ResolveRegions { callback, min_ts } => {
                     let now = Instant::now();
-                    let timedout = self.wait(Duration::from_secs(30)).await;
+                    let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
                         warn!("waiting for initial scanning done timed out, forcing progress!"; 
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);

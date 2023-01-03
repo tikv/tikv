@@ -155,4 +155,10 @@ lazy_static! {
         &["stage"]
     )
     .unwrap();
+    pub static ref MIN_TS_RESOLVE_DURATION: Histogram = register_histogram!(
+        "tikv_log_backup_resolve_duration_sec",
+        "The duration of resolving.",
+        exponential_buckets(0.001, 2.0, 16).unwrap()
+    )
+    .unwrap();
 }
