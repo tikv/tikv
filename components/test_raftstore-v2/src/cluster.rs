@@ -592,6 +592,25 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn call_command_on_node(
+        &self,
+        node_id: u64,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        match self
+            .sim
+            .rl()
+            .call_command_on_node(node_id, request.clone(), timeout)
+        {
+            Err(e) => {
+                warn!("failed to call command {:?}: {:?}", request, e);
+                Err(e)
+            }
+            a => a,
+        }
+    }
+
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
         let timer = Instant::now_coarse();
         let timeout = Duration::from_secs(5);
@@ -883,6 +902,18 @@ impl<T: Simulator> Cluster<T> {
             .take_region_epoch()
     }
 
+    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+        self.get_impl(CF_DEFAULT, key, false)
+    }
+
+    pub fn get_cf(&mut self, cf: &str, key: &[u8]) -> Option<Vec<u8>> {
+        self.get_impl(cf, key, false)
+    }
+
+    pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+        self.get_impl(CF_DEFAULT, key, true)
+    }
+
     fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
         let mut resp = self.request(
             key,
@@ -906,8 +937,9 @@ impl<T: Simulator> Cluster<T> {
     pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
         for registry in self.tablet_registries.values() {
             registry.for_each_opened_tablet(|_id, cached_tablet| -> bool {
-                let db = cached_tablet.latest().unwrap();
-                db.flush_cf(cf, true).unwrap();
+                if let Some(db) = cached_tablet.latest() {
+                    db.flush_cf(cf, true).unwrap();
+                }
                 true
             });
         }

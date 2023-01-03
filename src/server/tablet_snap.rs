@@ -494,6 +494,10 @@ pub fn copy_tablet_snapshot(
     }
 
     let final_path = recver_snap_mgr.final_recv_path(&recv_context.key);
+    println!(
+        "copy snapshot done recv path {:?}, final path {:?}",
+        recv_path, final_path
+    );
     fs::rename(&recv_path, final_path)?;
     Ok(())
 }
