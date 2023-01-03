@@ -286,7 +286,7 @@ impl Drop for ReadDelegate {
 
 /// #[RaftstoreCommon]
 pub trait ReadExecutorProvider: Send + Clone + 'static {
-    type Executor: ReadExecutor;
+    type Executor;
     type StoreMeta;
 
     fn store_id(&self) -> Option<u64>;
@@ -687,11 +687,7 @@ where
 /// #[RaftstoreCommon]: LocalReader is an entry point where local read requests are dipatch to the
 /// relevant regions by LocalReader so that these requests can be handled by the
 /// relevant ReadDelegate respectively.
-pub struct LocalReaderCore<D, S>
-where
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
-{
+pub struct LocalReaderCore<D, S> {
     pub store_id: Cell<Option<u64>>,
     store_meta: S,
     pub delegates: LruCache<u64, D>,
@@ -699,7 +695,7 @@ where
 
 impl<D, S> LocalReaderCore<D, S>
 where
-    D: ReadExecutor + Deref<Target = ReadDelegate> + Clone,
+    D: Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<Executor = D>,
 {
     pub fn new(store_meta: S) -> Self {
@@ -827,8 +823,7 @@ where
 
 impl<D, S> Clone for LocalReaderCore<D, S>
 where
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
+    S: Clone,
 {
     fn clone(&self) -> Self {
         LocalReaderCore {

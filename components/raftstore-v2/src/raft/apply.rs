@@ -2,7 +2,7 @@
 
 use std::{mem, sync::Arc};
 
-use engine_traits::{CachedTablet, FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_LEN};
+use engine_traits::{FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_LEN};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::{
     fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
@@ -19,8 +19,6 @@ use crate::{
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine, R> {
     peer: metapb::Peer,
-    /// publish the update of the tablet
-    remote_tablet: CachedTablet<EK>,
     tablet: EK,
     pub write_batch: Option<EK::WriteBatch>,
     /// A buffer for encoding key.
@@ -79,7 +77,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         Apply {
             peer,
             tablet: remote_tablet.latest().unwrap().clone(),
-            remote_tablet,
             write_batch: None,
             callbacks: vec![],
             tombstone: false,
@@ -155,13 +152,16 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         &mut self.region_state
     }
 
-    /// Publish the tablet so that it can be used by read worker.
-    ///
-    /// Note, during split/merge, lease is expired explicitly and read is
-    /// forbidden. So publishing it immediately is OK.
+    /// The tablet can't be public yet, otherwise content of latest tablet
+    /// doesn't matches its epoch in both readers and peer fsm.
     #[inline]
-    pub fn publish_tablet(&mut self, tablet: EK) {
-        self.remote_tablet.set(tablet.clone());
+    pub fn set_tablet(&mut self, tablet: EK) {
+        assert!(
+            self.write_batch.as_ref().map_or(true, |wb| wb.is_empty()),
+            "{:?}",
+            self.logger.list()
+        );
+        self.write_batch.take();
         self.tablet = tablet;
     }
 

@@ -46,7 +46,7 @@ mod lease;
 mod local;
 mod replica;
 
-pub(crate) use self::local::LocalReader;
+pub(crate) use self::local::{LocalReader, ReadDelegatePair, SharedReadTablet};
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     PeerFsmDelegate<'a, EK, ER, T>
@@ -439,7 +439,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             let progress = ReadProgress::applied_term(applied_term);
             let mut meta = ctx.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            let reader = &mut meta.readers.get_mut(&self.region_id()).unwrap().0;
             self.maybe_update_read_progress(reader, progress);
         }
     }
