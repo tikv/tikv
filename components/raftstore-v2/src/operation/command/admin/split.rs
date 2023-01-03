@@ -329,7 +329,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
             slog_panic!(
                 self.logger,
-                "ails to create checkpoint object";
+                "fails to create checkpoint object";
                 "error" => ?e
             )
         });

@@ -142,7 +142,7 @@ pub fn format_kv_list(buffer: &mut String, kv_list: &OwnedKVList, borrow_list: B
     kv_list.serialize(&record, &mut formatter).unwrap();
 }
 
-/// A helper macros to panic with the key-value list of a slog logger.
+/// A helper macro to panic with the key-value list of a slog logger.
 ///
 /// Similar to `SlogFormat`, but just panic.
 #[macro_export]
