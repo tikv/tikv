@@ -167,11 +167,12 @@ impl RaftEngine for PanicEngine {
 }
 
 impl RaftLogBatch for PanicWriteBatch {
-    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
-        panic!()
-    }
-
-    fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64) {
+    fn append(
+        &mut self,
+        raft_group_id: u64,
+        overwrite_to: Option<u64>,
+        entries: Vec<Entry>,
+    ) -> Result<()> {
         panic!()
     }
 

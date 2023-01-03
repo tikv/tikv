@@ -966,7 +966,7 @@ fn test_debug_raft_log() {
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42].into());
     let mut lb = engine.log_batch(0);
-    lb.append(region_id, vec![entry.clone()]).unwrap();
+    lb.append(region_id, None, vec![entry.clone()]).unwrap();
     engine.consume(&mut lb, false).unwrap();
     assert_eq!(
         engine.get_entry(region_id, log_index).unwrap().unwrap(),
