@@ -45,7 +45,7 @@ use tikv_util::box_err;
 
 use crate::{
     fsm::ApplyResReporter,
-    operation::command::temp_split_path,
+    operation::{command::temp_split_path, SharedReadTablet},
     raft::{Apply, Peer, Storage},
     Result, StoreContext,
 };
@@ -197,7 +197,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             StateRole::Follower,
         );
         let persisted_index = self.persisted_index();
-        *self.last_applying_index_mut() = persisted_index;
+        self.compact_log_context_mut()
+            .set_last_applying_index(persisted_index);
         let snapshot_index = self.entry_storage().truncated_index();
         assert!(snapshot_index >= RAFT_INIT_LOG_INDEX, "{:?}", self.logger);
         // If leader sends a message append to the follower while it's applying
@@ -211,17 +212,40 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let mut tablet_ctx = TabletContext::new(self.region(), Some(snapshot_index));
             // Use a new FlushState to avoid conflicts with the old one.
             tablet_ctx.flush_state = Some(flush_state);
-            ctx.tablet_registry.load(tablet_ctx, false).unwrap();
-            self.record_tablet_as_tombstone_and_refresh(snapshot_index, ctx);
+            let path = ctx.tablet_registry.tablet_path(region_id, snapshot_index);
+            assert!(
+                path.exists(),
+                "{:?} {} not exists",
+                self.logger.list(),
+                path.display()
+            );
+            let tablet = ctx
+                .tablet_registry
+                .tablet_factory()
+                .open_tablet(tablet_ctx, &path)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{:?} failed to load tablet at {}: {:?}",
+                        self.logger.list(),
+                        path.display(),
+                        e
+                    );
+                });
+
+            let prev_persisted_applied = self.storage().apply_trace().persisted_apply_index();
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(snapshot_index);
+            let read_tablet = SharedReadTablet::new(tablet.clone());
             {
                 let mut meta = ctx.store_meta.lock().unwrap();
                 meta.set_region(self.region(), true, &self.logger);
                 meta.readers
-                    .insert(region_id, self.generate_read_delegate());
+                    .insert(region_id, (self.generate_read_delegate(), read_tablet));
                 meta.region_read_progress
                     .insert(region_id, self.read_progress().clone());
+            }
+            if let Some(tablet) = self.set_tablet(tablet) {
+                self.record_tombstone_tablet(ctx, tablet, snapshot_index);
             }
             self.read_progress_mut().update_applied_core(snapshot_index);
             let split = self.storage_mut().split_init_mut().take();
@@ -234,6 +258,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 info!(self.logger, "init split with snapshot finished");
                 self.post_split_init(ctx, init);
             }
+            self.on_advance_persisted_apply_index(ctx, prev_persisted_applied, None);
             self.schedule_apply_fsm(ctx);
         }
     }
@@ -506,7 +531,22 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let old_last_index = self.entry_storage().last_index();
         if self.entry_storage().first_index() <= old_last_index {
             // All states are rewritten in the following blocks. Stale states will be
-            // cleaned up by compact worker.
+            // cleaned up by compact worker. Have to use raft write batch here becaue
+            // raft log engine expects deletes before writes.
+            let raft_engine = self.entry_storage().raft_engine();
+            if task.raft_wb.is_none() {
+                task.raft_wb = Some(raft_engine.log_batch(64));
+            }
+            let wb = task.raft_wb.as_mut().unwrap();
+            raft_engine
+                .clean(region.get_id(), 0, self.entry_storage().raft_state(), wb)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{:?} failed to clean up region: {:?}",
+                        self.logger().list(),
+                        e
+                    )
+                });
             self.entry_storage_mut().clear();
         }
 
