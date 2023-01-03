@@ -329,14 +329,15 @@ impl<T: Simulator> Cluster<T> {
                 .io_rate_limit
                 .build(true /* enable_statistics */),
         ));
-        for _ in 0..self.count {
-            self.create_engine();
+        for id in 1..self.count + 1 {
+            self.create_engine(Some((self.id(), id as u64)));
         }
     }
 
-    fn create_engine(&mut self) {
+    // id indicates cluster id store_id
+    fn create_engine(&mut self, id: Option<(u64, u64)>) {
         let (reg, raft_engine, key_manager, dir, sst_worker, kv_statistics, raft_statistics, node) =
-            create_test_engine(self.io_rate_limiter.clone(), &self.cfg, &self.pd_client);
+            create_test_engine(id, self.io_rate_limiter.clone(), &self.cfg, &self.pd_client);
         self.engines.push((reg, raft_engine, node));
         self.key_managers.push(key_manager);
         self.paths.push(dir);
@@ -359,7 +360,7 @@ impl<T: Simulator> Cluster<T> {
         // Try start new nodes.
         for _ in self.raft_engines.len()..self.count {
             let logger = slog_global::borrow_global().new(o!());
-            self.create_engine();
+            self.create_engine(None);
             let (tablet_registry, raft_engine, node) = self.engines.pop().unwrap();
             let id = node.id();
 
@@ -493,10 +494,6 @@ impl<T: Simulator> Cluster<T> {
                 .insert(id, self.key_managers[i].clone());
             self.sst_workers_map.insert(id, i);
             i += 1;
-        }
-
-        for (&id, raft_engine) in &self.raft_engines {
-            bootstrap_store(raft_engine, self.id(), id).unwrap();
         }
 
         let node_id = 1;
@@ -1028,8 +1025,9 @@ impl<T: Simulator> Cluster<T> {
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
+        // todo(SpadeA): modify
         let resp = self
-            .call_command_on_leader(transfer_leader, Duration::from_secs(5))
+            .call_command_on_leader(transfer_leader, Duration::from_secs(500))
             .unwrap();
         assert_eq!(
             resp.get_admin_response().get_cmd_type(),
@@ -1051,7 +1049,8 @@ impl<T: Simulator> Cluster<T> {
                     return;
                 }
             }
-            if timer.saturating_elapsed() > Duration::from_secs(5) {
+            // todo(SpadeA): modify
+            if timer.saturating_elapsed() > Duration::from_secs(500) {
                 panic!(
                     "failed to transfer leader to [{}] {:?}, current leader: {:?}",
                     region_id, leader, cur_leader

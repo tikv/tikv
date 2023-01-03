@@ -20,10 +20,11 @@ use test_raftstore::{new_put_cf_cmd, Config};
 use tikv::server::{KvEngineFactoryBuilder, NodeV2};
 use tikv_util::{config::ReadableDuration, worker::LazyWorker};
 
-use crate::{cluster::Cluster, Simulator};
+use crate::{bootstrap_store, cluster::Cluster, Simulator};
 
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
+    id: Option<(u64, u64)>,
     limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
     pd_client: &Arc<TestPdClient>,
@@ -56,11 +57,15 @@ pub fn create_test_engine(
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
+    if let Some((cluster_id, store_id)) = id {
+        assert_ne!(store_id, 0);
+        bootstrap_store(&raft_engine, cluster_id, store_id).unwrap();
+    }
+
     let builder =
         KvEngineFactoryBuilder::new(env, &cfg.tikv, cache).sst_recovery_sender(Some(scheduler));
 
     cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
-    println!("init addr {:?}", cfg.server.addr);
     let mut node = NodeV2::new(&cfg.server, pd_client.clone(), None);
     node.try_bootstrap_store(&cfg.raft_store, &raft_engine)
         .unwrap();

@@ -37,6 +37,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         mut req: RaftCmdRequest,
         ch: CmdResChannel,
     ) {
+        // if req.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2 {
+        //     return;
+        // }
+        // println!("Received msg {:?}", req);
         if !self.serving() {
             apply::notify_req_region_removed(self.region_id(), ch);
             return;
