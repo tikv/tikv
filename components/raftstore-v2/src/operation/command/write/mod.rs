@@ -177,6 +177,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         }
         util::check_key_in_region(key, self.region_state().get_region())?;
         keys::data_key_with_buffer(key, &mut self.key_buffer);
+        self.ensure_write_buffer();
         let res = if cf.is_empty() || cf == CF_DEFAULT {
             // TODO: use write_vector
             self.write_batch.as_mut().unwrap().delete(&self.key_buffer)

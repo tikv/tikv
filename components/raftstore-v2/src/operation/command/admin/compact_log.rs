@@ -21,7 +21,7 @@ use raftstore::{
     Result,
 };
 use slog::{debug, error, info};
-use tikv_util::{box_err, Either};
+use tikv_util::box_err;
 
 use crate::{
     batch::StoreContext,
@@ -255,7 +255,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .unwrap();
         self.set_has_extra_write();
 
-        self.maybe_compact_log_from_engine(store_ctx, Either::Right(old_truncated));
+        // All logs < perssited_apply will be deleted, so should check with +1.
+        if old_truncated + 1 < self.storage().apply_trace().persisted_apply_index() {
+            self.compact_log_from_engine(store_ctx);
+        }
+
+        let applied = *self.last_applying_index_mut();
+        let total_cnt = applied - old_truncated;
+        let remain_cnt = applied - res.compact_index;
+        self.update_approximate_raft_log_size(|s| s * remain_cnt / total_cnt);
     }
 
     #[inline]
@@ -278,7 +286,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             } else {
                 self.set_has_extra_write();
             }
-            self.maybe_compact_log_from_engine(store_ctx, Either::Left(old_persisted));
+            if old_persisted < self.entry_storage().truncated_index() + 1 {
+                self.compact_log_from_engine(store_ctx);
+            }
             if self.remove_tombstone_tablets_before(new_persisted) {
                 let sched = store_ctx.schedulers.tablet_gc.clone();
                 task.persisted_cbs.push(Box::new(move || {
@@ -288,19 +298,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn maybe_compact_log_from_engine<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        old_index: Either<u64, u64>,
-    ) {
-        let truncated = self.entry_storage().truncated_index();
-        let persisted = self.storage().apply_trace().persisted_apply_index();
-        match old_index {
-            Either::Left(old_persisted) if old_persisted >= truncated => return,
-            Either::Right(old_truncated) if old_truncated >= persisted => return,
-            _ => {}
-        }
-        let compact_index = std::cmp::min(truncated, persisted);
+    fn compact_log_from_engine<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+        let truncated = self.entry_storage().truncated_index() + 1;
+        let persisted_applied = self.storage().apply_trace().persisted_apply_index();
+        let compact_index = std::cmp::min(truncated, persisted_applied);
         // Raft Engine doesn't care about first index.
         if let Err(e) =
             store_ctx
@@ -309,11 +310,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             error!(self.logger, "failed to compact raft logs"; "err" => ?e);
         } else {
+            // TODO: make this debug when stable.
+            info!(self.logger, "compact log";
+                "index" => compact_index,
+                "apply_trace" => ?self.storage().apply_trace(),
+                "truncated" => ?self.entry_storage().apply_state());
             self.set_has_extra_write();
-            let applied = self.storage().apply_state().get_applied_index();
-            let total_cnt = applied - self.storage().entry_storage().first_index() + 1;
-            let remain_cnt = applied - compact_index;
-            self.update_approximate_raft_log_size(|s| s * remain_cnt / total_cnt);
         }
     }
 }

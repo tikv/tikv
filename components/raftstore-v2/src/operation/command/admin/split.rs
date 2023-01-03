@@ -65,7 +65,7 @@ use crate::{
     Error,
 };
 
-pub const SPLIT_PREFIX: &str = "split_";
+pub const SPLIT_PREFIX: &str = "split";
 
 #[derive(Debug)]
 pub struct SplitResult {
@@ -171,6 +171,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics) {
         let control = self.split_flow_control_mut();
         control.size_diff_hint += metrics.size_diff_hint;
+        if self.is_leader() {
+            self.add_pending_tick(PeerTick::SplitRegionCheck);
+        }
     }
 
     pub fn on_request_split<T>(
@@ -265,6 +268,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             self.logger,
             "split region";
             "region" => ?region,
+            "index" => log_index,
             "boundaries" => %KeysInfoFormatter(boundaries.iter()),
         );
 
@@ -449,6 +453,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Now pd only uses ReportBatchSplit for history operation show,
             // so we send it independently here.
             self.report_batch_split_pd(store_ctx, res.regions.to_vec());
+            // After split, the peer may need to update its metrics.
+            self.split_flow_control_mut().may_skip_split_check = false;
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
 
@@ -629,7 +635,7 @@ mod test {
         kv::TestTabletFactory,
     };
     use engine_traits::{
-        Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
+        FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
     };
     use kvproto::{
         metapb::RegionEpoch,
@@ -787,8 +793,9 @@ mod test {
             reporter,
             reg,
             read_scheduler,
-            Arc::default(),
+            Arc::new(FlushState::new(5)),
             None,
+            5,
             logger.clone(),
         );
 
@@ -803,7 +810,7 @@ mod test {
 
         splits.mut_requests().clear();
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 0).unwrap_err();
+        let err = apply.apply_batch_split(&req, 6).unwrap_err();
         // Empty requests should be rejected.
         assert!(err.to_string().contains("missing split requests"));
 
@@ -824,7 +831,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 0).unwrap_err();
+        let err = apply.apply_batch_split(&req, 7).unwrap_err();
         // Empty key will not in any region exclusively.
         assert!(err.to_string().contains("missing split key"), "{:?}", err);
 
@@ -836,7 +843,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k1", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 0).unwrap_err();
+        let err = apply.apply_batch_split(&req, 8).unwrap_err();
         // keys should be in ascend order.
         assert!(
             err.to_string().contains("invalid split request"),
@@ -852,7 +859,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k2", 1, vec![11, 12]));
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 0).unwrap_err();
+        let err = apply.apply_batch_split(&req, 9).unwrap_err();
         // All requests should be checked.
         assert!(err.to_string().contains("id count"), "{:?}", err);
 
