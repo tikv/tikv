@@ -49,16 +49,15 @@ impl Default for ResourceGroupManager {
 
 impl ResourceGroupManager {
     fn get_ru_setting(setting: &GroupSettings, is_read: bool) -> f64 {
-        if setting.get_mode() == GroupMode::RuMode {
-            if is_read {
-                setting.get_r_u_settings().get_r_r_u().get_tokens()
-            } else {
-                setting.get_r_u_settings().get_w_r_u().get_tokens()
+        match (setting.get_mode(), is_read) {
+            (GroupMode::RuMode, true) => setting.get_r_u_settings().get_r_r_u().get_tokens(),
+            (GroupMode::RuMode, false) => setting.get_r_u_settings().get_w_r_u().get_tokens(),
+            // TODO: currently we only consider the cpu usage in the read path, we may also take
+            // io read bytes into account later.
+            (GroupMode::NativeMode, true) => setting.get_resource_settings().get_cpu().get_tokens(),
+            (GroupMode::NativeMode, false) => {
+                setting.get_resource_settings().get_io_write().get_tokens()
             }
-        } else if is_read {
-            setting.get_resource_settings().get_cpu().get_tokens()
-        } else {
-            setting.get_resource_settings().get_io_write().get_tokens()
         }
     }
 
