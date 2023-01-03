@@ -34,6 +34,7 @@ use slog::{warn, Logger};
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
+    log::SlogFormat,
     sys::SysQuota,
     time::Instant as TiInstant,
     timer::SteadyTimer,
@@ -339,9 +340,9 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 let prev = regions.insert(region_id, (sender, peer_fsm));
                 if let Some((_, p)) = prev {
                     return Err(box_err!(
-                        "duplicate region {:?} vs {:?}",
-                        p.logger().list(),
-                        regions[&region_id].1.logger().list()
+                        "duplicate region {} vs {}",
+                        SlogFormat(p.logger()),
+                        SlogFormat(regions[&region_id].1.logger())
                     ));
                 }
                 Ok(())

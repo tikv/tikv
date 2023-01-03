@@ -17,7 +17,9 @@ use slog::{info, o, Logger};
 use tikv_util::{
     future::poll_future_notify,
     is_zero_duration,
+    log::SlogFormat,
     mpsc::{self, LooseBoundedSender, Receiver},
+    slog_panic,
 };
 
 use crate::{
@@ -60,12 +62,12 @@ impl<EK> StoreMeta<EK> {
             .insert(region_id, (region.clone(), initialized));
         // `prev` only makes sense when it's initialized.
         if let Some((prev, prev_init)) = prev && prev_init {
-            assert!(initialized, "{:?} region corrupted", logger.list());
+            assert!(initialized, "{} region corrupted", SlogFormat(logger));
             if prev.get_region_epoch().get_version() != version {
                 let prev_id = self.region_ranges.remove(&(data_end_key(prev.get_end_key()), prev.get_region_epoch().get_version()));
-                assert_eq!(prev_id, Some(region_id), "{:?} region corrupted", logger.list());
+                assert_eq!(prev_id, Some(region_id), "{} region corrupted", SlogFormat(logger));
             } else {
-                assert!(self.region_ranges.get(&(data_end_key(prev.get_end_key()), version)).is_some(), "{:?} region corrupted", logger.list());
+                assert!(self.region_ranges.get(&(data_end_key(prev.get_end_key()), version)).is_some(), "{} region corrupted", SlogFormat(logger));
                 return;
             }
         }
@@ -74,8 +76,8 @@ impl<EK> StoreMeta<EK> {
                 self.region_ranges
                     .insert((data_end_key(region.get_end_key()), version), region_id)
                     .is_none(),
-                "{:?} region corrupted",
-                logger.list()
+                "{} region corrupted",
+                SlogFormat(logger)
             );
         }
     }
@@ -216,7 +218,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
 
     fn on_start(&mut self) {
         if self.fsm.store.start_time.is_some() {
-            panic!("{:?} unable to start again", self.fsm.store.logger.list(),);
+            slog_panic!(self.fsm.store.logger, "store is already started");
         }
 
         self.fsm.store.start_time = Some(

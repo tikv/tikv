@@ -41,7 +41,7 @@ use raftstore::store::{
     ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{trace, Logger};
-use tikv_util::{box_err, worker::Scheduler};
+use tikv_util::{box_err, slog_panic, worker::Scheduler};
 
 use crate::{
     operation::{
@@ -444,11 +444,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 return;
             }
         }
-        panic!(
-            "{:?} data loss detected: {}_{} not found",
-            self.logger().list(),
-            region_id,
-            tablet_index
+        slog_panic!(
+            self.logger(),
+            "tablet loss detected";
+            "tablet_index" => tablet_index
         );
     }
 
