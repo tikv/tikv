@@ -59,6 +59,11 @@ pub fn gen_tikv_config(
             },
         )
         .unwrap_or_else(|e| {
+            eprintln!(
+                "invalid default auto generated configuration file {}, err {}",
+                path.display(),
+                e
+            );
             error!(
                 "invalid default auto generated configuration file {}, err {}",
                 path.display(),
