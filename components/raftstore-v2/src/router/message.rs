@@ -182,6 +182,9 @@ pub enum PeerMsg {
         ch: CmdResChannel,
     },
     ForceCompactLog,
+    TabletTrimmed {
+        tablet_index: u64,
+    },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),

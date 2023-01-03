@@ -345,12 +345,23 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             };
         }
 
-        info!(
-            self.logger(),
-            "requesting snapshot";
-            "request_index" => request_index,
-            "request_peer" => to,
-        );
+        if self.has_dirty_data() {
+            info!(self.logger(), "delay generating snapshot as there are still dirty data"; "request_index" => request_index, "request_peer" => to);
+            // It's OK to delay. If there are still dirty data, it means the tablet is just
+            // split. In normal cases, all peers will apply split, so reject generates
+            // snapshot may actually good for all peers as they are more likely
+            // to be initialized by split.
+            return Err(raft::Error::Store(
+                raft::StorageError::SnapshotTemporarilyUnavailable,
+            ));
+        } else {
+            info!(
+                self.logger(),
+                "requesting snapshot";
+                "request_index" => request_index,
+                "request_peer" => to,
+            );
+        }
         let canceled = Arc::new(AtomicBool::new(false));
         let index = Arc::new(AtomicU64::new(0));
         let mut gen_snap_task = self.gen_snap_task_mut();
@@ -586,6 +597,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let (path, clean_split) = match self.split_init_mut() {
             // If index not match, the peer may accept a newer snapshot after split.
             Some(init) if init.scheduled && last_index == RAFT_INIT_LOG_INDEX => {
+                lb.put_dirty_mark(region_id, last_index, true).unwrap();
+                self.set_has_dirty_data(true);
                 (temp_split_path(&reg, region_id), false)
             }
             si => (

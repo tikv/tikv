@@ -191,7 +191,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_start(&mut self) {
-        if !self.fsm.peer.maybe_pause_for_recovery() {
+        if !self.fsm.peer.maybe_pause_for_recovery(self.store_ctx) {
             self.schedule_tick(PeerTick::Raft);
         }
         self.schedule_tick(PeerTick::SplitRegionCheck);
@@ -308,6 +308,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         .on_request_split(self.store_ctx, request, ch)
                 }
                 PeerMsg::ForceCompactLog => self.on_compact_log_tick(true),
+                PeerMsg::TabletTrimmed { tablet_index } => {
+                    self.fsm.peer_mut().on_tablet_trimmed(tablet_index)
+                }
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }

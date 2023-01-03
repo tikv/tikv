@@ -471,12 +471,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.split_flow_control_mut().may_skip_split_check = false;
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
+        self.storage_mut().set_has_dirty_data(true);
+        let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
+        let tablet_index = res.tablet_index;
         let _ = store_ctx
             .schedulers
             .tablet_gc
             .schedule(tablet_gc::Task::trim(
                 self.tablet().unwrap().clone(),
                 derived,
+                move || {
+                    let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                },
             ));
 
         let last_region_id = res.regions.last().unwrap().get_id();
@@ -520,6 +526,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_state = self.storage().region_state().clone();
         self.state_changes_mut()
             .put_region_state(region_id, res.tablet_index, &region_state)
+            .unwrap();
+        self.state_changes_mut()
+            .put_dirty_mark(region_id, res.tablet_index, true)
             .unwrap();
         self.set_has_extra_write();
     }
@@ -574,13 +583,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         split_init: Box<SplitInit>,
     ) {
-        let _ = store_ctx
-            .schedulers
-            .tablet_gc
-            .schedule(tablet_gc::Task::trim(
-                self.tablet().unwrap().clone(),
-                self.region(),
-            ));
+        let region_id = self.region_id();
+        if self.storage().has_dirty_data() {
+            let tablet_index = self.storage().tablet_index();
+            let mailbox = store_ctx.router.mailbox(region_id).unwrap();
+            let _ = store_ctx
+                .schedulers
+                .tablet_gc
+                .schedule(tablet_gc::Task::trim(
+                    self.tablet().unwrap().clone(),
+                    self.region(),
+                    move || {
+                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                    },
+                ));
+        }
         if split_init.source_leader
             && self.leader_id() == INVALID_ID
             && self.term() == RAFT_INIT_LOG_TERM
@@ -593,7 +610,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // reduce client query miss.
             self.region_heartbeat_pd(store_ctx);
         }
-        let region_id = self.region_id();
 
         if split_init.check_split {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
@@ -631,6 +647,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .on_admin_flush(admin_flushed);
             // Persist admin flushed.
             self.set_has_extra_write();
+        }
+    }
+
+    pub fn on_tablet_trimmed(&mut self, tablet_index: u64) {
+        info!(self.logger, "tablet is trimmed"; "tablet_index" => tablet_index);
+        let region_id = self.region_id();
+        let changes = self.state_changes_mut();
+        changes
+            .put_dirty_mark(region_id, tablet_index, false)
+            .unwrap();
+        self.set_has_extra_write();
+        if self.storage().tablet_index() == tablet_index {
+            self.storage_mut().set_has_dirty_data(false);
         }
     }
 }

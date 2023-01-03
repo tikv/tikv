@@ -17,6 +17,7 @@ pub enum Task<EK> {
         tablet: EK,
         start_key: Box<[u8]>,
         end_key: Box<[u8]>,
+        cb: Box<dyn FnOnce() + Send>,
     },
     PrepareDestroy {
         tablet: EK,
@@ -31,11 +32,9 @@ pub enum Task<EK> {
 
 impl<EK> Display for Task<EK> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
+        match self {
             Task::Trim {
-                ref start_key,
-                ref end_key,
-                ..
+                start_key, end_key, ..
             } => write!(
                 f,
                 "trim tablet for start_key {}, end_key {}",
@@ -65,11 +64,12 @@ impl<EK> Display for Task<EK> {
 
 impl<EK> Task<EK> {
     #[inline]
-    pub fn trim(tablet: EK, region: &Region) -> Self {
+    pub fn trim(tablet: EK, region: &Region, cb: impl FnOnce() + Send + 'static) -> Self {
         Task::Trim {
             tablet,
             start_key: region.get_start_key().into(),
             end_key: region.get_end_key().into(),
+            cb: Box::new(cb),
         }
     }
 
@@ -110,7 +110,12 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
-    fn trim(tablet: &EK, start_key: &[u8], end_key: &[u8]) -> engine_traits::Result<()> {
+    fn trim(
+        tablet: &EK,
+        start_key: &[u8],
+        end_key: &[u8],
+        cb: Box<dyn FnOnce() + Send>,
+    ) -> engine_traits::Result<()> {
         let start_key = keys::data_key(start_key);
         let end_key = keys::data_end_key(end_key);
         let range1 = Range::new(&[], &start_key);
@@ -121,6 +126,7 @@ impl<EK: KvEngine> Runner<EK> {
         for r in [range1, range2] {
             tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1)?;
         }
+        cb();
         Ok(())
     }
 
@@ -195,8 +201,9 @@ where
                 tablet,
                 start_key,
                 end_key,
+                cb,
             } => {
-                if let Err(e) = Self::trim(&tablet, &start_key, &end_key) {
+                if let Err(e) = Self::trim(&tablet, &start_key, &end_key, cb) {
                     error!(
                         self.logger,
                         "failed to trim tablet";
