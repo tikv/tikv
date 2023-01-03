@@ -11,7 +11,7 @@ use raftstore::{
     coprocessor::CoprocessorHost,
     store::{GlobalReplicationState, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX},
 };
-use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreSystem};
+use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
 use slog::{info, o, Logger};
 use tikv_util::{
     config::VersionTrack,
@@ -24,11 +24,10 @@ use crate::server::{node::init_store, Result};
 pub struct NodeV2<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
-    system: Option<(RaftRouter<EK, ER>, StoreSystem<EK, ER>)>,
+    system: Option<(StoreRouter<EK, ER>, StoreSystem<EK, ER>)>,
     has_started: bool,
 
     pd_client: Arc<C>,
-    registry: TabletRegistry<EK>,
     logger: Logger,
 }
 
@@ -43,7 +42,6 @@ where
         cfg: &crate::server::Config,
         pd_client: Arc<C>,
         store: Option<metapb::Store>,
-        registry: TabletRegistry<EK>,
     ) -> NodeV2<C, EK, ER> {
         let store = init_store(store, cfg);
 
@@ -53,7 +51,6 @@ where
             pd_client,
             system: None,
             has_started: false,
-            registry,
             logger: slog_global::borrow_global().new(o!()),
         }
     }
@@ -71,16 +68,14 @@ where
         )
         .bootstrap_store()?;
         self.store.set_id(store_id);
+
         let (router, system) =
             raftstore_v2::create_store_batch_system(cfg, store_id, self.logger.clone());
-        self.system = Some((
-            RaftRouter::new(store_id, self.registry.clone(), router),
-            system,
-        ));
+        self.system = Some((router, system));
         Ok(())
     }
 
-    pub fn router(&self) -> &RaftRouter<EK, ER> {
+    pub fn router(&self) -> &StoreRouter<EK, ER> {
         &self.system.as_ref().unwrap().0
     }
 
@@ -90,6 +85,8 @@ where
     pub fn start<T>(
         &mut self,
         raft_engine: ER,
+        registry: TabletRegistry<EK>,
+        router: &RaftRouter<EK, ER>,
         trans: T,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
@@ -112,15 +109,10 @@ where
         )
         .bootstrap_first_region(&self.store, store_id)?
         {
-            let path = self
-                .registry
-                .tablet_path(region.get_id(), RAFT_INIT_LOG_INDEX);
+            let path = registry.tablet_path(region.get_id(), RAFT_INIT_LOG_INDEX);
             let ctx = TabletContext::new(&region, Some(RAFT_INIT_LOG_INDEX));
             // TODO: make follow line can recover from abort.
-            self.registry
-                .tablet_factory()
-                .open_tablet(ctx, &path)
-                .unwrap();
+            registry.tablet_factory().open_tablet(ctx, &path).unwrap();
         }
 
         // Put store only if the cluster is bootstrapped.
@@ -130,6 +122,8 @@ where
 
         self.start_store(
             raft_engine,
+            registry,
+            router,
             trans,
             snap_mgr,
             concurrency_manager,
@@ -187,6 +181,8 @@ where
     fn start_store<T>(
         &mut self,
         raft_engine: ER,
+        registry: TabletRegistry<EK>,
+        router: &RaftRouter<EK, ER>,
         trans: T,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
@@ -207,13 +203,13 @@ where
         }
         self.has_started = true;
 
-        let (router, system) = self.system.as_mut().unwrap();
+        let system = &mut self.system.as_mut().unwrap().1;
 
         system.start(
             store_id,
             store_cfg,
             raft_engine,
-            self.registry.clone(),
+            registry,
             trans,
             self.pd_client.clone(),
             router.store_router(),
