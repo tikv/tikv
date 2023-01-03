@@ -25,7 +25,7 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{borrow::Cow, cmp, path::PathBuf};
+use std::{any::Any, borrow::Cow, cmp, path::PathBuf};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
@@ -58,7 +58,7 @@ use slog::info;
 use crate::{
     batch::StoreContext,
     fsm::{ApplyResReporter, PeerFsmDelegate},
-    operation::AdminCmdResult,
+    operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
     worker::tablet_gc,
@@ -73,6 +73,10 @@ pub struct SplitResult {
     // The index of the derived region in `regions`
     pub derived_index: usize,
     pub tablet_index: u64,
+    // Hack: in common case we should use generic, but split is an unfrequent
+    // event that performance is not critical. And using `Any` can avoid polluting
+    // all existing code.
+    tablet: Box<dyn Any + Send + Sync>,
 }
 
 #[derive(Debug)]
@@ -370,8 +374,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     )
                 });
         }
-        // Remove the old write batch.
-        self.write_batch.take();
         let reg = self.tablet_registry();
         let path = reg.tablet_path(region_id, log_index);
         let mut ctx = TabletContext::new(&regions[derived_index], Some(log_index));
@@ -380,7 +382,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // TODO: Should we avoid flushing for the old tablet?
         ctx.flush_state = Some(self.flush_state().clone());
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
-        self.publish_tablet(tablet);
+        self.set_tablet(tablet.clone());
 
         self.region_state_mut()
             .set_region(regions[derived_index].clone());
@@ -396,6 +398,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 regions,
                 derived_index,
                 tablet_index: log_index,
+                tablet: Box::new(tablet),
             }),
         ))
     }
@@ -427,10 +430,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         fail_point!("on_split_invalidate_locks");
 
+        let tablet: EK = match res.tablet.downcast() {
+            Ok(t) => *t,
+            Err(t) => unreachable!("tablet type should be the same: {:?}", t),
+        };
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
             meta.set_region(derived, true, &self.logger);
-            let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
+            let (reader, read_tablet) = meta.readers.get_mut(&derived.get_id()).unwrap();
             self.set_region(
                 &store_ctx.coprocessor_host,
                 reader,
@@ -438,6 +445,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 RegionChangeReason::Split,
                 res.tablet_index,
             );
+
+            // Tablet should be updated in lock to match the epoch.
+            *read_tablet = SharedReadTablet::new(tablet.clone());
+        }
+        if let Some(tablet) = self.set_tablet(tablet) {
+            self.record_tombstone_tablet(store_ctx, tablet, res.tablet_index);
         }
 
         self.post_split();
@@ -457,8 +470,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.split_flow_control_mut().may_skip_split_check = false;
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
-
-        self.record_tablet_as_tombstone_and_refresh(res.tablet_index, store_ctx);
         let _ = store_ctx
             .schedulers
             .tablet_gc
@@ -632,7 +643,7 @@ mod test {
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::TestTabletFactory,
+        kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
         FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
@@ -679,7 +690,7 @@ mod test {
     }
 
     fn assert_split(
-        apply: &mut Apply<engine_test::kv::KvTestEngine, MockReporter>,
+        apply: &mut Apply<KvTestEngine, MockReporter>,
         parent_id: u64,
         right_derived: bool,
         new_region_ids: Vec<u64>,

@@ -912,7 +912,6 @@ where
 }
 
 /// Used for test to write task to kv db and raft db.
-#[cfg(test)]
 pub fn write_to_db_for_test<EK, ER>(
     engines: &engine_traits::Engines<EK, ER>,
     task: WriteTask<EK, ER>,
@@ -922,7 +921,8 @@ pub fn write_to_db_for_test<EK, ER>(
 {
     let mut batch = WriteTaskBatch::new(engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE));
     batch.add_write_task(&engines.raft, task);
-    batch.before_write_to_db(&StoreWriteMetrics::new(false));
+    let metrics = StoreWriteMetrics::new(false);
+    batch.before_write_to_db(&metrics);
     if let ExtraBatchWrite::V1(kv_wb) = &mut batch.extra_batch_write {
         if !kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
@@ -939,6 +939,8 @@ pub fn write_to_db_for_test<EK, ER>(
             });
         }
     }
+    batch.after_write_to_raft_db(&metrics);
+    batch.after_write_all();
 }
 
 #[cfg(test)]

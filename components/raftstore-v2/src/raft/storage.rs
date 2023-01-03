@@ -307,8 +307,9 @@ mod tests {
     };
     use raft::{Error as RaftError, StorageError};
     use raftstore::store::{
-        util::new_empty_snapshot, AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner,
-        TabletSnapKey, TabletSnapManager, WriteTask,
+        util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, FetchedLogs, GenSnapRes,
+        ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX,
+        RAFT_INIT_LOG_TERM,
     };
     use slog::o;
     use tempfile::TempDir;
@@ -357,14 +358,20 @@ mod tests {
         region
     }
 
+    fn new_entry(index: u64, term: u64) -> Entry {
+        let mut e = Entry::default();
+        e.set_index(index);
+        e.set_term(term);
+        e
+    }
+
     #[test]
     fn test_apply_snapshot() {
         let region = new_region();
         let path = TempDir::new().unwrap();
         let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
-        let raft_engine =
-            engine_test::raft::new_engine(&format!("{}", path.path().join("raft").display()), None)
-                .unwrap();
+        let engines = engine_test::new_temp_engine(&path);
+        let raft_engine = engines.raft.clone();
         let mut wb = raft_engine.log_batch(10);
         write_initial_states(&mut wb, region.clone()).unwrap();
         assert!(!wb.is_empty());
@@ -381,26 +388,57 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let snapshot = new_empty_snapshot(region.clone(), 10, 9, false);
-        let mut task = WriteTask::new(region.get_id(), 5, 0);
-        s.apply_snapshot(&snapshot, &mut task, mgr, reg).unwrap();
+        let mut task = WriteTask::new(region.get_id(), 5, 1);
+        let entries = (RAFT_INIT_LOG_INDEX + 1..RAFT_INIT_LOG_INDEX + 10)
+            .map(|i| new_entry(i, RAFT_INIT_LOG_TERM))
+            .collect();
+        s.entry_storage_mut().append(entries, &mut task);
+        write_to_db_for_test(&engines, task);
+
+        let snap_index = RAFT_INIT_LOG_INDEX + 20;
+        let snap_term = 9;
+        let path = mgr.final_recv_path(&TabletSnapKey::new(
+            region.get_id(),
+            5,
+            snap_term,
+            snap_index,
+        ));
+        reg.tablet_factory()
+            .open_tablet(TabletContext::new(&region, Some(snap_index)), &path)
+            .unwrap();
+        let snapshot = new_empty_snapshot(region.clone(), snap_index, snap_term, false);
+        let mut task = WriteTask::new(region.get_id(), 5, 1);
+        s.apply_snapshot(&snapshot, &mut task, mgr, reg.clone())
+            .unwrap();
+        // Add more entries to check if old entries are cleared. If not, it should panic
+        // with memtable hole when using raft engine.
+        let entries = (snap_index + 1..=snap_index + 10)
+            .map(|i| new_entry(i, snap_term))
+            .collect();
+        s.entry_storage_mut().append(entries, &mut task);
+
+        assert!(!reg.tablet_path(region.get_id(), snap_index).exists());
+        assert!(!task.persisted_cbs.is_empty());
+
+        write_to_db_for_test(&engines, task);
+
+        assert!(reg.tablet_path(region.get_id(), snap_index).exists());
 
         // It can be set before load tablet.
         assert_eq!(PeerState::Normal, s.region_state().get_state());
-        assert_eq!(10, s.entry_storage().truncated_index());
-        assert_eq!(9, s.entry_storage().truncated_term());
-        assert_eq!(9, s.entry_storage().last_term());
-        assert_eq!(10, s.entry_storage().raft_state().last_index);
+        assert_eq!(snap_index, s.entry_storage().truncated_index());
+        assert_eq!(snap_term, s.entry_storage().truncated_term());
+        assert_eq!(snap_term, s.entry_storage().last_term());
+        assert_eq!(snap_index + 10, s.entry_storage().raft_state().last_index);
         // This index can't be set before load tablet.
-        assert_ne!(10, s.entry_storage().applied_index());
-        assert_ne!(9, s.entry_storage().applied_term());
-        assert_eq!(10, s.region_state().get_tablet_index());
-        assert!(!task.persisted_cbs.is_empty());
+        assert_ne!(snap_index, s.entry_storage().applied_index());
+        assert_ne!(snap_term, s.entry_storage().applied_term());
+        assert_eq!(snap_index, s.region_state().get_tablet_index());
 
         s.on_applied_snapshot();
-        assert_eq!(10, s.entry_storage().applied_index());
-        assert_eq!(9, s.entry_storage().applied_term());
-        assert_eq!(10, s.region_state().get_tablet_index());
+        assert_eq!(snap_index, s.entry_storage().applied_index());
+        assert_eq!(snap_term, s.entry_storage().applied_term());
+        assert_eq!(snap_index, s.region_state().get_tablet_index());
     }
 
     #[test]

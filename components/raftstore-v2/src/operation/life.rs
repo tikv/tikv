@@ -320,12 +320,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// memory states.
     pub fn finish_destroy<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         info!(self.logger, "peer destroyed");
-        ctx.router.close(self.region_id());
+        let region_id = self.region_id();
+        ctx.router.close(region_id);
         {
-            ctx.store_meta
-                .lock()
-                .unwrap()
-                .remove_region(self.region_id());
+            let mut meta = ctx.store_meta.lock().unwrap();
+            meta.remove_region(region_id);
+            meta.readers.remove(&region_id);
         }
         if let Some(msg) = self.destroy_progress_mut().finish() {
             // The message will be dispatched to store fsm, which will create a

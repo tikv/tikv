@@ -6,7 +6,7 @@ use std::{
 };
 
 use crossbeam::channel::TrySendError;
-use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
@@ -115,13 +115,13 @@ where
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
-    pub fn new(store_id: u64, reg: TabletRegistry<EK>, router: StoreRouter<EK, ER>) -> Self {
+    pub fn new(store_id: u64, router: StoreRouter<EK, ER>) -> Self {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(store_id)));
 
         let logger = router.logger().clone();
         RaftRouter {
             router: router.clone(),
-            local_reader: LocalReader::new(store_meta, reg, router, logger),
+            local_reader: LocalReader::new(store_meta, router, logger),
         }
     }
 
@@ -138,7 +138,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
         self.router.check_send(addr, msg)
     }
 
-    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta>> {
+    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta<EK>>> {
         self.local_reader.store_meta()
     }
 
