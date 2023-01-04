@@ -505,7 +505,7 @@ impl ServerCluster {
                 copr.clone(),
                 copr_v2.clone(),
                 resolver.clone(),
-                snap_mgr.clone(),
+                tikv_util::Either::Left(snap_mgr.clone()),
                 gc_worker.clone(),
                 check_leader_scheduler.clone(),
                 self.env.clone(),
