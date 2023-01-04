@@ -9,7 +9,7 @@ use std::{
 use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry};
 use kvproto::metapb::Region;
-use slog::{error, warn, Logger};
+use slog::{debug, error, warn, Logger};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 pub enum Task<EK> {
@@ -156,10 +156,15 @@ impl<EK: KvEngine> Runner<EK> {
                 "path" => path.display(),
             ),
             Ok(false) => {
+                let (_, region_id, tablet_index) =
+                    registry.parse_tablet_name(path).unwrap_or(("", 0, 0));
                 // TODO: use a meaningful table context.
                 let _ = registry
                     .tablet_factory()
-                    .destroy_tablet(TabletContext::with_infinite_region(0, None), path)
+                    .destroy_tablet(
+                        TabletContext::with_infinite_region(region_id, Some(tablet_index)),
+                        path,
+                    )
                     .map_err(|e| {
                         warn!(
                             logger,
@@ -170,7 +175,9 @@ impl<EK: KvEngine> Runner<EK> {
                     });
                 return true;
             }
-            _ => {}
+            Ok(true) => {
+                debug!(logger, "ignore locked tablet"; "path" => path.display());
+            }
         }
         false
     }
@@ -222,6 +229,6 @@ where
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(2)
+        Duration::from_secs(10)
     }
 }

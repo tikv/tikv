@@ -385,15 +385,16 @@ const FLUSH_STATE_KEY: &[u8] = &[0x06];
 const KEY_PREFIX_LEN: usize = RAFT_LOG_STATE_KEY.len();
 
 impl RaftLogBatchTrait for RaftLogBatch {
-    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
+    fn append(
+        &mut self,
+        raft_group_id: u64,
+        _overwrite_to: Option<u64>,
+        entries: Vec<Entry>,
+    ) -> Result<()> {
+        // overwrite is handled within raft log engine.
         self.0
             .add_entries::<MessageExtTyped>(raft_group_id, &entries)
             .map_err(transfer_error)
-    }
-
-    fn cut_logs(&mut self, _: u64, _: u64, _: u64) {
-        // It's unnecessary because overlapped entries can be handled in
-        // `append`.
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {

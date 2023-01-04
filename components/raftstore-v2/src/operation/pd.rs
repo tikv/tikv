@@ -7,6 +7,7 @@ use fail::fail_point;
 use kvproto::{metapb, pdpb};
 use raftstore::store::Transport;
 use slog::error;
+use tikv_util::slog_panic;
 
 use crate::{
     batch::StoreContext,
@@ -137,10 +138,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     pending_peers.push(p);
                 } else {
                     if ctx.cfg.dev_assert {
-                        panic!(
-                            "{:?} failed to get peer {} from cache",
-                            self.logger.list(),
-                            id
+                        slog_panic!(
+                            self.logger,
+                            "failed to get peer from cache";
+                            "get_peer_id" => id
                         );
                     }
                     error!(
