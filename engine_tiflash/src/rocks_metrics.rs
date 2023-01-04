@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use collections::HashMap;
-use engine_traits::{StatisticsReporter,CF_DEFAULT};
+use engine_traits::{StatisticsReporter, CF_DEFAULT};
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;

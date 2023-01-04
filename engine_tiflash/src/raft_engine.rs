@@ -3,8 +3,8 @@
 // #[PerformanceCriticalPath]
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, Result, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
+    RaftEngineReadOnly, RaftLogBatch, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
+    RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::{
     metapb::Region,

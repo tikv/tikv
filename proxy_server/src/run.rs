@@ -21,8 +21,7 @@ use api_version::{dispatch_api_version, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
-    flush_engine_statistics,
-    from_rocks_compression_type,
+    flush_engine_statistics, from_rocks_compression_type,
     raw::{Cache, Env},
     FlowInfo, RocksEngine, RocksStatistics,
 };
@@ -32,8 +31,8 @@ use engine_store_ffi::{
     RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient, TiFlashEngine,
 };
 use engine_traits::{
-    CachedTablet, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine, 
-    TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE, StatisticsReporter,
+    CachedTablet, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
+    StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -100,6 +99,7 @@ use tikv_util::{
     Either,
 };
 use tokio::runtime::Builder;
+
 // use engine_tiflash::rocks_metrics::RocksStatisticsReporter;
 use crate::{
     config::ProxyConfig, fatal, hacked_lock_mgr::HackedLockManager as LockManager, setup::*,
@@ -412,7 +412,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         let kv_engine = factory
             .create_shared_db(&self.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        
+
         self.kv_statistics = Some(factory.rocks_statistics());
 
         let helper = engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper);
@@ -434,8 +434,8 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             tikv::config::Module::Rocksdb,
             Box::new(DbConfigManger::new(kv_engine.clone(), DbType::Kv)),
         );
-        // let reg = TabletRegistry::new(Box::new(SingletonFactory::new(kv_engine)), &self.store_path)
-        //     .unwrap();
+        // let reg = TabletRegistry::new(Box::new(SingletonFactory::new(kv_engine)),
+        // &self.store_path)     .unwrap();
         // self.tablet_registry = Some(reg.clone());
         engines.raft.register_config(cfg_controller);
 

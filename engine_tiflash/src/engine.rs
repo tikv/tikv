@@ -14,14 +14,13 @@ use std::{
 
 use engine_rocks::{RocksDbVector, RocksEngineIterator, RocksSnapshot};
 use engine_traits::{
-    Checkpointable, Checkpointer, Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions,
-    Result, SyncMutable, CF_DEFAULT, DbOptionsExt, DbOptions, CfOptionsExt,
+    CfOptionsExt, Checkpointable, Checkpointer, DbOptions, DbOptionsExt, Error, IterOptions,
+    Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable, CF_DEFAULT,
 };
 use rocksdb::{Writable, DB};
+use tikv::config::ConfigurableDb;
 
 use crate::{r2e, util::get_cf_handle};
-
-use tikv::config::ConfigurableDb;
 
 pub struct FsStatsExt {
     pub used: u64,
