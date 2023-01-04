@@ -68,10 +68,7 @@ pub fn create_test_engine(
     assert_ne!(node.id(), 0);
 
     let router = node.router().clone();
-    let builder = builder.state_storage(Arc::new(StateStorage::new(
-        raft_engine.clone(),
-        router.clone(),
-    )));
+    let builder = builder.state_storage(Arc::new(StateStorage::new(raft_engine.clone(), router)));
 
     let factory = Box::new(builder.build());
     let rocks_statistics = factory.rocks_statistics();

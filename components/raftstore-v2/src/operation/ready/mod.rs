@@ -34,6 +34,8 @@ use raftstore::{
 };
 use slog::{debug, error, info, trace, warn};
 use tikv_util::{
+    log::SlogFormat,
+    slog_panic,
     store::find_peer,
     time::{duration_to_sec, monotonic_raw_now},
 };
@@ -306,7 +308,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut update_lease = self.is_leader();
         if update_lease {
             for entry in committed_entries.iter().rev() {
-                self.update_approximate_raft_log_size(|s| s + entry.get_data().len() as u64);
+                self.compact_log_context_mut()
+                    .add_log_size(entry.get_data().len() as u64);
                 if update_lease {
                     let propose_time = self
                         .proposals()
@@ -329,7 +332,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let applying_index = committed_entries.last().unwrap().index;
         let commit_to_current_term = committed_entries.last().unwrap().term == self.term();
-        *self.last_applying_index_mut() = applying_index;
+        self.compact_log_context_mut()
+            .set_last_applying_index(applying_index);
         if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
             // Compact all cached entries instead of half evict.
             self.entry_storage_mut().evict_entry_cache(false);
@@ -386,8 +390,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let prev_commit_index = self.entry_storage().commit_index();
             assert!(
                 hs.get_commit() >= prev_commit_index,
-                "{:?} {:?} {}",
-                self.logger.list(),
+                "{} {:?} {}",
+                SlogFormat(&self.logger),
                 hs,
                 prev_commit_index
             );
@@ -426,7 +430,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
-        self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
+        self.on_advance_persisted_apply_index(ctx, prev_persisted, Some(&mut write_task));
 
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready
@@ -454,11 +458,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             if !light_rd.messages().is_empty() || light_rd.commit_index().is_some() {
-                panic!(
-                    "{:?} unexpected messages [{}] commit index [{:?}]",
-                    self.logger.list(),
-                    light_rd.messages().len(),
-                    light_rd.commit_index()
+                slog_panic!(
+                    self.logger,
+                    "unexpected messages";
+                    "messages_count" => ?light_rd.messages().len(),
+                    "commit_index" => ?light_rd.commit_index()
                 );
             }
             if !light_rd.committed_entries().is_empty() {
@@ -612,9 +616,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // leader apply the split command or an election timeout is passed since split
         // is committed. We already forbid renewing lease after committing split, and
         // original leader will update the reader delegate with latest epoch after
-        // applying split before the split peer starts campaign, so here the only thing
-        // we need to do is marking split is committed (which is done by `commit_to`
-        // above). It's correct to allow local read during split.
+        // applying split before the split peer starts campaign, so what needs to be
+        // done are 1. mark split is committed, which is done by `commit_to` above,
+        // 2. make sure split result is invisible until epoch is updated or reader may
+        // miss data from the new tablet. This is done by always publish tablet in
+        // `on_apply_res_split`. So it's correct to allow local read during split.
         //
         // - For merge, after the prepare merge command is committed, the target peers
         // may apply commit merge at any time, so we need to forbid any type of read

@@ -164,7 +164,7 @@ impl ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: Config,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
         mut node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
@@ -183,7 +183,7 @@ impl ServerCluster {
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
 
-        cfg.server.addr = node.store().address.clone();
+        cfg.server.addr = node.store().address;
 
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
@@ -198,12 +198,8 @@ impl ServerCluster {
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
         let node_id = node.id();
-        let raft_router = RaftRouter::new_with_store_meta(
-            node_id,
-            tablet_registry.clone(),
-            node.router().clone(),
-            store_meta.clone(),
-        );
+        let raft_router =
+            RaftRouter::new_with_store_meta(node.router().clone(), store_meta.clone());
 
         // Create coprocessor.
         let mut coprocessor_host =
@@ -308,7 +304,7 @@ impl ServerCluster {
         let (resolver, state) = resolve::new_resolver(
             Arc::clone(&self.pd_client),
             &bg_worker,
-            store.get_engine().raft_extension().clone(),
+            store.get_engine().raft_extension(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
@@ -506,7 +502,7 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         cfg: Config,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
         node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,

@@ -171,7 +171,7 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: Config,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
         mut node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
@@ -211,12 +211,7 @@ impl Simulator for NodeCluster {
             trans.snap_paths[&node_id].clone()
         };
 
-        let raft_router = RaftRouter::new_with_store_meta(
-            node.id(),
-            tablet_registry.clone(),
-            node.router().clone(),
-            store_meta,
-        );
+        let raft_router = RaftRouter::new_with_store_meta(node.router().clone(), store_meta);
         // Create coprocessor.
         let mut coprocessor_host =
             CoprocessorHost::new(raft_router.store_router().clone(), cfg.coprocessor.clone());
@@ -237,7 +232,7 @@ impl Simulator for NodeCluster {
         node.start(
             raft_engine.clone(),
             tablet_registry,
-            &raft_router.clone(),
+            &raft_router,
             simulate_trans.clone(),
             snap_mgr.clone(),
             cm,

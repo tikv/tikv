@@ -470,7 +470,7 @@ pub fn copy_tablet_snapshot(
     recver_snap_mgr: &TabletSnapManager,
 ) -> Result<()> {
     let sender_path = sender_snap_mgr.tablet_gen_path(&key);
-    let files = fs::read_dir(&sender_path)?
+    let files = fs::read_dir(sender_path)?
         .map(|f| Ok(f?.path()))
         .filter(|f| f.is_ok() && f.as_ref().unwrap().is_file())
         .collect::<Result<Vec<_>>>()?;
@@ -488,7 +488,7 @@ pub fn copy_tablet_snapshot(
         let mut sender_f = File::open(&path)?;
 
         let recv_p = recv_path.join(sender_name);
-        let mut recv_f = File::create(&recv_p)?;
+        let mut recv_f = File::create(recv_p)?;
 
         while io::copy(&mut sender_f, &mut recv_f)? != 0 {}
     }

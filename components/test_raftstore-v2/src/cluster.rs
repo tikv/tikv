@@ -72,7 +72,7 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: Config,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
         node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
@@ -253,7 +253,7 @@ pub struct Cluster<T: Simulator> {
     pub tablet_registries: HashMap<u64, TabletRegistry<RocksEngine>>,
     pub raft_engines: HashMap<u64, RaftTestEngine>,
     pub nodes: HashMap<u64, Option<NodeV2<TestPdClient, RocksEngine, RaftTestEngine>>>,
-    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
+    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta<RocksEngine>>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IoRateLimiter>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
@@ -441,8 +441,9 @@ impl<T: Simulator> Cluster<T> {
     ///
     /// Must be called after `create_engines`.
     pub fn bootstrap_region(&mut self) -> Result<()> {
-        let mut i = 0;
-        for (tablet_registry, raft_engine, node) in std::mem::take(&mut self.engines) {
+        for (i, (tablet_registry, raft_engine, node)) in
+            std::mem::take(&mut self.engines).into_iter().enumerate()
+        {
             let id = node.id();
             self.tablet_registries.insert(id, tablet_registry);
             self.raft_engines.insert(id, raft_engine);
@@ -452,7 +453,6 @@ impl<T: Simulator> Cluster<T> {
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
             self.sst_workers_map.insert(id, i);
-            i += 1;
         }
 
         let mut region = metapb::Region::default();
@@ -480,8 +480,9 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn bootstrap_conf_change(&mut self) -> u64 {
-        let mut i = 0;
-        for (tablet_registry, raft_engine, node) in std::mem::take(&mut self.engines) {
+        for (i, (tablet_registry, raft_engine, node)) in
+            std::mem::take(&mut self.engines).into_iter().enumerate()
+        {
             let id = node.id();
             self.tablet_registries.insert(id, tablet_registry);
             self.raft_engines.insert(id, raft_engine);
@@ -491,7 +492,6 @@ impl<T: Simulator> Cluster<T> {
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
             self.sst_workers_map.insert(id, i);
-            i += 1;
         }
 
         let node_id = 1;
