@@ -6,7 +6,7 @@ use std::{
 };
 
 use engine_traits::{KvEngine, RaftEngine};
-use futures::{executor::block_on, prelude::*};
+use futures::executor::block_on;
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
@@ -16,7 +16,7 @@ use raftstore::{
     store::{RegionSnapshot, Transport},
     Result, Result as RaftStoreResult,
 };
-use raftstore_v2::router::{CmdResSubscriber, PeerMsg, RaftRouter};
+use raftstore_v2::router::{PeerMsg, RaftRouter};
 use test_raftstore::{filter_send, Filter};
 use tikv_util::HandyRwLock;
 

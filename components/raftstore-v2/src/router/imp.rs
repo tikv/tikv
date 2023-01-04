@@ -156,4 +156,18 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
     {
         self.local_reader.snapshot(req)
     }
+
+    // test only
+    pub fn new_with_store_meta(
+        store_id: u64,
+        reg: TabletRegistry<EK>,
+        router: StoreRouter<EK, ER>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+    ) -> Self {
+        let logger = router.logger().clone();
+        RaftRouter {
+            router: router.clone(),
+            local_reader: LocalReader::new(store_meta, reg, router, logger),
+        }
+    }
 }

@@ -13,8 +13,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Iterable, KvEngine, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch,
-    ReadOptions, SyncMutable, TabletRegistry, CF_DEFAULT,
+    Iterable, KvEngine, MiscExt, Peekable, RaftEngine, RaftLogBatch, ReadOptions, SyncMutable,
+    TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
 use futures::{compat::Future01CompatExt, executor::block_on, select, FutureExt};
@@ -22,23 +22,25 @@ use keys::data_key;
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::ApiVersion,
-    metapb::{self, PeerRole, RegionEpoch},
-    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response},
+    metapb::{self, Buckets, PeerRole, RegionEpoch},
+    raft_cmdpb::{
+        AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RegionDetailResponse, Request,
+        Response, StatusCmdType,
+    },
     raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent},
 };
 use pd_client::PdClient;
 use raftstore::{
     store::{
-        cmd_resp, initial_region, util::check_key_in_region, Callback, RegionSnapshot,
-        WriteResponse, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+        cmd_resp, initial_region, util::check_key_in_region, Bucket, BucketRange, Callback,
+        RegionSnapshot, WriteResponse, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     },
     Error, Result,
 };
 use raftstore_v2::{
     router::{PeerMsg, QueryResult},
-    write_initial_states, Bootstrap, SimpleWriteEncoder, StoreMeta, StoreRouter,
+    write_initial_states, SimpleWriteEncoder, StoreMeta, StoreRouter,
 };
-use slog::o;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
@@ -84,9 +86,6 @@ pub trait Simulator {
     fn get_snap_dir(&self, node_id: u64) -> String;
 
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
-        let node_id = request.get_header().get_peer().get_store_id();
-        let region_id = request.get_header().get_region_id();
-
         let mut req_clone = request.clone();
         req_clone.clear_requests();
         req_clone.mut_requests().push(new_snap_cmd());
@@ -162,7 +161,7 @@ pub trait Simulator {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        timeout: Duration,
+        _timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
         let (msg, sub) = PeerMsg::raft_query(request);
@@ -359,7 +358,6 @@ impl<T: Simulator> Cluster<T> {
 
         // Try start new nodes.
         for _ in self.raft_engines.len()..self.count {
-            let logger = slog_global::borrow_global().new(o!());
             self.create_engine(None);
             let (tablet_registry, raft_engine, node) = self.engines.pop().unwrap();
             let id = node.id();
@@ -902,6 +900,21 @@ impl<T: Simulator> Cluster<T> {
             .take_region_epoch()
     }
 
+    pub fn region_detail(&mut self, region_id: u64, store_id: u64) -> RegionDetailResponse {
+        let status_cmd = new_region_detail_cmd();
+        let peer = new_peer(store_id, 0);
+        let req = new_status_request(region_id, peer, status_cmd);
+        let resp = self.call_command(req, Duration::from_secs(5));
+        assert!(resp.is_ok(), "{:?}", resp);
+
+        let mut resp = resp.unwrap();
+        assert!(resp.has_status_response());
+        let mut status_resp = resp.take_status_response();
+        assert_eq!(status_resp.get_cmd_type(), StatusCmdType::RegionDetail);
+        assert!(status_resp.has_region_detail());
+        status_resp.take_region_detail()
+    }
+
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         self.get_impl(CF_DEFAULT, key, false)
     }
@@ -1029,7 +1042,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
+    pub fn apply_state(&self, _region_id: u64, _store_id: u64) -> RaftApplyState {
         unimplemented!()
     }
 
@@ -1226,6 +1239,49 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(itvl_ms);
         }
     }
+
+    pub fn get_snap_dir(&self, node_id: u64) -> String {
+        self.sim.rl().get_snap_dir(node_id)
+    }
+
+    pub fn refresh_region_bucket_keys(
+        &mut self,
+        _region: &metapb::Region,
+        _buckets: Vec<Bucket>,
+        _bucket_ranges: Option<Vec<BucketRange>>,
+        _expect_buckets: Option<Buckets>,
+    ) -> u64 {
+        unimplemented!()
+    }
+
+    pub fn send_half_split_region_message(
+        &mut self,
+        _region: &metapb::Region,
+        _expected_bucket_ranges: Option<Vec<BucketRange>>,
+    ) {
+        unimplemented!()
+    }
+
+    pub fn shutdown(&mut self) {
+        debug!("about to shutdown cluster");
+        let keys = match self.sim.read() {
+            Ok(s) => s.get_node_ids(),
+            Err(_) => {
+                safe_panic!("failed to acquire read lock");
+                // Leave the resource to avoid double panic.
+                return;
+            }
+        };
+        for id in keys {
+            self.stop_node(id);
+        }
+        self.leaders.clear();
+        self.store_metas.clear();
+        // for sst_worker in self.sst_workers.drain(..) {
+        //     sst_worker.stop_worker();
+        // }
+        debug!("all nodes are shut down.");
+    }
 }
 
 pub fn bootstrap_store<ER: RaftEngine>(
@@ -1280,7 +1336,7 @@ impl WrapFactory {
 
     pub fn get_region_state(
         &self,
-        region_id: u64,
+        _region_id: u64,
     ) -> engine_traits::Result<Option<RegionLocalState>> {
         unimplemented!()
         // self.raft_engine.get_region_state(region_id)
@@ -1315,8 +1371,8 @@ impl Peekable for WrapFactory {
 
     fn get_msg_cf<M: protobuf::Message + Default>(
         &self,
-        cf: &str,
-        key: &[u8],
+        _cf: &str,
+        _key: &[u8],
     ) -> engine_traits::Result<Option<M>> {
         unimplemented!()
     }
@@ -1351,15 +1407,15 @@ impl SyncMutable for WrapFactory {
         }
     }
 
-    fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> engine_traits::Result<()> {
+    fn delete_range(&self, _begin_key: &[u8], _end_key: &[u8]) -> engine_traits::Result<()> {
         unimplemented!()
     }
 
     fn delete_range_cf(
         &self,
-        cf: &str,
-        begin_key: &[u8],
-        end_key: &[u8],
+        _cf: &str,
+        _begin_key: &[u8],
+        _end_key: &[u8],
     ) -> engine_traits::Result<()> {
         unimplemented!()
     }

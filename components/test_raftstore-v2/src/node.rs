@@ -25,16 +25,13 @@ use raftstore::{
 };
 use raftstore_v2::{
     router::{PeerMsg, RaftRouter},
-    StoreMeta, StoreRouter, StoreSystem,
+    StoreMeta, StoreRouter,
 };
 use test_pd_client::TestPdClient;
 use test_raftstore::{Config, Filter};
-use tikv::{
-    config::ConfigController,
-    server::{
-        raftkv::ReplicaReadLockChecker, tablet_snap::copy_tablet_snapshot, NodeV2,
-        Result as ServerResult,
-    },
+use tikv::server::{
+    raftkv::ReplicaReadLockChecker, tablet_snap::copy_tablet_snapshot, NodeV2,
+    Result as ServerResult,
 };
 use tikv_util::{
     box_err,
@@ -214,8 +211,12 @@ impl Simulator for NodeCluster {
             trans.snap_paths[&node_id].clone()
         };
 
-        let raft_router =
-            RaftRouter::new(node.id(), tablet_registry.clone(), node.router().clone());
+        let raft_router = RaftRouter::new_with_store_meta(
+            node.id(),
+            tablet_registry.clone(),
+            node.router().clone(),
+            store_meta,
+        );
         // Create coprocessor.
         let mut coprocessor_host =
             CoprocessorHost::new(raft_router.store_router().clone(), cfg.coprocessor.clone());
@@ -225,7 +226,11 @@ impl Simulator for NodeCluster {
 
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
 
-        let cfg_controller = ConfigController::new(cfg.tikv.clone());
+        // let cfg_controller = ConfigController::new(cfg.tikv.clone());
+        // cfg_controller.register(
+        //     Module::Coprocessor,
+        //     Box::new(SplitCheckConfigManager(split_scheduler.clone())),
+        // );
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
@@ -259,6 +264,7 @@ impl Simulator for NodeCluster {
         raftstore_cfg
             .validate(region_split_size, enable_region_bucket, region_bucket_size)
             .unwrap();
+
         // let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         // cfg_controller.register(
         //     Module::Raftstore,

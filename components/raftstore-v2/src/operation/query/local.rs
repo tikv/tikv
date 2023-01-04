@@ -234,6 +234,7 @@ where
         region_id: u64,
         req: &RaftCmdRequest,
     ) -> impl Future<Output = std::result::Result<Option<QueryResult>, RaftCmdResponse>> {
+        println!("try to renew lease region_id {}", region_id);
         let mut req = req.clone();
         // Remote lease is updated step by step. It's possible local reader expires
         // while the raftstore doesn't. So we need to trigger an update

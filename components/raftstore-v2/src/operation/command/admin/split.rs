@@ -599,6 +599,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 break;
             }
         }
+        let store_id = self.storage().peer().store_id;
         assert!(found, "{:?} {}", self.logger.list(), region_id);
         let split_trace = self.split_trace_mut();
         let mut off = 0;
@@ -610,6 +611,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             admin_flushed = *tablet_index;
             off += 1;
         }
+        println!(
+            "split finish store_id {}, region id {}",
+            store_id, region_id
+        );
         if off > 0 {
             // There should be very few elements in the vector.
             split_trace.drain(..off);

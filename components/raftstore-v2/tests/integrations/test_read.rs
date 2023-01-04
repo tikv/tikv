@@ -161,7 +161,9 @@ fn test_snap_with_invalid_parameter() {
 
 #[test]
 fn test_local_read() {
-    let mut cluster = Cluster::default();
+    let mut config = v2_default_config();
+    config.raft_store_max_leader_lease = ReadableDuration::millis(150);
+    let mut cluster = Cluster::with_config(config);
     let router = &mut cluster.routers[0];
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;

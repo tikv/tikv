@@ -1,7 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    fmt::format,
     path::Path,
     sync::{Arc, Mutex, RwLock},
     thread,
@@ -14,7 +13,7 @@ use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{KvEngine, RaftEngineReadOnly, TabletFactory, TabletRegistry};
+use engine_traits::{KvEngine, TabletRegistry};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
@@ -37,7 +36,7 @@ use raftstore::{
     },
     RegionInfoAccessor,
 };
-use raftstore_v2::{router::RaftRouter, StoreMeta, StoreRouter, StoreSystem};
+use raftstore_v2::{router::RaftRouter, StoreMeta, StoreRouter};
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use slog_global::debug;
@@ -199,7 +198,12 @@ impl ServerCluster {
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
         let node_id = node.id();
-        let raft_router = RaftRouter::new(node_id, tablet_registry.clone(), node.router().clone());
+        let raft_router = RaftRouter::new_with_store_meta(
+            node_id,
+            tablet_registry.clone(),
+            node.router().clone(),
+            store_meta.clone(),
+        );
 
         // Create coprocessor.
         let mut coprocessor_host =
