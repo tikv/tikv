@@ -19,7 +19,7 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::{deadlock::*, metapb::Region};
-use pd_client::{PdClient, INVALID_ID};
+use pd_client::{PdClientCommon, INVALID_ID};
 use raft::StateRole;
 use raftstore::{
     coprocessor::{
@@ -618,7 +618,7 @@ struct Inner {
 pub struct Detector<S, P>
 where
     S: StoreAddrResolver + 'static,
-    P: PdClient + 'static,
+    P: PdClientCommon + 'static,
 {
     /// The store id of the node.
     store_id: u64,
@@ -629,7 +629,7 @@ where
     /// The connection to the leader.
     leader_client: Option<Client>,
     /// Used to get the leader of leader region from PD.
-    pd_client: Arc<P>,
+    pd_client: P,
     /// Used to resolve store address.
     resolver: S,
     /// Used to connect other nodes.
@@ -643,18 +643,18 @@ where
 unsafe impl<S, P> Send for Detector<S, P>
 where
     S: StoreAddrResolver + 'static,
-    P: PdClient + 'static,
+    P: PdClientCommon + 'static,
 {
 }
 
 impl<S, P> Detector<S, P>
 where
     S: StoreAddrResolver + 'static,
-    P: PdClient + 'static,
+    P: PdClientCommon + 'static,
 {
     pub fn new(
         store_id: u64,
-        pd_client: Arc<P>,
+        pd_client: P,
         resolver: S,
         security_mgr: Arc<SecurityManager>,
         waiter_mgr_scheduler: WaiterMgrScheduler,
@@ -711,7 +711,7 @@ where
     }
 
     /// Gets leader info from PD.
-    fn get_leader_info(&self) -> Result<Option<(u64, String)>> {
+    fn get_leader_info(&mut self) -> Result<Option<(u64, String)>> {
         let leader = self.pd_client.get_region_info(LEADER_KEY)?.leader;
         match leader {
             Some(leader) => {
@@ -1023,7 +1023,7 @@ where
 impl<S, P> FutureRunnable<Task> for Detector<S, P>
 where
     S: StoreAddrResolver + 'static,
-    P: PdClient + 'static,
+    P: PdClientCommon + 'static,
 {
     fn run(&mut self, task: Task) {
         match task {
@@ -1463,9 +1463,10 @@ pub mod tests {
         test_once(&case);
     }
 
+    #[derive(Clone)]
     pub(crate) struct MockPdClient;
 
-    impl PdClient for MockPdClient {}
+    impl pd_client::PdClientCommon for MockPdClient {}
 
     #[derive(Clone)]
     pub(crate) struct MockResolver;
@@ -1484,7 +1485,7 @@ pub mod tests {
         let mut detector_worker = FutureWorker::new("test-deadlock-detector");
         let detector_runner = Detector::new(
             1,
-            Arc::new(MockPdClient {}),
+            MockPdClient {},
             MockResolver {},
             Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()),
             waiter_mgr_scheduler,

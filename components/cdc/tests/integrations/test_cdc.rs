@@ -8,7 +8,7 @@ use concurrency_manager::ConcurrencyManager;
 use futures::{executor::block_on, SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*};
-use pd_client::PdClient;
+use pd_client::{PdClientCommon, PdClientTsoExt};
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;

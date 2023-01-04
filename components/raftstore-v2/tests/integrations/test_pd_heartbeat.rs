@@ -2,7 +2,7 @@
 
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
-use pd_client::PdClientV2;
+use pd_client::PdClientCommon;
 use tikv_util::store::new_peer;
 
 use crate::cluster::Cluster;

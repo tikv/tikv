@@ -7,7 +7,7 @@ use std::{
 };
 
 use kvproto::metapb::{Peer, Region};
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::MessageType;
 use raftstore::store::Callback;
 use test_raftstore::*;
@@ -221,7 +221,7 @@ fn test_stale_read_during_merging() {
     cluster.cfg.raft_store.pd_heartbeat_tick_interval =
         cluster.cfg.raft_store.raft_base_tick_interval;
     debug!("max leader lease: {:?}", election_timeout);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run_conf_change();
@@ -426,7 +426,7 @@ fn test_read_index_when_transfer_leader_2() {
 #[test]
 fn test_read_after_peer_destroyed() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -479,7 +479,7 @@ fn test_read_after_peer_destroyed() {
 #[test]
 fn test_stale_read_during_merging_2() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     configure_for_merge(&mut cluster);

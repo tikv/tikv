@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use causal_ts::{BatchTsoProvider, CausalTsProvider, TsoBatchList};
 use criterion::*;
@@ -68,11 +68,11 @@ fn bench_batch_tso_list_push(c: &mut Criterion) {
 }
 
 fn bench_batch_tso_provider_get_ts(c: &mut Criterion) {
-    let pd_cli = Arc::new(TestPdClient::new(1, false));
+    let pd_cli = TestPdClient::new(1, false);
 
     // Disable background renew by setting `renew_interval` to 0 to make test result
     // stable.
-    let provider = block_on(BatchTsoProvider::new_opt(
+    let mut provider = block_on(BatchTsoProvider::new_opt(
         pd_cli,
         Duration::ZERO,
         Duration::from_secs(1), // cache_multiplier = 10
@@ -89,11 +89,11 @@ fn bench_batch_tso_provider_get_ts(c: &mut Criterion) {
 }
 
 fn bench_batch_tso_provider_flush(c: &mut Criterion) {
-    let pd_cli = Arc::new(TestPdClient::new(1, false));
+    let pd_cli = TestPdClient::new(1, false);
 
     // Disable background renew by setting `renew_interval` to 0 to make test result
     // stable.
-    let provider = block_on(BatchTsoProvider::new_opt(
+    let mut provider = block_on(BatchTsoProvider::new_opt(
         pd_cli,
         Duration::ZERO,
         Duration::from_secs(1), // cache_multiplier = 10

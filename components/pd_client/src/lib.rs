@@ -16,19 +16,22 @@ mod config;
 pub mod errors;
 use std::{cmp::Ordering, collections::HashMap, ops::Deref, sync::Arc, time::Duration};
 
-use futures::future::BoxFuture;
+use futures::{executor::block_on, future::BoxFuture};
 use grpcio::ClientSStreamReceiver;
 use kvproto::{
     metapb, pdpb,
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
-use tikv_util::time::{Instant, UnixSecs};
+use tikv_util::{
+    mpsc::future as mpsc,
+    time::{Instant, UnixSecs},
+};
 use txn_types::TimeStamp;
 
 pub use self::{
     client::RpcClient,
-    client_v2::{PdClient as PdClientV2, RpcClient as RpcClientV2},
+    client_v2::{RpcClient as RpcClientV2, TsoConnection},
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
@@ -37,6 +40,7 @@ pub use self::{
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
+pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
 
 #[derive(Default, Clone)]
 pub struct RegionStat {
@@ -207,24 +211,24 @@ pub const INVALID_ID: u64 = 0;
 /// cluster id in trait interface every time, so passing the cluster id when
 /// creating the PdClient is enough and the PdClient will use this cluster id
 /// all the time.
-pub trait PdClient: Send + Sync {
-    /// Load a list of GlobalConfig
-    fn load_global_config(&self, _list: Vec<String>) -> PdFuture<HashMap<String, String>> {
-        unimplemented!();
+pub trait PdClientCommon: Sync + Send {
+    /// Gets the internal `FeatureGate`.
+    fn feature_gate(&self) -> &FeatureGate {
+        unimplemented!()
     }
 
-    /// Store a list of GlobalConfig
-    fn store_global_config(&self, _list: HashMap<String, String>) -> PdFuture<()> {
-        unimplemented!();
+    /// Load a list of GlobalConfig.
+    fn load_global_config(&mut self, _list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+        unimplemented!()
     }
 
-    /// Watching change of GlobalConfig
-    fn watch_global_config(&self) -> Result<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
-        unimplemented!();
+    /// Watching change of GlobalConfig.
+    fn watch_global_config(&mut self) -> Result<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
+        unimplemented!()
     }
 
     /// Returns the cluster ID.
-    fn get_cluster_id(&self) -> Result<u64> {
+    fn fetch_cluster_id(&mut self) -> Result<u64> {
         unimplemented!();
     }
 
@@ -237,11 +241,11 @@ pub trait PdClient: Send + Sync {
     /// bootstrap, but only one can succeed, while others will fail
     /// and must remove their created local Region data themselves.
     fn bootstrap_cluster(
-        &self,
+        &mut self,
         _stores: metapb::Store,
         _region: metapb::Region,
     ) -> Result<Option<ReplicationStatus>> {
-        unimplemented!();
+        unimplemented!()
     }
 
     /// Returns whether the cluster is bootstrapped or not.
@@ -249,13 +253,13 @@ pub trait PdClient: Send + Sync {
     /// Cluster must be bootstrapped when we use it, so when the
     /// node starts, `is_cluster_bootstrapped` must be called,
     /// and panics if cluster was not bootstrapped.
-    fn is_cluster_bootstrapped(&self) -> Result<bool> {
-        unimplemented!();
+    fn is_cluster_bootstrapped(&mut self) -> Result<bool> {
+        unimplemented!()
     }
 
     /// Allocates a unique positive id.
-    fn alloc_id(&self) -> Result<u64> {
-        unimplemented!();
+    fn alloc_id(&mut self) -> Result<u64> {
+        unimplemented!()
     }
 
     /// Returns whether the cluster is marked to start with snapshot recovery.
@@ -266,13 +270,13 @@ pub trait PdClient: Send + Sync {
     /// 1. update tikv cluster id from pd
     /// 2. all peer apply the log to last of the leader peer which has the most
     /// log appended. 3. delete data to some point of time (resolved_ts)
-    fn is_recovering_marked(&self) -> Result<bool> {
-        unimplemented!();
+    fn is_recovering_marked(&mut self) -> Result<bool> {
+        unimplemented!()
     }
 
     /// Informs PD when the store starts or some store information changes.
-    fn put_store(&self, _store: metapb::Store) -> Result<Option<ReplicationStatus>> {
-        unimplemented!();
+    fn put_store(&mut self, _store: metapb::Store) -> Result<Option<ReplicationStatus>> {
+        unimplemented!()
     }
 
     /// We don't need to support Region and Peer put/delete,
@@ -287,63 +291,138 @@ pub trait PdClient: Send + Sync {
     /// - For auto-balance, PD determines how to move the Region from one store
     ///   to another.
 
-    /// Gets store information if it is not a tombstone store.
-    fn get_store(&self, _store_id: u64) -> Result<metapb::Store> {
-        unimplemented!();
+    /// Gets store information if it is not a tombstone store asynchronously.
+    fn get_store_and_stats(
+        &mut self,
+        _store_id: u64,
+    ) -> PdFuture<(metapb::Store, pdpb::StoreStats)> {
+        unimplemented!()
     }
 
-    /// Gets store information if it is not a tombstone store asynchronously
-    fn get_store_async(&self, _store_id: u64) -> PdFuture<metapb::Store> {
-        unimplemented!();
+    /// Gets store information if it is not a tombstone store.
+    fn get_store(&mut self, store_id: u64) -> Result<metapb::Store> {
+        block_on(self.get_store_and_stats(store_id)).map(|r| r.0)
     }
 
     /// Gets all stores information.
-    fn get_all_stores(&self, _exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
-        unimplemented!();
+    fn get_all_stores(&mut self, _exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
+        unimplemented!()
     }
 
     /// Gets cluster meta information.
-    fn get_cluster_config(&self) -> Result<metapb::Cluster> {
-        unimplemented!();
+    fn get_cluster_config(&mut self) -> Result<metapb::Cluster> {
+        unimplemented!()
+    }
+
+    fn get_region_and_leader(
+        &mut self,
+        _key: &[u8],
+    ) -> PdFuture<(metapb::Region, Option<metapb::Peer>)> {
+        unimplemented!()
     }
 
     /// For route.
     /// Gets Region which the key belongs to.
-    fn get_region(&self, _key: &[u8]) -> Result<metapb::Region> {
-        unimplemented!();
-    }
-
-    /// Gets Region which the key belongs to asynchronously.
-    fn get_region_async<'k>(&'k self, _key: &'k [u8]) -> BoxFuture<'k, Result<metapb::Region>> {
-        unimplemented!();
+    fn get_region(&mut self, key: &[u8]) -> Result<metapb::Region> {
+        block_on(self.get_region_and_leader(key)).map(|r| r.0)
     }
 
     /// Gets Region info which the key belongs to.
-    fn get_region_info(&self, _key: &[u8]) -> Result<RegionInfo> {
-        unimplemented!();
-    }
-
-    /// Gets Region info which the key belongs to asynchronously.
-    fn get_region_info_async<'k>(&'k self, _key: &'k [u8]) -> BoxFuture<'k, Result<RegionInfo>> {
-        unimplemented!();
+    fn get_region_info(&mut self, key: &[u8]) -> Result<RegionInfo> {
+        block_on(self.get_region_and_leader(key)).map(|r| RegionInfo::new(r.0, r.1))
     }
 
     /// Gets Region by Region id.
-    fn get_region_by_id(&self, _region_id: u64) -> PdFuture<Option<metapb::Region>> {
-        unimplemented!();
+    fn get_region_by_id(&mut self, _region_id: u64) -> PdFuture<Option<metapb::Region>> {
+        unimplemented!()
     }
 
     /// Gets Region and its leader by Region id.
     fn get_region_leader_by_id(
-        &self,
+        &mut self,
         _region_id: u64,
     ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
-        unimplemented!();
+        unimplemented!()
     }
 
+    /// Asks PD for split. PD returns the newly split Region id.
+    fn ask_split(&mut self, _region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+        unimplemented!()
+    }
+
+    /// Asks PD for batch split. PD returns the newly split Region ids.
+    fn ask_batch_split(
+        &mut self,
+        _region: metapb::Region,
+        _count: usize,
+    ) -> PdFuture<pdpb::AskBatchSplitResponse> {
+        unimplemented!()
+    }
+
+    /// Sends store statistics regularly.
+    fn store_heartbeat(
+        &mut self,
+        _stats: pdpb::StoreStats,
+        _store_report: Option<pdpb::StoreReport>,
+        _dr_autosync_status: Option<StoreDrAutoSyncStatus>,
+    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
+        unimplemented!()
+    }
+
+    /// Reports PD the split Region.
+    fn report_batch_split(&mut self, _regions: Vec<metapb::Region>) -> PdFuture<()> {
+        unimplemented!()
+    }
+
+    /// Scatters the Region across the cluster.
+    fn scatter_region(&mut self, _region: RegionInfo) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn get_gc_safe_point(&mut self) -> PdFuture<u64> {
+        unimplemented!()
+    }
+
+    /// Gets current operator of the region
+    fn get_operator(&mut self, _region_id: u64) -> Result<pdpb::GetOperatorResponse> {
+        unimplemented!()
+    }
+
+    /// Set a service safe point.
+    fn update_service_safe_point(
+        &mut self,
+        _name: String,
+        _safe_point: TimeStamp,
+        _ttl: Duration,
+    ) -> PdFuture<()> {
+        unimplemented!()
+    }
+
+    // Report min resolved_ts to PD.
+    fn report_min_resolved_ts(&mut self, _store_id: u64, _min_resolved_ts: u64) -> PdFuture<()> {
+        unimplemented!()
+    }
+}
+
+pub trait PdClientTsoExt: Send + Sync {
+    /// Gets a timestamp from PD.
+    fn get_tso(&mut self) -> PdFuture<TimeStamp> {
+        self.batch_get_tso(1)
+    }
+
+    /// Gets a batch of timestamps from PD.
+    /// Return a timestamp with (physical, logical), indicating that timestamps
+    /// allocated are: [Timestamp(physical, logical - count + 1),
+    /// Timestamp(physical, logical)]
+    fn batch_get_tso(&mut self, _count: u32) -> PdFuture<TimeStamp> {
+        unimplemented!()
+    }
+}
+
+pub trait PdClientExt {
     /// Region's Leader uses this to heartbeat PD.
     fn region_heartbeat(
-        &self,
+        &mut self,
         _term: u64,
         _region: metapb::Region,
         _leader: metapb::Peer,
@@ -356,7 +435,7 @@ pub trait PdClient: Send + Sync {
     /// Gets a stream of Region heartbeat response.
     ///
     /// Please note that this method should only be called once.
-    fn handle_region_heartbeat_response<F>(&self, _store_id: u64, _f: F) -> PdFuture<()>
+    fn handle_region_heartbeat_response<F>(&mut self, _store_id: u64, _f: F) -> PdFuture<()>
     where
         Self: Sized,
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
@@ -364,102 +443,50 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
-    /// Asks PD for split. PD returns the newly split Region id.
-    fn ask_split(&self, _region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
-        unimplemented!();
-    }
-
-    /// Asks PD for batch split. PD returns the newly split Region ids.
-    fn ask_batch_split(
-        &self,
-        _region: metapb::Region,
-        _count: usize,
-    ) -> PdFuture<pdpb::AskBatchSplitResponse> {
-        unimplemented!();
-    }
-
-    /// Sends store statistics regularly.
-    fn store_heartbeat(
-        &self,
-        _stats: pdpb::StoreStats,
-        _report: Option<pdpb::StoreReport>,
-        _status: Option<StoreDrAutoSyncStatus>,
-    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
-        unimplemented!();
-    }
-
-    /// Reports PD the split Region.
-    fn report_batch_split(&self, _regions: Vec<metapb::Region>) -> PdFuture<()> {
-        unimplemented!();
-    }
-
-    /// Scatters the Region across the cluster.
-    fn scatter_region(&self, _: RegionInfo) -> Result<()> {
-        unimplemented!();
-    }
-
     /// Registers a handler to the client, which will be invoked after
     /// reconnecting to PD.
     ///
     /// Please note that this method should only be called once.
-    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F)
+    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&mut self, _: F)
     where
         Self: Sized,
     {
     }
 
-    fn get_gc_safe_point(&self) -> PdFuture<u64> {
-        unimplemented!();
-    }
-
-    /// Gets store state if it is not a tombstone store asynchronously.
-    fn get_store_stats_async(&self, _store_id: u64) -> BoxFuture<'_, Result<pdpb::StoreStats>> {
-        unimplemented!();
-    }
-
-    /// Gets current operator of the region
-    fn get_operator(&self, _region_id: u64) -> Result<pdpb::GetOperatorResponse> {
-        unimplemented!();
-    }
-
-    /// Gets a timestamp from PD.
-    fn get_tso(&self) -> PdFuture<TimeStamp> {
-        self.batch_get_tso(1)
-    }
-
-    /// Gets a batch of timestamps from PD.
-    /// Return a timestamp with (physical, logical), indicating that timestamps
-    /// allocated are: [Timestamp(physical, logical - count + 1),
-    /// Timestamp(physical, logical)]
-    fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
-        unimplemented!()
-    }
-
-    /// Set a service safe point.
-    fn update_service_safe_point(
-        &self,
-        _name: String,
-        _safepoint: TimeStamp,
-        _ttl: Duration,
-    ) -> PdFuture<()> {
-        unimplemented!()
-    }
-
-    /// Gets the internal `FeatureGate`.
-    fn feature_gate(&self) -> &FeatureGate {
-        unimplemented!()
-    }
-
-    // Report min resolved_ts to PD.
-    fn report_min_resolved_ts(&self, _store_id: u64, _min_resolved_ts: u64) -> PdFuture<()> {
-        unimplemented!()
-    }
-
     /// Region's Leader uses this to report buckets to PD.
-    fn report_region_buckets(&self, _bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
+    fn report_region_buckets(
+        &mut self,
+        _bucket_stat: &BucketStat,
+        _period: Duration,
+    ) -> PdFuture<()> {
         unimplemented!();
     }
 }
+
+pub trait PdClient: PdClientCommon + PdClientExt + PdClientTsoExt {}
+
+pub trait PdClientExtV2 {
+    type TsoStream: PdClientTsoExt + Clone;
+
+    fn subscribe_reconnect(&self) -> BoxStream<()>;
+
+    fn create_region_heartbeat_stream(
+        &mut self,
+        wake_policy: mpsc::WakePolicy,
+    ) -> Result<(
+        mpsc::Sender<pdpb::RegionHeartbeatRequest>,
+        BoxStream<Result<pdpb::RegionHeartbeatResponse>>,
+    )>;
+
+    fn create_report_region_buckets_stream(
+        &mut self,
+        wake_policy: mpsc::WakePolicy,
+    ) -> Result<mpsc::Sender<pdpb::ReportBucketsRequest>>;
+
+    fn create_tso_stream(&mut self) -> Result<Self::TsoStream>;
+}
+
+pub trait PdClientV2: PdClientCommon + PdClientExtV2 {}
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
 

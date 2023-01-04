@@ -187,7 +187,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 
     api_version: ApiVersion, // TODO: remove this. Use `Api` instead.
 
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    causal_ts_provider: Option<CausalTsProviderImpl>,
 
     quota_limiter: Arc<QuotaLimiter>,
 
@@ -269,7 +269,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        causal_ts_provider: Option<CausalTsProviderImpl>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -1928,7 +1928,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
         let deadline = Self::get_deadline(&ctx);
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let provider = self.causal_ts_provider.clone();
+        let mut provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         self.sched_raw_command(CMD, async move {
@@ -1941,11 +1941,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 return callback(Err(e));
             }
 
-            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
+            let key_guard = get_raw_key_guard(&mut provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = get_causal_ts(&provider).await;
+            let ts = get_causal_ts(&mut provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -2037,7 +2037,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         );
         Self::check_ttl_valid(pairs.len(), &ttls)?;
 
-        let provider = self.causal_ts_provider.clone();
+        let mut provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
@@ -2051,11 +2051,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 return callback(Err(e));
             }
 
-            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
+            let key_guard = get_raw_key_guard(&mut provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = get_causal_ts(&provider).await;
+            let ts = get_causal_ts(&mut provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -2100,7 +2100,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let provider = self.causal_ts_provider.clone();
+        let mut provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
@@ -2114,11 +2114,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 return callback(Err(e));
             }
 
-            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
+            let key_guard = get_raw_key_guard(&mut provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = get_causal_ts(&provider).await;
+            let ts = get_causal_ts(&mut provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -2205,7 +2205,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
-        let provider = self.causal_ts_provider.clone();
+        let mut provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
@@ -2219,11 +2219,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 return callback(Err(e));
             }
 
-            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
+            let key_guard = get_raw_key_guard(&mut provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = get_causal_ts(&provider).await;
+            let ts = get_causal_ts(&mut provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -2803,7 +2803,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 }
 
 pub async fn get_raw_key_guard(
-    ts_provider: &Option<Arc<CausalTsProviderImpl>>,
+    ts_provider: &mut Option<CausalTsProviderImpl>,
     concurrency_manager: ConcurrencyManager,
 ) -> Result<Option<KeyHandleGuard>> {
     // NOTE: the ts cannot be reused as timestamp of data key.
@@ -2829,7 +2829,7 @@ pub async fn get_raw_key_guard(
 }
 
 pub async fn get_causal_ts(
-    ts_provider: &Option<Arc<CausalTsProviderImpl>>,
+    ts_provider: &mut Option<CausalTsProviderImpl>,
 ) -> Result<Option<TimeStamp>> {
     if let Some(p) = ts_provider {
         match p.async_get_ts().await {
@@ -3129,7 +3129,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
         let ts_provider = if F::TAG == ApiVersion::V2 {
             let test_provider: causal_ts::CausalTsProviderImpl =
                 causal_ts::tests::TestProvider::default().into();
-            Some(Arc::new(test_provider))
+            Some(test_provider)
         } else {
             None
         };
@@ -8060,14 +8060,14 @@ mod tests {
         let results_values = |res: Vec<Option<Value>>| {
             PessimisticLockResults(
                 res.into_iter()
-                    .map(|v| PessimisticLockKeyResult::Value(v))
+                    .map(PessimisticLockKeyResult::Value)
                     .collect::<Vec<_>>(),
             )
         };
         let results_existence = |res: Vec<bool>| {
             PessimisticLockResults(
                 res.into_iter()
-                    .map(|v| PessimisticLockKeyResult::Existence(v))
+                    .map(PessimisticLockKeyResult::Existence)
                     .collect::<Vec<_>>(),
             )
         };

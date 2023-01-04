@@ -262,7 +262,7 @@ impl ObserveRegion {
     }
 }
 
-pub struct Endpoint<T, E: KvEngine> {
+pub struct Endpoint<T, E: KvEngine, P> {
     store_id: Option<u64>,
     cfg: ResolvedTsConfig,
     cfg_update_notify: Arc<Notify>,
@@ -271,21 +271,22 @@ pub struct Endpoint<T, E: KvEngine> {
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task>,
-    advance_worker: AdvanceTsWorker,
+    advance_worker: AdvanceTsWorker<P>,
     _phantom: PhantomData<(T, E)>,
 }
 
-impl<T, E> Endpoint<T, E>
+impl<T, E, P> Endpoint<T, E, P>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
+    P: PdClient + Clone + 'static,
 {
     pub fn new(
         cfg: &ResolvedTsConfig,
         scheduler: Scheduler<Task>,
         raft_router: T,
         store_meta: Arc<Mutex<StoreMeta>>,
-        pd_client: Arc<dyn PdClient>,
+        pd_client: P,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
@@ -295,12 +296,11 @@ where
             (meta.region_read_progress.clone(), meta.store_id)
         };
         let advance_worker =
-            AdvanceTsWorker::new(pd_client.clone(), scheduler.clone(), concurrency_manager);
+            AdvanceTsWorker::new(pd_client, scheduler.clone(), concurrency_manager);
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
             store_id.unwrap(),
-            pd_client.clone(),
             env,
             security_mgr,
             region_read_progress.clone(),
@@ -687,10 +687,11 @@ impl fmt::Display for Task {
     }
 }
 
-impl<T, E> Runnable for Endpoint<T, E>
+impl<T, E, P> Runnable for Endpoint<T, E, P>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
+    P: PdClient + Clone + 'static,
 {
     type Task = Task;
 
@@ -743,10 +744,11 @@ impl ConfigManager for ResolvedTsConfigManager {
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-impl<T, E> RunnableWithTimer for Endpoint<T, E>
+impl<T, E, P> RunnableWithTimer for Endpoint<T, E, P>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
+    P: PdClient + Clone + 'static,
 {
     fn on_timeout(&mut self) {
         let store_id = self.get_or_init_store_id();

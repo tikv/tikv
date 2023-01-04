@@ -12,7 +12,7 @@ use api_version::{test_kv_format_impl, KvFormat};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*, raft_serverpb::RaftMessage};
-use pd_client::PdClient;
+use pd_client::{PdClientCommon, PdClientTsoExt};
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};

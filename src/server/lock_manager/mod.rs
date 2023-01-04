@@ -16,7 +16,7 @@ use std::{
 
 use engine_traits::KvEngine;
 use kvproto::metapb::RegionEpoch;
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raftstore::coprocessor::CoprocessorHost;
 use security::SecurityManager;
 use tikv_util::worker::FutureWorker;
@@ -106,14 +106,14 @@ impl LockManager {
     pub fn start<S, P>(
         &mut self,
         store_id: u64,
-        pd_client: Arc<P>,
+        pd_client: P,
         resolver: S,
         security_mgr: Arc<SecurityManager>,
         cfg: &Config,
     ) -> Result<()>
     where
         S: StoreAddrResolver + 'static,
-        P: PdClient + 'static,
+        P: PdClientCommon + 'static,
     {
         self.start_waiter_manager(cfg)?;
         self.start_deadlock_detector(store_id, pd_client, resolver, security_mgr, cfg)?;
@@ -156,14 +156,14 @@ impl LockManager {
     fn start_deadlock_detector<S, P>(
         &mut self,
         store_id: u64,
-        pd_client: Arc<P>,
+        pd_client: P,
         resolver: S,
         security_mgr: Arc<SecurityManager>,
         cfg: &Config,
     ) -> Result<()>
     where
         S: StoreAddrResolver + 'static,
-        P: PdClient + 'static,
+        P: PdClientCommon + 'static,
     {
         let detector_runner = Detector::new(
             store_id,
@@ -335,7 +335,7 @@ mod tests {
         lock_mgr
             .start(
                 1,
-                Arc::new(MockPdClient {}),
+                MockPdClient {},
                 MockResolver {},
                 Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()),
                 &cfg,

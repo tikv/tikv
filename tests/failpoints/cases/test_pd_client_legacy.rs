@@ -8,14 +8,14 @@ use std::{
 
 use grpcio::EnvBuilder;
 use kvproto::metapb::*;
-use pd_client::{PdClient, RegionInfo, RegionStat, RpcClient};
+use pd_client::{PdClientCommon, PdClientExt, PdClientTsoExt, RegionInfo, RegionStat, RpcClient};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;
 
 fn new_test_server_and_client(
     update_interval: ReadableDuration,
-) -> (MockServer<Service>, RpcClient) {
+) -> (MockServer<Service>, Arc<RpcClient>) {
     let server = MockServer::new(1);
     let eps = server.bind_addrs();
     let client = new_client_with_update_interval(eps, None, update_interval);
@@ -25,7 +25,7 @@ fn new_test_server_and_client(
 macro_rules! request {
     ($client: ident => block_on($func: tt($($arg: expr),*))) => {
         (stringify!($func), {
-            let client = $client.clone();
+            let mut client = $client.clone();
             Box::new(move || {
                 let _ = futures::executor::block_on(client.$func($($arg),*));
             })
@@ -33,7 +33,8 @@ macro_rules! request {
     };
     ($client: ident => $func: tt($($arg: expr),*)) => {
         (stringify!($func), {
-            let client = $client.clone();
+            #[allow(unused_mut)]
+            let mut client = $client.clone();
             Box::new(move || {
                 let _ = client.$func($($arg),*);
             })
@@ -43,14 +44,13 @@ macro_rules! request {
 
 #[test]
 fn test_pd_client_deadlock() {
-    let (_server, client) = new_test_server_and_client(ReadableDuration::millis(100));
-    let client = Arc::new(client);
+    let (_server, mut client) = new_test_server_and_client(ReadableDuration::millis(100));
     let pd_client_reconnect_fp = "pd_client_reconnect";
 
     // It contains all interfaces of PdClient.
     let test_funcs: Vec<(_, Box<dyn FnOnce() + Send>)> = vec![
         request!(client => reconnect()),
-        request!(client => get_cluster_id()),
+        request!(client => fetch_cluster_id()),
         request!(client => bootstrap_cluster(Store::default(), Region::default())),
         request!(client => is_cluster_bootstrapped()),
         request!(client => alloc_id()),
@@ -60,8 +60,6 @@ fn test_pd_client_deadlock() {
         request!(client => get_cluster_config()),
         request!(client => get_region(b"")),
         request!(client => get_region_info(b"")),
-        request!(client => block_on(get_region_async(b""))),
-        request!(client => block_on(get_region_info_async(b""))),
         request!(client => block_on(get_region_by_id(0))),
         request!(client => block_on(region_heartbeat(0, Region::default(), Peer::default(), RegionStat::default(), None))),
         request!(client => block_on(ask_split(Region::default()))),
@@ -70,7 +68,7 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(report_batch_split(vec![]))),
         request!(client => scatter_region(RegionInfo::new(Region::default(), None))),
         request!(client => block_on(get_gc_safe_point())),
-        request!(client => block_on(get_store_stats_async(0))),
+        request!(client => block_on(get_store_and_stats(0))),
         request!(client => get_operator(0)),
         request!(client => block_on(get_tso())),
         request!(client => load_global_config(vec![])),
@@ -107,7 +105,7 @@ fn test_pd_client_deadlock() {
 
 #[test]
 fn test_load_global_config() {
-    let (mut _server, client) = new_test_server_and_client(ReadableDuration::millis(100));
+    let (mut _server, mut client) = new_test_server_and_client(ReadableDuration::millis(100));
     let res = futures::executor::block_on(async move {
         client
             .load_global_config(
@@ -125,8 +123,7 @@ fn test_load_global_config() {
 
 #[test]
 fn test_watch_global_config_on_closed_server() {
-    let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
-    let client = Arc::new(client);
+    let (mut server, mut client) = new_test_server_and_client(ReadableDuration::millis(100));
     use futures::StreamExt;
     let j = std::thread::spawn(move || {
         futures::executor::block_on(async move {
@@ -181,11 +178,11 @@ fn test_slow_periodical_update() {
 
     // client1 updates leader frequently (100ms).
     cfg.update_interval = ReadableDuration(Duration::from_millis(100));
-    let _client1 = RpcClient::new(&cfg, Some(env.clone()), mgr.clone()).unwrap();
+    let mut _client1 = Arc::new(RpcClient::new(&cfg, Some(env.clone()), mgr.clone()).unwrap());
 
     // client2 never updates leader in the test.
     cfg.update_interval = ReadableDuration(Duration::from_secs(100));
-    let client2 = RpcClient::new(&cfg, Some(env), mgr).unwrap();
+    let mut client2 = Arc::new(RpcClient::new(&cfg, Some(env), mgr).unwrap());
 
     fail::cfg(pd_client_reconnect_fp, "pause").unwrap();
     // Wait for the PD client thread blocking on the fail point.

@@ -48,7 +48,7 @@ use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
 use kvproto::{deadlock::create_deadlock, diagnosticspb::create_diagnostics, kvrpcpb::ApiVersion};
-use pd_client::{PdClientV2, RpcClientV2};
+use pd_client::{PdClientCommon, PdClientExtV2, PdClientTsoExt, RpcClientV2};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -221,7 +221,7 @@ struct TikvServer<ER: RaftEngine> {
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+    causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
 }
 
@@ -256,7 +256,7 @@ where
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );
-        let pd_client =
+        let mut pd_client =
             Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
 
         // Initialize and check config
@@ -271,7 +271,10 @@ where
             .create();
 
         // Initialize concurrency manager
-        let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
+        let mut tso_stream = pd_client
+            .create_tso_stream()
+            .expect("failed to create pd tso stream");
+        let latest_ts = block_on(tso_stream.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
         // use different quota for front-end and back-end requests
@@ -289,7 +292,7 @@ where
         let mut causal_ts_provider = None;
         if let ApiVersion::V2 = F::TAG {
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
-                pd_client.clone(),
+                tso_stream.clone(),
                 config.causal_ts.renew_interval.0,
                 config.causal_ts.alloc_ahead_buffer.0,
                 config.causal_ts.renew_batch_min_size,
@@ -298,7 +301,7 @@ where
             if let Err(e) = tso {
                 fatal!("Causal timestamp provider initialize failed: {:?}", e);
             }
-            causal_ts_provider = Some(Arc::new(tso.unwrap().into()));
+            causal_ts_provider = Some(tso.unwrap().into());
             info!("Causal timestamp provider startup.");
         }
 
@@ -389,12 +392,12 @@ where
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
     ) -> RpcClientV2 {
-        let pd_client = RpcClientV2::new(&config.pd, Some(env), security_mgr)
+        let mut pd_client = RpcClientV2::new(&config.pd, Some(env), security_mgr)
             .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e));
 
         let cluster_id = pd_client
-            .get_cluster_id()
-            .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
+            .fetch_cluster_id()
+            .unwrap_or_else(|e| fatal!("failed to fetch cluster id: {}", e));
         if cluster_id == DEFAULT_CLUSTER_ID {
             fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
         }

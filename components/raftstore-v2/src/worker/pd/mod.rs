@@ -121,8 +121,8 @@ where
 
     // For update_max_timestamp.
     concurrency_manager: ConcurrencyManager,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
-    tso_transport: Option<update_max_timestamp::Transport>,
+    causal_ts_provider: Option<CausalTsProviderImpl>,
+    tso_transport: Option<T::TsoStream>,
 
     logger: Logger,
     shutdown: Arc<AtomicBool>,
@@ -143,7 +143,7 @@ where
         router: StoreRouter<EK, ER>,
         remote: Remote<TaskCell>,
         concurrency_manager: ConcurrencyManager,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
         logger: Logger,
         shutdown: Arc<AtomicBool>,
         cfg: Arc<VersionTrack<Config>>,

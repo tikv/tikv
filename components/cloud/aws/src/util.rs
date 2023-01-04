@@ -155,7 +155,7 @@ impl ProvideAwsCredentials for DefaultCredentialsProvider {
                     let res = self
                         .web_identity_provider
                         .credentials()
-                        .map_err(|e| CredentialsErrorWrapper(e));
+                        .map_err(CredentialsErrorWrapper);
                     #[cfg(test)]
                     return Box::pin(res);
                     #[cfg(not(test))]
@@ -172,7 +172,7 @@ impl ProvideAwsCredentials for DefaultCredentialsProvider {
                 || {
                     self.default_provider
                         .credentials()
-                        .map_err(|e| CredentialsErrorWrapper(e))
+                        .map_err(CredentialsErrorWrapper)
                 },
                 "get_cred_on_premise",
             )

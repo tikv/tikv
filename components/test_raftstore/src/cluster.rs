@@ -31,7 +31,7 @@ use kvproto::{
         RegionLocalState,
     },
 };
-use pd_client::{BucketStat, PdClient};
+use pd_client::{BucketStat, PdClientCommon};
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
     router::RaftStoreRouter,
@@ -173,7 +173,7 @@ pub struct Cluster<T: Simulator> {
     pub kv_statistics: Vec<Arc<RocksStatistics>>,
     pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
-    pub pd_client: Arc<TestPdClient>,
+    pub pd_client: TestPdClient,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -182,7 +182,7 @@ impl<T: Simulator> Cluster<T> {
         id: u64,
         count: usize,
         sim: Arc<RwLock<T>>,
-        pd_client: Arc<TestPdClient>,
+        pd_client: TestPdClient,
         api_version: ApiVersion,
     ) -> Cluster<T> {
         // TODO: In the future, maybe it's better to test both case where
@@ -491,7 +491,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    fn valid_leader_id(&self, region_id: u64, leader_id: u64) -> bool {
+    fn valid_leader_id(&mut self, region_id: u64, leader_id: u64) -> bool {
         let store_ids = match self.voter_store_ids_of_region(region_id) {
             None => return false,
             Some(ids) => ids,
@@ -500,7 +500,7 @@ impl<T: Simulator> Cluster<T> {
         store_ids.contains(&leader_id) && node_ids.contains(&leader_id)
     }
 
-    fn voter_store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
+    fn voter_store_ids_of_region(&mut self, region_id: u64) -> Option<Vec<u64>> {
         block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .map(|region| {
@@ -519,7 +519,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn query_leader(
-        &self,
+        &mut self,
         store_id: u64,
         region_id: u64,
         timeout: Duration,
@@ -560,10 +560,10 @@ impl<T: Simulator> Cluster<T> {
             };
         }
         let store_ids = store_ids?;
-        if let Some(l) = self.leaders.get(&region_id) {
+        if let Some(l) = self.leaders.get(&region_id).cloned() {
             // leader may be stopped in some tests.
             if self.valid_leader_id(region_id, l.get_store_id()) {
-                return Some(l.clone());
+                return Some(l);
             }
         }
         self.reset_leader_of_region(region_id);
@@ -613,14 +613,14 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.get(&region_id).cloned()
     }
 
-    pub fn check_regions_number(&self, len: u32) {
+    pub fn check_regions_number(&mut self, len: u32) {
         assert_eq!(self.pd_client.get_regions_number() as u32, len)
     }
 
     // For test when a node is already bootstrapped the cluster with the first
     // region But another node may request bootstrap at same time and get
     // is_bootstrap false Add Region but not set bootstrap to true
-    pub fn add_first_region(&self) -> Result<()> {
+    pub fn add_first_region(&mut self) -> Result<()> {
         let mut region = metapb::Region::default();
         let region_id = self.pd_client.alloc_id().unwrap();
         let peer_id = self.pd_client.alloc_id().unwrap();
@@ -885,7 +885,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // Get region when the `filter` returns true.
-    pub fn get_region_with<F>(&self, key: &[u8], filter: F) -> metapb::Region
+    pub fn get_region_with<F>(&mut self, key: &[u8], filter: F) -> metapb::Region
     where
         F: Fn(&metapb::Region) -> bool,
     {
@@ -903,15 +903,15 @@ impl<T: Simulator> Cluster<T> {
         panic!("find no region for {}", log_wrappers::hex_encode_upper(key));
     }
 
-    pub fn get_region(&self, key: &[u8]) -> metapb::Region {
+    pub fn get_region(&mut self, key: &[u8]) -> metapb::Region {
         self.get_region_with(key, |_| true)
     }
 
-    pub fn get_region_id(&self, key: &[u8]) -> u64 {
+    pub fn get_region_id(&mut self, key: &[u8]) -> u64 {
         self.get_region(key).get_id()
     }
 
-    pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
+    pub fn get_down_peers(&mut self) -> HashMap<u64, pdpb::PeerStats> {
         self.pd_client.get_down_peers()
     }
 
@@ -1103,7 +1103,7 @@ impl<T: Simulator> Cluster<T> {
         panic!("failed to get buckets for region {}", region_id);
     }
 
-    pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
+    pub fn get_region_epoch(&mut self, region_id: u64) -> RegionEpoch {
         block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap()
@@ -1617,7 +1617,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
+    fn new_prepare_merge(&mut self, source: u64, target: u64) -> RaftCmdRequest {
         let region = block_on(self.pd_client.get_region_by_id(target))
             .unwrap()
             .unwrap();
@@ -1643,11 +1643,9 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
-        self.call_command_on_leader(
-            self.new_prepare_merge(source, target),
-            Duration::from_secs(5),
-        )
-        .unwrap()
+        let cmd = self.new_prepare_merge(source, target);
+        self.call_command_on_leader(cmd, Duration::from_secs(5))
+            .unwrap()
     }
 
     pub fn must_try_merge(&mut self, source: u64, target: u64) {
@@ -1738,7 +1736,7 @@ impl<T: Simulator> Cluster<T> {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
     }
 
-    pub fn must_wait_for_leader_expire(&self, node_id: u64, region_id: u64) {
+    pub fn must_wait_for_leader_expire(&mut self, node_id: u64, region_id: u64) {
         let timer = Instant::now_coarse();
         while timer.saturating_elapsed() < Duration::from_secs(5) {
             if self

@@ -346,6 +346,6 @@ fn is_option_type(ty: &Type) -> bool {
     }
 
     extract_type_path(ty)
-        .and_then(|path| extract_option_segment(path))
+        .and_then(extract_option_segment)
         .is_some()
 }

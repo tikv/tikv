@@ -378,7 +378,7 @@ fn check_msg_count(max_delay_ms: u64, count: &AtomicUsize, expected: usize) {
 fn test_tombstone_block_list() {
     let pd_server = test_pd::Server::new(1);
     let eps = pd_server.bind_addrs();
-    let pd_client = Arc::new(test_pd::util::new_client(eps, None));
+    let pd_client = test_pd::util::new_client(eps, None);
     let bg_worker = WorkerBuilder::new(thd_name!("background"))
         .thread_count(2)
         .create();
@@ -434,7 +434,7 @@ fn test_tombstone_block_list() {
 fn test_store_allowlist() {
     let pd_server = test_pd::Server::new(1);
     let eps = pd_server.bind_addrs();
-    let pd_client = Arc::new(test_pd::util::new_client(eps, None));
+    let pd_client = test_pd::util::new_client(eps, None);
     let bg_worker = WorkerBuilder::new(thd_name!("background"))
         .thread_count(2)
         .create();

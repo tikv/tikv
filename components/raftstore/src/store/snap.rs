@@ -2258,7 +2258,7 @@ pub mod tests {
         };
         let key_manager = data_key_manager_from_config(&enc_cfg, &dict_path)
             .unwrap()
-            .map(|x| Arc::new(x));
+            .map(Arc::new);
         (dir, key_manager.unwrap())
     }
 

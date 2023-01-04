@@ -125,7 +125,7 @@ fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) {
     #[derive(Clone)]
     struct MockSafePointProvider;
     impl GcSafePointProvider for MockSafePointProvider {
-        fn get_safe_point(&self) -> GcWorkerResult<TimeStamp> {
+        fn get_safe_point(&mut self) -> GcWorkerResult<TimeStamp> {
             Ok(TimeStamp::from(0))
         }
     }

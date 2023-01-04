@@ -5,7 +5,7 @@ use api_version::{test_kv_format_impl, KvFormat};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*, metapb::RegionEpoch};
-use pd_client::PdClient;
+use pd_client::PdClientTsoExt;
 use raft::StateRole;
 use raftstore::coprocessor::{ObserverContext, RoleChange, RoleObserver};
 use test_raftstore::sleep_ms;

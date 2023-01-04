@@ -9,7 +9,7 @@ use std::{
 use futures::executor::block_on;
 use grpcio::EnvBuilder;
 use kvproto::metapb::*;
-use pd_client::{PdClientV2, RegionInfo, RpcClientV2};
+use pd_client::{PdClientCommon, RegionInfo, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;

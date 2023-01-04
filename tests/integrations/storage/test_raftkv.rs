@@ -279,7 +279,7 @@ fn test_invalid_read_index_when_no_leader() {
     configure_for_lease_read(&mut cluster, Some(10), Some(6));
     cluster.cfg.raft_store.raft_heartbeat_ticks = 1;
     cluster.cfg.raft_store.hibernate_regions = false;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     // Set region and peers

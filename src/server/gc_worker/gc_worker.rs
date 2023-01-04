@@ -23,7 +23,7 @@ use engine_traits::{
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::Context, metapb::Region};
-use pd_client::{FeatureGate, PdClient};
+use pd_client::{FeatureGate, PdClientCommon};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
@@ -70,11 +70,11 @@ pub const STAT_RAW_KEYMODE: &str = "raw";
 
 /// Provides safe point.
 pub trait GcSafePointProvider: Send + 'static {
-    fn get_safe_point(&self) -> Result<TimeStamp>;
+    fn get_safe_point(&mut self) -> Result<TimeStamp>;
 }
 
-impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
-    fn get_safe_point(&self) -> Result<TimeStamp> {
+impl<T: PdClientCommon + 'static> GcSafePointProvider for T {
+    fn get_safe_point(&mut self) -> Result<TimeStamp> {
         block_on(self.get_gc_safe_point())
             .map(Into::into)
             .map_err(|e| box_err!("failed to get safe point from PD: {:?}", e))
@@ -411,11 +411,7 @@ impl<E: Engine> GcRunner<E> {
         let count = keys.len();
         let range_start_key = keys.first().unwrap().clone();
         let range_end_key = {
-            let mut k = keys
-                .last()
-                .unwrap()
-                .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
+            let mut k = keys.last().unwrap().to_raw().map_err(EngineError::Codec)?;
             k.push(0);
             Key::from_raw(&k)
         };
@@ -531,11 +527,7 @@ impl<E: Engine> GcRunner<E> {
     ) -> Result<(usize, usize)> {
         let range_start_key = keys.first().unwrap().clone();
         let range_end_key = {
-            let mut k = keys
-                .last()
-                .unwrap()
-                .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
+            let mut k = keys.last().unwrap().to_raw().map_err(EngineError::Codec)?;
             k.push(0);
             Key::from_raw(&k)
         };
@@ -1408,7 +1400,7 @@ pub mod test_gc_worker {
     pub struct MockSafePointProvider(pub u64);
 
     impl GcSafePointProvider for MockSafePointProvider {
-        fn get_safe_point(&self) -> GcWorkerResult<TimeStamp> {
+        fn get_safe_point(&mut self) -> GcWorkerResult<TimeStamp> {
             Ok(self.0.into())
         }
     }

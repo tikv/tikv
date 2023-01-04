@@ -1,23 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{Arc, *},
-    thread,
-    time::Duration,
-};
+use std::{sync::*, thread, time::Duration};
 
 use api_version::{test_kv_format_impl, KvFormat};
 use engine_traits::MiscExt;
 use futures::{executor::block_on, SinkExt, StreamExt};
 use grpcio::*;
 use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
-use pd_client::PdClient;
+use pd_client::{PdClientCommon, PdClientTsoExt};
 use test_raftstore::*;
 use tikv_util::{config::*, store::QueryStats};
 use txn_types::Key;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     let engine = cluster.get_engine(1);
 
     let stats = pd_client.get_store_stats(1).unwrap();
@@ -43,7 +39,7 @@ fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(20);
     cluster.run();
@@ -141,7 +137,7 @@ fn test_store_heartbeat_report_hotspots() {
     fail::remove("mock_hotspot_threshold");
 }
 
-type Query = dyn Fn(Context, &Cluster<ServerCluster>, TikvClient, u64, u64, Vec<u8>);
+type Query = dyn Fn(Context, &mut Cluster<ServerCluster>, TikvClient, u64, u64, Vec<u8>);
 
 #[test]
 fn test_query_stats() {
@@ -439,7 +435,7 @@ fn raw_put<F: KvFormat>(
 }
 
 fn put(
-    cluster: &Cluster<ServerCluster>,
+    cluster: &mut Cluster<ServerCluster>,
     client: &TikvClient,
     ctx: &Context,
     store_id: u64,
@@ -501,13 +497,13 @@ fn put(
 }
 
 fn test_pessimistic_lock() {
-    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+    let (mut cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
     });
 
     let key = b"key2".to_vec();
     let store_id = 1;
-    put(&cluster, &client, &ctx, store_id, key.clone());
+    put(&mut cluster, &client, &ctx, store_id, key.clone());
 
     let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
@@ -541,12 +537,12 @@ fn test_pessimistic_lock() {
 }
 
 pub fn test_rollback() {
-    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+    let (mut cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
     });
     let key = b"key2".to_vec();
     let store_id = 1;
-    put(&cluster, &client, &ctx, store_id, key.clone());
+    put(&mut cluster, &client, &ctx, store_id, key.clone());
     let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
 
     let mut rollback_req = BatchRollbackRequest::default();
@@ -594,10 +590,10 @@ fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool) {
         raw_put::<F>(&cluster, &client, &ctx, store_id, k.clone());
     } else {
         k = b"x_key".to_vec(); // "x" is key prefix of TxnKV.
-        put(&cluster, &client, &ctx, store_id, k.clone());
+        put(&mut cluster, &client, &ctx, store_id, k.clone());
     }
     let region_id = cluster.get_region_id(&k);
-    query(ctx, &cluster, client, store_id, region_id, k.clone());
+    query(ctx, &mut cluster, client, store_id, region_id, k.clone());
 }
 
 fn test_raw_delete_query<F: KvFormat>() {
@@ -635,11 +631,11 @@ fn test_txn_delete_query<F: KvFormat>() {
     let store_id = 1;
 
     {
-        let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        let (mut cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
             cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
         });
 
-        put(&cluster, &client, &ctx, store_id, k.clone());
+        put(&mut cluster, &client, &ctx, store_id, k.clone());
         // DeleteRange
         let mut delete_req = DeleteRangeRequest::default();
         delete_req.set_context(ctx);
@@ -697,7 +693,7 @@ fn check_query_num_write(
 }
 
 fn check_split_key(
-    cluster: &Cluster<ServerCluster>,
+    cluster: &mut Cluster<ServerCluster>,
     start_key: Vec<u8>,
     end_key: Option<Vec<u8>>,
 ) -> bool {

@@ -62,7 +62,7 @@ use kvproto::{
     kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
-use pd_client::{PdClient, RpcClient};
+use pd_client::{PdClientCommon, PdClientTsoExt, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -244,7 +244,7 @@ struct TikvServer<ER: RaftEngine> {
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+    causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
 }
@@ -258,7 +258,7 @@ struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
 struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
-    node: Node<RpcClient, EK, ER>,
+    node: Node<Arc<RpcClient>, EK, ER>,
     importer: Arc<SstImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
@@ -288,7 +288,7 @@ where
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );
-        let pd_client =
+        let mut pd_client =
             Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
         // check if TiKV need to run in snapshot recovery mode
         let is_recovering_marked = match pd_client.is_recovering_marked() {
@@ -308,11 +308,7 @@ where
             snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
             // connect_to_pd_cluster retreived the cluster id from pd
             let cluster_id = config.server.cluster_id;
-            snap_recovery::init_cluster::start_recovery(
-                config.clone(),
-                cluster_id,
-                pd_client.clone(),
-            );
+            snap_recovery::init_cluster::start_recovery(config.clone(), cluster_id, &mut pd_client);
         }
 
         // Initialize and check config
@@ -363,7 +359,7 @@ where
             if let Err(e) = tso {
                 fatal!("Causal timestamp provider initialize failed: {:?}", e);
             }
-            causal_ts_provider = Some(Arc::new(tso.unwrap().into()));
+            causal_ts_provider = Some(tso.unwrap().into());
             info!("Causal timestamp provider startup.");
         }
 
@@ -455,14 +451,14 @@ where
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
     ) -> Arc<RpcClient> {
-        let pd_client = Arc::new(
+        let mut pd_client = Arc::new(
             RpcClient::new(&config.pd, Some(env), security_mgr)
                 .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
         );
 
         let cluster_id = pd_client
-            .get_cluster_id()
-            .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
+            .fetch_cluster_id()
+            .unwrap_or_else(|e| fatal!("failed to fetch cluster id: {}", e));
         if cluster_id == DEFAULT_CLUSTER_ID {
             fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
         }

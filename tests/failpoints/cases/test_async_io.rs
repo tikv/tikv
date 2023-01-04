@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
@@ -17,7 +17,7 @@ fn test_async_io_commit_without_leader_persist() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
     cluster.cfg.raft_store.store_io_pool_size = 2;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -53,7 +53,7 @@ fn test_async_io_commit_without_leader_persist() {
 fn test_async_io_delay_destroy_after_conf_change() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.store_io_pool_size = 2;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
@@ -98,7 +98,7 @@ fn test_async_io_cannot_destroy_when_persist_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.store_io_pool_size = 2;
     configure_for_snapshot(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -181,7 +181,7 @@ fn test_async_io_cannot_handle_ready_when_persist_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.store_io_pool_size = 2;
     configure_for_snapshot(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();

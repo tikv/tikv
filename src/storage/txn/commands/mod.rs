@@ -782,8 +782,6 @@ pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
 
 #[cfg(test)]
 pub mod test_util {
-    use std::sync::Arc;
-
     use causal_ts::CausalTsProviderImpl;
     use kvproto::kvrpcpb::ApiVersion;
     use txn_types::Mutation;
@@ -982,11 +980,11 @@ pub mod test_util {
         Ok(())
     }
 
-    pub fn gen_ts_provider(api_version: ApiVersion) -> Option<Arc<CausalTsProviderImpl>> {
+    pub fn gen_ts_provider(api_version: ApiVersion) -> Option<CausalTsProviderImpl> {
         if api_version == ApiVersion::V2 {
             let test_provider: causal_ts::CausalTsProviderImpl =
                 causal_ts::tests::TestProvider::default().into();
-            Some(Arc::new(test_provider))
+            Some(test_provider)
         } else {
             None
         }

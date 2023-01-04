@@ -11,7 +11,7 @@ use test_raftstore::*;
 use tikv_util::{config::*, time::Instant};
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -114,7 +114,7 @@ fn test_server_tombstone() {
 }
 
 fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     // Disable default max peer number check.
     pd_client.disable_default_operator();
@@ -159,7 +159,7 @@ fn test_server_fast_destroy() {
 }
 
 fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -231,7 +231,7 @@ fn test_server_readd_peer() {
 fn test_server_stale_meta() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -277,7 +277,7 @@ fn test_safe_tombstone_gc() {
     cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration(check_interval * 2);
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(check_interval * 2);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     // Disable default max peer number check.
     pd_client.disable_default_operator();
@@ -335,7 +335,7 @@ fn test_destroy_clean_up_logs_with_log_gc() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(50);
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
 
     // Disable default max peer number check.
     pd_client.disable_default_operator();

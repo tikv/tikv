@@ -235,7 +235,7 @@ impl RunningState {
         cfg: Arc<VersionTrack<Config>>,
         transport: TestTransport,
         concurrency_manager: ConcurrencyManager,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        causal_ts_provider: Option<CausalTsProviderImpl>,
         logger: &Logger,
     ) -> (TestRouter, Self) {
         let raft_engine =

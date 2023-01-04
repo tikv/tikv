@@ -96,7 +96,7 @@ where
                 tikv_alloc::add_thread_memory_accessor();
                 set_io_type(IoType::Import);
             })
-            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
+            .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
             .build()
             .unwrap();
         let props = tikv_util::thread_group::current_properties();
@@ -108,7 +108,7 @@ where
                 tikv_alloc::add_thread_memory_accessor();
                 set_io_type(IoType::Import);
             })
-            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
+            .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
             .create()
             .unwrap();
         importer.start_switch_mode_check(threads.handle(), engine.clone());

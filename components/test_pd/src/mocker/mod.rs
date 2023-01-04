@@ -41,13 +41,6 @@ pub trait PdMocker {
         Some(Ok(res))
     }
 
-    fn store_global_config(
-        &self,
-        _: &StoreGlobalConfigRequest,
-    ) -> Option<Result<StoreGlobalConfigResponse>> {
-        unimplemented!()
-    }
-
     fn watch_global_config(&self) -> Option<Result<WatchGlobalConfigResponse>> {
         panic!("could not mock this function due to it should return a stream")
     }

@@ -6,7 +6,10 @@ use error_code::ErrorCodeExt;
 use futures::{executor::block_on, StreamExt};
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
-use pd_client::{Error as PdError, Feature, PdClientV2, PdConnector, RpcClientV2};
+use pd_client::{
+    Error as PdError, Feature, PdClientCommon, PdClientExtV2, PdClientTsoExt, PdConnector,
+    RpcClientV2,
+};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::{config::ReadableDuration, mpsc::future::WakePolicy, thd_name};
@@ -20,19 +23,6 @@ fn setup_runtime() -> Runtime {
         .enable_all()
         .build()
         .unwrap()
-}
-
-fn must_get_tso(client: &mut RpcClientV2, count: u32) -> TimeStamp {
-    let (tx, mut responses) = client.create_tso_stream(WakePolicy::Immediately).unwrap();
-    let mut req = pdpb::TsoRequest::default();
-    req.mut_header().cluster_id = client.fetch_cluster_id().unwrap();
-    req.count = count;
-    tx.send(req).unwrap();
-    let resp = block_on(responses.next()).unwrap().unwrap();
-    let ts = resp.timestamp.unwrap();
-    let physical = ts.physical as u64;
-    let logical = ts.logical as u64;
-    TimeStamp::compose(physical, logical)
 }
 
 #[test]
@@ -105,10 +95,10 @@ fn test_rpc_client() {
         .unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
-    let ts = must_get_tso(&mut client, 1);
+    let mut tso_stream = client.create_tso_stream().unwrap();
+    let ts = block_on(tso_stream.get_tso()).unwrap();
     assert_ne!(ts, TimeStamp::zero());
-
-    let ts100 = must_get_tso(&mut client, 100);
+    let ts100 = block_on(tso_stream.batch_get_tso(100)).unwrap();
     assert_eq!(ts.logical() + 100, ts100.logical());
 
     let mut prev_id = 0;

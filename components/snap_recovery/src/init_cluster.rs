@@ -106,7 +106,7 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
 }
 
 // update the cluster_id and bootcluster in pd before tikv startup
-pub fn start_recovery(config: TikvConfig, cluster_id: u64, pd_client: Arc<dyn PdClient>) {
+pub fn start_recovery(config: TikvConfig, cluster_id: u64, pd_client: &mut dyn PdClient) {
     let local_engine_service = create_local_engine_service(&config)
         .unwrap_or_else(|e| panic!("create a local engine reader failure, error is {}", e));
 
@@ -134,7 +134,7 @@ fn bootcluster(
     cfg: &ServerConfig,
     cluster_id: u64,
     store_id: u64,
-    pd_client: Arc<dyn PdClient>,
+    pd_client: &mut dyn PdClient,
 ) -> Result<()> {
     // build a store from config for bootcluster
     let mut store = metapb::Store::default();

@@ -47,8 +47,8 @@ use crate::{endpoint::Task, metrics::*};
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
-pub struct AdvanceTsWorker {
-    pd_client: Arc<dyn PdClient>,
+pub struct AdvanceTsWorker<P> {
+    pd_client: P,
     timer: SteadyTimer,
     worker: Runtime,
     scheduler: Scheduler<Task>,
@@ -57,9 +57,9 @@ pub struct AdvanceTsWorker {
     concurrency_manager: ConcurrencyManager,
 }
 
-impl AdvanceTsWorker {
+impl<P: PdClient + Clone> AdvanceTsWorker<P> {
     pub fn new(
-        pd_client: Arc<dyn PdClient>,
+        pd_client: P,
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
     ) -> Self {
@@ -81,7 +81,7 @@ impl AdvanceTsWorker {
     }
 }
 
-impl AdvanceTsWorker {
+impl<P: PdClient + Clone + 'static> AdvanceTsWorker<P> {
     // Advance ts asynchronously and register RegisterAdvanceEvent when its done.
     pub fn advance_ts_for_regions(
         &self,
@@ -91,7 +91,7 @@ impl AdvanceTsWorker {
         cfg_update_notify: Arc<Notify>,
     ) {
         let cm = self.concurrency_manager.clone();
-        let pd_client = self.pd_client.clone();
+        let mut pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let timeout = self.timer.delay(advance_ts_interval);
 
@@ -110,7 +110,9 @@ impl AdvanceTsWorker {
                 }
             }
 
-            let regions = leader_resolver.resolve(regions, min_ts).await;
+            let regions = leader_resolver
+                .resolve(&mut pd_client, regions, min_ts)
+                .await;
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
                     regions,
@@ -137,7 +139,6 @@ impl AdvanceTsWorker {
 
 pub struct LeadershipResolver {
     tikv_clients: Mutex<HashMap<u64, TikvClient>>,
-    pd_client: Arc<dyn PdClient>,
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
     region_read_progress: RegionReadProgressRegistry,
@@ -158,7 +159,6 @@ pub struct LeadershipResolver {
 impl LeadershipResolver {
     pub fn new(
         store_id: u64,
-        pd_client: Arc<dyn PdClient>,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         region_read_progress: RegionReadProgressRegistry,
@@ -167,7 +167,6 @@ impl LeadershipResolver {
         LeadershipResolver {
             tikv_clients: Mutex::default(),
             store_id,
-            pd_client,
             env,
             security_mgr,
             region_read_progress,
@@ -248,7 +247,12 @@ impl LeadershipResolver {
     // This function broadcasts a special message to all stores, gets the leader id
     // of them to confirm whether current peer has a quorum which accepts its
     // leadership.
-    pub async fn resolve(&mut self, _regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+    pub async fn resolve<P: PdClient + Clone>(
+        &mut self,
+        pd_client: &mut P,
+        _regions: Vec<u64>,
+        min_ts: TimeStamp,
+    ) -> Vec<u64> {
         // Clear previous result before resolving.
         self.clear();
         // GC when necessary to prevent memory leak.
@@ -314,7 +318,6 @@ impl LeadershipResolver {
         });
 
         let env = &self.env;
-        let pd_client = &self.pd_client;
         let security_mgr = &self.security_mgr;
         let tikv_clients = &self.tikv_clients;
         // Approximate `LeaderInfo` size
@@ -335,12 +338,16 @@ impl LeadershipResolver {
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
 
             // Check leadership for `regions` on `to_store`.
+            let mut pd_client = pd_client.clone();
             let rpc = async move {
                 PENDING_CHECK_LEADER_REQ_COUNT.inc();
                 defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
-                let client = get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients)
-                    .await
-                    .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;
+                let client =
+                    get_tikv_client(to_store, &mut pd_client, security_mgr, env, tikv_clients)
+                        .await
+                        .map_err(|e| {
+                            (to_store, e.retryable(), format!("[get tikv client] {}", e))
+                        })?;
 
                 // Set min_ts in the request.
                 req.set_ts(min_ts.into_inner());
@@ -483,7 +490,7 @@ static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 async fn get_tikv_client(
     store_id: u64,
-    pd_client: &Arc<dyn PdClient>,
+    pd_client: &mut dyn PdClient,
     security_mgr: &SecurityManager,
     env: Arc<Environment>,
     tikv_clients: &Mutex<HashMap<u64, TikvClient>>,
@@ -495,10 +502,11 @@ async fn get_tikv_client(
         }
     }
     let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
-    let store = tokio::time::timeout(timeout, pd_client.get_store_async(store_id))
+    let store = tokio::time::timeout(timeout, pd_client.get_store_and_stats(store_id))
         .await
         .map_err(|e| pd_client::Error::Other(Box::new(e)))
-        .flatten()?;
+        .flatten()?
+        .0;
     let mut clients = tikv_clients.lock().await;
     let start = Instant::now_coarse();
     // hack: so it's different args, grpc will always create a new connection.

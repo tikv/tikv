@@ -263,7 +263,7 @@ struct SchedulerInner<L: LockManager> {
     flow_controller: Arc<FlowController>,
 
     // used for apiv2
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    causal_ts_provider: Option<CausalTsProviderImpl>,
 
     control_mutex: Arc<tokio::sync::Mutex<bool>>,
 
@@ -428,7 +428,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         config: &Config,
         dynamic_configs: DynamicConfigs,
         flow_controller: Arc<FlowController>,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        causal_ts_provider: Option<CausalTsProviderImpl>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
@@ -1747,7 +1747,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 }
 
 pub async fn get_raw_ext(
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    mut causal_ts_provider: Option<CausalTsProviderImpl>,
     concurrency_manager: ConcurrencyManager,
     max_ts_synced: bool,
     cmd: &Command,
@@ -1762,13 +1762,13 @@ pub async fn get_raw_ext(
                     }
                     .into());
                 }
-                let key_guard = get_raw_key_guard(&causal_ts_provider, concurrency_manager)
+                let key_guard = get_raw_key_guard(&mut causal_ts_provider, concurrency_manager)
                     .await
                     .map_err(|err: StorageError| {
                         ErrorInner::Other(box_err!("failed to key guard: {:?}", err))
                     })?;
                 let ts =
-                    get_causal_ts(&causal_ts_provider)
+                    get_causal_ts(&mut causal_ts_provider)
                         .await
                         .map_err(|err: StorageError| {
                             ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))

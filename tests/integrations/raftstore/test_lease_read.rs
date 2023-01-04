@@ -12,7 +12,7 @@ use std::{
 use engine_rocks::RocksSnapshot;
 use kvproto::{kvrpcpb::Op, metapb};
 use more_asserts::assert_le;
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
@@ -125,7 +125,7 @@ fn test_node_renew_lease() {
 // If the leader lease has expired, there may be new leader elected and
 // the old leader will fail to renew its lease.
 fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -288,7 +288,7 @@ fn test_node_batch_id_in_lease() {
 }
 
 fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -584,7 +584,7 @@ fn test_local_read_cache() {
     configure_for_lease_read(&mut cluster, Some(50), None);
     cluster.pd_client.disable_default_operator();
     cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
@@ -673,7 +673,7 @@ fn test_read_index_after_write() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10));
     let heartbeat_interval = cluster.cfg.raft_store.raft_heartbeat_interval();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -832,29 +832,29 @@ fn test_node_local_read_renew_lease() {
 #[test]
 fn test_stale_read_with_ts0() {
     let mut cluster = new_server_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.cfg.resolved_ts.enable = true;
     cluster.run();
 
     let leader = new_peer(1, 1);
     cluster.must_transfer_leader(1, leader.clone());
-    let mut leader_client = PeerClient::new(&cluster, 1, leader);
+    let mut leader_client = PeerClient::new(&mut cluster, 1, leader);
 
-    let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
+    let mut follower_client2 = PeerClient::new(&mut cluster, 1, new_peer(2, 2));
 
     // Set the `stale_read` flag
     leader_client.ctx.set_stale_read(true);
     follower_client2.ctx.set_stale_read(true);
 
     let commit_ts1 = leader_client.must_kv_write(
-        &pd_client,
+        &mut pd_client,
         vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
         b"key1".to_vec(),
     );
 
     let commit_ts2 = leader_client.must_kv_write(
-        &pd_client,
+        &mut pd_client,
         vec![new_mutation(Op::Put, &b"key1"[..], &b"value2"[..])],
         b"key1".to_vec(),
     );

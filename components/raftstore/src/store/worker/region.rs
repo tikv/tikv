@@ -20,7 +20,7 @@ use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOC
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
     box_err, box_try,
@@ -340,7 +340,7 @@ where
 pub struct Runner<EK, R, T>
 where
     EK: KvEngine,
-    T: PdClient + 'static,
+    T: PdClientCommon + 'static,
 {
     batch_size: usize,
     use_delete_range: bool,
@@ -366,7 +366,7 @@ where
     mgr: SnapManager,
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
-    pd_client: Option<Arc<T>>,
+    pd_client: Option<T>,
     pool: ThreadPool<TaskCell>,
 }
 
@@ -374,7 +374,7 @@ impl<EK, R, T> Runner<EK, R, T>
 where
     EK: KvEngine,
     R: CasualRouter<EK>,
-    T: PdClient + 'static,
+    T: PdClientCommon + 'static,
 {
     pub fn new(
         engine: EK,
@@ -382,7 +382,7 @@ where
         cfg: Arc<VersionTrack<Config>>,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
-        pd_client: Option<Arc<T>>,
+        pd_client: Option<T>,
     ) -> Runner<EK, R, T> {
         Runner {
             batch_size: cfg.value().snap_apply_batch_size.0 as usize,
@@ -775,7 +775,7 @@ impl<EK, R, T> Runnable for Runner<EK, R, T>
 where
     EK: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
-    T: PdClient,
+    T: PdClientCommon,
 {
     type Task = Task<EK::Snapshot>;
 
@@ -799,7 +799,7 @@ where
                     if let Some(is_tiflash) = self.tiflash_stores.get(&to_store_id) {
                         allow_multi_files_snapshot = !is_tiflash;
                     } else {
-                        let is_tiflash = self.pd_client.as_ref().map_or(false, |pd_client| {
+                        let is_tiflash = self.pd_client.as_mut().map_or(false, |pd_client| {
                             if let Ok(s) = pd_client.get_store(to_store_id) {
                                 if let Some(_l) = s.get_labels().iter().find(|l| {
                                     l.key.to_lowercase() == ENGINE
@@ -874,7 +874,7 @@ impl<EK, R, T> RunnableWithTimer for Runner<EK, R, T>
 where
     EK: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
-    T: PdClient + 'static,
+    T: PdClientCommon + 'static,
 {
     fn on_timeout(&mut self) {
         self.handle_pending_applies(true);

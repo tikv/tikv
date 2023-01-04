@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{iter::*, sync::*, thread, time::*};
+use std::{iter::*, thread, time::*};
 
 use api_version::{test_kv_format_impl, KvFormat};
 use engine_traits::{Peekable, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -9,7 +9,7 @@ use kvproto::{
     raft_cmdpb::CmdType,
     raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
 };
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
@@ -36,7 +36,7 @@ fn test_node_base_merge() {
         must_get_equal(&cluster.get_engine(i + 1), b"k3", b"v3");
     }
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k1").unwrap();
@@ -121,11 +121,11 @@ fn test_node_merge_with_slow_learner() {
 
     // Create a cluster with peer 1 as leader and peer 2 as learner.
     let r1 = cluster.run_conf_change();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.must_add_peer(r1, new_learner_peer(2, 2));
 
     // Split the region.
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k1").unwrap();
@@ -189,7 +189,7 @@ fn test_node_merge_with_slow_learner() {
 fn test_node_merge_prerequisites_check() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     cluster.run();
 
@@ -271,7 +271,7 @@ fn test_node_check_merged_message() {
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
     ignore_merge_target_integrity(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run_conf_change();
@@ -342,7 +342,7 @@ fn test_node_merge_slow_split(is_right_derive: bool) {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     ignore_merge_target_integrity(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.cfg.raft_store.right_derive_when_split = is_right_derive;
 
@@ -407,7 +407,7 @@ fn test_node_merge_dist_isolation() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     ignore_merge_target_integrity(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -490,7 +490,7 @@ fn test_node_merge_brain_split() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let region = pd_client.get_region(b"k1").unwrap();
 
     cluster.must_split(&region, b"k2");
@@ -591,7 +591,7 @@ fn test_merge_approximate_size_and_keys() {
     let middle_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
     let max_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let region = pd_client.get_region(b"").unwrap();
 
     cluster.must_split(&region, &middle_key);
@@ -669,7 +669,7 @@ fn test_node_merge_update_region() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k1").unwrap();
@@ -746,7 +746,7 @@ fn test_node_merge_catch_up_logs_empty_entries() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let region = pd_client.get_region(b"k1").unwrap();
     let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
@@ -796,7 +796,7 @@ fn test_node_merge_catch_up_logs_empty_entries() {
 fn test_merge_with_slow_promote() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
@@ -840,7 +840,7 @@ fn test_merge_isolated_store_with_no_target_peer() {
     configure_for_merge(&mut cluster);
     ignore_merge_target_integrity(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
@@ -897,7 +897,7 @@ fn test_merge_isolated_store_with_no_target_peer() {
 fn test_merge_cascade_merge_isolated() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -948,7 +948,7 @@ fn test_merge_cascade_merge_isolated() {
 fn test_merge_isolated_not_in_merge_learner() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run_conf_change();
@@ -999,7 +999,7 @@ fn test_merge_isolated_stale_learner() {
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(2);
     cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::minutes(10);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run_conf_change();
@@ -1045,7 +1045,7 @@ fn test_merge_isolated_stale_learner() {
 fn test_merge_isolated_not_in_merge_learner_2() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run_conf_change();
@@ -1090,7 +1090,7 @@ fn test_merge_isolated_not_in_merge_learner_2() {
 fn test_merge_remove_target_peer_isolated() {
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run_conf_change();
@@ -1216,7 +1216,7 @@ fn test_merge_snapshot_demote() {
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
     configure_for_snapshot(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run_conf_change();
@@ -1272,7 +1272,7 @@ fn test_propose_in_memory_pessimistic_locks() {
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster);
     cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -1355,7 +1355,7 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
     // Set raft_entry_max_size to 64 KiB. We will try to make the gap larger than
     // the limit later.
     cluster.cfg.raft_store.raft_entry_max_size = ReadableSize::kb(64);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -1402,7 +1402,7 @@ fn test_merge_pessimistic_locks_repeated_merge() {
     configure_for_merge(&mut cluster);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -1468,7 +1468,7 @@ fn test_node_merge_long_isolated() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     ignore_merge_target_integrity(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -1530,7 +1530,7 @@ fn test_stale_message_after_merge() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -1577,7 +1577,7 @@ fn test_stale_message_after_merge() {
 fn test_prepare_merge_with_reset_matched() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
     pd_client.must_add_peer(r, new_peer(2, 2));
@@ -1626,7 +1626,7 @@ fn test_prepare_merge_with_reset_matched() {
 fn test_prepare_merge_with_5_nodes_snapshot() {
     let mut cluster = new_server_cluster(0, 5);
     configure_for_merge(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run();
     cluster.must_put(b"k1", b"v1");

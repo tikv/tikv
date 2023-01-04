@@ -12,7 +12,7 @@ use cdc::{recv_timeout, Delegate, OldValueCache, Task, Validate};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
-use pd_client::PdClient;
+use pd_client::PdClientTsoExt;
 use test_raftstore::*;
 use tikv_util::{debug, worker::Scheduler, HandyRwLock};
 use txn_types::TimeStamp;
@@ -342,7 +342,7 @@ fn test_cdc_observed_before_incremental_scan_snapshot() {
     cluster.pd_client.disable_default_operator();
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let region = suite.cluster.get_region(b"");
-    let lead_client = PeerClient::new(&suite.cluster, region.id, new_peer(1, 1));
+    let lead_client = PeerClient::new(&mut suite.cluster, region.id, new_peer(1, 1));
 
     // So that the second changefeed can get some delta changes elder than its
     // snapshot.
@@ -360,13 +360,13 @@ fn test_cdc_observed_before_incremental_scan_snapshot() {
 
     for version in 0..10 {
         let key = format!("key-{:0>6}", version);
-        let start_ts = get_tso(&suite.cluster.pd_client);
+        let start_ts = get_tso(&mut suite.cluster.pd_client);
         lead_client.must_kv_prewrite(
             vec![new_mutation(Op::Put, key.as_bytes(), b"value")],
             key.as_bytes().to_owned(),
             start_ts,
         );
-        let commit_ts = get_tso(&suite.cluster.pd_client);
+        let commit_ts = get_tso(&mut suite.cluster.pd_client);
         lead_client.must_kv_commit(vec![key.into_bytes()], start_ts, commit_ts);
     }
 
@@ -453,17 +453,21 @@ fn test_old_value_cache_without_downstreams() {
 #[test]
 fn test_cdc_rawkv_resolved_ts() {
     let mut suite = TestSuite::new(1, ApiVersion::V2);
-    let cluster = &suite.cluster;
 
-    let region = cluster.get_region(b"");
+    let region = suite.cluster.get_region(b"");
     let region_id = region.get_id();
     let leader = region.get_peers()[0].clone();
     let node_id = leader.get_id();
-    let ts_provider = cluster.sim.rl().get_causal_ts_provider(node_id).unwrap();
+    let mut ts_provider = suite
+        .cluster
+        .sim
+        .rl()
+        .get_causal_ts_provider(node_id)
+        .unwrap();
 
     let env = Arc::new(Environment::new(1));
     let channel =
-        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+        ChannelBuilder::new(env).connect(&suite.cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = TikvClient::new(channel);
 
     let mut req = suite.new_changedata_request(region_id);

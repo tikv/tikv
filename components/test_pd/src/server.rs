@@ -192,15 +192,6 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         hijack_unary(self, ctx, sink, |c| c.load_global_config(&req))
     }
 
-    fn store_global_config(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: StoreGlobalConfigRequest,
-        _sink: UnarySink<StoreGlobalConfigResponse>,
-    ) {
-        unimplemented!()
-    }
-
     fn watch_global_config(
         &mut self,
         ctx: RpcContext<'_>,

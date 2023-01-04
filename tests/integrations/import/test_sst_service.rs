@@ -2,7 +2,7 @@
 
 use futures::{executor::block_on, stream::StreamExt};
 use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use tempfile::Builder;
 use test_sst_importer::*;
 use tikv::config::TikvConfig;

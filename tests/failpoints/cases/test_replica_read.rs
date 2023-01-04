@@ -21,7 +21,7 @@ fn test_wait_for_apply_index() {
 
     // Increase the election tick to make this test case running reliably.
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
@@ -78,7 +78,7 @@ fn test_duplicate_read_index_ctx() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
     cluster.cfg.raft_store.raft_heartbeat_ticks = 1;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     // Set region and peers
@@ -156,7 +156,7 @@ fn test_read_before_init() {
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     // Set region and peers
@@ -207,7 +207,7 @@ fn test_read_applying_snapshot() {
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     // Set region and peers
@@ -272,7 +272,7 @@ fn test_read_after_cleanup_range_for_snap() {
     let mut cluster = new_server_cluster(1, 3);
     configure_for_snapshot(&mut cluster);
     configure_for_lease_read(&mut cluster, Some(100), Some(10));
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     // Set region and peers
@@ -367,7 +367,7 @@ fn test_new_split_learner_can_not_find_leader() {
     let mut cluster = new_node_cluster(0, 4);
     configure_for_lease_read(&mut cluster, Some(5000), None);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
@@ -413,7 +413,7 @@ fn test_replica_read_after_transfer_leader() {
 
     configure_for_lease_read(&mut cluster, Some(50), Some(100));
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r = cluster.run_conf_change();
@@ -486,7 +486,7 @@ fn test_replica_read_after_transfer_leader() {
 #[test]
 fn test_read_index_after_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     configure_for_lease_read(&mut cluster, Some(50), Some(100));
     // Setup cluster and check all peers have data.
@@ -581,7 +581,7 @@ fn test_batch_read_index_after_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(100));
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r = cluster.run_conf_change();
@@ -657,7 +657,7 @@ fn test_batch_read_index_after_transfer_leader() {
 fn test_read_index_lock_checking_on_follower() {
     let mut cluster = new_node_cluster(0, 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let rid = cluster.run_conf_change();
@@ -734,7 +734,7 @@ fn test_read_index_lock_checking_on_false_leader() {
     cluster.cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(Duration::from_millis(100));
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let rid = cluster.run_conf_change();

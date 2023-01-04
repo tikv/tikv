@@ -39,7 +39,7 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
 #[test]
 fn test_node_bootstrap_with_prepared_data() {
     // create a node
-    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let pd_client = TestPdClient::new(0, false);
     let cfg = new_tikv_config(0);
 
     let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
@@ -58,7 +58,7 @@ fn test_node_bootstrap_with_prepared_data() {
         &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
         cfg.storage.api_version(),
-        Arc::clone(&pd_client),
+        pd_client.clone(),
         Arc::default(),
         bg_worker,
         None,
@@ -69,7 +69,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     // assume there is a node has bootstrapped the cluster and add region in pd
     // successfully
-    bootstrap_with_first_region(Arc::clone(&pd_client)).unwrap();
+    bootstrap_with_first_region(pd_client.clone()).unwrap();
 
     // now another node at same time begin bootstrap node, but panic after prepared
     // bootstrap now rocksDB must have some prepare data

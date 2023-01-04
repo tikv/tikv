@@ -34,7 +34,7 @@ use async_trait::async_trait;
 #[cfg(test)]
 use futures::executor::block_on;
 use parking_lot::RwLock;
-use pd_client::PdClient;
+use pd_client::PdClientTsoExt;
 use tikv_util::{
     time::{Duration, Instant},
     worker::{Builder as WorkerBuilder, Worker},
@@ -302,16 +302,17 @@ struct RenewParameter {
     cache_multiplier: u32,
 }
 
-pub struct BatchTsoProvider<C: PdClient> {
-    pd_client: Arc<C>,
+#[derive(Clone)]
+pub struct BatchTsoProvider<C: PdClientTsoExt> {
+    pd_client: C,
     batch_list: Arc<TsoBatchList>,
-    causal_ts_worker: Worker,
+    causal_ts_worker: Arc<Worker>,
     renew_interval: Duration,
     renew_parameter: RenewParameter,
     renew_request_tx: Sender<RenewRequest>,
 }
 
-impl<C: PdClient> std::fmt::Debug for BatchTsoProvider<C> {
+impl<C: PdClientTsoExt> std::fmt::Debug for BatchTsoProvider<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BatchTsoProvider")
             .field("batch_list", &self.batch_list)
@@ -321,8 +322,8 @@ impl<C: PdClient> std::fmt::Debug for BatchTsoProvider<C> {
     }
 }
 
-impl<C: PdClient + 'static> BatchTsoProvider<C> {
-    pub async fn new(pd_client: Arc<C>) -> Result<Self> {
+impl<C: PdClientTsoExt + Clone + 'static> BatchTsoProvider<C> {
+    pub async fn new(pd_client: C) -> Result<Self> {
         Self::new_opt(
             pd_client,
             Duration::from_millis(DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS),
@@ -344,7 +345,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     }
 
     pub async fn new_opt(
-        pd_client: Arc<C>,
+        pd_client: C,
         renew_interval: Duration,
         alloc_ahead: Duration,
         batch_min_size: u32,
@@ -360,7 +361,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         let s = Self {
             pd_client: pd_client.clone(),
             batch_list: Arc::new(TsoBatchList::new(cache_multiplier)),
-            causal_ts_worker: WorkerBuilder::new("causal_ts_batch_tso_worker").create(),
+            causal_ts_worker: Arc::new(WorkerBuilder::new("causal_ts_batch_tso_worker").create()),
             renew_interval,
             renew_parameter,
             renew_request_tx,
@@ -400,7 +401,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     }
 
     async fn renew_tso_batch_impl(
-        pd_client: Arc<C>,
+        mut pd_client: C,
         tso_batch_list: Arc<TsoBatchList>,
         renew_parameter: RenewParameter,
         need_flush: bool,
@@ -453,7 +454,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     }
 
     async fn renew_thread(
-        pd_client: Arc<C>,
+        pd_client: C,
         tso_batch_list: Arc<TsoBatchList>,
         renew_parameter: RenewParameter,
         mut rx: Receiver<RenewRequest>,
@@ -564,12 +565,12 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     }
 
     #[cfg(test)]
-    pub fn get_ts(&self) -> Result<TimeStamp> {
+    pub fn get_ts(&mut self) -> Result<TimeStamp> {
         block_on(self.async_get_ts())
     }
 
     #[cfg(test)]
-    pub fn flush(&self) -> Result<TimeStamp> {
+    pub fn flush(&mut self) -> Result<TimeStamp> {
         block_on(self.async_flush())
     }
 }
@@ -577,9 +578,9 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
 const GET_TS_MAX_RETRY: u32 = 3;
 
 #[async_trait]
-impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
+impl<C: PdClientTsoExt + Clone + 'static> CausalTsProvider for BatchTsoProvider<C> {
     // TODO: support `after_ts` argument.
-    async fn async_get_ts(&self) -> Result<TimeStamp> {
+    async fn async_get_ts(&mut self) -> Result<TimeStamp> {
         let start = Instant::now();
         let mut retries = 0;
         let mut last_batch_size: u32;
@@ -621,7 +622,7 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
         Err(Error::TsoBatchUsedUp(last_batch_size))
     }
 
-    async fn async_flush(&self) -> Result<TimeStamp> {
+    async fn async_flush(&mut self) -> Result<TimeStamp> {
         self.renew_tso_batch(true, TsoBatchRenewReason::flush)
             .await?;
         // TODO: Return the first tso by renew_tso_batch instead of async_get_ts
@@ -631,25 +632,25 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
 
 /// A simple implementation acquiring TSO on every request.
 /// For test purpose only. Do not use in production.
-pub struct SimpleTsoProvider {
-    pd_client: Arc<dyn PdClient>,
+pub struct SimpleTsoProvider<C> {
+    pd_client: C,
 }
 
-impl SimpleTsoProvider {
-    pub fn new(pd_client: Arc<dyn PdClient>) -> SimpleTsoProvider {
+impl<C> SimpleTsoProvider<C> {
+    pub fn new(pd_client: C) -> SimpleTsoProvider<C> {
         SimpleTsoProvider { pd_client }
     }
 }
 
 #[async_trait]
-impl CausalTsProvider for SimpleTsoProvider {
-    async fn async_get_ts(&self) -> Result<TimeStamp> {
+impl<C: PdClientTsoExt> CausalTsProvider for SimpleTsoProvider<C> {
+    async fn async_get_ts(&mut self) -> Result<TimeStamp> {
         let ts = self.pd_client.get_tso().await?;
         debug!("SimpleTsoProvider::get_ts"; "ts" => ?ts);
         Ok(ts)
     }
 
-    async fn async_flush(&self) -> Result<TimeStamp> {
+    async fn async_flush(&mut self) -> Result<TimeStamp> {
         self.async_get_ts().await
     }
 }
@@ -868,9 +869,9 @@ pub mod tests {
 
     #[test]
     fn test_simple_tso_provider() {
-        let pd_cli = Arc::new(TestPdClient::new(1, false));
+        let pd_cli = TestPdClient::new(1, false);
 
-        let provider = SimpleTsoProvider::new(pd_cli.clone());
+        let mut provider = SimpleTsoProvider::new(pd_cli.clone());
 
         pd_cli.set_tso(100.into());
         let ts = block_on(provider.async_get_ts()).unwrap();
@@ -879,12 +880,12 @@ pub mod tests {
 
     #[test]
     fn test_batch_tso_provider() {
-        let pd_cli = Arc::new(TestPdClient::new(1, false));
+        let pd_cli = TestPdClient::new(1, false);
         pd_cli.set_tso(1000.into());
 
         // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to
         // renew manually. allocated: [1001, 1100]
-        let provider = block_on(BatchTsoProvider::new_opt(
+        let mut provider = block_on(BatchTsoProvider::new_opt(
             pd_cli.clone(),
             Duration::ZERO,
             Duration::from_secs(1), // cache_multiplier = 10
@@ -947,7 +948,7 @@ pub mod tests {
 
     #[test]
     fn test_batch_tso_provider_on_failure() {
-        let pd_cli = Arc::new(TestPdClient::new(1, false));
+        let pd_cli = TestPdClient::new(1, false);
         pd_cli.set_tso(1000.into());
 
         {
@@ -964,7 +965,7 @@ pub mod tests {
 
         // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to
         // renew manually. allocated: [1001, 1100]
-        let provider = block_on(BatchTsoProvider::new_opt(
+        let mut provider = block_on(BatchTsoProvider::new_opt(
             pd_cli.clone(),
             Duration::ZERO,
             Duration::from_secs(1), // cache_multiplier=10

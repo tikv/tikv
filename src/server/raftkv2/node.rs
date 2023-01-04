@@ -90,7 +90,7 @@ where
         trans: T,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
         background: Worker,
         pd_worker: LazyWorker<PdTask>,
@@ -186,7 +186,7 @@ where
         trans: T,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
         background: Worker,
         pd_worker: LazyWorker<PdTask>,

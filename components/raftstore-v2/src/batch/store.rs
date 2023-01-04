@@ -477,7 +477,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         store_meta: Arc<Mutex<StoreMeta>>,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
         background: Worker,
         pd_worker: LazyWorker<pd::Task>,

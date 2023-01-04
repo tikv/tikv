@@ -4,7 +4,7 @@ use std::{fmt, marker::PhantomData, sync::Arc};
 
 use engine_traits::KvEngine;
 use kvproto::import_sstpb::SstMeta;
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use sst_importer::SstImporter;
 use tikv_util::{error, worker::Runnable};
 
@@ -32,21 +32,21 @@ where
     store_id: u64,
     store_router: S,
     importer: Arc<SstImporter>,
-    pd_client: Arc<C>,
+    pd_client: C,
     _engine: PhantomData<EK>,
 }
 
 impl<EK, C, S> Runner<EK, C, S>
 where
     EK: KvEngine,
-    C: PdClient,
+    C: PdClientCommon,
     S: StoreRouter<EK>,
 {
     pub fn new(
         store_id: u64,
         store_router: S,
         importer: Arc<SstImporter>,
-        pd_client: Arc<C>,
+        pd_client: C,
     ) -> Runner<EK, C, S> {
         Runner {
             store_id,
@@ -65,7 +65,7 @@ where
     }
 
     /// Validates whether the SST is stale or not.
-    fn handle_validate_sst(&self, ssts: Vec<SstMeta>) {
+    fn handle_validate_sst(&mut self, ssts: Vec<SstMeta>) {
         let store_id = self.store_id;
         let mut invalid_ssts = Vec::new();
         for sst in ssts {
@@ -105,7 +105,7 @@ where
 impl<EK, C, S> Runnable for Runner<EK, C, S>
 where
     EK: KvEngine,
-    C: PdClient,
+    C: PdClientCommon,
     S: StoreRouter<EK>,
 {
     type Task = Task;

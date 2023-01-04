@@ -30,7 +30,7 @@ use kvproto::{
     logbackuppb_grpc::{create_log_backup, LogBackupClient},
     tikvpb::*,
 };
-use pd_client::PdClient;
+use pd_client::{PdClientCommon, PdClientTsoExt};
 use protobuf::parse_from_bytes;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
@@ -574,7 +574,7 @@ impl Suite {
 
 // Copy & Paste from cdc::tests::TestSuite, maybe make it a mixin?
 impl Suite {
-    pub fn tso(&self) -> TimeStamp {
+    pub fn tso(&mut self) -> TimeStamp {
         run_async_test(self.cluster.pd_client.get_tso()).unwrap()
     }
 
@@ -802,11 +802,11 @@ mod test {
         RegionSet, Task,
     };
     use futures::{Stream, StreamExt};
-    use pd_client::PdClient;
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use tokio::time::timeout;
     use txn_types::{Key, TimeStamp};
 
+    use super::*;
     use crate::{
         make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
     };
@@ -928,14 +928,15 @@ mod test {
         suite.must_register_task(1, "frequent_initial_scan");
         let commit_ts = suite.tso();
         suite.commit_keys(keys, start_ts, commit_ts);
+        let region = suite.cluster.get_region(&make_record_key(1, 886));
         suite.run(|| {
             Task::ModifyObserve(backup_stream::ObserveOp::Stop {
-                region: suite.cluster.get_region(&make_record_key(1, 886)),
+                region: region.clone(),
             })
         });
         suite.run(|| {
             Task::ModifyObserve(backup_stream::ObserveOp::Start {
-                region: suite.cluster.get_region(&make_record_key(1, 886)),
+                region: region.clone(),
             })
         });
         fail::cfg("scan_after_get_snapshot", "off").unwrap();
@@ -1024,7 +1025,7 @@ mod test {
         let paused =
             run_async_test(suite.get_meta_cli().check_task_paused("test_fatal_error")).unwrap();
         assert!(paused);
-        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        let safepoints = suite.cluster.pd_client.gc_safepoints().rl();
         let checkpoint = suite.global_checkpoint();
 
         assert!(
@@ -1197,17 +1198,19 @@ mod test {
     #[test]
     fn pessimistic_lock() {
         let mut suite = SuiteBuilder::new_named("pessimistic_lock").nodes(3).build();
+        let tso = suite.tso();
         suite.must_kv_pessimistic_lock(
             1,
             vec![make_record_key(1, 42)],
-            suite.tso(),
+            tso,
             make_record_key(1, 42),
         );
         suite.must_register_task(1, "pessimistic_lock");
+        let tso = suite.tso();
         suite.must_kv_pessimistic_lock(
             1,
             vec![make_record_key(1, 43)],
-            suite.tso(),
+            tso,
             make_record_key(1, 43),
         );
         let expected_tso = suite.tso().into_inner();
@@ -1249,7 +1252,8 @@ mod test {
         for i in 1..10 {
             let split_key = make_split_key_at_record(1, i * 20);
             suite.must_split(&split_key);
-            suite.must_shuffle_leader(suite.cluster.get_region_id(&split_key));
+            let region_id = suite.cluster.get_region_id(&split_key);
+            suite.must_shuffle_leader(region_id);
         }
 
         let round1 = run_async_test(suite.write_records(0, 128, 1));

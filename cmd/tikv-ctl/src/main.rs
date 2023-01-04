@@ -39,7 +39,7 @@ use kvproto::{
     raft_serverpb::SnapshotMeta,
     tikvpb::TikvClient,
 };
-use pd_client::{Config as PdConfig, PdClient, RpcClient};
+use pd_client::{Config as PdConfig, PdClientCommon, RpcClient};
 use protobuf::Message;
 use raft_log_engine::ManagedFileSystem;
 use regex::Regex;
@@ -109,18 +109,15 @@ fn main() {
             let key_manager =
                 data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .expect("data_key_manager_from_config should success");
-            let file_system = Arc::new(ManagedFileSystem::new(
-                key_manager.map(|m| Arc::new(m)),
-                None,
-            ));
+            let file_system = Arc::new(ManagedFileSystem::new(key_manager.map(Arc::new), None));
             raft_engine_ctl::run_command(args, file_system);
         }
         Cmd::BadSsts { manifest, pd } => {
             let data_dir = opt.data_dir.as_deref();
             assert!(data_dir.is_some(), "--data-dir must be specified");
             let data_dir = data_dir.expect("--data-dir must be specified");
-            let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
-            print_bad_ssts(data_dir, manifest.as_deref(), pd_client, &cfg);
+            let mut pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
+            print_bad_ssts(data_dir, manifest.as_deref(), &mut pd_client, &cfg);
         }
         Cmd::DumpSnapMeta { file } => {
             let path = file.as_ref();
@@ -217,23 +214,31 @@ fn main() {
             threads,
             bottommost,
         } => {
-            let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
+            let mut pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
             let db_type = if db == "kv" { DbType::Kv } else { DbType::Raft };
             let cfs = cf.iter().map(|s| s.as_ref()).collect();
             let from_key = from.map(|k| unescape(&k));
             let to_key = to.map(|k| unescape(&k));
             let bottommost = BottommostLevelCompaction::from(Some(bottommost.as_ref()));
             compact_whole_cluster(
-                &pd_client, &cfg, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
+                &mut pd_client,
+                &cfg,
+                mgr,
+                db_type,
+                cfs,
+                from_key,
+                to_key,
+                threads,
+                bottommost,
             );
         }
         Cmd::SplitRegion {
             region: region_id,
             key,
         } => {
-            let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
+            let mut pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
             let key = unescape(&key);
-            split_region(&pd_client, mgr, region_id, key);
+            split_region(&mut pd_client, mgr, region_id, key);
         }
         // Commands below requires either the data dir or the host.
         cmd => {
@@ -559,7 +564,7 @@ fn dump_snap_meta_file(path: &str) {
     }
 }
 
-fn get_pd_rpc_client(pd: Option<String>, mgr: Arc<SecurityManager>) -> RpcClient {
+fn get_pd_rpc_client(pd: Option<String>, mgr: Arc<SecurityManager>) -> Arc<RpcClient> {
     let pd = pd.unwrap_or_else(|| {
         clap::Error {
             message: String::from("--pd is required for this command"),
@@ -570,10 +575,17 @@ fn get_pd_rpc_client(pd: Option<String>, mgr: Arc<SecurityManager>) -> RpcClient
     });
     let cfg = PdConfig::new(vec![pd]);
     cfg.validate().unwrap();
-    RpcClient::new(&cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+    Arc::new(
+        RpcClient::new(&cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e)),
+    )
 }
 
-fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
+fn split_region(
+    pd_client: &mut Arc<RpcClient>,
+    mgr: Arc<SecurityManager>,
+    region_id: u64,
+    key: Vec<u8>,
+) {
     let region = block_on(pd_client.get_region_by_id(region_id))
         .expect("get_region_by_id should success")
         .expect("must have the region");
@@ -617,7 +629,7 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
 }
 
 fn compact_whole_cluster(
-    pd_client: &RpcClient,
+    pd_client: &mut Arc<RpcClient>,
     cfg: &TikvConfig,
     mgr: Arc<SecurityManager>,
     db_type: DbType,
@@ -697,7 +709,12 @@ fn run_sst_dump_command(args: Vec<String>, cfg: &TikvConfig) {
     engine_rocks::raw::run_sst_dump_tool(&args, &build_rocks_opts(cfg));
 }
 
-fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TikvConfig) {
+fn print_bad_ssts(
+    data_dir: &str,
+    manifest: Option<&str>,
+    pd_client: &mut Arc<RpcClient>,
+    cfg: &TikvConfig,
+) {
     let db = &cfg.infer_kv_engine_path(Some(data_dir)).unwrap();
     println!(
         "\nstart to print bad ssts; data_dir:{}; db:{}",
@@ -833,7 +850,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
 
             if start.starts_with(&[keys::DATA_PREFIX]) {
                 print_overlap_region_and_suggestions(
-                    &pd_client,
+                    pd_client,
                     &start[1..],
                     &end[1..],
                     db,
@@ -850,7 +867,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
                 if end.starts_with(&[keys::DATA_PREFIX]) {
                     println!("WARNING: the range includes both meta and user data.");
                     print_overlap_region_and_suggestions(
-                        &pd_client,
+                        pd_client,
                         &[],
                         &end[1..],
                         db,
@@ -875,7 +892,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
 }
 
 fn print_overlap_region_and_suggestions(
-    pd_client: &RpcClient,
+    pd_client: &mut Arc<RpcClient>,
     start: &[u8],
     end: &[u8],
     db: &str,

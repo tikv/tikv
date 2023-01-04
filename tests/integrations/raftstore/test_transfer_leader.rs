@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, thread, time::Duration};
+use std::{thread, time::Duration};
 
 use api_version::{test_kv_format_impl, KvFormat};
 use engine_traits::CF_LOCK;
@@ -71,7 +71,7 @@ fn test_server_basic_transfer_leader() {
 }
 
 fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -119,7 +119,7 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_pd_transfer_leader_multi_target<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -183,7 +183,7 @@ fn test_server_pd_transfer_leader_multi_target() {
 }
 
 fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);

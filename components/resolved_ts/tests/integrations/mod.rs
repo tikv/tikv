@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::*, metapb::RegionEpoch};
-use pd_client::PdClient;
+use pd_client::PdClientTsoExt;
 use tempfile::Builder;
 use test_raftstore::sleep_ms;
 use test_sst_importer::*;
@@ -111,10 +111,8 @@ fn test_dynamic_change_advance_ts_interval() {
     let region = suite.cluster.get_region(&[]);
 
     // `reolved-ts` should update with the interval of 10ms
-    suite.must_get_rts_ge(
-        region.id,
-        block_on(suite.cluster.pd_client.get_tso()).unwrap(),
-    );
+    let tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_get_rts_ge(region.id, tso);
 
     // change the interval to 10min
     suite.must_change_advance_ts_interval(1, Duration::from_secs(600));
@@ -134,10 +132,8 @@ fn test_dynamic_change_advance_ts_interval() {
     // change the interval to 10ms
     suite.must_change_advance_ts_interval(1, Duration::from_millis(10));
     // `resolved-ts` should be updated immediately
-    suite.must_get_rts_ge(
-        region.id,
-        block_on(suite.cluster.pd_client.get_tso()).unwrap(),
-    );
+    let tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_get_rts_ge(region.id, tso);
 
     suite.stop();
 }

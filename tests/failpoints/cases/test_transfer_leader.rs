@@ -11,7 +11,7 @@ use engine_traits::CF_LOCK;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
-use pd_client::PdClient;
+use pd_client::PdClientTsoExt;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::storage::Snapshot;
@@ -29,7 +29,7 @@ fn test_transfer_leader_slow_apply() {
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
 
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();

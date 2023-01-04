@@ -191,7 +191,7 @@ impl FromStr for ReadableSize {
                 if size.chars().all(|c| char::is_ascii_digit(&c)) {
                     return size
                         .parse::<u64>()
-                        .map(|n| ReadableSize(n))
+                        .map(ReadableSize)
                         .map_err(|_| format!("invalid size string: {:?}", s));
                 }
                 UNIT

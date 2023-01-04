@@ -1,10 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{mpsc::channel, Arc},
-    thread,
-    time::Duration,
-};
+use std::{sync::mpsc::channel, thread, time::Duration};
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
@@ -277,7 +273,7 @@ fn test_auto_gc() {
     let count = 3;
     let (mut cluster, first_leader_storage, ctx) =
         new_raft_storage_with_store_count::<ApiV1>(count, "");
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
 
     // Used to wait for all storage's GC to finish
     let (finish_signal_tx, finish_signal_rx) = channel();
@@ -307,7 +303,7 @@ fn test_auto_gc() {
         let tx = finish_signal_tx.clone();
 
         let mut cfg = AutoGcConfig::new_test_cfg(
-            Arc::clone(&pd_client),
+            pd_client.clone(),
             region_info_accessors.remove(id).unwrap(),
             *id,
         );

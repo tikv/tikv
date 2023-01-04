@@ -18,7 +18,7 @@ use kvproto::{
     raft_cmdpb::RaftCmdRequest,
     raft_serverpb::PeerState,
 };
-use pd_client::{Config as PdConfig, PdClient, RpcClient};
+use pd_client::{Config as PdConfig, PdClientCommon, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_log_engine::RaftLogEngine;
@@ -529,8 +529,9 @@ pub trait DebugExecutor {
         region_ids: Vec<u64>,
     ) {
         self.check_local_mode();
-        let rpc_client =
-            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+        let mut rpc_client = Arc::new(
+            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e)),
+        );
 
         let regions = region_ids
             .into_iter()
@@ -577,8 +578,9 @@ pub trait DebugExecutor {
         read_only: bool,
     ) {
         self.check_local_mode();
-        let rpc_client =
-            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+        let mut rpc_client = Arc::new(
+            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e)),
+        );
 
         let regions = region_ids
             .into_iter()
@@ -1002,8 +1004,10 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
-        let rpc_client = RpcClient::new(pd_cfg, None, mgr)
-            .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+        let mut rpc_client = Arc::new(
+            RpcClient::new(pd_cfg, None, mgr)
+                .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e)),
+        );
 
         let mut region = match block_on(rpc_client.get_region_by_id(region_id)) {
             Ok(Some(region)) => region,

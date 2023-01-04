@@ -300,11 +300,7 @@ pub fn fuzz_coprocessor_codec_duration_from_parse(data: &[u8]) -> Result<()> {
     let fsp = cursor.read_as_i8()?;
     let mut buf: [u8; 32] = [b' '; 32];
     cursor.read_exact(&mut buf)?;
-    let d = Duration::parse(
-        &mut EvalContext::default(),
-        &std::str::from_utf8(&buf)?,
-        fsp,
-    )?;
+    let d = Duration::parse(&mut EvalContext::default(), std::str::from_utf8(&buf)?, fsp)?;
     fuzz_duration(d, cursor)
 }
 

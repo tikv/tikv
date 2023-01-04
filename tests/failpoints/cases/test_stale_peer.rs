@@ -9,7 +9,7 @@ use std::{
 use engine_traits::RaftEngineReadOnly;
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage};
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
@@ -47,7 +47,7 @@ fn test_one_node_leader_missing() {
 #[test]
 fn test_node_update_localreader_after_removed() {
     let mut cluster = new_node_cluster(0, 6);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -139,7 +139,7 @@ fn test_stale_learner_restart() {
 fn test_stale_peer_destroy_when_apply_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -219,7 +219,7 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.hibernate_regions = false;
 
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -296,7 +296,7 @@ fn test_destroy_clean_up_logs_with_unfinished_log_gc() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(15);
     cluster.cfg.raft_store.raft_log_gc_threshold = 15;
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
 
     // Disable default max peer number check.
     pd_client.disable_default_operator();

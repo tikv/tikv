@@ -1493,13 +1493,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     }
 
     // TODO: reduce arguments
-    pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
+    pub fn spawn<T: Transport + 'static, C: PdClient + Clone + 'static>(
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
         engines: Engines<EK, ER>,
         trans: T,
-        pd_client: Arc<C>,
+        pd_client: C,
         mgr: SnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
@@ -1512,7 +1512,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1557,7 +1557,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cfg.clone(),
             workers.coprocessor_host.clone(),
             self.router(),
-            Some(Arc::clone(&pd_client)),
+            Some(pd_client.clone()),
         );
         let region_scheduler = workers
             .region_worker
@@ -1581,7 +1581,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             meta.get_id(),
             self.router.clone(),
             Arc::clone(&importer),
-            Arc::clone(&pd_client),
+            pd_client.clone(),
         );
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
@@ -1650,7 +1650,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
+    fn start_system<T: Transport + 'static, C: PdClient + Clone + 'static>(
         &mut self,
         mut workers: Workers<EK, ER>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
@@ -1658,11 +1658,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
-        pd_client: Arc<C>,
+        mut pd_client: C,
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1732,7 +1732,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let pd_runner = PdRunner::new(
             &cfg,
             store.get_id(),
-            Arc::clone(&pd_client),
+            pd_client.clone(),
             self.router.clone(),
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.0,

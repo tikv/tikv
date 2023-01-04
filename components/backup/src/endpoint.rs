@@ -670,7 +670,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     concurrency_manager: ConcurrencyManager,
     softlimit: SoftLimitKeeper,
     api_version: ApiVersion,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used in rawkv apiv2 only
+    causal_ts_provider: Option<CausalTsProviderImpl>, // used in rawkv apiv2 only
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -822,7 +822,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
         api_version: ApiVersion,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        causal_ts_provider: Option<CausalTsProviderImpl>,
     ) -> Endpoint<E, R> {
         let pool = ControlThreadPool::new();
         let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
@@ -1024,7 +1024,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         }
     }
 
-    pub fn handle_backup_task(&self, task: Task) {
+    pub fn handle_backup_task(&mut self, task: Task) {
         let Task { request, resp } = task;
         let codec = KeyValueCodec::new(request.is_raw_kv, self.api_version, request.dst_api_ver);
         if !codec.check_backup_api_version(&request.start_key, &request.end_key) {
@@ -1047,7 +1047,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         if request.is_raw_kv {
             if let Err(e) = self
                 .causal_ts_provider
-                .as_ref()
+                .as_mut()
                 .map_or(Ok(TimeStamp::new(0)), |provider| {
                     block_on(provider.async_flush())
                 })
@@ -1332,7 +1332,7 @@ pub mod tests {
         limiter: Option<Arc<IoRateLimiter>>,
         api_version: ApiVersion,
         is_raw_kv: bool,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        causal_ts_provider: Option<CausalTsProviderImpl>,
     ) -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
@@ -1430,7 +1430,7 @@ pub mod tests {
 
     #[test]
     fn test_seek_range() {
-        let (_tmp, endpoint) = new_endpoint();
+        let (_tmp, mut endpoint) = new_endpoint();
 
         endpoint.region_info.set_regions(vec![
             (b"".to_vec(), b"1".to_vec(), 1),
@@ -1441,14 +1441,17 @@ pub mod tests {
         ]);
         // Test seek backup range.
         let test_seek_backup_range =
-            |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
+            |e: &Endpoint<RocksEngine, MockRegionInfoProvider>,
+             start_key: &[u8],
+             end_key: &[u8],
+             expect: Vec<(&[u8], &[u8])>| {
                 let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
                 let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
                 let mut prs = Progress::new_with_range(
-                    endpoint.store_id,
+                    e.store_id,
                     start_key,
                     end_key,
-                    endpoint.region_info.clone(),
+                    e.region_info.clone(),
                     KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
                     engine_traits::CF_DEFAULT,
                 );
@@ -1488,7 +1491,10 @@ pub mod tests {
         // Test whether responses contain correct range.
         #[allow(clippy::blocks_in_if_conditions)]
         let test_handle_backup_task_range =
-            |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
+            |e: &mut Endpoint<RocksEngine, MockRegionInfoProvider>,
+             start_key: &[u8],
+             end_key: &[u8],
+             expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
                 let backend = make_local_backend(tmp.path());
                 let (tx, rx) = unbounded();
@@ -1511,7 +1517,7 @@ pub mod tests {
                     },
                     resp: tx,
                 };
-                endpoint.handle_backup_task(task);
+                e.handle_backup_task(task);
                 let resps: Vec<_> = block_on(rx.collect());
                 for a in &resps {
                     assert!(
@@ -1558,14 +1564,14 @@ pub mod tests {
             ),
         ];
         for (start_key, end_key, ranges) in case {
-            test_seek_backup_range(start_key, end_key, ranges.clone());
-            test_handle_backup_task_range(start_key, end_key, ranges);
+            test_seek_backup_range(&endpoint, start_key, end_key, ranges.clone());
+            test_handle_backup_task_range(&mut endpoint, start_key, end_key, ranges);
         }
     }
 
     #[test]
     fn test_seek_ranges() {
-        let (_tmp, endpoint) = new_endpoint();
+        let (_tmp, mut endpoint) = new_endpoint();
 
         endpoint.region_info.set_regions(vec![
             (b"".to_vec(), b"1".to_vec(), 1),
@@ -1576,7 +1582,9 @@ pub mod tests {
         ]);
         // Test seek backup range.
         let test_seek_backup_ranges =
-            |sub_ranges: Vec<(&[u8], &[u8])>, expect: Vec<(&[u8], &[u8])>| {
+            |e: &Endpoint<RocksEngine, MockRegionInfoProvider>,
+             sub_ranges: Vec<(&[u8], &[u8])>,
+             expect: Vec<(&[u8], &[u8])>| {
                 let mut ranges = Vec::with_capacity(sub_ranges.len());
                 for &(start_key, end_key) in &sub_ranges {
                     let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
@@ -1584,9 +1592,9 @@ pub mod tests {
                     ranges.push((start_key, end_key));
                 }
                 let mut prs = Progress::new_with_ranges(
-                    endpoint.store_id,
+                    e.store_id,
                     ranges,
-                    endpoint.region_info.clone(),
+                    e.region_info.clone(),
                     KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
                     engine_traits::CF_DEFAULT,
                 );
@@ -1626,7 +1634,9 @@ pub mod tests {
         // Test whether responses contain correct range.
         #[allow(clippy::blocks_in_if_conditions)]
         let test_handle_backup_task_ranges =
-            |sub_ranges: Vec<(&[u8], &[u8])>, expect: Vec<(&[u8], &[u8])>| {
+            |e: &mut Endpoint<RocksEngine, MockRegionInfoProvider>,
+             sub_ranges: Vec<(&[u8], &[u8])>,
+             expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
                 let backend = make_local_backend(tmp.path());
                 let (tx, rx) = unbounded();
@@ -1659,7 +1669,7 @@ pub mod tests {
                     },
                     resp: tx,
                 };
-                endpoint.handle_backup_task(task);
+                e.handle_backup_task(task);
                 let resps: Vec<_> = block_on(rx.collect());
                 for a in &resps {
                     assert!(
@@ -1741,8 +1751,8 @@ pub mod tests {
             ),
         ];
         for (ranges, expect_ranges) in case {
-            test_seek_backup_ranges(ranges.clone(), expect_ranges.clone());
-            test_handle_backup_task_ranges(ranges, expect_ranges);
+            test_seek_backup_ranges(&endpoint, ranges.clone(), expect_ranges.clone());
+            test_handle_backup_task_ranges(&mut endpoint, ranges, expect_ranges);
         }
     }
 
@@ -1750,7 +1760,8 @@ pub mod tests {
     fn test_handle_backup_task() {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
-        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), ApiVersion::V1, false, None);
+        let (tmp, mut endpoint) =
+            new_endpoint_with_limiter(Some(limiter), ApiVersion::V1, false, None);
         let mut engine = endpoint.engine.clone();
 
         endpoint
@@ -1893,7 +1904,7 @@ pub mod tests {
     ) -> bool {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
-        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true, None);
+        let (tmp, mut endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true, None);
         let engine = endpoint.engine.clone();
 
         let start_key_idx: u64 = 100;
@@ -2060,10 +2071,10 @@ pub mod tests {
     #[test]
     fn test_backup_raw_apiv2_causal_ts() {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
-        let ts_provider: Arc<CausalTsProviderImpl> =
-            Arc::new(causal_ts::tests::TestProvider::default().into());
+        let mut ts_provider: CausalTsProviderImpl =
+            causal_ts::tests::TestProvider::default().into();
         let start_ts = block_on(ts_provider.async_get_ts()).unwrap();
-        let (tmp, endpoint) = new_endpoint_with_limiter(
+        let (tmp, mut endpoint) = new_endpoint_with_limiter(
             Some(limiter),
             ApiVersion::V2,
             true,
@@ -2086,7 +2097,7 @@ pub mod tests {
 
     #[test]
     fn test_scan_error() {
-        let (tmp, endpoint) = new_endpoint();
+        let (tmp, mut endpoint) = new_endpoint();
         let mut engine = endpoint.engine.clone();
 
         endpoint
@@ -2204,7 +2215,7 @@ pub mod tests {
 
     #[test]
     fn test_busy() {
-        let (_tmp, endpoint) = new_endpoint();
+        let (_tmp, mut endpoint) = new_endpoint();
         let engine = endpoint.engine.clone();
 
         endpoint
@@ -2238,7 +2249,7 @@ pub mod tests {
 
     #[test]
     fn test_adjust_thread_pool_size() {
-        let (_tmp, endpoint) = new_endpoint();
+        let (_tmp, mut endpoint) = new_endpoint();
         endpoint
             .region_info
             .set_regions(vec![(b"".to_vec(), b"".to_vec(), 1)]);

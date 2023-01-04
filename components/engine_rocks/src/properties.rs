@@ -213,8 +213,8 @@ impl RangeProperties {
             Ok(idx) => Some(idx),
             Err(next_idx) => next_idx.checked_sub(1),
         };
-        let start = start_offset.map_or_else(|| Default::default(), |x| self.offsets[x].1);
-        let end = end_offset.map_or_else(|| Default::default(), |x| self.offsets[x].1);
+        let start = start_offset.map_or_else(Default::default, |x| self.offsets[x].1);
+        let end = end_offset.map_or_else(Default::default, |x| self.offsets[x].1);
         assert!(end.size >= start.size && end.keys >= start.keys);
         (end.size - start.size, end.keys - start.keys)
     }

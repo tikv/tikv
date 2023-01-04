@@ -1,16 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    fs,
-    sync::{mpsc::channel, Arc},
-    thread,
-    time::Duration,
-};
+use std::{fs, sync::mpsc::channel, thread, time::Duration};
 
 use engine_traits::{Iterable, Peekable, CF_DEFAULT, CF_WRITE};
 use keys::data_key;
 use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{Bucket, BucketRange, Callback, WriteResponse},
@@ -32,7 +27,7 @@ where
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     let tbls = vec![
         (b"k22", b"k11", b"k33"),
@@ -107,7 +102,7 @@ fn test_server_split_region_twice() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     let (split_key, left_key, right_key) = (b"k22", b"k11", b"k33");
     cluster.must_put(left_key, b"v1");
@@ -159,7 +154,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.run();
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     let region = pd_client.get_region(b"").unwrap();
 
@@ -319,7 +314,7 @@ fn test_delay_split_region() {
     // We use three nodes for this test.
     cluster.run();
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     let region = pd_client.get_region(b"").unwrap();
 
@@ -368,7 +363,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k0", b"v0");
     assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     // isolate node 3 for region 1.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)));
@@ -437,7 +432,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k0", b"v0");
     assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     // isolate node 3 for region 1.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)));
@@ -494,7 +489,7 @@ fn test_server_split_with_stale_peer() {
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -570,7 +565,7 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.run();
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
 
     // The default size index distance is too large for small data, we flush
     // multiple times to generate more size index handles.
@@ -635,7 +630,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
 
     cluster.run();
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
 
     let mut range = 1..;
     put_till_size(&mut cluster, region_max_size / 2, &mut range);
@@ -667,7 +662,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
 fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let old = pd_client.get_region(b"k1").unwrap();
     // Construct a get command using old region meta.
     let get_old = new_request(
@@ -823,7 +818,7 @@ fn test_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(item_len) * 1024);
     let mut range = 1..;
     cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let region = pd_client.get_region(b"").unwrap();
     let mid_key = put_till_size(cluster, 11 * item_len, &mut range);
     let max_key = put_till_size(cluster, 9 * item_len, &mut range);
@@ -863,7 +858,7 @@ fn test_node_split_update_region_right_derive() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
     let right = pd_client.get_region(b"k2").unwrap();
@@ -909,7 +904,7 @@ fn test_node_split_update_region_right_derive() {
 #[test]
 fn test_split_with_epoch_not_match() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -943,7 +938,7 @@ fn test_split_with_epoch_not_match() {
 #[test]
 fn test_split_with_in_memory_pessimistic_locks() {
     let mut cluster = new_server_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -1020,7 +1015,7 @@ fn test_refresh_region_bucket_keys() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     cluster.must_put(b"k11", b"v1");
     let mut region = pd_client.get_region(b"k11").unwrap();
@@ -1213,7 +1208,7 @@ fn test_gen_split_check_bucket_ranges() {
     // Make merge check resume quickly.
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     cluster.must_put(b"k11", b"v1");
     let region = pd_client.get_region(b"k11").unwrap();

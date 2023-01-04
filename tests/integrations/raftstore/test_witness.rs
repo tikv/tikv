@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{iter::FromIterator, sync::Arc, time::Duration};
+use std::{iter::FromIterator, time::Duration};
 
 use collections::HashMap;
 use futures::executor::block_on;
@@ -9,12 +9,12 @@ use kvproto::{
     raft_cmdpb::ChangePeerRequest,
     raft_serverpb::{PeerState, RaftApplyState},
 };
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
 use tikv_util::store::find_peer;
 
-fn become_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
+fn become_witness(cluster: &mut Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
     peer.set_role(metapb::PeerRole::Learner);
     cluster.pd_client.must_add_peer(region_id, peer.clone());
     cluster.pd_client.must_remove_peer(region_id, peer.clone());
@@ -25,7 +25,11 @@ fn become_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut m
     cluster.pd_client.must_add_peer(region_id, peer.clone());
 }
 
-fn become_non_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
+fn become_non_witness(
+    cluster: &mut Cluster<ServerCluster>,
+    region_id: u64,
+    peer: &mut metapb::Peer,
+) {
     peer.set_role(metapb::PeerRole::Learner);
     cluster.pd_client.must_add_peer(region_id, peer.clone());
     cluster.pd_client.must_remove_peer(region_id, peer.clone());
@@ -44,13 +48,13 @@ fn test_witness_split_merge() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     // nonwitness -> witness
     let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    become_witness(&mut cluster, region.get_id(), &mut peer_on_store3);
 
     let before = cluster
         .apply_state(region.get_id(), nodes[2])
@@ -97,7 +101,7 @@ fn test_witness_split_merge() {
 
     // can't merge with different witness location
     let mut peer_on_store3 = find_peer(&left, nodes[2]).unwrap().clone();
-    become_non_witness(&cluster, left.get_id(), &mut peer_on_store3);
+    become_non_witness(&mut cluster, left.get_id(), &mut peer_on_store3);
     let left = cluster.get_region(b"k1");
     let req = new_admin_request(
         left.get_id(),
@@ -123,7 +127,7 @@ fn test_witness_conf_change() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k1", b"v1");
@@ -190,7 +194,7 @@ fn test_witness_conf_change() {
 //     let nodes = Vec::from_iter(cluster.get_node_ids());
 //     assert_eq!(nodes.len(), 3);
 
-//     let pd_client = Arc::clone(&cluster.pd_client);
+//     let mut pd_client = cluster.pd_client.clone();
 //     pd_client.disable_default_operator();
 
 //     cluster.must_put(b"k1", b"v1");
@@ -201,7 +205,7 @@ fn test_witness_conf_change() {
 
 //     // nonwitness -> witness
 //     let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-//     become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+//     become_witness(&mut cluster, region.get_id(), &mut peer_on_store3);
 
 //     std::thread::sleep(Duration::from_millis(100));
 //     must_get_none(&cluster.get_engine(3), b"k1");
@@ -231,7 +235,7 @@ fn test_witness_conf_change() {
 //     let nodes = Vec::from_iter(cluster.get_node_ids());
 //     assert_eq!(nodes.len(), 3);
 
-//     let pd_client = Arc::clone(&cluster.pd_client);
+//     let mut pd_client = cluster.pd_client.clone();
 //     pd_client.disable_default_operator();
 
 //     cluster.must_put(b"k1", b"v1");
@@ -273,13 +277,13 @@ fn test_witness_conf_change() {
 //     let nodes = Vec::from_iter(cluster.get_node_ids());
 //     assert_eq!(nodes.len(), 3);
 
-//     let pd_client = Arc::clone(&cluster.pd_client);
+//     let mut pd_client = cluster.pd_client.clone();
 //     pd_client.disable_default_operator();
 
 //     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
 //     // nonwitness -> witness
 //     let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-//     become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+//     become_witness(&mut cluster, region.get_id(), &mut peer_on_store3);
 //     cluster.must_put(b"k0", b"v0");
 
 //     // make sure logs are replicated to the witness
@@ -311,7 +315,7 @@ fn test_witness_raftlog_gc_lagged_follower() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k0", b"v0");
@@ -321,7 +325,7 @@ fn test_witness_raftlog_gc_lagged_follower() {
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
     // nonwitness -> witness
     let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    become_witness(&mut cluster, region.get_id(), &mut peer_on_store3);
 
     // make sure raft log gc is triggered
     std::thread::sleep(Duration::from_millis(200));
@@ -384,7 +388,7 @@ fn test_witness_raftlog_gc_lagged_witness() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -392,7 +396,7 @@ fn test_witness_raftlog_gc_lagged_witness() {
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
     // nonwitness -> witness
     let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    become_witness(&mut cluster, region.get_id(), &mut peer_on_store3);
     cluster.must_put(b"k0", b"v0");
 
     // make sure raft log gc is triggered
@@ -438,7 +442,7 @@ fn test_witness_replica_read() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k0", b"v0");
@@ -448,7 +452,7 @@ fn test_witness_replica_read() {
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
     // nonwitness -> witness
     let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    become_witness(&mut cluster, region.get_id(), &mut peer_on_store3);
 
     let mut request = new_request(
         region.get_id(),
@@ -504,7 +508,7 @@ fn test_witness_leader_down() {
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k0", b"v0");
@@ -515,7 +519,7 @@ fn test_witness_leader_down() {
 
     let mut peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
     // nonwitness -> witness
-    become_witness(&cluster, region.get_id(), &mut peer_on_store2);
+    become_witness(&mut cluster, region.get_id(), &mut peer_on_store2);
 
     // the other follower is isolated
     cluster.add_send_filter(IsolationFilterFactory::new(3));

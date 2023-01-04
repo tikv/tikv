@@ -14,7 +14,7 @@ use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::FutureExt;
 use kvproto::metapb::Region;
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::StateRole;
 use raftstore::{
     coprocessor::{ObserveHandle, RegionInfoProvider},
@@ -292,7 +292,7 @@ pub struct RegionSubscriptionManager<S, R, PDC> {
     // Note: these fields appear everywhere, maybe make them a `context` type?
     regions: R,
     meta_cli: MetadataClient<S>,
-    pd_client: Arc<PDC>,
+    pd_client: PDC,
     range_router: Router,
     scheduler: Scheduler<Task>,
     observer: BackupStreamObserver,
@@ -307,14 +307,13 @@ impl<S, R, PDC> Clone for RegionSubscriptionManager<S, R, PDC>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
-    PDC: PdClient + 'static,
+    PDC: PdClientCommon + Clone + 'static,
 {
     fn clone(&self) -> Self {
         Self {
             regions: self.regions.clone(),
             meta_cli: self.meta_cli.clone(),
-            // We should manually call Arc::clone here or rustc complains that `PDC` isn't `Clone`.
-            pd_client: Arc::clone(&self.pd_client),
+            pd_client: self.pd_client.clone(),
             range_router: self.range_router.clone(),
             scheduler: self.scheduler.clone(),
             observer: self.observer.clone(),
@@ -337,7 +336,7 @@ impl<S, R, PDC> RegionSubscriptionManager<S, R, PDC>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
-    PDC: PdClient + 'static,
+    PDC: PdClientCommon + Clone + 'static,
 {
     /// create a [`RegionSubscriptionManager`].
     ///
@@ -349,7 +348,7 @@ where
         initial_loader: InitialDataLoader<E, R, RT>,
         observer: BackupStreamObserver,
         meta_cli: MetadataClient<S>,
-        pd_client: Arc<PDC>,
+        pd_client: PDC,
         scan_pool_size: usize,
     ) -> (Self, future![()])
     where

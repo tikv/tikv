@@ -28,7 +28,7 @@ impl Checkpointer for RocksEngineCheckpointer {
     ) -> Result<()> {
         self.0
             .create_at(db_out_dir, titan_out_dir, log_size_for_flush)
-            .map_err(|e| r2e(e))
+            .map_err(r2e)
     }
 }
 

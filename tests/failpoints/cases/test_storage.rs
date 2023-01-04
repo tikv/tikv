@@ -172,7 +172,8 @@ fn test_raftkv_early_error_report() {
     let raftkv_fp = "raftkv_early_error_report";
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
-    cluster.must_split(&cluster.get_region(b"k0"), b"k1");
+    let region = cluster.get_region(b"k0");
+    cluster.must_split(&region, b"k1");
 
     let env = Arc::new(Environment::new(1));
     let mut clients: HashMap<&[u8], (Context, TikvClient)> = HashMap::default();

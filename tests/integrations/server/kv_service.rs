@@ -25,7 +25,7 @@ use kvproto::{
     raft_serverpb::*,
     tikvpb::*,
 };
-use pd_client::PdClient;
+use pd_client::PdClientTsoExt;
 use raft::eraftpb;
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -419,7 +419,7 @@ fn test_mvcc_rollback_and_cleanup() {
 fn test_mvcc_resolve_lock_gc_and_delete() {
     use kvproto::kvrpcpb::*;
 
-    let (cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -1523,7 +1523,7 @@ fn test_check_txn_status_with_max_ts() {
     must_kv_commit(&client, ctx, vec![k], lock_ts, lock_ts + 1, lock_ts + 1);
 }
 
-fn build_client(cluster: &Cluster<ServerCluster>) -> (TikvClient, Context) {
+fn build_client(cluster: &mut Cluster<ServerCluster>) -> (TikvClient, Context) {
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();
     let addr = cluster.sim.rl().get_addr(leader.get_store_id());
@@ -1545,7 +1545,7 @@ fn test_batch_commands() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
 
-    let (client, _) = build_client(&cluster);
+    let (client, _) = build_client(&mut cluster);
     let (mut sender, receiver) = client.batch_commands().unwrap();
     for _ in 0..1000 {
         let mut batch_req = BatchCommandsRequest::default();
@@ -1581,7 +1581,7 @@ fn test_empty_commands() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
 
-    let (client, _) = build_client(&cluster);
+    let (client, _) = build_client(&mut cluster);
     let (mut sender, receiver) = client.batch_commands().unwrap();
     for _ in 0..1000 {
         let mut batch_req = BatchCommandsRequest::default();
@@ -1621,7 +1621,7 @@ fn test_async_commit_check_txn_status() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
 
-    let (client, ctx) = build_client(&cluster);
+    let (client, ctx) = build_client(&mut cluster);
 
     let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
     let mut req = PrewriteRequest::default();
@@ -1654,7 +1654,7 @@ fn test_prewrite_check_max_commit_ts() {
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
     cm.update_max_ts(100.into());
 
-    let (client, ctx) = build_client(&cluster);
+    let (client, ctx) = build_client(&mut cluster);
 
     let mut req = PrewriteRequest::default();
     req.set_context(ctx.clone());

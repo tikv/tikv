@@ -189,9 +189,9 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
     fail::cfg(get_fp(usage, 1), "return").unwrap();
 
     // Test normal prewrite is not allowed.
-    let pd_client = cluster.pd_client.clone();
-    let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
-    let prewrite_ts = get_tso(&pd_client);
+    let mut pd_client = cluster.pd_client.clone();
+    let lead_client = PeerClient::new(&mut cluster, 1, new_peer(1, 1));
+    let prewrite_ts = get_tso(&mut pd_client);
     let res = lead_client.try_kv_prewrite(
         vec![new_mutation(Op::Put, b"k3", b"v3")],
         b"k3".to_vec(),
@@ -203,7 +203,7 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
 
     fail::remove(get_fp(usage, 1));
     cluster.must_transfer_leader(1, new_peer(1, 1));
-    let prewrite_ts = get_tso(&pd_client);
+    let prewrite_ts = get_tso(&mut pd_client);
     lead_client.must_kv_prewrite(
         vec![new_mutation(Op::Put, b"k4", b"v4")],
         b"k4".to_vec(),
@@ -212,12 +212,12 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
 
     // Test commit is allowed.
     fail::cfg(get_fp(usage, 1), "return").unwrap();
-    let commit_ts = get_tso(&pd_client);
+    let commit_ts = get_tso(&mut pd_client);
     lead_client.must_kv_commit(vec![b"k4".to_vec()], prewrite_ts, commit_ts);
     lead_client.must_kv_read_equal(b"k4".to_vec(), b"v4".to_vec(), commit_ts);
 
     // Test prewrite is allowed with a special `DiskFullOpt` flag.
-    let prewrite_ts = get_tso(&pd_client);
+    let prewrite_ts = get_tso(&mut pd_client);
     let res = lead_client.try_kv_prewrite(
         vec![new_mutation(Op::Put, b"k5", b"v5")],
         b"k5".to_vec(),
@@ -225,13 +225,13 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
         DiskFullOpt::AllowedOnAlmostFull,
     );
     assert!(!res.get_region_error().has_disk_full());
-    let commit_ts = get_tso(&pd_client);
+    let commit_ts = get_tso(&mut pd_client);
     lead_client.must_kv_commit(vec![b"k5".to_vec()], prewrite_ts, commit_ts);
     assert!(!res.get_region_error().has_disk_full());
 
     fail::remove(get_fp(usage, 1));
-    let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
-    let prewrite_ts = get_tso(&pd_client);
+    let lead_client = PeerClient::new(&mut cluster, 1, new_peer(1, 1));
+    let prewrite_ts = get_tso(&mut pd_client);
     lead_client.must_kv_prewrite(
         vec![new_mutation(Op::Put, b"k6", b"v6")],
         b"k6".to_vec(),
@@ -240,11 +240,11 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
 
     // Test rollback must be allowed.
     fail::cfg(get_fp(usage, 1), "return").unwrap();
-    PeerClient::new(&cluster, 1, new_peer(1, 1))
+    PeerClient::new(&mut cluster, 1, new_peer(1, 1))
         .must_kv_rollback(vec![b"k6".to_vec()], prewrite_ts);
 
     fail::remove(get_fp(usage, 1));
-    let start_ts = get_tso(&pd_client);
+    let start_ts = get_tso(&mut pd_client);
     lead_client.must_kv_pessimistic_lock(b"k7".to_vec(), start_ts);
 
     // Test pessimistic commit is allowed.
@@ -256,10 +256,10 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
         DiskFullOpt::AllowedOnAlmostFull,
     );
     assert!(!res.get_region_error().has_disk_full());
-    lead_client.must_kv_commit(vec![b"k7".to_vec()], start_ts, get_tso(&pd_client));
+    lead_client.must_kv_commit(vec![b"k7".to_vec()], start_ts, get_tso(&mut pd_client));
 
     fail::remove(get_fp(usage, 1));
-    let lock_ts = get_tso(&pd_client);
+    let lock_ts = get_tso(&mut pd_client);
     lead_client.must_kv_pessimistic_lock(b"k8".to_vec(), lock_ts);
 
     // Test pessmistic rollback is allowed.
@@ -484,8 +484,8 @@ fn test_almost_and_already_full_behavior() {
         ensure_disk_usage_is_reported(&mut cluster, i + 1, i + 1, &region);
     }
 
-    let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
-    let prewrite_ts = get_tso(&cluster.pd_client);
+    let lead_client = PeerClient::new(&mut cluster, 1, new_peer(1, 1));
+    let prewrite_ts = get_tso(&mut cluster.pd_client);
     let res = lead_client.try_kv_prewrite(
         vec![new_mutation(Op::Put, b"k2", b"v2")],
         b"k2".to_vec(),
@@ -496,7 +496,7 @@ fn test_almost_and_already_full_behavior() {
     lead_client.must_kv_commit(
         vec![b"k2".to_vec()],
         prewrite_ts,
-        get_tso(&cluster.pd_client),
+        get_tso(&mut cluster.pd_client),
     );
 
     let index_1 = cluster.raft_local_state(1, 1).last_index;
@@ -522,7 +522,7 @@ fn test_almost_and_already_full_behavior() {
 }
 
 fn wait_down_peers_reported<T: Simulator>(
-    cluster: &Cluster<T>,
+    cluster: &mut Cluster<T>,
     total_down_count: u64,
     target_report_peer: u64,
 ) {
@@ -558,8 +558,8 @@ fn test_down_node_when_disk_full() {
         ensure_disk_usage_is_reported(&mut cluster, i, i, &region);
     }
 
-    let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
-    let prewrite_ts = get_tso(&cluster.pd_client);
+    let lead_client = PeerClient::new(&mut cluster, 1, new_peer(1, 1));
+    let prewrite_ts = get_tso(&mut cluster.pd_client);
     let res = lead_client.try_kv_prewrite(
         vec![new_mutation(Op::Put, b"k2", b"v2")],
         b"k2".to_vec(),
@@ -570,13 +570,13 @@ fn test_down_node_when_disk_full() {
     lead_client.must_kv_commit(
         vec![b"k2".to_vec()],
         prewrite_ts,
-        get_tso(&cluster.pd_client),
+        get_tso(&mut cluster.pd_client),
     );
 
     cluster.stop_node(2);
-    wait_down_peers_reported(&cluster, 1, 2u64);
+    wait_down_peers_reported(&mut cluster, 1, 2u64);
 
-    let prewrite_ts = get_tso(&cluster.pd_client);
+    let prewrite_ts = get_tso(&mut cluster.pd_client);
     let res = lead_client.try_kv_prewrite(
         vec![new_mutation(Op::Put, b"k3", b"v3")],
         b"k3".to_vec(),
@@ -587,7 +587,7 @@ fn test_down_node_when_disk_full() {
     lead_client.must_kv_commit(
         vec![b"k3".to_vec()],
         prewrite_ts,
-        get_tso(&cluster.pd_client),
+        get_tso(&mut cluster.pd_client),
     );
 
     for i in 3..6 {

@@ -25,7 +25,7 @@ fn test_overlap_cleanup() {
 
     let gen_snapshot_fp = "region_gen_snap";
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -66,7 +66,7 @@ fn test_server_snapshot_on_resolve_failure() {
 
     let on_send_store_fp = "transport_on_send_snapshot";
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
     cluster.run_conf_change();
@@ -105,7 +105,7 @@ fn test_generate_snapshot() {
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
     cluster.cfg.raft_store.merge_max_log_gap = 3;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -196,7 +196,7 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
 fn test_destroy_peer_on_pending_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     fail::cfg_callback("engine_rocks_raft_engine_clean_seek", move || {
@@ -262,7 +262,7 @@ fn test_destroy_peer_on_pending_snapshot() {
 fn test_destroy_peer_on_pending_snapshot_and_restart() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
@@ -345,7 +345,7 @@ fn test_shutdown_when_snap_gc() {
     // So that batch system can handle a snap_gc event before shutting down.
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(20);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
 
@@ -390,7 +390,7 @@ fn test_receive_old_snapshot() {
     configure_for_snapshot(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
 
@@ -484,7 +484,7 @@ fn test_gen_snapshot_with_no_committed_entries_ready() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let on_raft_gc_log_tick_fp = "on_raft_gc_log_tick";
     fail::cfg(on_raft_gc_log_tick_fp, "return()").unwrap();
@@ -523,7 +523,7 @@ fn test_cancel_snapshot_generating() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
     cluster.cfg.raft_store.merge_max_log_gap = 5;
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let rid = cluster.run_conf_change();
     let snap_dir = cluster.get_snap_dir(1);
@@ -574,7 +574,7 @@ fn test_snapshot_gc_after_failed() {
     configure_for_snapshot(&mut cluster);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -644,7 +644,7 @@ fn test_sending_fail_with_net_error() {
     configure_for_snapshot(&mut cluster);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -745,7 +745,7 @@ fn test_snapshot_recover_from_raft_write_failure() {
     configure_for_snapshot(&mut cluster);
     // Avoid triggering snapshot at final step.
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
@@ -803,7 +803,7 @@ fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
     configure_for_snapshot(&mut cluster);
     // Avoid triggering snapshot at final step.
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     // We use three peers([1, 2, 3]) for this test.

@@ -14,7 +14,7 @@ use std::{
 
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::MessageType;
 use raftstore::{store::ReadIndexContext, Result};
 use test_raftstore::*;
@@ -255,7 +255,7 @@ fn test_replica_read_on_stale_peer() {
     let mut cluster = new_node_cluster(0, 3);
 
     configure_for_lease_read(&mut cluster, Some(50), Some(30));
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -292,7 +292,7 @@ fn test_read_index_out_of_order() {
     cluster.cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(Duration::from_millis(100));
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let rid = cluster.run_conf_change();
@@ -332,7 +332,7 @@ fn test_read_index_retry_lock_checking() {
     cluster.cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(Duration::from_millis(100));
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let rid = cluster.run_conf_change();
@@ -404,7 +404,7 @@ fn test_split_isolation() {
     configure_for_hibernate(&mut cluster);
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let rid = cluster.run_conf_change();
@@ -465,7 +465,7 @@ fn test_read_local_after_snapshpot_replace_peer() {
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region_id = cluster.run_conf_change();
@@ -532,7 +532,7 @@ fn test_malformed_read_index() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
     cluster.cfg.raft_store.hibernate_regions = true;
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region_id = cluster.run_conf_change();

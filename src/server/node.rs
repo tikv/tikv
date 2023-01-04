@@ -91,7 +91,7 @@ pub(crate) fn init_store(store: Option<metapb::Store>, cfg: &ServerConfig) -> me
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
+pub struct Node<C: PdClient + Clone + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
@@ -99,7 +99,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     system: RaftBatchSystem<EK, ER>,
     has_started: bool,
 
-    pd_client: Arc<C>,
+    pd_client: C,
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
     health_service: Option<HealthService>,
@@ -107,7 +107,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
 
 impl<C, EK, ER> Node<C, EK, ER>
 where
-    C: PdClient,
+    C: PdClient + Clone,
     EK: KvEngine,
     ER: RaftEngine,
 {
@@ -117,7 +117,7 @@ where
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         api_version: ApiVersion,
-        pd_client: Arc<C>,
+        pd_client: C,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
         health_service: Option<HealthService>,
@@ -171,7 +171,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -322,7 +322,7 @@ where
         Ok(())
     }
 
-    fn alloc_id(&self) -> Result<u64> {
+    fn alloc_id(&mut self) -> Result<u64> {
         let id = self.pd_client.alloc_id()?;
         Ok(id)
     }
@@ -347,7 +347,7 @@ where
     // Exported for tests.
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
-        &self,
+        &mut self,
         engines: &Engines<EK, ER>,
         store_id: u64,
     ) -> Result<metapb::Region> {
@@ -371,7 +371,7 @@ where
     }
 
     fn check_or_prepare_bootstrap_cluster(
-        &self,
+        &mut self,
         engines: &Engines<EK, ER>,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
@@ -427,7 +427,7 @@ where
         Err(box_err!("bootstrapped cluster failed"))
     }
 
-    fn check_cluster_bootstrapped(&self) -> Result<bool> {
+    fn check_cluster_bootstrapped(&mut self) -> Result<bool> {
         for _ in 0..MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
             match self.pd_client.is_cluster_bootstrapped() {
                 Ok(b) => return Ok(b),
@@ -455,7 +455,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -467,7 +467,7 @@ where
         }
         self.has_started = true;
         let cfg = self.store_cfg.clone();
-        let pd_client = Arc::clone(&self.pd_client);
+        let pd_client = self.pd_client.clone();
         let store = self.store.clone();
 
         self.system.spawn(

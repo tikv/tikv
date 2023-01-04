@@ -4,7 +4,7 @@
 mod testsuite;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::*;
-use pd_client::PdClient;
+use pd_client::PdClientTsoExt;
 use test_raftstore::{new_peer, sleep_ms};
 pub use testsuite::*;
 use tikv_util::config::ReadableDuration;

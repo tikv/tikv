@@ -8,7 +8,7 @@ use std::{
 
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
@@ -21,7 +21,7 @@ fn test_destroy_local_reader() {
     // Set election timeout and max leader lease to 1s.
     configure_for_lease_read(&mut cluster, Some(100), Some(10));
 
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -80,7 +80,7 @@ fn test_write_after_destroy() {
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
 
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -147,7 +147,7 @@ fn test_tick_after_destroy() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
 
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -220,7 +220,7 @@ fn test_redundant_conf_change_by_snapshot() {
     cluster.cfg.raft_store.merge_max_log_gap = 4;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     // Add voter 2 and learner 3.
@@ -278,7 +278,7 @@ fn test_redundant_conf_change_by_snapshot() {
 #[test]
 fn test_handle_conf_change_when_apply_fsm_resume_pending_state() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();

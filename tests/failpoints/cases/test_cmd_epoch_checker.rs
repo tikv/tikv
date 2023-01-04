@@ -160,7 +160,7 @@ fn test_reject_proposal_during_region_split() {
 fn test_reject_proposal_during_region_merge() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -285,7 +285,7 @@ fn test_reject_proposal_during_region_merge() {
 fn test_reject_proposal_during_rollback_region_merge() {
     let mut cluster = new_node_cluster(0, 2);
     configure_for_merge(&mut cluster);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run_conf_change();
 
@@ -348,7 +348,7 @@ fn test_reject_proposal_during_rollback_region_merge() {
 #[test]
 fn test_reject_proposal_during_leader_transfer() {
     let mut cluster = new_node_cluster(0, 2);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
     pd_client.must_add_peer(r, new_peer(2, 2));
@@ -508,7 +508,7 @@ fn test_propose_before_transfer_leader() {
 #[test]
 fn test_propose_before_split_and_merge() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));

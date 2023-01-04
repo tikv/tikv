@@ -9,7 +9,7 @@ use kvproto::{
     metapb::{Region, Store},
     raft_serverpb::{RaftLocalState, StoreIdent},
 };
-use pd_client::PdClientV2;
+use pd_client::PdClientCommon;
 use raft::INVALID_ID;
 use raftstore::store::initial_region;
 use slog::{debug, error, info, warn, Logger};
@@ -36,7 +36,7 @@ pub struct Bootstrap<'a, ER: RaftEngine> {
     engine: &'a ER,
     cluster_id: u64,
     // It's not performance critical.
-    pd_client: &'a mut dyn PdClientV2,
+    pd_client: &'a mut dyn PdClientCommon,
     logger: Logger,
 }
 
@@ -46,7 +46,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
     pub fn new(
         engine: &'a ER,
         cluster_id: u64,
-        pd_client: &'a mut impl PdClientV2,
+        pd_client: &'a mut impl PdClientCommon,
         logger: Logger,
     ) -> Self {
         Self {

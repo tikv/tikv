@@ -8,7 +8,7 @@ use test_pd_client::TestPdClient;
 use test_raftstore::*;
 
 fn test_bootstrap_half_way_failure(fp: &str) {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let pd_client = TestPdClient::new(0, false);
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     let mut cluster = Cluster::new(0, 5, sim, pd_client, ApiVersion::V1);
 

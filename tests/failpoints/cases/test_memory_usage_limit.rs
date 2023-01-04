@@ -81,7 +81,7 @@ fn test_evict_entry_cache() {
 #[test]
 fn test_memory_full_cause_of_raft_message() {
     let mut cluster = new_server_cluster(0, 2);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     cluster.pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();

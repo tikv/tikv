@@ -684,7 +684,8 @@ fn test_store_resolve_with_illegal_tso() {
 fn test_txn_store_gc() {
     let key = "k";
     let store = AssertionStorage::default();
-    let (cluster, raft_store) = AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
+    let (mut cluster, raft_store) =
+        AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
 
     let region = cluster.get_region(key.as_bytes());
     store.test_txn_store_gc(key, region.clone());

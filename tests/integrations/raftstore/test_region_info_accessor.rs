@@ -1,10 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{mpsc::channel, Arc},
-    thread,
-    time::Duration,
-};
+use std::{sync::mpsc::channel, thread, time::Duration};
 
 use kvproto::metapb::Region;
 use raft::StateRole;
@@ -54,7 +50,7 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
         cluster.must_put(&k, &v);
     }
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     let init_regions = dump(c);
     check_region_ranges(&init_regions, &[(&b""[..], &b""[..])]);
@@ -174,7 +170,7 @@ fn test_node_cluster_region_info_accessor() {
     let mut cluster = new_node_cluster(1, 3);
     configure_for_merge(&mut cluster);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     // Create a RegionInfoAccessor on node 1

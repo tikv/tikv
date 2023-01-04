@@ -34,7 +34,7 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
-use pd_client::PdClient;
+use pd_client::PdClientTsoExt;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
@@ -774,7 +774,7 @@ pub fn new_mutation(op: Op, k: &[u8], v: &[u8]) -> Mutation {
 }
 
 pub fn must_kv_write(
-    pd_client: &TestPdClient,
+    pd_client: &mut TestPdClient,
     client: &TikvClient,
     ctx: Context,
     kvs: Vec<Mutation>,
@@ -1133,7 +1133,7 @@ pub fn must_check_txn_status(
     resp
 }
 
-pub fn get_tso(pd_client: &TestPdClient) -> u64 {
+pub fn get_tso(pd_client: &mut TestPdClient) -> u64 {
     block_on(pd_client.get_tso()).unwrap().into_inner()
 }
 
@@ -1280,7 +1280,11 @@ pub struct PeerClient {
 }
 
 impl PeerClient {
-    pub fn new(cluster: &Cluster<ServerCluster>, region_id: u64, peer: metapb::Peer) -> PeerClient {
+    pub fn new(
+        cluster: &mut Cluster<ServerCluster>,
+        region_id: u64,
+        peer: metapb::Peer,
+    ) -> PeerClient {
         let cli = {
             let env = Arc::new(Environment::new(1));
             let channel =
@@ -1306,7 +1310,12 @@ impl PeerClient {
         must_kv_read_equal(&self.cli, self.ctx.clone(), key, val, ts)
     }
 
-    pub fn must_kv_write(&self, pd_client: &TestPdClient, kvs: Vec<Mutation>, pk: Vec<u8>) -> u64 {
+    pub fn must_kv_write(
+        &self,
+        pd_client: &mut TestPdClient,
+        kvs: Vec<Mutation>,
+        pk: Vec<u8>,
+    ) -> u64 {
         must_kv_write(pd_client, &self.cli, self.ctx.clone(), kvs, pk)
     }
 
