@@ -52,7 +52,7 @@ use crate::{
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
-    subscription_track::SubscriptionTracer,
+    subscription_track::{CheckpointType, ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, StopWatch, Work},
 };
@@ -92,6 +92,11 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     #[allow(dead_code)]
     config: BackupStreamConfig,
     checkpoint_mgr: CheckpointManager,
+
+    // For better advancing the checkpoint while doing rolling updating, once the store
+    // bootstrapped and we successfully resolved (without initial scanning blocks), we need to
+    // flush as soon as possible. (Because the lag might grows hugely while the server is down)
+    bootstrap_flush: bool,
 }
 
 impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
@@ -186,6 +191,7 @@ where
             failover_time: None,
             config,
             checkpoint_mgr,
+            bootstrap_flush: false,
         };
         ep.pool.spawn(ep.min_ts_worker());
         ep
@@ -773,7 +779,7 @@ where
             let mut resolved = get_rts.await?;
             let mut new_rts = resolved.global_checkpoint();
             fail::fail_point!("delay_on_flush");
-            flush_ob.before(resolved.take_region_checkpoints()).await;
+            flush_ob.before(resolved.take_resolve_result()).await;
             if let Some(rewritten_rts) = flush_ob.rewrite_resolved_ts(&task).await {
                 info!("rewriting resolved ts"; "old" => %new_rts, "new" => %rewritten_rts);
                 new_rts = rewritten_rts.min(new_rts);
@@ -948,6 +954,23 @@ where
                 checkpoints,
                 start_time,
             } => {
+                if !self.bootstrap_flush
+                    && checkpoints.iter().all(|r| {
+                        matches!(
+                            r.checkpoint_type,
+                            CheckpointType::MinTs | CheckpointType::StartTsOfTxn(_)
+                        )
+                    })
+                {
+                    for task in self
+                        .pool
+                        .block_on(self.range_router.select_task(TaskSelector::All.reference()))
+                    {
+                        try_send!(self.scheduler, Task::Flush(task));
+                    }
+                    self.bootstrap_flush = true;
+                }
+
                 self.checkpoint_mgr.resolve_regions(checkpoints);
                 metrics::MIN_TS_RESOLVE_DURATION.observe(start_time.saturating_elapsed_secs());
             }
@@ -999,7 +1022,7 @@ where
                         callback: Box::new(move |mut resolved| {
                             let t =
                                 Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolved {
-                                    checkpoints: resolved.take_region_checkpoints(),
+                                    checkpoints: resolved.take_resolve_result(),
                                     start_time,
                                 });
                             try_send!(sched, t);
@@ -1059,7 +1082,7 @@ pub enum RegionCheckpointOperation {
         start_time: Instant,
     },
     Resolved {
-        checkpoints: Vec<(Region, TimeStamp)>,
+        checkpoints: Vec<ResolveResult>,
         start_time: Instant,
     },
     Get(RegionSet, Box<dyn FnOnce(Vec<GetCheckpointResult>) + Send>),

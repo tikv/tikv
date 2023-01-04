@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use futures::{
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
@@ -22,7 +22,9 @@ use crate::{
     errors::{Error, ReportableResult, Result},
     future,
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
-    metrics, try_send, RegionCheckpointOperation, Task,
+    metrics,
+    subscription_track::ResolveResult,
+    try_send, RegionCheckpointOperation, Task,
 };
 
 /// A manager for maintaining the last flush ts.
@@ -168,9 +170,9 @@ impl CheckpointManager {
         sub.main_loop()
     }
 
-    pub fn resolve_regions(&mut self, region_and_checkpoint: Vec<(Region, TimeStamp)>) {
-        for (region, checkpoint) in &region_and_checkpoint {
-            self.do_update(region, *checkpoint);
+    pub fn resolve_regions(&mut self, region_and_checkpoint: Vec<ResolveResult>) {
+        for res in region_and_checkpoint {
+            self.do_update(res.region, res.checkpoint);
         }
     }
 
@@ -189,29 +191,37 @@ impl CheckpointManager {
     /// update a region checkpoint in need.
     #[cfg(test)]
     pub fn update_region_checkpoint(&mut self, region: &Region, checkpoint: TimeStamp) {
-        Self::update_ts(&mut self.checkpoint_ts, region, checkpoint)
+        Self::update_ts(&mut self.checkpoint_ts, region.clone(), checkpoint)
     }
 
     fn update_ts(
         container: &mut HashMap<u64, LastFlushTsOfRegion>,
-        region: &Region,
+        region: Region,
         checkpoint: TimeStamp,
     ) {
         let e = container.entry(region.get_id());
+        let ver = region.get_region_epoch().get_version();
+        // A hacky way to allow the two closures move out the region.
+        // It is safe given the two closures would only be called once.
+        let r = RefCell::new(Some(region));
         e.and_modify(|old_cp| {
             if old_cp.checkpoint < checkpoint
-                && old_cp.region.get_region_epoch().get_version()
-                    <= region.get_region_epoch().get_version()
+                && old_cp.region.get_region_epoch().get_version() <= ver
             {
                 *old_cp = LastFlushTsOfRegion {
                     checkpoint,
-                    region: region.clone(),
+                    region: r.borrow_mut().take().expect(
+                        "unreachable: `and_modify` and `or_insert_with` called at the same time.",
+                    ),
                 };
             }
         })
         .or_insert_with(|| LastFlushTsOfRegion {
             checkpoint,
-            region: region.clone(),
+            region: r
+                .borrow_mut()
+                .take()
+                .expect("unreachable: `and_modify` and `or_insert_with` called at the same time."),
         });
     }
 
@@ -279,7 +289,7 @@ impl CheckpointManager {
         }
     }
 
-    fn do_update(&mut self, region: &Region, checkpoint: TimeStamp) {
+    fn do_update(&mut self, region: Region, checkpoint: TimeStamp) {
         Self::update_ts(&mut self.resolved_ts, region, checkpoint)
     }
 
@@ -353,7 +363,7 @@ pub struct LastFlushTsOfRegion {
 #[async_trait::async_trait]
 pub trait FlushObserver: Send + 'static {
     /// The callback when the flush has advanced the resolver.
-    async fn before(&mut self, checkpoints: Vec<(Region, TimeStamp)>);
+    async fn before(&mut self, checkpoints: Vec<ResolveResult>);
     /// The callback when the flush is done. (Files are fully written to
     /// external storage.)
     async fn after(&mut self, task: &str, rts: u64) -> Result<()>;
@@ -383,7 +393,7 @@ impl<PD> BasicFlushObserver<PD> {
 
 #[async_trait::async_trait]
 impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
-    async fn before(&mut self, _checkpoints: Vec<(Region, TimeStamp)>) {}
+    async fn before(&mut self, _checkpoints: Vec<ResolveResult>) {}
 
     async fn after(&mut self, task: &str, rts: u64) -> Result<()> {
         if let Err(err) = self
@@ -421,7 +431,7 @@ pub struct CheckpointV3FlushObserver<S, O> {
     sched: Scheduler<Task>,
     meta_cli: MetadataClient<S>,
 
-    checkpoints: Vec<(Region, TimeStamp)>,
+    checkpoints: Vec<ResolveResult>,
     global_checkpoint_cache: HashMap<String, Checkpoint>,
     start_time: Instant,
 }
@@ -465,7 +475,7 @@ where
     S: MetaStore + 'static,
     O: FlushObserver + Send,
 {
-    async fn before(&mut self, checkpoints: Vec<(Region, TimeStamp)>) {
+    async fn before(&mut self, checkpoints: Vec<ResolveResult>) {
         self.checkpoints = checkpoints;
     }
 
