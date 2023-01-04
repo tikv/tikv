@@ -522,9 +522,11 @@ pub fn create_tiflash_test_engine(
         .rocksdb
         .build_opt(&cfg.rocksdb.build_resources(env.clone()));
 
+    let cache = cfg.storage.block_cache.build_shared_cache();
+    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
+
     let kv_cfs_opt = cfg.rocksdb.build_cf_opts(
-        &cfg.rocksdb
-            .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
+        &cfg.rocksdb.build_cf_resources(cache),
         None,
         cfg.storage.api_version(),
         cfg.storage.engine,
@@ -538,9 +540,6 @@ pub fn create_tiflash_test_engine(
 
     let raft_db_opt = cfg.raftdb.build_opt(env.clone(), None);
 
-    let raft_cfs_opt = cfg
-        .raftdb
-        .build_cf_opts(&cfg.storage.block_cache.build_shared_cache());
     let raft_engine =
         engine_rocks::util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap();
 
