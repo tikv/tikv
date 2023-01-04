@@ -702,7 +702,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     Command::FlashbackToVersionReadPhase { .. }
                         | Command::FlashbackToVersion { .. }
                 ) {
-                    snap_ctx.for_flashback = true;
+                    snap_ctx.allowed_in_flashback = true;
                 }
                 // The program is currently in scheduler worker threads.
                 // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
@@ -798,6 +798,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock_guards: Vec<KeyHandleGuard>,
         pipelined: bool,
         async_apply_prewrite: bool,
+        new_acquired_locks: Vec<kvrpcpb::LockInfo>,
         tag: CommandKind,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
@@ -846,7 +847,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        // TODO: Update lock wait relationships after acquiring some locks.
+        self.on_acquired_locks_finished(new_acquired_locks);
 
         if do_wake_up {
             let woken_up_resumable_lock_requests = tctx.woken_up_resumable_lock_requests;
@@ -976,6 +977,28 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
 
         resumable_wake_up_list
+    }
+
+    fn on_acquired_locks_finished(&self, new_acquired_locks: Vec<kvrpcpb::LockInfo>) {
+        if new_acquired_locks.is_empty() || self.inner.lock_wait_queues.is_empty() {
+            return;
+        }
+
+        // If there are not too many new locks, do not spawn the task to the high
+        // priority pool since it may consume more CPU.
+        if new_acquired_locks.len() < 30 {
+            self.inner
+                .lock_wait_queues
+                .update_lock_wait(new_acquired_locks);
+        } else {
+            let lock_wait_queues = self.inner.lock_wait_queues.clone();
+            self.get_sched_pool(CommandPri::High)
+                .pool
+                .spawn(async move {
+                    lock_wait_queues.update_lock_wait(new_acquired_locks);
+                })
+                .unwrap();
+        }
     }
 
     fn wake_up_legacy_pessimistic_locks(
@@ -1201,6 +1224,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             pr,
             lock_info,
             released_locks,
+            new_acquired_locks,
             lock_guards,
             response_policy,
         } = match deadline
@@ -1273,7 +1297,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
 
         if to_be_write.modifies.is_empty() {
-            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+            scheduler.on_write_finished(
+                cid,
+                pr,
+                Ok(()),
+                lock_guards,
+                false,
+                false,
+                new_acquired_locks,
+                tag,
+            );
             return;
         }
 
@@ -1294,7 +1327,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     engine.schedule_txn_extra(to_be_write.extra);
                 })
             }
-            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+            scheduler.on_write_finished(
+                cid,
+                pr,
+                Ok(()),
+                lock_guards,
+                false,
+                false,
+                new_acquired_locks,
+                tag,
+            );
             return;
         }
 
@@ -1478,6 +1520,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         lock_guards,
                         pipelined,
                         is_async_apply_prewrite,
+                        new_acquired_locks,
                         tag,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC

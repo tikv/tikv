@@ -14,12 +14,12 @@ use std::cmp;
 
 use batch_system::BasicMailbox;
 use crossbeam::channel::{SendError, TrySendError};
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{PeerState, RaftMessage},
 };
-use raftstore::store::{util, ExtraStates, WriteTask};
+use raftstore::store::{util, WriteTask};
 use slog::{debug, error, info, warn};
 use tikv_util::store::find_peer;
 
@@ -149,7 +149,6 @@ impl Store {
         } else {
             return;
         };
-        let msg_type = msg.get_message().get_msg_type();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
         // Now the peer should not exist.
@@ -176,7 +175,7 @@ impl Store {
             return;
         }
         let from_epoch = msg.get_region_epoch();
-        let local_state = match ctx.engine.get_region_state(region_id) {
+        let local_state = match ctx.engine.get_region_state(region_id, u64::MAX) {
             Ok(s) => s,
             Err(e) => {
                 error!(self.logger(), "failed to get region state"; "region_id" => region_id, "err" => ?e);
@@ -227,10 +226,10 @@ impl Store {
             self.store_id(),
             region,
             ctx.engine.clone(),
-            ctx.read_scheduler.clone(),
+            ctx.schedulers.read.clone(),
             &ctx.logger,
         )
-        .and_then(|s| PeerFsm::new(&ctx.cfg, &*ctx.tablet_factory, s))
+        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, &ctx.snap_mgr, s))
         {
             Ok(p) => p,
             res => {
@@ -238,10 +237,15 @@ impl Store {
                 return;
             }
         };
+        ctx.store_meta
+            .lock()
+            .unwrap()
+            .set_region(fsm.peer().region(), false, fsm.logger());
         let mailbox = BasicMailbox::new(tx, fsm, ctx.router.state_cnt().clone());
-        if let Err((p, _)) = ctx
+        if ctx
             .router
             .send_and_register(region_id, mailbox, PeerMsg::Start)
+            .is_err()
         {
             panic!(
                 "[region {}] {} failed to register peer",
@@ -304,13 +308,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 Some((f, l)) => Some((cmp::min(first_index, f), cmp::max(last_index, l))),
             };
         }
-        let mut extra_states = ExtraStates::new(entry_storage.apply_state().clone());
+        let raft_engine = self.entry_storage().raft_engine();
         let mut region_state = self.storage().region_state().clone();
+        let region_id = region_state.get_region().get_id();
+        let lb = write_task
+            .extra_write
+            .ensure_v2(|| raft_engine.log_batch(2));
+        // We only use raft-log-engine for v2, first index is not important.
+        let raft_state = self.entry_storage().raft_state();
+        raft_engine.clean(region_id, 0, raft_state, lb).unwrap();
         // Write worker will do the clean up when meeting tombstone state.
         region_state.set_state(PeerState::Tombstone);
-        extra_states.set_region_state(region_state);
-        extra_states.set_raft_state(entry_storage.raft_state().clone());
-        write_task.extra_write.set_v2(extra_states);
+        let applied_index = self.entry_storage().applied_index();
+        lb.put_region_state(region_id, applied_index, &region_state)
+            .unwrap();
         self.destroy_progress_mut().start();
     }
 
@@ -325,6 +336,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // new peer. Ignore error as it's just a best effort.
             let _ = ctx.router.send_raft_message(msg);
         }
-        // TODO: close apply mailbox.
+        self.clear_apply_scheduler();
     }
 }

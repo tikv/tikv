@@ -52,7 +52,6 @@ use tikv::{
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
-        create_raft_storage,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
         lock_manager::LockManager,
@@ -66,7 +65,7 @@ use tikv::{
         self,
         kv::{FakeExtension, SnapContext},
         txn::flow_controller::{EngineFlowController, FlowController},
-        Engine,
+        Engine, Storage,
     },
 };
 use tikv_util::{
@@ -401,8 +400,8 @@ impl ServerCluster {
             cfg.quota.max_delay_duration,
             cfg.quota.enable_auto_tune,
         ));
-        let extension = engine.raft_extension().clone();
-        let store = create_raft_storage::<_, _, _, F, _>(
+        let extension = engine.raft_extension();
+        let store = Storage::<_, _, F>::from_engine(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
@@ -483,6 +482,8 @@ impl ServerCluster {
         let debug_thread_handle = debug_thread_pool.handle().clone();
         let debug_service = DebugService::new(
             engines.clone(),
+            None,
+            None,
             debug_thread_handle,
             extension,
             ConfigController::default(),
@@ -522,7 +523,7 @@ impl ServerCluster {
                 copr.clone(),
                 copr_v2.clone(),
                 resolver.clone(),
-                snap_mgr.clone(),
+                tikv_util::Either::Left(snap_mgr.clone()),
                 gc_worker.clone(),
                 check_leader_scheduler.clone(),
                 self.env.clone(),
@@ -793,6 +794,10 @@ impl Cluster<ServerCluster> {
             thread::sleep(Duration::from_millis(200));
         }
         panic!("failed to get snapshot of region {}", region_id);
+    }
+
+    pub fn raft_extension(&self, node_id: u64) -> SimulateRaftExtension {
+        self.sim.rl().storages[&node_id].raft_extension()
     }
 }
 

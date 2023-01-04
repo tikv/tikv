@@ -186,6 +186,16 @@ impl CheckpointManager {
 
     pub fn add_subscriber(&mut self, sub: Subscription) -> future![Result<()>] {
         let mgr = self.manager_handle.as_ref().cloned();
+        let initial_data = self
+            .items
+            .values()
+            .map(|v| FlushEvent {
+                start_key: v.region.start_key.clone(),
+                end_key: v.region.end_key.clone(),
+                checkpoint: v.checkpoint.into_inner(),
+                ..Default::default()
+            })
+            .collect::<Box<[_]>>();
 
         // NOTE: we cannot send the real error into the client directly because once
         // we send the subscription into the sink, we cannot fetch it again :(
@@ -208,6 +218,11 @@ impl CheckpointManager {
             mgr.send(SubscriptionOp::Add(sub))
                 .await
                 .map_err(|err| annotate!(err, "failed to send request to subscriber manager"))?;
+            mgr.send(SubscriptionOp::Emit(initial_data))
+                .await
+                .map_err(|err| {
+                    annotate!(err, "failed to send initial data to subscriber manager")
+                })?;
             Ok(())
         }
     }
@@ -356,9 +371,13 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
             .update_service_safe_point(
                 format!("backup-stream-{}-{}", task, self.store_id),
                 TimeStamp::new(rts.saturating_sub(1)),
-                // Add a service safe point for 30 mins (6x the default flush interval).
-                // It would probably be safe.
-                Duration::from_secs(1800),
+                // Add a service safe point for 24 hours. (the same as fatal error.)
+                // We make it the same duration as we meet fatal errors because TiKV may be
+                // SIGKILL'ed after it meets fatal error and before it successfully updated the
+                // fatal error safepoint.
+                // TODO: We'd better make the coordinator, who really
+                // calculates the checkpoint to register service safepoint.
+                Duration::from_secs(60 * 60 * 24),
             )
             .await
         {
@@ -454,7 +473,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::{
         assert_matches,
         collections::HashMap,
@@ -506,7 +525,7 @@ mod tests {
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 24);
     }
 
-    struct MockPdClient {
+    pub struct MockPdClient {
         safepoint: RwLock<HashMap<String, TimeStamp>>,
     }
 

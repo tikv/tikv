@@ -19,8 +19,20 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>>;
 
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
-    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
-    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
+    /// Get the latest region state not after the apply index.
+    fn get_region_state(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<RegionLocalState>>;
+    /// Get the latest apply state not after the apply index.
+    fn get_apply_state(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<RaftApplyState>>;
+    /// Get the flushed index of the given CF.
+    fn get_flushed_index(&self, raft_group_id: u64, cf: &str) -> Result<Option<u64>>;
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
@@ -62,12 +74,6 @@ pub trait RaftEngineDebug: RaftEngine + Sync + Send + 'static {
     }
 }
 
-pub struct RaftLogGcTask {
-    pub raft_group_id: u64,
-    pub from: u64,
-    pub to: u64,
-}
-
 // TODO: Refactor common methods between Kv and Raft engine into a shared trait.
 pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
@@ -98,26 +104,17 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
         batch: &mut Self::LogBatch,
     ) -> Result<()>;
 
-    /// Append some log entries and return written bytes.
-    ///
-    /// Note: `RaftLocalState` won't be updated in this call.
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize>;
+    /// Like `cut_logs` but the range could be very large.
+    fn gc(&self, raft_group_id: u64, from: u64, to: u64, batch: &mut Self::LogBatch) -> Result<()>;
 
-    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()>;
-
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
-
-    /// Like `cut_logs` but the range could be very large. Return the deleted
-    /// count. Generally, `from` can be passed in `0`.
-    fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
-
-    fn batch_gc(&self, tasks: Vec<RaftLogGcTask>) -> Result<usize> {
-        let mut total = 0;
-        for task in tasks {
-            total += self.gc(task.raft_group_id, task.from, task.to)?;
-        }
-        Ok(total)
-    }
+    /// Delete all but the latest one of states that are associated with smaller
+    /// apply_index.
+    fn delete_all_but_one_states_before(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()>;
 
     fn need_manual_purge(&self) -> bool {
         false
@@ -133,7 +130,6 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     fn flush_stats(&self) -> Option<CacheStats> {
         None
     }
-    fn reset_statistics(&self) {}
 
     fn stop(&self) {}
 
@@ -151,12 +147,6 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     where
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<Error>;
-
-    /// Indicate whether region states should be recovered from raftdb and
-    /// replay raft logs.
-    /// When kvdb's write-ahead-log is disabled, the sequence number of the last
-    /// boot time is saved.
-    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()>;
 }
 
 pub trait RaftLogBatch: Send {
@@ -172,8 +162,42 @@ pub trait RaftLogBatch: Send {
     fn remove_prepare_bootstrap_region(&mut self) -> Result<()>;
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
-    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
-    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
+    fn put_region_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_index: u64,
+        state: &RegionLocalState,
+    ) -> Result<()>;
+    fn put_apply_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_index: u64,
+        state: &RaftApplyState,
+    ) -> Result<()>;
+
+    /// Record the flushed apply index.
+    ///
+    /// There are two types of apply index:
+    /// 1. Normal apply index that only related to single tablet. These apply
+    /// indexes    are recorded using its own CF.
+    /// 2. Apply index that can affect other tablets, like split, merge. These
+    /// apply indexes are recorded using special Raft CF.
+    ///
+    /// Because a peer may have multiple tablets (only one is latest), we use
+    /// `tablet_index` to avoid conflicts.
+    fn put_flushed_index(
+        &mut self,
+        raft_group_id: u64,
+        cf: &str,
+        tablet_index: u64,
+        apply_index: u64,
+    ) -> Result<()>;
+
+    /// Indicate whether region states should be recovered from raftdb and
+    /// replay raft logs.
+    /// When kvdb's write-ahead-log is disabled, the sequence number of the last
+    /// boot time is saved.
+    fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()>;
 
     /// The data size of this RaftLogBatch.
     fn persist_size(&self) -> usize;

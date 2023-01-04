@@ -12,7 +12,7 @@ use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::config::ReadableSize;
 
 use crate::storage::{
-    config::BlockCacheConfig,
+    config::{BlockCacheConfig, EngineType},
     kv::{Result, RocksEngine},
 };
 
@@ -96,22 +96,31 @@ impl TestEngineBuilder {
         if !enable_block_cache {
             cache_opt.capacity = Some(ReadableSize::kb(0));
         }
-        let cache = cache_opt.build_shared_cache();
+        let shared = cfg_rocksdb.build_cf_resources(cache_opt.build_shared_cache());
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
                 CF_DEFAULT => (
                     CF_DEFAULT,
-                    cfg_rocksdb.defaultcf.build_opt(&cache, None, api_version),
+                    cfg_rocksdb
+                        .defaultcf
+                        .build_opt(&shared, None, api_version, EngineType::RaftKv),
                 ),
-                CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                CF_LOCK => (
+                    CF_LOCK,
+                    cfg_rocksdb.lockcf.build_opt(&shared, EngineType::RaftKv),
+                ),
+                CF_WRITE => (
+                    CF_WRITE,
+                    cfg_rocksdb
+                        .writecf
+                        .build_opt(&shared, None, EngineType::RaftKv),
+                ),
+                CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&shared)),
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-        let engine =
-            RocksEngine::new(&path, None, cfs_opts, cache.is_some(), self.io_rate_limiter)?;
+        let engine = RocksEngine::new(&path, None, cfs_opts, self.io_rate_limiter)?;
         Ok(engine)
     }
 }

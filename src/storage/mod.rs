@@ -75,7 +75,9 @@ use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine_traits::{
+    raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+};
 use futures::prelude::*;
 use kvproto::{
     kvrpcpb::{
@@ -1538,7 +1540,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             [(Some(start_key.as_encoded()), Some(end_key.as_encoded()))],
         )?;
 
-        let mut modifies = Vec::with_capacity(DATA_CFS.len());
+        let mut modifies = Vec::with_capacity(DATA_CFS_LEN);
         for cf in DATA_CFS {
             modifies.push(Modify::DeleteRange(
                 cf,
@@ -3593,6 +3595,7 @@ mod tests {
     use txn_types::{Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::{
+        config::EngineType,
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
         txn::{
@@ -4133,24 +4136,32 @@ mod tests {
         let engine = {
             let path = "".to_owned();
             let cfg_rocksdb = db_config;
-            let cache = BlockCacheConfig::default().build_shared_cache();
+            let shared =
+                cfg_rocksdb.build_cf_resources(BlockCacheConfig::default().build_shared_cache());
             let cfs_opts = vec![
                 (
                     CF_DEFAULT,
-                    cfg_rocksdb
-                        .defaultcf
-                        .build_opt(&cache, None, ApiVersion::V1),
+                    cfg_rocksdb.defaultcf.build_opt(
+                        &shared,
+                        None,
+                        ApiVersion::V1,
+                        EngineType::RaftKv,
+                    ),
                 ),
-                (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                (
+                    CF_LOCK,
+                    cfg_rocksdb.lockcf.build_opt(&shared, EngineType::RaftKv),
+                ),
+                (
+                    CF_WRITE,
+                    cfg_rocksdb
+                        .writecf
+                        .build_opt(&shared, None, EngineType::RaftKv),
+                ),
+                (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&shared)),
             ];
             RocksEngine::new(
-                &path,
-                None,
-                cfs_opts,
-                cache.is_some(),
-                None, // io_rate_limiter
+                &path, None, cfs_opts, None, // io_rate_limiter
             )
         }
         .unwrap();
@@ -4875,7 +4886,7 @@ mod tests {
                 commit_ts,
                 version,
                 key.clone(),
-                Key::from_raw(b"z"),
+                Some(Key::from_raw(b"z")),
             );
             if let Mutation::Put(..) = write.0 {
                 expect_value(
@@ -4900,7 +4911,7 @@ mod tests {
         commit_ts: TimeStamp,
         version: TimeStamp,
         start_key: Key,
-        end_key: Key,
+        end_key: Option<Key>,
     ) {
         let (tx, rx) = channel();
         storage
@@ -4997,7 +5008,7 @@ mod tests {
             commit_ts,
             2.into(),
             Key::from_raw(b"k"),
-            Key::from_raw(b"z"),
+            Some(Key::from_raw(b"z")),
         );
         expect_value(
             b"v@1".to_vec(),
@@ -5013,7 +5024,7 @@ mod tests {
             commit_ts,
             1.into(),
             Key::from_raw(b"k"),
-            Key::from_raw(b"z"),
+            Some(Key::from_raw(b"z")),
         );
         expect_none(
             block_on(storage.get(Context::default(), Key::from_raw(b"k"), commit_ts))
@@ -5104,7 +5115,7 @@ mod tests {
                 flashback_commit_ts,
                 TimeStamp::zero(),
                 Key::from_raw(b"k"),
-                Key::from_raw(b"z"),
+                Some(Key::from_raw(b"z")),
             );
             for i in 1..=FLASHBACK_BATCH_SIZE * 4 {
                 let key = Key::from_raw(format!("k{}", i).as_bytes());
@@ -5183,10 +5194,78 @@ mod tests {
             flashback_commit_ts,
             1.into(),
             Key::from_raw(b"k"),
-            Key::from_raw(b"z"),
+            Some(Key::from_raw(b"z")),
         );
         expect_none(
             block_on(storage.get(Context::default(), k, flashback_commit_ts))
+                .unwrap()
+                .0,
+        );
+    }
+
+    #[test]
+    fn test_mvcc_flashback_retry_prepare() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let mut ts = TimeStamp::zero();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"k"), b"v@1".to_vec())],
+                    b"k".to_vec(),
+                    *ts.incr(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k")],
+                    ts,
+                    *ts.incr(),
+                    Context::default(),
+                ),
+                expect_value_callback(tx.clone(), 1, TxnStatus::committed(ts)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_value(
+            b"v@1".to_vec(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), ts))
+                .unwrap()
+                .0,
+        );
+        // Try to prepare flashback first.
+        let flashback_start_ts = *ts.incr();
+        let flashback_commit_ts = *ts.incr();
+        storage
+            .sched_txn_command(
+                new_flashback_rollback_lock_cmd(
+                    flashback_start_ts,
+                    TimeStamp::zero(),
+                    Key::from_raw(b"k"),
+                    Some(Key::from_raw(b"z")),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Mock the prepare flashback retry.
+        run_flashback_to_version(
+            &storage,
+            flashback_start_ts,
+            flashback_commit_ts,
+            TimeStamp::zero(),
+            Key::from_raw(b"k"),
+            Some(Key::from_raw(b"z")),
+        );
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), flashback_commit_ts))
                 .unwrap()
                 .0,
         );

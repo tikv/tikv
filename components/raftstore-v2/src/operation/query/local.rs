@@ -8,7 +8,8 @@ use std::{
 
 use batch_system::Router;
 use crossbeam::channel::TrySendError;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{CachedTablet, KvEngine, RaftEngine, TabletRegistry};
+use futures::Future;
 use kvproto::{
     errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
@@ -16,29 +17,26 @@ use kvproto::{
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, util::LeaseState, LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor,
-        ReadExecutorProvider, RegionSnapshot, RequestInspector, RequestPolicy,
-        TLS_LOCAL_READ_METRICS,
+        cmd_resp,
+        util::LeaseState,
+        worker_metrics::{self, TLS_LOCAL_READ_METRICS},
+        LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor, ReadExecutorProvider,
+        RegionSnapshot, RequestPolicy,
     },
     Error, Result,
 };
 use slog::{debug, Logger};
-use tikv_util::{
-    box_err,
-    codec::number::decode_u64,
-    time::{monotonic_raw_now, ThreadReadId},
-};
+use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now, Either};
 use time::Timespec;
 use txn_types::WriteBatchFlags;
 
 use crate::{
     fsm::StoreMeta,
     router::{PeerMsg, QueryResult},
-    tablet::CachedTablet,
     StoreRouter,
 };
 
-pub trait MsgRouter: Send {
+pub trait MsgRouter: Clone + Send {
     fn send(&self, addr: u64, msg: PeerMsg) -> std::result::Result<(), TrySendError<PeerMsg>>;
 }
 
@@ -69,16 +67,21 @@ where
     E: KvEngine,
     C: MsgRouter,
 {
-    pub fn new(store_meta: Arc<Mutex<StoreMeta<E>>>, router: C, logger: Logger) -> Self {
+    pub fn new(
+        store_meta: Arc<Mutex<StoreMeta>>,
+        reg: TabletRegistry<E>,
+        router: C,
+        logger: Logger,
+    ) -> Self {
         Self {
-            local_reader: LocalReaderCore::new(StoreMetaDelegate::new(store_meta)),
+            local_reader: LocalReaderCore::new(StoreMetaDelegate::new(store_meta, reg)),
             router,
             logger,
         }
     }
 
-    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta<E>>> {
-        self.local_reader.store_meta()
+    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta>> {
+        &self.local_reader.store_meta().store_meta
     }
 
     pub fn pre_propose_raft_command(
@@ -94,6 +97,8 @@ where
                 Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
                 Ok(RequestPolicy::StaleRead) => Ok(Some((delegate, RequestPolicy::StaleRead))),
                 // It can not handle other policies.
+                // TODO: we should only abort when lease expires. For other cases we should retry
+                // infinitely.
                 Ok(_) => Ok(None),
                 Err(e) => Err(e),
             }
@@ -104,44 +109,55 @@ where
 
     fn try_get_snapshot(
         &mut self,
-        req: RaftCmdRequest,
+        req: &RaftCmdRequest,
     ) -> std::result::Result<Option<RegionSnapshot<E::Snapshot>>, RaftCmdResponse> {
-        match self.pre_propose_raft_command(&req) {
-            Ok(Some((mut delegate, policy))) => match policy {
-                RequestPolicy::ReadLocal => {
-                    let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
-                    // Ensures the snapshot is acquired before getting the time
-                    atomic::fence(atomic::Ordering::Release);
-                    let snapshot_ts = monotonic_raw_now();
+        match self.pre_propose_raft_command(req) {
+            Ok(Some((mut delegate, policy))) => {
+                let mut snap = match policy {
+                    RequestPolicy::ReadLocal => {
+                        let region = Arc::clone(&delegate.region);
+                        let snap =
+                            RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
+                        // Ensures the snapshot is acquired before getting the time
+                        atomic::fence(atomic::Ordering::Release);
+                        let snapshot_ts = monotonic_raw_now();
 
-                    if !delegate.is_in_leader_lease(snapshot_ts) {
-                        return Ok(None);
+                        if !delegate.is_in_leader_lease(snapshot_ts) {
+                            return Ok(None);
+                        }
+
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_requests.inc());
+
+                        // Try renew lease in advance
+                        self.maybe_renew_lease_in_advance(&delegate, req, snapshot_ts);
+                        snap
                     }
+                    RequestPolicy::StaleRead => {
+                        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+                        delegate.check_stale_read_safe(read_ts)?;
 
-                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
+                        let region = Arc::clone(&delegate.region);
+                        let snap =
+                            RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
 
-                    // Try renew lease in advance
-                    self.maybe_renew_lease_in_advance(&delegate, &req, snapshot_ts);
-                    Ok(Some(snap))
-                }
-                RequestPolicy::StaleRead => {
-                    let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                    delegate.check_stale_read_safe(read_ts)?;
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_requests.inc());
 
-                    let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
+                        delegate.check_stale_read_safe(read_ts)?;
 
-                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
+                        snap
+                    }
+                    _ => unreachable!(),
+                };
 
-                    delegate.check_stale_read_safe(read_ts)?;
+                snap.txn_ext = Some(delegate.txn_ext.clone());
+                snap.bucket_meta = delegate.bucket_meta.clone();
 
-                    TLS_LOCAL_READ_METRICS
-                        .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
-                    Ok(Some(snap))
-                }
-                _ => unreachable!(),
-            },
+                Ok(Some(snap))
+            }
             Ok(None) => Ok(None),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
@@ -157,63 +173,102 @@ where
         }
     }
 
-    pub async fn snapshot(
+    pub fn snapshot(
         &mut self,
         mut req: RaftCmdRequest,
-    ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>> + Send
+    {
         let region_id = req.header.get_ref().region_id;
-        if let Some(snap) = self.try_get_snapshot(req.clone())? {
-            return Ok(snap);
-        }
+        let res = match self.try_get_snapshot(&req) {
+            res @ (Ok(Some(_)) | Err(_)) => Either::Left(res),
+            Ok(None) => Either::Right((self.try_to_renew_lease(region_id, &req), self.clone())),
+        };
 
-        if let Some(query_res) = self.try_to_renew_lease(region_id, &req).await? {
-            // If query successful, try again.
-            if query_res.read().is_some() {
-                req.mut_header().set_read_quorum(false);
-                if let Some(snap) = self.try_get_snapshot(req)? {
-                    return Ok(snap);
+        worker_metrics::maybe_tls_local_read_metrics_flush();
+
+        async move {
+            match res {
+                Either::Left(Ok(Some(snap))) => Ok(snap),
+                Either::Left(Err(e)) => Err(e),
+                Either::Right((fut, mut reader)) => {
+                    let err = match fut.await? {
+                        Some(query_res) => {
+                            if query_res.read().is_some() {
+                                // If query successful, try again.
+                                req.mut_header().set_read_quorum(false);
+                                if let Some(snap) = reader.try_get_snapshot(&req)? {
+                                    return Ok(snap);
+                                } else {
+                                    let mut err = errorpb::Error::default();
+                                    err.set_message(format!("no delegate found for {}", region_id));
+                                    err
+                                }
+                            } else {
+                                let QueryResult::Response(res) = query_res else { unreachable!() };
+                                assert!(res.get_header().has_error(), "{:?}", res);
+                                return Err(res);
+                            }
+                        }
+                        None => {
+                            let mut err = errorpb::Error::default();
+                            err.set_message(format!(
+                                "failed to extend lease: canceled: {}",
+                                region_id
+                            ));
+                            err
+                        }
+                    };
+                    let mut resp = RaftCmdResponse::default();
+                    resp.mut_header().set_error(err);
+                    Err(resp)
                 }
+                Either::Left(Ok(None)) => unreachable!(),
             }
         }
-
-        let mut err = errorpb::Error::default();
-        err.set_message(format!(
-            "Fail to get snapshot from LocalReader for region {}. \
-            Maybe due to `not leader`, `region not found` or `not applied to the current term`",
-            region_id
-        ));
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        Err(resp)
     }
 
     // try to renew the lease by sending read query where the reading process may
     // renew the lease
-    async fn try_to_renew_lease(
+    fn try_to_renew_lease(
         &self,
         region_id: u64,
         req: &RaftCmdRequest,
-    ) -> std::result::Result<Option<QueryResult>, RaftCmdResponse> {
-        let (msg, sub) = PeerMsg::raft_query(req.clone());
-        let mut err = errorpb::Error::default();
-        match MsgRouter::send(&self.router, region_id, msg) {
-            Ok(()) => return Ok(sub.result().await),
-            Err(TrySendError::Full(c)) => {
+    ) -> impl Future<Output = std::result::Result<Option<QueryResult>, RaftCmdResponse>> {
+        let mut req = req.clone();
+        // Remote lease is updated step by step. It's possible local reader expires
+        // while the raftstore doesn't. So we need to trigger an update
+        // explicitly. TODO: find a way to reduce the triggered heartbeats.
+        req.mut_header().set_read_quorum(true);
+        let (msg, sub) = PeerMsg::raft_query(req);
+        let res = match MsgRouter::send(&self.router, region_id, msg) {
+            Ok(()) => Ok(sub),
+            Err(TrySendError::Full(_)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.channel_full.inc());
+                let mut err = errorpb::Error::default();
                 err.set_message(RAFTSTORE_IS_BUSY.to_owned());
                 err.mut_server_is_busy()
                     .set_reason(RAFTSTORE_IS_BUSY.to_owned());
+                Err(err)
             }
-            Err(TrySendError::Disconnected(c)) => {
+            Err(TrySendError::Disconnected(_)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
+                let mut err = errorpb::Error::default();
                 err.set_message(format!("region {} is missing", region_id));
                 err.mut_region_not_found().set_region_id(region_id);
+                Err(err)
+            }
+        };
+
+        async move {
+            match res {
+                Ok(sub) => Ok(sub.result().await),
+                Err(e) => {
+                    let mut resp = RaftCmdResponse::default();
+                    resp.mut_header().set_error(e);
+                    Err(resp)
+                }
             }
         }
-
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        Err(resp)
     }
 
     // If the remote lease will be expired in near future send message
@@ -231,7 +286,7 @@ where
         let region_id = req.header.get_ref().region_id;
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().renew_lease_advance.inc());
         // Send a read query which may renew the lease
-        let (msg, sub) = PeerMsg::raft_query(req.clone());
+        let msg = PeerMsg::raft_query(req.clone()).0;
         if let Err(e) = MsgRouter::send(&self.router, region_id, msg) {
             debug!(
                 self.logger,
@@ -300,15 +355,16 @@ struct StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
-    store_meta: Arc<Mutex<StoreMeta<E>>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
+    reg: TabletRegistry<E>,
 }
 
 impl<E> StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
-    pub fn new(store_meta: Arc<Mutex<StoreMeta<E>>>) -> StoreMetaDelegate<E> {
-        StoreMetaDelegate { store_meta }
+    pub fn new(store_meta: Arc<Mutex<StoreMeta>>, reg: TabletRegistry<E>) -> StoreMetaDelegate<E> {
+        StoreMetaDelegate { store_meta, reg }
     }
 }
 
@@ -317,10 +373,10 @@ where
     E: KvEngine,
 {
     type Executor = CachedReadDelegate<E>;
-    type StoreMeta = Arc<Mutex<StoreMeta<E>>>;
+    type StoreMeta = Arc<Mutex<StoreMeta>>;
 
     fn store_id(&self) -> Option<u64> {
-        self.store_meta.as_ref().lock().unwrap().store_id
+        Some(self.store_meta.as_ref().lock().unwrap().store_id)
     }
 
     /// get the ReadDelegate with region_id and the number of delegates in the
@@ -330,7 +386,7 @@ where
         let reader = meta.readers.get(&region_id).cloned();
         if let Some(reader) = reader {
             // If reader is not None, cache must not be None.
-            let cached_tablet = meta.tablet_caches.get(&region_id).cloned().unwrap();
+            let cached_tablet = self.reg.get(region_id).unwrap();
             return (
                 meta.readers.len(),
                 Some(CachedReadDelegate {
@@ -340,10 +396,6 @@ where
             );
         }
         (meta.readers.len(), None)
-    }
-
-    fn store_meta(&self) -> &Self::StoreMeta {
-        &self.store_meta
     }
 }
 
@@ -431,14 +483,15 @@ mod tests {
     use crossbeam::{atomic::AtomicCell, channel::TrySendError};
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::{KvTestEngine, TestTabletFactoryV2},
+        kv::{KvTestEngine, TestTabletFactory},
     };
-    use engine_traits::{MiscExt, OpenOptions, Peekable, SyncMutable, TabletFactory, ALL_CFS};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, TabletContext, DATA_CFS};
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
+    use pd_client::BucketMeta;
     use raftstore::store::{
-        util::Lease, ReadCallback, ReadProgress, RegionReadProgress, TrackVer, TxnExt,
-        TLS_LOCAL_READ_METRICS,
+        util::Lease, worker_metrics::TLS_LOCAL_READ_METRICS, ReadCallback, ReadProgress,
+        RegionReadProgress, TrackVer, TxnExt,
     };
     use slog::o;
     use tempfile::Builder;
@@ -449,6 +502,7 @@ mod tests {
     use super::*;
     use crate::router::{QueryResult, ReadResponse};
 
+    #[derive(Clone)]
     struct MockRouter {
         p_router: SyncSender<(u64, PeerMsg)>,
     }
@@ -470,7 +524,8 @@ mod tests {
     #[allow(clippy::type_complexity)]
     fn new_reader(
         store_id: u64,
-        store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        reg: TabletRegistry<KvTestEngine>,
     ) -> (
         LocalReader<KvTestEngine, MockRouter>,
         Receiver<(u64, PeerMsg)>,
@@ -478,6 +533,7 @@ mod tests {
         let (ch, rx) = MockRouter::new();
         let mut reader = LocalReader::new(
             store_meta,
+            reg,
             ch,
             Logger::root(slog::Discard, o!("key1" => "value1")),
         );
@@ -519,13 +575,16 @@ mod tests {
 
                 match msg {
                     // send the result back to local reader
-                    PeerMsg::RaftQuery(query) => ReadCallback::set_result(
-                        query.ch,
-                        QueryResult::Read(ReadResponse {
-                            read_index: 0,
-                            txn_extra_op: Default::default(),
-                        }),
-                    ),
+                    PeerMsg::RaftQuery(query) => {
+                        assert!(query.request.get_header().get_read_quorum());
+                        ReadCallback::set_result(
+                            query.ch,
+                            QueryResult::Read(ReadResponse {
+                                read_index: 0,
+                                txn_extra_op: Default::default(),
+                            }),
+                        )
+                    }
                     _ => unreachable!(),
                 }
                 ch_tx.send(rx).unwrap();
@@ -539,15 +598,16 @@ mod tests {
 
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test-local-reader")
             .tempdir()
             .unwrap();
-        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+        let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
+        let reg = TabletRegistry::new(factory, path.path()).unwrap();
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new()));
-        let (mut reader, mut rx) = new_reader(store_id, store_meta.clone());
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(store_id)));
+        let (mut reader, mut rx) = new_reader(store_id, store_meta.clone(), reg.clone());
         let (mix_tx, mix_rx) = sync_channel(1);
         let handler = mock_raftstore(mix_rx);
 
@@ -602,6 +662,8 @@ mod tests {
         // Register region 1
         lease.renew(monotonic_raw_now());
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
+        let txn_ext = Arc::new(TxnExt::default());
+        let bucket_meta = Arc::new(BucketMeta::default());
         {
             let mut meta = store_meta.as_ref().lock().unwrap();
 
@@ -615,19 +677,16 @@ mod tests {
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                txn_ext: Arc::new(TxnExt::default()),
+                txn_ext: txn_ext.clone(),
                 read_progress: read_progress.clone(),
                 pending_remove: false,
                 track_ver: TrackVer::new(),
-                bucket_meta: None,
+                bucket_meta: Some(bucket_meta.clone()),
             };
             meta.readers.insert(1, read_delegate);
             // create tablet with region_id 1 and prepare some data
-            let tablet1 = factory
-                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-                .unwrap();
-            let cache = CachedTablet::new(Some(tablet1));
-            meta.tablet_caches.insert(1, cache);
+            let ctx = TabletContext::new(&region1, Some(10));
+            reg.load(ctx, true).unwrap();
         }
 
         let (ch_tx, ch_rx) = sync_channel(1);
@@ -652,6 +711,11 @@ mod tests {
         // the applied term by the above thread, the snapshot will be acquired by
         // retrying.
         let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
+        assert!(Arc::ptr_eq(snap.txn_ext.as_ref().unwrap(), &txn_ext));
+        assert!(Arc::ptr_eq(
+            snap.bucket_meta.as_ref().unwrap(),
+            &bucket_meta
+        ));
         assert_eq!(*snap.get_region(), region1);
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
@@ -680,11 +744,12 @@ mod tests {
                 ch_tx.clone(),
             ))
             .unwrap();
-        let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
-        // Updating lease makes cache miss.
+        block_on(reader.snapshot(cmd.clone())).unwrap();
+        // Updating lease makes cache miss. And because the cache is updated on cloned
+        // copy, so the old cache will still need to be updated again.
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
-            4
+            5
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
@@ -733,15 +798,16 @@ mod tests {
     fn test_read_delegate() {
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test-local-reader")
             .tempdir()
             .unwrap();
-        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+        let factory = Box::new(TestTabletFactory::new(ops, cf_opts));
+        let reg = TabletRegistry::new(factory, path.path()).unwrap();
 
         let store_meta =
-            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new())));
+            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(1))), reg.clone());
 
         let tablet1;
         let tablet2;
@@ -753,24 +819,20 @@ mod tests {
             meta.readers.insert(1, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
-            tablet1 = factory
-                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-                .unwrap();
+            let mut ctx = TabletContext::with_infinite_region(1, Some(10));
+            reg.load(ctx, true).unwrap();
+            tablet1 = reg.get(1).unwrap().latest().unwrap().clone();
             tablet1.put(b"a1", b"val1").unwrap();
-            let cache = CachedTablet::new(Some(tablet1.clone()));
-            meta.tablet_caches.insert(1, cache);
 
             // Create read_delegate with region id 2
             let read_delegate = ReadDelegate::mock(2);
             meta.readers.insert(2, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
-            tablet2 = factory
-                .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
-                .unwrap();
+            ctx = TabletContext::with_infinite_region(2, Some(10));
+            reg.load(ctx, true).unwrap();
+            tablet2 = reg.get(2).unwrap().latest().unwrap().clone();
             tablet2.put(b"a2", b"val2").unwrap();
-            let cache = CachedTablet::new(Some(tablet2.clone()));
-            meta.tablet_caches.insert(2, cache);
         }
 
         let (_, delegate) = store_meta.get_executor_and_len(1);

@@ -34,7 +34,6 @@ scheduler-concurrency = 10
 scheduler-worker-pool-size = 1
 
 [storage.block-cache]
-shared = true
 capacity = "64MB"
 
 [pd]

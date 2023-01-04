@@ -1,12 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Bound;
+
 // #[PerformanceCriticalPath]
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
     mvcc::MvccReader,
     txn::{
-        actions::flashback_to_version::get_first_user_key,
+        actions::flashback_to_version::{check_flashback_commit, get_first_user_key},
         commands::{
             Command, CommandExt, FlashbackToVersion, ProcessResult, ReadCommand, TypedCommand,
         },
@@ -39,7 +41,7 @@ pub fn new_flashback_rollback_lock_cmd(
     start_ts: TimeStamp,
     version: TimeStamp,
     start_key: Key,
-    end_key: Key,
+    end_key: Option<Key>,
     ctx: Context,
 ) -> TypedCommand<()> {
     FlashbackToVersionReadPhase::new(
@@ -61,7 +63,7 @@ pub fn new_flashback_write_cmd(
     commit_ts: TimeStamp,
     version: TimeStamp,
     start_key: Key,
-    end_key: Key,
+    end_key: Option<Key>,
     ctx: Context,
 ) -> TypedCommand<()> {
     FlashbackToVersionReadPhase::new(
@@ -87,7 +89,7 @@ command! {
             commit_ts: TimeStamp,
             version: TimeStamp,
             start_key: Key,
-            end_key: Key,
+            end_key: Option<Key>,
             state: FlashbackToVersionState,
         }
 }
@@ -109,25 +111,34 @@ impl CommandExt for FlashbackToVersionReadPhase {
 ///     - Scan all locks.
 ///     - Rollback all these locks.
 ///   2. [PrepareFlashback] Prewrite phase:
-///     - Prewrite the `self.start_key` specifically to prevent the
-///       `resolved_ts` from advancing.
+///     - Prewrite the first user key after `self.start_key` specifically to
+///       prevent the `resolved_ts` from advancing.
 ///   3. [FinishFlashback] FlashbackWrite phase:
 ///     - Scan all the latest writes and their corresponding values at
 ///       `self.version`.
 ///     - Write the old MVCC version writes again for all these keys with
-///       `self.commit_ts` excluding the `self.start_key`.
+///       `self.commit_ts` excluding the first user key after `self.start_key`.
 ///   4. [FinishFlashback] Commit phase:
-///     - Commit the `self.start_key` we write at the second phase to finish the
-///       flashback.
+///     - Commit the first user key after `self.start_key` we write at the
+///       second phase to finish the flashback.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
+        // Filter out the SST that does not have a newer version than `self.version` in
+        // `CF_WRITE`, i.e, whose latest `commit_ts` <= `self.version` in the later
+        // scan. By doing this, we can only flashback those keys that have version
+        // changed since `self.version` as much as possible.
+        reader.set_hint_min_ts(Some(Bound::Excluded(self.version)));
         let mut start_key = self.start_key.clone();
         let next_state = match self.state {
             FlashbackToVersionState::RollbackLock { next_lock_key, .. } => {
-                let mut key_locks =
-                    flashback_to_version_read_lock(&mut reader, next_lock_key, &self.end_key)?;
+                let mut key_locks = flashback_to_version_read_lock(
+                    &mut reader,
+                    next_lock_key,
+                    self.end_key.as_ref(),
+                    self.start_ts,
+                )?;
                 if key_locks.is_empty() {
                     // - No more locks to rollback, continue to the Prewrite Phase.
                     // - The start key from the client is actually a range which is used to limit
@@ -138,9 +149,12 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     //   completion of the 2pc.
                     // - To make sure the key locked in the latch is the same as the actual key
                     //   written, we pass it to the key in `process_write' after getting it.
-                    let key_to_lock = if let Some(first_key) =
-                        get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
-                    {
+                    let key_to_lock = if let Some(first_key) = get_first_user_key(
+                        &mut reader,
+                        &self.start_key,
+                        self.end_key.as_ref(),
+                        self.version,
+                    )? {
                         first_key
                     } else {
                         // If the key is None return directly
@@ -177,9 +191,12 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     // 2pc. So When overwriting the write, we skip the immediate
                     // write of this key and instead put it after the completion
                     // of the 2pc.
-                    next_write_key = if let Some(first_key) =
-                        get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
-                    {
+                    next_write_key = if let Some(first_key) = get_first_user_key(
+                        &mut reader,
+                        &self.start_key,
+                        self.end_key.as_ref(),
+                        self.version,
+                    )? {
                         first_key
                     } else {
                         // If the key is None return directly
@@ -189,9 +206,14 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     // Commit key needs to match the Prewrite key, which is set as the first user
                     // key.
                     start_key = next_write_key.clone();
-                    // If the key is not locked, it means that the key has been committed before and
-                    // we are in a retry.
-                    if reader.load_lock(&next_write_key)?.is_none() {
+                    // If the key has already been committed by the flashback, it means that we are
+                    // in a retry. It's safe to just return directly.
+                    if check_flashback_commit(
+                        &mut reader,
+                        &start_key,
+                        self.start_ts,
+                        self.commit_ts,
+                    )? {
                         statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);
                     }
@@ -200,7 +222,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     &mut reader,
                     next_write_key,
                     &start_key,
-                    &self.end_key,
+                    self.end_key.as_ref(),
                     self.version,
                     self.commit_ts,
                 )?;

@@ -62,10 +62,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.set_has_ready();
     }
 
-    pub(crate) fn respond_replica_read<T>(
+    pub(crate) fn respond_replica_read(
         &self,
         read_index_req: &mut ReadIndexRequest<QueryResChannel>,
-        ctx: &mut StoreContext<EK, ER, T>,
     ) {
         debug!(
             self.logger,
@@ -74,7 +73,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
         let time = monotonic_raw_now();
-        for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
+        for (req, ch, _) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)

@@ -1,12 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Bound;
-
 use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
 use crate::storage::{
-    mvcc::{MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
-    txn::{actions::check_txn_status::rollback_lock, Result as TxnResult},
+    mvcc::{self, MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
+    txn::{self, actions::check_txn_status::rollback_lock, Result as TxnResult},
     Snapshot,
 };
 
@@ -15,12 +13,14 @@ pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for mul
 pub fn flashback_to_version_read_lock(
     reader: &mut MvccReader<impl Snapshot>,
     next_lock_key: Key,
-    end_key: &Key,
+    end_key: Option<&Key>,
+    flashback_start_ts: TimeStamp,
 ) -> TxnResult<Vec<(Key, Lock)>> {
     let result = reader.scan_locks(
         Some(&next_lock_key),
-        Some(end_key),
-        |_| true,
+        end_key,
+        // Skip the `prewrite_lock`. This lock will appear when retrying prepare
+        |lock| lock.ts != flashback_start_ts,
         FLASHBACK_BATCH_SIZE,
     );
     let (key_locks, _) = result?;
@@ -31,20 +31,15 @@ pub fn flashback_to_version_read_write(
     reader: &mut MvccReader<impl Snapshot>,
     next_write_key: Key,
     start_key: &Key,
-    end_key: &Key,
+    end_key: Option<&Key>,
     flashback_version: TimeStamp,
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<Vec<Key>> {
-    // Filter out the SST that does not have a newer version than
-    // `flashback_version` in `CF_WRITE`, i.e, whose latest `commit_ts` <=
-    // `flashback_version`. By doing this, we can only flashback those keys that
-    // have version changed since `flashback_version` as much as possible.
-    reader.set_hint_min_ts(Some(Bound::Excluded(flashback_version)));
     // To flashback the data, we need to get all the latest visible keys first by
     // scanning every unique key in `CF_WRITE`.
     let keys_result = reader.scan_latest_user_keys(
         Some(&next_write_key),
-        Some(end_key),
+        end_key,
         |key, latest_commit_ts| {
             // There is no any other write could happen after the flashback begins.
             assert!(latest_commit_ts <= flashback_commit_ts);
@@ -154,6 +149,9 @@ pub fn prewrite_flashback_key(
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<()> {
+    if reader.load_lock(key_to_lock)?.is_some() {
+        return Ok(());
+    }
     let old_write = reader.get_write(key_to_lock, flashback_version, None)?;
     // Flashback the value in `CF_DEFAULT` as well if the old write is a
     // `WriteType::Put` without the short value.
@@ -188,6 +186,7 @@ pub fn prewrite_flashback_key(
             1,
             TimeStamp::zero(),
         ),
+        false, // Assuming flashback transactions won't participate any lock conflicts.
     );
     Ok(())
 }
@@ -218,17 +217,75 @@ pub fn commit_flashback_key(
             lock.is_pessimistic_txn(),
             flashback_commit_ts,
         );
+    } else {
+        return Err(txn::Error::from_mvcc(mvcc::ErrorInner::TxnLockNotFound {
+            start_ts: flashback_start_ts,
+            commit_ts: flashback_commit_ts,
+            key: key_to_commit.to_raw()?,
+        }));
     }
     Ok(())
+}
+
+// Check if the flashback has been finished before.
+pub fn check_flashback_commit(
+    reader: &mut MvccReader<impl Snapshot>,
+    key_to_commit: &Key,
+    flashback_start_ts: TimeStamp,
+    flashback_commit_ts: TimeStamp,
+) -> TxnResult<bool> {
+    match reader.load_lock(key_to_commit)? {
+        // If the lock exists, it means the flashback hasn't been finished.
+        Some(lock) => {
+            if lock.ts == flashback_start_ts {
+                return Ok(false);
+            }
+            error!(
+                "check flashback commit exception: lock not found";
+                "key_to_commit" => log_wrappers::Value::key(key_to_commit.as_encoded()),
+                "flashback_start_ts" => flashback_start_ts,
+                "flashback_commit_ts" => flashback_commit_ts,
+                "lock" => ?lock,
+            );
+        }
+        // If the lock doesn't exist and the flashback commit record exists, it means the flashback
+        // has been finished.
+        None => {
+            let write_res = reader.seek_write(key_to_commit, flashback_commit_ts)?;
+            if let Some((commit_ts, ref write)) = write_res {
+                if commit_ts == flashback_commit_ts && write.start_ts == flashback_start_ts {
+                    return Ok(true);
+                }
+            }
+            error!(
+                "check flashback commit exception: write record mismatched";
+                "key_to_commit" => log_wrappers::Value::key(key_to_commit.as_encoded()),
+                "flashback_start_ts" => flashback_start_ts,
+                "flashback_commit_ts" => flashback_commit_ts,
+                "write" => ?write_res,
+            );
+        }
+    }
+    Err(txn::Error::from_mvcc(mvcc::ErrorInner::TxnLockNotFound {
+        start_ts: flashback_start_ts,
+        commit_ts: flashback_commit_ts,
+        key: key_to_commit.to_raw()?,
+    }))
 }
 
 pub fn get_first_user_key(
     reader: &mut MvccReader<impl Snapshot>,
     start_key: &Key,
-    end_key: &Key,
+    end_key: Option<&Key>,
+    flashback_version: TimeStamp,
 ) -> TxnResult<Option<Key>> {
-    let (mut keys_result, _) =
-        reader.scan_latest_user_keys(Some(start_key), Some(end_key), |_, _| true, 1)?;
+    let (mut keys_result, _) = reader.scan_latest_user_keys(
+        Some(start_key),
+        end_key,
+        // Make sure we will get the same first user key each time.
+        |_, latest_commit_ts| latest_commit_ts > flashback_version,
+        1,
+    )?;
     Ok(keys_result.pop())
 }
 
@@ -258,14 +315,17 @@ pub mod tests {
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
     ) -> usize {
+        let start_ts = start_ts.into();
         let next_key = Key::from_raw(keys::next_key(key).as_slice());
         let key = Key::from_raw(key);
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new_with_ctx(snapshot.clone(), Some(ScanMode::Forward), &ctx);
-        let key_locks = flashback_to_version_read_lock(&mut reader, key, &next_key).unwrap();
+        let key_locks =
+            flashback_to_version_read_lock(&mut reader, key, Some(next_key).as_ref(), start_ts)
+                .unwrap();
         let cm = ConcurrencyManager::new(TimeStamp::zero());
-        let mut txn = MvccTxn::new(start_ts.into(), cm);
+        let mut txn = MvccTxn::new(start_ts, cm);
         rollback_locks(&mut txn, snapshot, key_locks).unwrap();
         let rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
@@ -284,8 +344,13 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        let prewrite_key = if let Some(first_key) =
-            get_first_user_key(&mut reader, &Key::from_raw(key), &Key::from_raw(b"z")).unwrap()
+        let prewrite_key = if let Some(first_key) = get_first_user_key(
+            &mut reader,
+            &Key::from_raw(key),
+            Some(Key::from_raw(b"z")).as_ref(),
+            version,
+        )
+        .unwrap()
         {
             first_key
         } else {
@@ -305,7 +370,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) -> usize {
-        let next_key = Key::from_raw(keys::next_key(key).as_slice());
+        let next_key = Key::from_raw_maybe_unbounded(keys::next_key(key).as_slice());
         let key = Key::from_raw(key);
         let (version, start_ts, commit_ts) = (version.into(), start_ts.into(), commit_ts.into());
         let ctx = Context::default();
@@ -316,7 +381,7 @@ pub mod tests {
             &mut reader,
             key,
             &Key::from_raw(b""),
-            &next_key,
+            next_key.as_ref(),
             version,
             commit_ts,
         )
@@ -333,19 +398,24 @@ pub mod tests {
     fn must_commit_flashback_key<E: Engine>(
         engine: &mut E,
         key: &[u8],
+        version: impl Into<TimeStamp>,
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) -> usize {
-        let (start_ts, commit_ts) = (start_ts.into(), commit_ts.into());
+        let (version, start_ts, commit_ts) = (version.into(), start_ts.into(), commit_ts.into());
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        let key_to_lock =
-            get_first_user_key(&mut reader, &Key::from_raw(key), &Key::from_raw(b"z"))
-                .unwrap()
-                .unwrap();
+        let key_to_lock = get_first_user_key(
+            &mut reader,
+            &Key::from_raw(key),
+            Some(Key::from_raw(b"z")).as_ref(),
+            version,
+        )
+        .unwrap()
+        .unwrap();
         commit_flashback_key(&mut txn, &mut reader, &key_to_lock, start_ts, commit_ts).unwrap();
         let rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
@@ -500,9 +570,11 @@ pub mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut ts = TimeStamp::zero();
         let (k, v) = (b"k", [u8::MAX; SHORT_VALUE_MAX_LEN + 1]);
-        must_prewrite_put(&mut engine, k, &v, k, *ts.incr());
-        must_commit(&mut engine, k, ts, *ts.incr());
-        must_get(&mut engine, k, ts, &v);
+        for _ in 0..2 {
+            must_prewrite_put(&mut engine, k, &v, k, *ts.incr());
+            must_commit(&mut engine, k, ts, *ts.incr());
+            must_get(&mut engine, k, ts, &v);
+        }
 
         let flashback_start_ts = *ts.incr();
         // Rollback nothing.
@@ -513,20 +585,11 @@ pub mod tests {
             2
         );
         // Retry Prepare
-        // Unlock `k`, put rollback record and delete the value of `k`.
-        assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 3);
-        // Lock and write the value of `k`.
+        // Skip `k` no need to write again.
+        assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 0);
         assert_eq!(
             must_prewrite_flashback_key(&mut engine, k, 2, flashback_start_ts),
-            2
-        );
-        // Retry Prepare
-        // Only unlock `k` since there is an overlapped rollback record.
-        assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 1);
-        // Only lock `k` since the value of `k` has already existed.
-        assert_eq!(
-            must_prewrite_flashback_key(&mut engine, k, 2, flashback_start_ts),
-            1
+            0
         );
     }
 
@@ -534,29 +597,26 @@ pub mod tests {
     fn test_prewrite_with_special_key() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut ts = TimeStamp::zero();
-        let (prewrite_key, prewrite_val) = (b"b", b"val");
-        must_prewrite_put(
-            &mut engine,
-            prewrite_key,
-            prewrite_val,
-            prewrite_key,
-            *ts.incr(),
-        );
-        must_commit(&mut engine, prewrite_key, ts, *ts.incr());
-        must_get(&mut engine, prewrite_key, ts, prewrite_val);
-        let (k, v1, v2) = (b"c", b"v1", b"v2");
-        must_prewrite_put(&mut engine, k, v1, k, *ts.incr());
-        must_commit(&mut engine, k, ts, *ts.incr());
-        must_prewrite_put(&mut engine, k, v2, k, *ts.incr());
-        must_commit(&mut engine, k, ts, *ts.incr());
-        must_get(&mut engine, k, ts, v2);
+        let (prewrite_key, k, v) = (b"b", b"c", b"val");
+        for k in [prewrite_key, k] {
+            let (start_ts, commit_ts) = (*ts.incr(), *ts.incr());
+            must_prewrite_put(&mut engine, k, v, k, start_ts);
+            must_commit(&mut engine, k, start_ts, commit_ts);
+            must_get(&mut engine, k, commit_ts, v);
+        }
         // Check for prewrite key b"b".
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        let first_key = get_first_user_key(&mut reader, &Key::from_raw(b""), &Key::from_raw(b"z"))
-            .unwrap_or_else(|_| Some(Key::from_raw(b"")))
-            .unwrap();
+        let flashback_version = TimeStamp::zero();
+        let first_key = get_first_user_key(
+            &mut reader,
+            &Key::from_raw(b""),
+            Some(Key::from_raw(b"z")).as_ref(),
+            flashback_version,
+        )
+        .unwrap_or_else(|_| Some(Key::from_raw(b"")))
+        .unwrap();
         assert_eq!(first_key, Key::from_raw(prewrite_key));
 
         // case 1: start key is before all keys, flashback b"c".
@@ -566,7 +626,12 @@ pub mod tests {
         assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 0);
         // Prewrite "prewrite_key" not "start_key".
         assert_eq!(
-            must_prewrite_flashback_key(&mut engine, start_key, 4, flashback_start_ts),
+            must_prewrite_flashback_key(
+                &mut engine,
+                start_key,
+                flashback_version,
+                flashback_start_ts
+            ),
             1
         );
         // Flashback (b"c", v2) to (b"c", v1).
@@ -574,7 +639,7 @@ pub mod tests {
             must_flashback_write_to_version(
                 &mut engine,
                 k,
-                4,
+                flashback_version,
                 flashback_start_ts,
                 flashback_commit_ts
             ),
@@ -585,14 +650,14 @@ pub mod tests {
             must_commit_flashback_key(
                 &mut engine,
                 start_key,
+                flashback_version,
                 flashback_start_ts,
                 flashback_commit_ts
             ),
             2
         );
-        must_get(&mut engine, k, ts, v1);
-        must_get(&mut engine, prewrite_key, ts, prewrite_val);
-
+        must_get_none(&mut engine, prewrite_key, ts);
+        must_get_none(&mut engine, k, ts);
         // case 2: start key is after all keys, prewrite will return None.
         let start_key = b"d";
         let flashback_start_ts = *ts.incr();
@@ -600,12 +665,22 @@ pub mod tests {
         assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 0);
         // Prewrite null.
         assert_eq!(
-            must_prewrite_flashback_key(&mut engine, start_key, 4, flashback_start_ts),
+            must_prewrite_flashback_key(
+                &mut engine,
+                start_key,
+                flashback_version,
+                flashback_start_ts
+            ),
             0
         );
-        // case 3: start key is valid, end_key is invalid, prewrite key will be None.
-        let first_key = get_first_user_key(&mut reader, &Key::from_raw(b"a"), &Key::from_raw(b""))
-            .unwrap_or_else(|_| Some(Key::from_raw(b"")));
-        assert_eq!(first_key, None);
+        must_get_none(&mut engine, prewrite_key, ts);
+        must_get_none(&mut engine, k, ts);
+        // case 3: for last region, end_key will be None, prewrite key will be valid.
+        assert_eq!(
+            get_first_user_key(&mut reader, &Key::from_raw(b"a"), None, flashback_version)
+                .unwrap()
+                .unwrap(),
+            Key::from_raw(prewrite_key)
+        );
     }
 }

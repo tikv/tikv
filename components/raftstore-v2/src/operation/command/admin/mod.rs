@@ -1,36 +1,32 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod compact_log;
 mod conf_change;
 mod split;
+mod transfer_leader;
 
+use compact_log::CompactLogResult;
+use conf_change::ConfChangeResult;
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
+use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::Message;
-use raft::prelude::ConfChangeV2;
-use raftstore::{
-    store::{
-        self, cmd_resp,
-        fsm::apply,
-        msg::ErrorCallback,
-        util::{ChangePeerI, ConfChangeKind},
-    },
-    Result,
-};
+use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
-pub use split::{SplitInit, SplitResult};
+use split::SplitResult;
+pub use split::{temp_split_path, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
 use tikv_util::box_err;
+use txn_types::WriteBatchFlags;
 
-use self::conf_change::ConfChangeResult;
-use crate::{
-    batch::StoreContext,
-    raft::{Apply, Peer},
-    router::CmdResChannel,
-};
+use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
 
 #[derive(Debug)]
 pub enum AdminCmdResult {
+    // No side effect produced by the command
+    None,
     SplitRegion(SplitResult),
     ConfChange(ConfChangeResult),
+    TransferLeader(u64),
+    CompactLog(CompactLogResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -45,7 +41,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply::notify_req_region_removed(self.region_id(), ch);
             return;
         }
-        if let Err(e) = self.validate_command(&req, &mut ctx.raft_metrics) {
+        if !req.has_admin_request() {
+            let e = box_err!("{:?} expect only execute admin command", self.logger.list());
+            let resp = cmd_resp::new_error(e);
+            ch.report_error(resp);
+            return;
+        }
+        if let Err(e) = ctx.coprocessor_host.pre_propose(self.region(), &mut req) {
+            let resp = cmd_resp::new_error(e.into());
+            ch.report_error(resp);
+            return;
+        }
+        let cmd_type = req.get_admin_request().get_cmd_type();
+        if let Err(e) =
+            self.validate_command(req.get_header(), Some(cmd_type), &mut ctx.raft_metrics)
+        {
             let resp = cmd_resp::new_error(e);
             ch.report_error(resp);
             return;
@@ -65,7 +75,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        let cmd_type = req.get_admin_request().get_cmd_type();
         if let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
             conflict.delay_channel(ch);
             return;
@@ -81,6 +90,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "Split is deprecated. Please use BatchSplit instead."
                 )),
                 AdminCmdType::BatchSplit => self.propose_split(ctx, req),
+                AdminCmdType::TransferLeader => {
+                    // Containing TRANSFER_LEADER_PROPOSAL flag means the this transfer leader
+                    // request should be proposed to the raft group
+                    if WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+                        .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL)
+                    {
+                        let data = req.write_to_bytes().unwrap();
+                        self.propose(ctx, data)
+                    } else {
+                        if self.propose_transfer_leader(ctx, req, ch) {
+                            self.set_has_ready();
+                        }
+                        return;
+                    }
+                }
+                AdminCmdType::CompactLog => self.propose_compact_log(ctx, req),
                 _ => unimplemented!(),
             }
         };

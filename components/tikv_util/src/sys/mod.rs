@@ -9,9 +9,10 @@ pub mod ioload;
 pub mod thread;
 
 // re-export some traits for ease of use
-#[cfg(target_os = "linux")]
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use fail::fail_point;
 #[cfg(target_os = "linux")]
@@ -19,7 +20,7 @@ use lazy_static::lazy_static;
 #[cfg(target_os = "linux")]
 use mnt::get_mount;
 use sysinfo::RefreshKind;
-pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
+pub use sysinfo::{CpuExt, DiskExt, NetworkExt, ProcessExt, SystemExt};
 
 use crate::config::{ReadableSize, KIB};
 
@@ -92,7 +93,7 @@ impl SysQuota {
 
     fn sysinfo_memory_limit_in_bytes() -> u64 {
         let system = sysinfo::System::new_with_specifics(RefreshKind::new().with_memory());
-        system.get_total_memory() * KIB
+        system.total_memory() * KIB
     }
 }
 
@@ -162,13 +163,13 @@ pub fn cache_line_size(level: usize) -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn path_in_diff_mount_point(path1: &str, path2: &str) -> bool {
-    if path1.is_empty() || path2.is_empty() {
+pub fn path_in_diff_mount_point(path1: impl AsRef<Path>, path2: impl AsRef<Path>) -> bool {
+    let (path1, path2) = (path1.as_ref(), path2.as_ref());
+    let empty_path = |p: &Path| p.to_str().map_or(false, |s| s.is_empty());
+    if empty_path(path1) || empty_path(path2) {
         return false;
     }
-    let path1 = PathBuf::from(path1);
-    let path2 = PathBuf::from(path2);
-    match (get_mount(&path1), get_mount(&path2)) {
+    match (get_mount(path1), get_mount(path2)) {
         (Err(e1), _) => {
             warn!("Get mount point error for path {}, {}", path1.display(), e1);
             false
@@ -190,7 +191,7 @@ pub fn path_in_diff_mount_point(path1: &str, path2: &str) -> bool {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn path_in_diff_mount_point(_path1: &str, _path2: &str) -> bool {
+pub fn path_in_diff_mount_point(_path1: impl AsRef<Path>, _path2: impl AsRef<Path>) -> bool {
     false
 }
 

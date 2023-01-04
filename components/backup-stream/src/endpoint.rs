@@ -273,7 +273,22 @@ where
         meta_client: MetadataClient<S>,
         scheduler: Scheduler<Task>,
     ) -> Result<()> {
-        let tasks = meta_client.get_tasks().await?;
+        let tasks;
+        loop {
+            let r = meta_client.get_tasks().await;
+            match r {
+                Ok(t) => {
+                    tasks = t;
+                    break;
+                }
+                Err(e) => {
+                    e.report("failed to get backup stream task");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            }
+        }
+
         for task in tasks.inner {
             info!("backup stream watch task"; "task" => ?task);
             if task.is_paused {
@@ -1055,12 +1070,21 @@ pub enum ObserveOp {
 impl std::fmt::Debug for ObserveOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Start { region } => f.debug_struct("Start").field("region", region).finish(),
-            Self::Stop { region } => f.debug_struct("Stop").field("region", region).finish(),
-            Self::Destroy { region } => f.debug_struct("Destroy").field("region", region).finish(),
+            Self::Start { region } => f
+                .debug_struct("Start")
+                .field("region", &utils::debug_region(region))
+                .finish(),
+            Self::Stop { region } => f
+                .debug_struct("Stop")
+                .field("region", &utils::debug_region(region))
+                .finish(),
+            Self::Destroy { region } => f
+                .debug_struct("Destroy")
+                .field("region", &utils::debug_region(region))
+                .finish(),
             Self::RefreshResolver { region } => f
                 .debug_struct("RefreshResolver")
-                .field("region", region)
+                .field("region", &utils::debug_region(region))
                 .finish(),
             Self::NotifyFailToStartObserve {
                 region,
@@ -1068,7 +1092,7 @@ impl std::fmt::Debug for ObserveOp {
                 err,
             } => f
                 .debug_struct("NotifyFailToStartObserve")
-                .field("region", region)
+                .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
                 .finish(),
@@ -1163,5 +1187,43 @@ where
 
     fn run(&mut self, task: Task) {
         self.run_task(task)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use engine_rocks::RocksEngine;
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use test_raftstore::MockRaftStoreRouter;
+    use tikv_util::worker::dummy_scheduler;
+
+    use crate::{
+        checkpoint_manager::tests::MockPdClient, endpoint, endpoint::Endpoint, metadata::test, Task,
+    };
+
+    #[tokio::test]
+    async fn test_start() {
+        let cli = test::test_meta_cli();
+        let (sched, mut rx) = dummy_scheduler();
+        let task = test::simple_task("simple_3");
+        cli.insert_task_with_range(&task, &[]).await.unwrap();
+
+        fail::cfg("failed_to_get_tasks", "1*return").unwrap();
+        Endpoint::<_, MockRegionInfoProvider, RocksEngine, MockRaftStoreRouter, MockPdClient>::start_and_watch_tasks(cli, sched).await.unwrap();
+        fail::remove("failed_to_get_tasks");
+
+        let _t1 = rx.recv().unwrap();
+        let t2 = rx.recv().unwrap();
+
+        match t2 {
+            Task::WatchTask(t) => match t {
+                endpoint::TaskOp::AddTask(t) => {
+                    assert_eq!(t.info, task.info);
+                    assert!(!t.is_paused);
+                }
+                _ => panic!("not match TaskOp type"),
+            },
+            _ => panic!("not match Task type {:?}", t2),
+        }
     }
 }

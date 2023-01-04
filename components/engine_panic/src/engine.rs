@@ -2,7 +2,7 @@
 
 use engine_traits::{
     IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
-    TabletAccessor, WriteOptions,
+    WriteOptions,
 };
 
 use crate::{db_vector::PanicDbVector, snapshot::PanicSnapshot, write_batch::PanicWriteBatch};
@@ -20,16 +20,6 @@ impl KvEngine for PanicEngine {
         panic!()
     }
     fn bad_downcast<T: 'static>(&self) -> &T {
-        panic!()
-    }
-}
-
-impl TabletAccessor<PanicEngine> for PanicEngine {
-    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &PanicEngine)) {
-        panic!()
-    }
-
-    fn is_single_engine(&self) -> bool {
         panic!()
     }
 }

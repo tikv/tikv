@@ -4,7 +4,11 @@ use std::{sync::Arc, time::Duration};
 
 use etcd_client::{ConnectOptions, Error as EtcdError, OpenSslClientConfig};
 use futures::Future;
-use tikv_util::stream::{RetryError, RetryExt};
+use openssl::x509::verify::X509VerifyFlags;
+use tikv_util::{
+    info,
+    stream::{RetryError, RetryExt},
+};
 use tokio::sync::OnceCell;
 
 use super::{etcd::EtcdSnapshot, EtcdStore, MetaStore};
@@ -30,6 +34,12 @@ impl ConnectionConfig {
             opts = opts.with_openssl_tls(
                 OpenSslClientConfig::default()
                     .ca_cert_pem(&tls.ca)
+                    // Some of users may prefer using multi-level self-signed certs.
+                    // In this scenario, we must set this flag or openssl would probably complain it cannot found the root CA.
+                    // (Because the flags we provide allows users providing exactly one CA cert.)
+                    // We haven't make it configurable because it is enabled in gRPC by default too.
+                    // TODO: Perhaps implement grpc-io based etcd client, fully remove the difference between gRPC TLS and our custom TLS?
+                    .manually(|c| c.cert_store_mut().set_flags(X509VerifyFlags::PARTIAL_CHAIN))
                     .client_cert_pem_and_key(&tls.client_cert, &tls.client_key.0),
             )
         }
@@ -113,7 +123,7 @@ where
     use futures::TryFutureExt;
     let r = tikv_util::stream::retry_ext(
         move || action().err_into::<RetryableEtcdError>(),
-        RetryExt::default().with_fail_hook(|err| println!("meet error {:?}", err)),
+        RetryExt::default().with_fail_hook(|err| info!("retry it"; "err" => ?err)),
     )
     .await;
     r.map_err(|err| err.0.into())

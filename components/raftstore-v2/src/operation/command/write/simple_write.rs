@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
-use protobuf::{CodedInputStream, Message, SingularPtrField};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
+use protobuf::{CodedInputStream, Message};
 use raftstore::store::WriteCallback;
 use slog::Logger;
 
@@ -13,83 +13,62 @@ use crate::{operation::command::parse_at, router::CmdResChannel};
 // TODO: use protobuf blob request seems better.
 const MAGIC_PREFIX: u8 = 0x00;
 
+#[derive(Clone, Debug)]
+#[repr(transparent)]
+pub struct SimpleWriteBinary {
+    buf: Box<[u8]>,
+}
+
 /// We usually use `RaftCmdRequest` for read write request. But the codec is
 /// not efficient enough for simple request. `SimpleWrite` is introduce to make
 /// codec alloc less and fast.
 #[derive(Debug)]
-pub struct SimpleWriteEncoder {
-    header: SingularPtrField<RaftRequestHeader>,
+pub struct SimpleWriteReqEncoder {
+    header: Box<RaftRequestHeader>,
     buf: Vec<u8>,
     channels: Vec<CmdResChannel>,
     size_limit: usize,
     notify_proposed: bool,
 }
 
-impl SimpleWriteEncoder {
-    /// Create an encoder.
+impl SimpleWriteReqEncoder {
+    /// Create a request encoder.
     ///
     /// If `notify_proposed` is true, channels will be called `notify_proposed`
     /// when it's appended.
     pub fn new(
-        mut req: RaftCmdRequest,
+        header: Box<RaftRequestHeader>,
+        bin: SimpleWriteBinary,
         size_limit: usize,
         notify_proposed: bool,
-    ) -> Result<SimpleWriteEncoder, RaftCmdRequest> {
-        if !Self::allow_request(&req) {
-            return Err(req);
-        }
-
+    ) -> SimpleWriteReqEncoder {
         let mut buf = Vec::with_capacity(256);
         buf.push(MAGIC_PREFIX);
-        req.get_header()
-            .write_length_delimited_to_vec(&mut buf)
-            .unwrap();
+        header.write_length_delimited_to_vec(&mut buf).unwrap();
+        buf.extend_from_slice(&bin.buf);
 
-        for r in req.get_requests() {
-            encode(r, &mut buf);
-        }
-        Ok(SimpleWriteEncoder {
-            header: req.header,
+        SimpleWriteReqEncoder {
+            header,
             buf,
             channels: vec![],
             size_limit,
             notify_proposed,
-        })
+        }
     }
 
-    fn allow_request(req: &RaftCmdRequest) -> bool {
-        if !req.has_status_request() && !req.has_admin_request() {
-            // TODO: skip the check and make caller use `SimpleWrite` directly.
-            for r in req.get_requests() {
-                if r.get_cmd_type() != CmdType::Put
-                    && r.get_cmd_type() != CmdType::Delete
-                    && r.get_cmd_type() != CmdType::DeleteRange
-                {
-                    return false;
-                }
-            }
-        } else {
-            return false;
-        };
-        true
-    }
-
+    /// Encode the simple write into the buffer dispite header check.
+    ///
+    /// Return false if the buffer limit is reached or the write can be amended.
     #[inline]
-    pub fn amend(&mut self, req: RaftCmdRequest) -> Result<(), RaftCmdRequest> {
-        if Self::allow_request(&req) && req.header == self.header {
-            let last_length = self.buf.len();
-            for r in req.get_requests() {
-                encode(r, &mut self.buf);
-            }
-            // The default size limit is 8 * 0.4 = 3.2MiB.
-            if self.buf.len() < self.size_limit {
-                Ok(())
-            } else {
-                self.buf.truncate(last_length);
-                Err(req)
-            }
+    pub fn amend(&mut self, header: &RaftRequestHeader, bin: &SimpleWriteBinary) -> bool {
+        if *self.header != *header {
+            return false;
+        }
+        if self.buf.len() + bin.buf.len() < self.size_limit {
+            self.buf.extend_from_slice(&bin.buf);
+            true
         } else {
-            Err(req)
+            false
         }
     }
 
@@ -118,9 +97,7 @@ impl SimpleWriteEncoder {
 
     #[inline]
     pub fn header(&self) -> &RaftRequestHeader {
-        self.header
-            .as_ref()
-            .unwrap_or_else(|| RaftRequestHeader::default_instance())
+        &self.header
     }
 }
 
@@ -152,19 +129,63 @@ pub enum SimpleWrite<'a> {
     DeleteRange(DeleteRange<'a>),
 }
 
+#[derive(Clone)]
+pub struct SimpleWriteEncoder {
+    buf: Vec<u8>,
+}
+
+impl SimpleWriteEncoder {
+    #[inline]
+    pub fn with_capacity(cap: usize) -> SimpleWriteEncoder {
+        SimpleWriteEncoder {
+            buf: Vec::with_capacity(cap),
+        }
+    }
+
+    #[inline]
+    pub fn put(&mut self, cf: &str, key: &[u8], value: &[u8]) {
+        encode(SimpleWrite::Put(Put { cf, key, value }), &mut self.buf);
+    }
+
+    #[inline]
+    pub fn delete(&mut self, cf: &str, key: &[u8]) {
+        encode(SimpleWrite::Delete(Delete { cf, key }), &mut self.buf);
+    }
+
+    #[inline]
+    pub fn delete_range(&mut self, cf: &str, start_key: &[u8], end_key: &[u8], notify_only: bool) {
+        encode(
+            SimpleWrite::DeleteRange(DeleteRange {
+                cf,
+                start_key,
+                end_key,
+                notify_only,
+            }),
+            &mut self.buf,
+        );
+    }
+
+    #[inline]
+    pub fn encode(self) -> SimpleWriteBinary {
+        SimpleWriteBinary {
+            buf: self.buf.into_boxed_slice(),
+        }
+    }
+}
+
 #[derive(Debug)]
-pub struct SimpleWriteDecoder<'a> {
+pub struct SimpleWriteReqDecoder<'a> {
     header: RaftRequestHeader,
     buf: &'a [u8],
 }
 
-impl<'a> SimpleWriteDecoder<'a> {
+impl<'a> SimpleWriteReqDecoder<'a> {
     pub fn new(
         logger: &Logger,
         buf: &'a [u8],
         index: u64,
         term: u64,
-    ) -> Result<SimpleWriteDecoder<'a>, RaftCmdRequest> {
+    ) -> Result<SimpleWriteReqDecoder<'a>, RaftCmdRequest> {
         match buf.first().cloned() {
             Some(MAGIC_PREFIX) => {
                 let mut is = CodedInputStream::from_bytes(&buf[1..]);
@@ -179,7 +200,7 @@ impl<'a> SimpleWriteDecoder<'a> {
                     ),
                 };
                 let read = is.pos();
-                Ok(SimpleWriteDecoder {
+                Ok(SimpleWriteReqDecoder {
                     header,
                     buf: &buf[1 + read as usize..],
                 })
@@ -194,7 +215,7 @@ impl<'a> SimpleWriteDecoder<'a> {
     }
 }
 
-impl<'a> Iterator for SimpleWriteDecoder<'a> {
+impl<'a> Iterator for SimpleWriteReqDecoder<'a> {
     type Item = SimpleWrite<'a>;
 
     #[inline]
@@ -310,43 +331,33 @@ fn decode_cf(buf: &[u8]) -> (&str, &[u8]) {
     }
 }
 
-// TODO: we need a way to verify every field is encoded.
-#[inline]
-fn encode(req: &Request, buf: &mut Vec<u8>) {
-    match req.get_cmd_type() {
-        CmdType::Put => {
+#[inline(always)]
+fn encode(simple_write: SimpleWrite<'_>, buf: &mut Vec<u8>) {
+    match simple_write {
+        SimpleWrite::Put(put) => {
             buf.push(PUT_TAG);
-            let put_req = req.get_put();
-            encode_cf(put_req.get_cf(), buf);
-            encode_bytes(put_req.get_key(), buf);
-            encode_bytes(put_req.get_value(), buf);
+            encode_cf(put.cf, buf);
+            encode_bytes(put.key, buf);
+            encode_bytes(put.value, buf);
         }
-        CmdType::Delete => {
+        SimpleWrite::Delete(delete) => {
             buf.push(DELETE_TAG);
-            let delete_req = req.get_delete();
-            encode_cf(delete_req.get_cf(), buf);
-            encode_bytes(delete_req.get_key(), buf);
+            encode_cf(delete.cf, buf);
+            encode_bytes(delete.key, buf);
         }
-        CmdType::DeleteRange => {
+        SimpleWrite::DeleteRange(dr) => {
             buf.push(DELETE_RANGE_TAG);
-            let delete_range_req = req.get_delete_range();
-            encode_cf(delete_range_req.get_cf(), buf);
-            encode_bytes(delete_range_req.get_start_key(), buf);
-            encode_bytes(delete_range_req.get_end_key(), buf);
-            buf.push(delete_range_req.get_notify_only() as u8);
+            encode_cf(dr.cf, buf);
+            encode_bytes(dr.start_key, buf);
+            encode_bytes(dr.end_key, buf);
+            buf.push(dr.notify_only as u8);
         }
-        CmdType::Invalid
-        | CmdType::Get
-        | CmdType::Snap
-        | CmdType::Prewrite
-        | CmdType::IngestSst
-        | CmdType::ReadIndex => unreachable!("not supported type should be filtered already"),
     }
 }
 
 #[inline]
 fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
-    let (tag, mut left) = buf.split_first()?;
+    let (tag, left) = buf.split_first()?;
     match *tag {
         PUT_TAG => {
             let (cf, left) = decode_cf(left);
@@ -380,57 +391,32 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
 
 #[cfg(test)]
 mod tests {
+    use kvproto::raft_cmdpb::{CmdType, Request};
     use slog::o;
 
     use super::*;
 
     #[test]
     fn test_codec() {
-        let mut cmd = RaftCmdRequest::default();
-        cmd.mut_header().set_term(2);
-
-        let mut req = Request::default();
-        req.set_cmd_type(CmdType::Put);
-        let put_req = req.mut_put();
-        put_req.set_cf(CF_DEFAULT.to_string());
-        put_req.set_key(b"key".to_vec());
-        put_req.set_value(b"".to_vec());
-        cmd.mut_requests().push(req);
-
-        req = Request::default();
-        req.set_cmd_type(CmdType::Delete);
-        let delete_req = req.mut_delete();
+        let mut encoder = SimpleWriteEncoder::with_capacity(512);
+        encoder.put(CF_DEFAULT, b"key", b"");
         let delete_key = vec![0; 1024];
-        delete_req.set_cf(CF_WRITE.to_string());
-        delete_req.set_key(delete_key.clone());
-        cmd.mut_requests().push(req);
+        encoder.delete(CF_WRITE, &delete_key);
+        let bin = encoder.encode();
 
-        let mut encoder = SimpleWriteEncoder::new(cmd.clone(), usize::MAX, false).unwrap();
-        cmd.clear_requests();
+        let mut header = Box::<RaftRequestHeader>::default();
+        header.set_term(2);
+        let mut req_encoder = SimpleWriteReqEncoder::new(header.clone(), bin, usize::MAX, false);
 
-        req = Request::default();
-        req.set_cmd_type(CmdType::DeleteRange);
-        let delete_range_req = req.mut_delete_range();
-        delete_range_req.set_cf(CF_LOCK.to_string());
-        delete_range_req.set_start_key(b"key".to_vec());
-        delete_range_req.set_end_key(b"key".to_vec());
-        delete_range_req.set_notify_only(true);
-        cmd.mut_requests().push(req);
+        let mut encoder = SimpleWriteEncoder::with_capacity(512);
+        encoder.delete_range(CF_LOCK, b"key", b"key", true);
+        encoder.delete_range("cf", b"key", b"key", false);
+        req_encoder.amend(&header, &encoder.encode());
 
-        req = Request::default();
-        req.set_cmd_type(CmdType::DeleteRange);
-        let delete_range_req = req.mut_delete_range();
-        delete_range_req.set_cf("cf".to_string());
-        delete_range_req.set_start_key(b"key".to_vec());
-        delete_range_req.set_end_key(b"key".to_vec());
-        delete_range_req.set_notify_only(false);
-        cmd.mut_requests().push(req);
-
-        encoder.amend(cmd.clone()).unwrap();
-        let (bytes, _) = encoder.encode();
+        let (bytes, _) = req_encoder.encode();
         let logger = slog_global::borrow_global().new(o!());
-        let mut decoder = SimpleWriteDecoder::new(&logger, &bytes, 0, 0).unwrap();
-        assert_eq!(decoder.header(), cmd.get_header());
+        let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
+        assert_eq!(*decoder.header(), *header);
         let write = decoder.next().unwrap();
         let SimpleWrite::Put(put) = write else { panic!("should be put") };
         assert_eq!(put.cf, CF_DEFAULT);
@@ -488,38 +474,40 @@ mod tests {
 
     #[test]
     fn test_invalid() {
-        let mut invalid_cmd = RaftCmdRequest::default();
-        invalid_cmd.mut_header().set_term(2);
+        let mut raft_cmd = RaftCmdRequest::default();
+        raft_cmd.mut_header().set_term(2);
 
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Invalid);
-        invalid_cmd.mut_requests().push(req);
-        let fallback = SimpleWriteEncoder::new(invalid_cmd.clone(), usize::MAX, false).unwrap_err();
-        let bytes = fallback.write_to_bytes().unwrap();
+        raft_cmd.mut_requests().push(req);
+        let bytes = raft_cmd.write_to_bytes().unwrap();
         let logger = slog_global::borrow_global().new(o!());
-        let decoded = SimpleWriteDecoder::new(&logger, &bytes, 0, 0).unwrap_err();
-        assert_eq!(decoded, invalid_cmd);
+        let decoded = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap_err();
+        // SimpleWriteReqDecoder should be able to decode naive RaftCmdRequest.
+        assert_eq!(decoded, raft_cmd);
 
-        let mut valid_cmd = RaftCmdRequest::default();
-        valid_cmd.mut_header().set_term(3);
-        let mut req = Request::default();
-        req.set_cmd_type(CmdType::Put);
-        let put_req = req.mut_put();
-        put_req.set_cf(CF_DEFAULT.to_string());
-        put_req.set_key(b"key".to_vec());
-        put_req.set_value(b"".to_vec());
-        valid_cmd.mut_requests().push(req);
-        let mut encoder = SimpleWriteEncoder::new(valid_cmd.clone(), usize::MAX, false).unwrap();
-        // Only simple write command can be batched.
-        encoder.amend(invalid_cmd.clone()).unwrap_err();
-        let mut valid_cmd2 = valid_cmd.clone();
-        valid_cmd2.mut_header().set_term(4);
+        let mut encoder = SimpleWriteEncoder::with_capacity(512);
+        encoder.put(CF_DEFAULT, b"key", b"");
+        let bin = encoder.encode();
+
+        let mut header = Box::<RaftRequestHeader>::default();
+        header.set_term(2);
+        let mut req_encoder = SimpleWriteReqEncoder::new(header.clone(), bin.clone(), 512, false);
+
+        let mut header2 = Box::<RaftRequestHeader>::default();
+        header2.set_term(4);
         // Only simple write command with same header can be batched.
-        encoder.amend(valid_cmd2).unwrap_err();
+        assert!(!req_encoder.amend(&header2, &bin));
 
-        let (bytes, _) = encoder.encode();
-        let mut decoder = SimpleWriteDecoder::new(&logger, &bytes, 0, 0).unwrap();
-        assert_eq!(decoder.header(), valid_cmd.get_header());
+        // Batch should not excceed max size limit.
+        let large_value = vec![0; 512];
+        let mut encoder = SimpleWriteEncoder::with_capacity(512);
+        encoder.put(CF_DEFAULT, b"key", &large_value);
+        assert!(!req_encoder.amend(&header, &encoder.encode()));
+
+        let (bytes, _) = req_encoder.encode();
+        let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
+        assert_eq!(*decoder.header(), *header);
         let req = decoder.next().unwrap();
         let SimpleWrite::Put(put) = req else { panic!("should be put") };
         assert_eq!(put.cf, CF_DEFAULT);

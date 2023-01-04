@@ -30,6 +30,7 @@ cloud-azure = ["raftstore/cloud-azure"]
 
 [dependencies]
 batch-system = { workspace = true }
+bytes = "1.0"
 causal_ts = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
@@ -43,15 +44,18 @@ futures = { version = "0.3", features = ["compat"] }
 keys = { workspace = true }
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }
+parking_lot = "0.12"
 pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft-proto = { version = "0.7.0" }
 raftstore = { workspace = true }
+rand = "0.8.3"
 resource_metering = { workspace = true }
 slog = "2.3"
 smallvec = "1.4"
+thiserror = "1.0"
 tikv_util = { workspace = true }
 time = "0.1"
 tracker = { workspace = true }
@@ -68,9 +72,9 @@ test_util = { workspace = true }
 [[test]]
 name = "raftstore-v2-failpoints"
 path = "tests/failpoints/mod.rs"
-required-features = ["failpoints", "testexport"]
+required-features = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 
 [[test]]
 name = "raftstore-v2-integrations"
 path = "tests/integrations/mod.rs"
-required-features = ["testexport"]
+required-features = ["testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]

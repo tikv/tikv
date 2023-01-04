@@ -90,7 +90,7 @@ use crate::{
         peer::Peer,
         peer_storage::{write_initial_apply_state, write_peer_state},
         util::{
-            self, admin_cmd_epoch_lookup, check_flashback_state, check_region_epoch,
+            self, admin_cmd_epoch_lookup, check_flashback_state, check_req_region_epoch,
             compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
         },
         Config, RegionSnapshot, RegionTask, WriteCallback,
@@ -1587,8 +1587,13 @@ where
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        check_region_epoch(req, &self.region, include_region)?;
-        check_flashback_state(self.region.get_is_in_flashback(), req, self.region_id())?;
+        check_req_region_epoch(req, &self.region, include_region)?;
+        check_flashback_state(
+            self.region.get_is_in_flashback(),
+            req,
+            self.region_id(),
+            false,
+        )?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req)
         } else {

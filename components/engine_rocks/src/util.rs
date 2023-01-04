@@ -11,7 +11,7 @@ use slog_global::warn;
 
 use crate::{
     cf_options::RocksCfOptions, db_options::RocksDbOptions, engine::RocksEngine, r2e,
-    rocks_metrics_defs::*,
+    rocks_metrics_defs::*, RocksStatistics,
 };
 
 pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
@@ -28,7 +28,7 @@ pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
 
 pub fn new_engine(path: &str, cfs: &[&str]) -> Result<RocksEngine> {
     let mut db_opts = RocksDbOptions::default();
-    db_opts.enable_statistics(true);
+    db_opts.set_statistics(&RocksStatistics::new_titan());
     let cf_opts = cfs.iter().map(|name| (*name, Default::default())).collect();
     new_engine_opt(path, db_opts, cf_opts)
 }

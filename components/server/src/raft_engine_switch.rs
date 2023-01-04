@@ -193,11 +193,11 @@ fn run_dump_raft_engine_worker(
     new_engine: &RocksEngine,
     count_size: &Arc<AtomicUsize>,
 ) {
+    let mut batch = new_engine.log_batch(0);
     while let Ok(id) = rx.recv() {
         let state = old_engine.get_raft_state(id).unwrap().unwrap();
-        new_engine.put_raft_state(id, &state).unwrap();
+        batch.put_raft_state(id, &state).unwrap();
         if let Some(last_index) = old_engine.last_index(id) {
-            let mut batch = new_engine.log_batch(0);
             let mut begin = old_engine.first_index(id).unwrap();
             while begin <= last_index {
                 let end = std::cmp::min(begin + 1024, last_index + 1);
@@ -209,6 +209,9 @@ fn run_dump_raft_engine_worker(
                 let size = new_engine.consume(&mut batch, false).unwrap();
                 count_size.fetch_add(size, Ordering::Relaxed);
             }
+        }
+        if !batch.is_empty() {
+            new_engine.consume(&mut batch, false).unwrap();
         }
     }
 }
@@ -234,6 +237,7 @@ mod tests {
         cfg.raft_store.raftdb_path = raftdb_path.to_str().unwrap().to_owned();
         cfg.raftdb.wal_dir = raftdb_wal_path.to_str().unwrap().to_owned();
         cfg.raft_engine.mut_config().dir = raft_engine_path.to_str().unwrap().to_owned();
+        let cache = cfg.storage.block_cache.build_shared_cache();
 
         // Dump logs from RocksEngine to RaftLogEngine.
         let raft_engine = RaftLogEngine::new(
@@ -247,8 +251,8 @@ mod tests {
             // Prepare some data for the RocksEngine.
             let raftdb = engine_rocks::util::new_engine_opt(
                 &cfg.raft_store.raftdb_path,
-                cfg.raftdb.build_opt(),
-                cfg.raftdb.build_cf_opts(&None),
+                cfg.raftdb.build_opt(Default::default(), None),
+                cfg.raftdb.build_cf_opts(&cache),
             )
             .unwrap();
             let mut batch = raftdb.log_batch(0);

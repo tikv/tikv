@@ -55,6 +55,7 @@ tempfile = "3.0"
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true, default-features = false }
 time = "0.1"
+tikv = { workspace = true }
 
 tracker = { workspace = true }
 txn_types = { workspace = true, default-features = false }

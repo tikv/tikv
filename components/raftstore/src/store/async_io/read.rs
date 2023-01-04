@@ -79,12 +79,12 @@ pub struct FetchedLogs {
     pub logs: Box<RaftlogFetchResult>,
 }
 
-pub type GenSnapRes = Option<Box<Snapshot>>;
+pub type GenSnapRes = Option<Box<(Snapshot, u64)>>;
 
 /// A router for receiving fetched result.
 pub trait AsyncReadNotifier: Send {
     fn notify_logs_fetched(&self, region_id: u64, fetched: FetchedLogs);
-    fn notify_snapshot_generated(&self, region_id: u64, res: Option<Box<Snapshot>>);
+    fn notify_snapshot_generated(&self, region_id: u64, res: GenSnapRes);
 }
 
 pub struct ReadRunner<EK, ER, N>
@@ -231,7 +231,7 @@ where
                     SNAP_HISTOGRAM
                         .generate
                         .observe(start.saturating_elapsed_secs());
-                    res = Some(Box::new(snapshot))
+                    res = Some(Box::new((snapshot, to_peer)))
                 }
 
                 self.notifier.notify_snapshot_generated(region_id, res);
