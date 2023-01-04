@@ -38,6 +38,7 @@ pub enum Task {
     RegionHeartbeat(RegionHeartbeatTask),
     StoreHeartbeat {
         stats: pdpb::StoreStats,
+        snap_size: u64,
         // TODO: StoreReport, StoreDrAutoSyncStatus
     },
     DestroyPeer {
@@ -180,7 +181,9 @@ where
         self.maybe_schedule_heartbeat_receiver();
         match task {
             Task::RegionHeartbeat(task) => self.handle_region_heartbeat(task),
-            Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
+            Task::StoreHeartbeat { stats, snap_size } => {
+                self.handle_store_heartbeat(stats, snap_size)
+            }
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
             Task::AskBatchSplit {
                 region,
