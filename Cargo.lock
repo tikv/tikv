@@ -1702,7 +1702,6 @@ dependencies = [
  "slog-global",
  "slog_derive",
  "tempfile",
- "tikv",
  "tikv_alloc",
  "tikv_util",
  "time",
