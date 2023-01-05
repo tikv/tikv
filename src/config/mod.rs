@@ -3236,7 +3236,7 @@ impl TikvConfig {
         self.quota.validate()?;
         self.causal_ts.validate()?;
 
-        if self.storage.flow_control.enable {
+        if self.storage.flow_control.enable || self.storage.engine == EngineType::RaftKv2 {
             self.rocksdb.defaultcf.disable_write_stall = true;
             self.rocksdb.writecf.disable_write_stall = true;
             self.rocksdb.lockcf.disable_write_stall = true;
