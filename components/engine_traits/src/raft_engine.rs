@@ -33,6 +33,7 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     ) -> Result<Option<RaftApplyState>>;
     /// Get the flushed index of the given CF.
     fn get_flushed_index(&self, raft_group_id: u64, cf: &str) -> Result<Option<u64>>;
+    fn get_dirty_mark(&self, raft_group_id: u64, tablet_index: u64) -> Result<bool>;
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
@@ -200,6 +201,9 @@ pub trait RaftLogBatch: Send {
         tablet_index: u64,
         apply_index: u64,
     ) -> Result<()>;
+
+    /// Mark a tablet may contain data that is not supposed to be in its range.
+    fn put_dirty_mark(&mut self, raft_group_id: u64, tablet_index: u64, dirty: bool) -> Result<()>;
 
     /// Indicate whether region states should be recovered from raftdb and
     /// replay raft logs.
