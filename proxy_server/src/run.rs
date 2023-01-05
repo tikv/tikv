@@ -101,8 +101,9 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    config::ProxyConfig, fatal, hacked_lock_mgr::HackedLockManager as LockManager, setup::*,
-    status_server::StatusServer, util::ffi_server_info,
+    config::ProxyConfig, engine::ProxyRocksEngine, fatal,
+    hacked_lock_mgr::HackedLockManager as LockManager, setup::*, status_server::StatusServer,
+    util::ffi_server_info,
 };
 
 #[inline]
@@ -427,10 +428,11 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
 
         let engines = Engines::new(kv_engine.clone(), raft_engine);
 
+        let proxy_rocks_engine = ProxyRocksEngine::new(kv_engine.clone());
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DbConfigManger::new(kv_engine.clone(), DbType::Kv)),
+            Box::new(DbConfigManger::new(proxy_rocks_engine, DbType::Kv)),
         );
 
         engines.raft.register_config(cfg_controller);
