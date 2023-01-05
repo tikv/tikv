@@ -2,14 +2,14 @@
 
 use std::{mem, sync::Arc};
 
-use engine_traits::{CachedTablet, FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_LEN};
+use engine_traits::{FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_LEN};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::{
     fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
     ReadTask,
 };
 use slog::Logger;
-use tikv_util::worker::Scheduler;
+use tikv_util::{log::SlogFormat, worker::Scheduler};
 
 use crate::{
     operation::{AdminCmdResult, DataTrace},
@@ -19,8 +19,6 @@ use crate::{
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine, R> {
     peer: metapb::Peer,
-    /// publish the update of the tablet
-    remote_tablet: CachedTablet<EK>,
     tablet: EK,
     pub write_batch: Option<EK::WriteBatch>,
     /// A buffer for encoding key.
@@ -34,6 +32,9 @@ pub struct Apply<EK: KvEngine, R> {
     /// command.
     tombstone: bool,
     applied_term: u64,
+    // Apply progress is set after every command in case there is a flush. But it's
+    // wrong to update flush_state immediately as a manual flush from other thread
+    // can fetch the wrong apply index from flush_state.
     applied_index: u64,
     /// The largest index that have modified each column family.
     modifications: DataTrace,
@@ -64,19 +65,22 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         read_scheduler: Scheduler<ReadTask<EK>>,
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
+        applied_term: u64,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
             .get(region_state.get_region().get_id())
             .unwrap();
+        assert_ne!(applied_term, 0, "{}", SlogFormat(&logger));
+        let applied_index = flush_state.applied_index();
+        assert_ne!(applied_index, 0, "{}", SlogFormat(&logger));
         Apply {
             peer,
             tablet: remote_tablet.latest().unwrap().clone(),
-            remote_tablet,
             write_batch: None,
             callbacks: vec![],
             tombstone: false,
-            applied_term: 0,
+            applied_term,
             applied_index: flush_state.applied_index(),
             modifications: [0; DATA_CFS_LEN],
             admin_cmd_result: vec![],
@@ -125,9 +129,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let log_recovery = self.log_recovery.as_ref().unwrap();
         if log_recovery.iter().all(|v| index >= *v) {
             self.log_recovery.take();
-            // Now all logs are recovered, flush them to avoid recover again
-            // and again.
-            let _ = self.tablet.flush_cfs(&[], false);
         }
     }
 
@@ -151,13 +152,16 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         &mut self.region_state
     }
 
-    /// Publish the tablet so that it can be used by read worker.
-    ///
-    /// Note, during split/merge, lease is expired explicitly and read is
-    /// forbidden. So publishing it immediately is OK.
+    /// The tablet can't be public yet, otherwise content of latest tablet
+    /// doesn't matches its epoch in both readers and peer fsm.
     #[inline]
-    pub fn publish_tablet(&mut self, tablet: EK) {
-        self.remote_tablet.set(tablet.clone());
+    pub fn set_tablet(&mut self, tablet: EK) {
+        assert!(
+            self.write_batch.as_ref().map_or(true, |wb| wb.is_empty()),
+            "{:?}",
+            self.logger.list()
+        );
+        self.write_batch.take();
         self.tablet = tablet;
     }
 

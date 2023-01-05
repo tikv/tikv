@@ -27,7 +27,7 @@ use raftstore::{
     Error, Result,
 };
 use slog::{error, info, warn};
-use tikv_util::box_err;
+use tikv_util::{box_err, slog_panic};
 
 use super::AdminCmdResult;
 use crate::{
@@ -232,7 +232,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         let region = self.region_state().get_region();
         let change_kind = ConfChangeKind::confchange_kind(changes.len());
-        info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch());
+        info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch(), "index" => index);
         let mut new_region = region.clone();
         match change_kind {
             ConfChangeKind::LeaveJoint => self.apply_leave_joint(&mut new_region),
@@ -312,10 +312,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             change_num += 1;
         }
         if change_num == 0 {
-            panic!(
-                "{:?} can't leave a non-joint config, region: {:?}",
-                self.logger.list(),
-                self.region_state()
+            slog_panic!(
+                self.logger,
+                "can't leave a non-joint config";
+                "region" => ?self.region_state()
             );
         }
         let conf_ver = region.get_region_epoch().get_conf_ver() + change_num;
@@ -433,11 +433,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         if let Some(exist_peer) = tikv_util::store::find_peer(region, store_id) {
             let r = exist_peer.get_role();
             if r == PeerRole::IncomingVoter || r == PeerRole::DemotingVoter {
-                panic!(
-                    "{:?} can't apply confchange because configuration is still in joint state, confchange: {:?}, region: {:?}",
-                    self.logger.list(),
-                    cp,
-                    self.region_state()
+                slog_panic!(
+                    self.logger,
+                    "can't apply confchange because configuration is still in joint state";
+                    "confchange" => ?cp,
+                    "region_state" => ?self.region_state()
                 );
             }
         }

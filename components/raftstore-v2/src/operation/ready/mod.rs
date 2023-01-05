@@ -32,8 +32,10 @@ use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{needs_evict_entry_cache, util, FetchedLogs, ReadProgress, Transport, WriteTask},
 };
-use slog::{debug, error, trace, warn};
+use slog::{debug, error, info, trace, warn};
 use tikv_util::{
+    log::SlogFormat,
+    slog_panic,
     store::find_peer,
     time::{duration_to_sec, monotonic_raw_now},
 };
@@ -49,6 +51,8 @@ use crate::{
     raft::{Peer, Storage},
     router::{ApplyTask, PeerMsg, PeerTick},
 };
+
+const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
 
 impl Store {
     pub fn on_store_unreachable<EK, ER, T>(
@@ -76,9 +80,33 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn maybe_pause_for_recovery(&mut self) -> bool {
+        let entry_storage = self.storage().entry_storage();
+        let committed_index = entry_storage.commit_index();
+        let applied_index = entry_storage.applied_index();
+        if committed_index > applied_index {
+            // Unlike v1, it's a must to set ready when there are pending entries. Otherwise
+            // it may block for ever when there is unapplied conf change.
+            self.set_has_ready();
+        }
+        if committed_index > applied_index + PAUSE_FOR_RECOVERY_GAP {
+            // If there are too many the missing logs, we need to skip ticking otherwise
+            // it may block the raftstore thread for a long time in reading logs for
+            // election timeout.
+            info!(self.logger, "pause for recovery"; "applied" => applied_index, "committed" => committed_index);
+            self.set_pause_for_recovery(true);
+            true
+        } else {
+            false
+        }
+    }
+
     #[inline]
     fn tick(&mut self) -> bool {
-        self.raft_group_mut().tick()
+        // When it's handling snapshot, it's pointless to tick as all the side
+        // affects have to wait till snapshot is applied. On the other hand, ticking
+        // will bring other corner cases like elections.
+        !self.is_handling_snapshot() && self.raft_group_mut().tick()
     }
 
     pub fn on_peer_unreachable(&mut self, to_peer_id: u64) {
@@ -107,6 +135,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
+        if self.pause_for_recovery() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+            ctx.raft_metrics.message_dropped.recovery.inc();
+            return;
+        }
         if !self.serving() {
             return;
         }
@@ -273,31 +305,46 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         // TODO: skip handling committed entries if a snapshot is being applied
         // asynchronously.
-        if self.is_leader() {
+        let mut update_lease = self.is_leader();
+        if update_lease {
             for entry in committed_entries.iter().rev() {
-                self.update_approximate_raft_log_size(|s| s + entry.get_data().len() as u64);
-                let propose_time = self
-                    .proposals()
-                    .find_propose_time(entry.get_term(), entry.get_index());
-                if let Some(propose_time) = propose_time {
-                    // We must renew current_time because this value may be created a long time ago.
-                    // If we do not renew it, this time may be smaller than propose_time of a
-                    // command, which was proposed in another thread while this thread receives its
-                    // AppendEntriesResponse and is ready to calculate its commit-log-duration.
-                    ctx.current_time.replace(monotonic_raw_now());
-                    ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                        (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
-                    ));
-                    self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
-                    break;
+                self.compact_log_context_mut()
+                    .add_log_size(entry.get_data().len() as u64);
+                if update_lease {
+                    let propose_time = self
+                        .proposals()
+                        .find_propose_time(entry.get_term(), entry.get_index());
+                    if let Some(propose_time) = propose_time {
+                        // We must renew current_time because this value may be created a long time
+                        // ago. If we do not renew it, this time may be
+                        // smaller than propose_time of a command, which was
+                        // proposed in another thread while this thread receives its
+                        // AppendEntriesResponse and is ready to calculate its commit-log-duration.
+                        ctx.current_time.replace(monotonic_raw_now());
+                        ctx.raft_metrics.commit_log.observe(duration_to_sec(
+                            (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
+                        ));
+                        self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
+                        update_lease = false;
+                    }
                 }
             }
         }
+        let applying_index = committed_entries.last().unwrap().index;
+        let commit_to_current_term = committed_entries.last().unwrap().term == self.term();
+        self.compact_log_context_mut()
+            .set_last_applying_index(applying_index);
         if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
             // Compact all cached entries instead of half evict.
             self.entry_storage_mut().evict_entry_cache(false);
         }
         self.schedule_apply_committed_entries(committed_entries);
+        if self.is_leader()
+            && commit_to_current_term
+            && !self.proposal_control().has_uncommitted_admin()
+        {
+            self.raft_group_mut().skip_bcast_commit(true);
+        }
     }
 
     /// Processing the ready of raft. A detail description of how it's handled
@@ -343,8 +390,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let prev_commit_index = self.entry_storage().commit_index();
             assert!(
                 hs.get_commit() >= prev_commit_index,
-                "{:?} {:?} {}",
-                self.logger.list(),
+                "{} {:?} {}",
+                SlogFormat(&self.logger),
                 hs,
                 prev_commit_index
             );
@@ -383,7 +430,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
-        self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
+        self.on_advance_persisted_apply_index(ctx, prev_persisted, Some(&mut write_task));
 
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready
@@ -411,11 +458,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             if !light_rd.messages().is_empty() || light_rd.commit_index().is_some() {
-                panic!(
-                    "{:?} unexpected messages [{}] commit index [{:?}]",
-                    self.logger.list(),
-                    light_rd.messages().len(),
-                    light_rd.commit_index()
+                slog_panic!(
+                    self.logger,
+                    "unexpected messages";
+                    "messages_count" => ?light_rd.messages().len(),
+                    "commit_index" => ?light_rd.commit_index()
                 );
             }
             if !light_rd.committed_entries().is_empty() {
@@ -525,6 +572,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
                     self.region_heartbeat_pd(ctx);
                     self.add_pending_tick(PeerTick::CompactLog);
+                    self.add_pending_tick(PeerTick::SplitRegionCheck);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
@@ -568,9 +616,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // leader apply the split command or an election timeout is passed since split
         // is committed. We already forbid renewing lease after committing split, and
         // original leader will update the reader delegate with latest epoch after
-        // applying split before the split peer starts campaign, so here the only thing
-        // we need to do is marking split is committed (which is done by `commit_to`
-        // above). It's correct to allow local read during split.
+        // applying split before the split peer starts campaign, so what needs to be
+        // done are 1. mark split is committed, which is done by `commit_to` above,
+        // 2. make sure split result is invisible until epoch is updated or reader may
+        // miss data from the new tablet. This is done by always publish tablet in
+        // `on_apply_res_split`. So it's correct to allow local read during split.
         //
         // - For merge, after the prepare merge command is committed, the target peers
         // may apply commit merge at any time, so we need to forbid any type of read

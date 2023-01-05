@@ -33,18 +33,23 @@ use raftstore::{
             Proposal,
         },
         local_metrics::RaftMetrics,
+        metrics::APPLY_TASK_WAIT_TIME_HISTOGRAM,
         msg::ErrorCallback,
         util, WriteCallback,
     },
     Error, Result,
 };
-use tikv_util::{box_err, time::monotonic_raw_now};
+use slog::{info, warn};
+use tikv_util::{
+    box_err, slog_panic,
+    time::{duration_to_sec, monotonic_raw_now, Instant},
+};
 
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter},
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel},
+    router::{ApplyRes, ApplyTask, CmdResChannel, PeerTick},
 };
 
 mod admin;
@@ -52,7 +57,8 @@ mod control;
 mod write;
 
 pub use admin::{
-    temp_split_path, AdminCmdResult, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
+    temp_split_path, AdminCmdResult, CompactLogContext, RequestSplit, SplitFlowControl, SplitInit,
+    SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
 pub use write::{
@@ -65,12 +71,12 @@ fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64,
     let mut m = M::default();
     match m.merge_from_bytes(buf) {
         Ok(()) => m,
-        Err(e) => panic!(
-            "{:?} data is corrupted at [{}] {}: {:?}",
-            logger.list(),
-            term,
-            index,
-            e
+        Err(e) => slog_panic!(
+            logger,
+            "data is corrupted";
+            "term" => term,
+            "index" => index,
+            "error" => ?e,
         ),
     }
 }
@@ -80,6 +86,7 @@ pub struct CommittedEntries {
     /// Entries need to be applied. Note some entries may not be included for
     /// flow control.
     entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
+    committed_time: Instant,
 }
 
 fn new_response(header: &RaftRequestHeader) -> RaftCmdResponse {
@@ -111,6 +118,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             read_scheduler,
             self.flush_state().clone(),
             self.storage().apply_trace().log_recovery(),
+            self.entry_storage().applied_term(),
             logger,
         );
 
@@ -244,6 +252,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // memtables in kv engine is flushed.
         let apply = CommittedEntries {
             entry_and_proposals,
+            committed_time: Instant::now(),
         };
         assert!(
             self.apply_scheduler().is_some(),
@@ -306,6 +315,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_res.applied_index,
             progress_to_be_updated,
         );
+        if self.pause_for_recovery()
+            && self.storage().entry_storage().commit_index() <= apply_res.applied_index
+        {
+            info!(self.logger, "recovery completed"; "apply_index" => apply_res.applied_index);
+            self.set_pause_for_recovery(false);
+            // Flush to avoid recover again and again.
+            if let Some(scheduler) = self.apply_scheduler() {
+                scheduler.send(ApplyTask::ManualFlush);
+            }
+            self.add_pending_tick(PeerTick::Raft);
+        }
+        if !self.pause_for_recovery() && self.storage_mut().apply_trace_mut().should_flush() {
+            if let Some(scheduler) = self.apply_scheduler() {
+                scheduler.send(ApplyTask::ManualFlush);
+            }
+        }
     }
 }
 
@@ -347,9 +372,18 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
     }
 
+    pub fn on_manual_flush(&mut self) {
+        self.flush();
+        if let Err(e) = self.tablet().flush_cfs(&[], false) {
+            warn!(self.logger, "failed to flush: {:?}", e);
+        }
+    }
+
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
+        APPLY_TASK_WAIT_TIME_HISTOGRAM
+            .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
         for (e, ch) in ce.entry_and_proposals {
             if self.tombstone() {
                 apply::notify_req_region_removed(self.region_state().get_region().get_id(), ch);
@@ -512,6 +546,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
     #[inline]
     pub fn flush(&mut self) {
+        // TODO: maybe we should check whether there is anything to flush.
         let (index, term) = self.apply_progress();
         let flush_state = self.flush_state().clone();
         if let Some(wb) = &mut self.write_batch && !wb.is_empty() {
@@ -520,7 +555,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             if let Err(e) = wb.write_callback_opt(&write_opt, || {
                 flush_state.set_applied_index(index);
             }) {
-                panic!("failed to write data: {:?}: {:?}", self.logger.list(), e);
+                slog_panic!(self.logger, "failed to write data"; "error" => ?e);
             }
             self.metrics.written_bytes += wb.data_size() as u64;
             self.metrics.written_keys += wb.count() as u64;
