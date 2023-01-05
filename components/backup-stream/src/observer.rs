@@ -96,6 +96,13 @@ impl BackupStreamObserver {
             .rl()
             .is_overlapping((region.get_start_key(), end_key))
     }
+
+    /// Check whether there are any task range registered to the observer.
+    /// when there isn't any task, we can ignore the events, so we don't need to
+    /// handle useless events. (Also won't yield verbose logs.)
+    fn is_hibernating(&self) -> bool {
+        self.ranges.rl().is_empty()
+    }
 }
 
 impl Coprocessor for BackupStreamObserver {}
@@ -149,7 +156,7 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
 
 impl RoleObserver for BackupStreamObserver {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, r: &RoleChange) {
-        if r.state != StateRole::Leader {
+        if r.state != StateRole::Leader && !self.is_hibernating() {
             try_send!(
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::Stop {
@@ -167,7 +174,7 @@ impl RegionChangeObserver for BackupStreamObserver {
         event: RegionChangeEvent,
         role: StateRole,
     ) {
-        if role != StateRole::Leader {
+        if role != StateRole::Leader || self.is_hibernating() {
             return;
         }
         match event {
@@ -207,7 +214,7 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::{
         Cmd, CmdBatch, CmdObserveInfo, CmdObserver, ObserveHandle, ObserveLevel, ObserverContext,
-        RegionChangeEvent, RegionChangeObserver, RoleChange, RoleObserver,
+        RegionChangeEvent, RegionChangeObserver, RegionChangeReason, RoleChange, RoleObserver,
     };
     use tikv_util::{worker::dummy_scheduler, HandyRwLock};
 
@@ -320,5 +327,24 @@ mod tests {
             task,
             Ok(Some(Task::ModifyObserve(ObserveOp::Stop { region, .. }))) if region.id == 42
         );
+    }
+
+    #[test]
+    fn test_hibernate() {
+        let (sched, mut rx) = dummy_scheduler();
+
+        // Prepare: assuming a task wants the range of [0001, 0010].
+        let o = BackupStreamObserver::new(sched);
+        let r = fake_region(43, b"0010", b"0042");
+        let mut ctx = ObserverContext::new(&r);
+        o.on_region_changed(&mut ctx, RegionChangeEvent::Create, StateRole::Leader);
+        o.on_region_changed(
+            &mut ctx,
+            RegionChangeEvent::Update(RegionChangeReason::Split),
+            StateRole::Leader,
+        );
+        o.on_role_change(&mut ctx, &RoleChange::new(StateRole::Leader));
+        let task = rx.recv_timeout(Duration::from_millis(20));
+        assert!(task.is_err(), "it is {:?}", task);
     }
 }
