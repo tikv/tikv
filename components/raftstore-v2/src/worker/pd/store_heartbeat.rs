@@ -165,7 +165,7 @@ where
     ER: RaftEngine,
     T: PdClient + 'static,
 {
-    pub fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, snap_size: u64) {
+    pub fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats) {
         let mut report_peers = HashMap::default();
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
@@ -193,8 +193,7 @@ where
         }
 
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
-        let (capacity, used_size, available) =
-            self.collect_engine_size(snap_size).unwrap_or_default();
+        let (capacity, used_size, available) = self.collect_engine_size().unwrap_or_default();
         if available == 0 {
             warn!(self.logger, "no available space");
         }
@@ -258,8 +257,7 @@ where
         self.remote.spawn(f);
     }
 
-    /// Returns (capacity, used, available).
-    fn collect_engine_size(&self, snap_size: u64) -> Option<(u64, u64, u64)> {
+    fn collect_engine_size(&self) -> Option<(u64, u64, u64)> {
         let disk_stats = match fs2::statvfs(self.tablet_registry.tablet_root()) {
             Err(e) => {
                 error!(
@@ -285,6 +283,7 @@ where
             }
             true
         });
+        let snap_size = self.snap_mgr.total_snap_size().unwrap();
         let used_size = snap_size
             + kv_size
             + self

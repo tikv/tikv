@@ -50,11 +50,8 @@ impl Store {
         stats.set_bytes_written(0);
         stats.set_keys_written(0);
         stats.set_is_busy(false);
-
-        // stats.set_query_stats(query_stats);
-
-        let snap_size = ctx.snap_mgr.total_snap_size().unwrap();
-        let task = pd::Task::StoreHeartbeat { stats, snap_size };
+        // todo: add query stats
+        let task = pd::Task::StoreHeartbeat { stats };
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(self.logger(), "notify pd failed";
                 "store_id" => self.store_id(),
