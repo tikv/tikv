@@ -100,7 +100,6 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
-// use engine_tiflash::rocks_metrics::RocksStatisticsReporter;
 use crate::{
     config::ProxyConfig, fatal, hacked_lock_mgr::HackedLockManager as LockManager, setup::*,
     status_server::StatusServer, util::ffi_server_info,
@@ -402,9 +401,8 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
 
         // Create kv engine.
         let builder = KvEngineFactoryBuilder::new(env, &self.config, block_cache)
-            // .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
-            //     router: Mutex::new(self.router.clone()),
-            // }))
+            // TODO(tiflash) check if we need a old version of RocksEngine, or if we need to upgrade
+            // .compaction_filter_router(self.router.clone())
             .region_info_accessor(self.region_info_accessor.clone())
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
@@ -434,9 +432,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             tikv::config::Module::Rocksdb,
             Box::new(DbConfigManger::new(kv_engine.clone(), DbType::Kv)),
         );
-        // let reg = TabletRegistry::new(Box::new(SingletonFactory::new(kv_engine)),
-        // &self.store_path)     .unwrap();
-        // self.tablet_registry = Some(reg.clone());
+
         engines.raft.register_config(cfg_controller);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
@@ -979,7 +975,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             resource_tag_factory.clone(),
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
-            None,
+            None, // causal_ts_provider
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(

@@ -93,7 +93,7 @@ fn test_safe_ts_basic() {
     suite
         .cluster
         .set_expected_safe_ts(physical_time, physical_time);
-    suite.must_check_leader(1, TimeStamp::compose(physical_time, 10), 1, 1);
+    suite.must_check_leader(1, TimeStamp::new(physical_time), 1, 1);
 
     suite.stop();
 }
