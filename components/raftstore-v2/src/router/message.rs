@@ -181,6 +181,13 @@ pub enum PeerMsg {
         request: RequestSplit,
         ch: CmdResChannel,
     },
+    UpdateRegionSize {
+        size: u64,
+    },
+    UpdateRegionKeys {
+        keys: u64,
+    },
+    ClearRegionSize,
     ForceCompactLog,
     TabletTrimmed {
         tablet_index: u64,
