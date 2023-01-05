@@ -2,6 +2,7 @@
 
 use std::{
     collections::hash_map::Entry as MapEntry,
+    path::Path,
     result,
     sync::{Arc, Mutex, RwLock},
     thread,
@@ -14,7 +15,7 @@ use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     Iterable, KvEngine, MiscExt, Peekable, RaftEngine, RaftLogBatch, ReadOptions, SyncMutable,
-    TabletRegistry, CF_DEFAULT,
+    TabletContext, TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
 use futures::{compat::Future01CompatExt, executor::block_on, select, FutureExt};
@@ -1280,6 +1281,22 @@ impl<T: Simulator> Cluster<T> {
         for sst_worker in self.sst_workers.drain(..) {
             sst_worker.stop_worker();
         }
+        for reg in self.tablet_registries.values() {
+            reg.for_each_opened_tablet(|region_id, cached_tablet| {
+                if let Some(tablet) = cached_tablet.latest() {
+                    let path = Path::new(tablet.path());
+                    let (_, region_id, tablet_index) = reg.parse_tablet_name(path).unwrap();
+                    reg.tablet_factory()
+                        .destroy_tablet(
+                            TabletContext::with_infinite_region(region_id, Some(tablet_index)),
+                            path,
+                        )
+                        .unwrap();
+                }
+                true
+            })
+        }
+        println!("all tablets are removed");
         debug!("all nodes are shut down.");
     }
 }
