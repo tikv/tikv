@@ -731,7 +731,7 @@ mod test {
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
         raft_serverpb::{PeerState, RegionLocalState},
     };
-    use raftstore::store::cmd_resp::new_error;
+    use raftstore::store::{cmd_resp::new_error, Config};
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
@@ -872,6 +872,7 @@ mod test {
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let mut apply = Apply::new(
+            &Config::default(),
             region
                 .get_peers()
                 .iter()
