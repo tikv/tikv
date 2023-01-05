@@ -307,6 +307,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         .peer_mut()
                         .on_request_split(self.store_ctx, request, ch)
                 }
+                PeerMsg::UpdateRegionSize { size } => {
+                    self.fsm.peer_mut().on_update_region_size(size)
+                }
+                PeerMsg::UpdateRegionKeys { keys } => {
+                    self.fsm.peer_mut().on_update_region_key_count(keys)
+                }
+                PeerMsg::ClearRegionSize => self.fsm.peer_mut().on_clear_region_size(),
                 PeerMsg::ForceCompactLog => self.on_compact_log_tick(true),
                 PeerMsg::TabletTrimmed { tablet_index } => {
                     self.fsm.peer_mut().on_tablet_trimmed(tablet_index)
