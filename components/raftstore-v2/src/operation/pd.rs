@@ -87,7 +87,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             written_bytes: self.self_stat().written_bytes,
             written_keys: self.self_stat().written_keys,
             approximate_size: self.split_flow_control_mut().approximate_size(),
-            approximate_keys: self.split_flow_control_mut().approximate_key_count(),
+            approximate_keys: self.split_flow_control_mut().approximate_keys(),
             wait_data_peers: Vec::new(),
         });
         if let Err(e) = ctx.schedulers.pd.schedule(task) {

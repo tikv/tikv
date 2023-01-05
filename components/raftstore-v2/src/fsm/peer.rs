@@ -311,7 +311,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     self.fsm.peer_mut().on_update_region_size(size)
                 }
                 PeerMsg::UpdateRegionKeys { keys } => {
-                    self.fsm.peer_mut().on_update_region_key_count(keys)
+                    self.fsm.peer_mut().on_update_region_keys(keys)
                 }
                 PeerMsg::ClearRegionSize => self.fsm.peer_mut().on_clear_region_size(),
                 PeerMsg::ForceCompactLog => self.on_compact_log_tick(true),

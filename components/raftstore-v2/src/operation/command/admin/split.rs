@@ -126,7 +126,7 @@ pub struct SplitFlowControl {
     skip_split_count: u64,
     may_skip_split_check: bool,
     approximate_size: Option<u64>,
-    approximate_key_count: Option<u64>,
+    approximate_keys: Option<u64>,
 }
 
 impl SplitFlowControl {
@@ -136,8 +136,8 @@ impl SplitFlowControl {
     }
 
     #[inline]
-    pub fn approximate_key_count(&self) -> Option<u64> {
-        self.approximate_key_count
+    pub fn approximate_keys(&self) -> Option<u64> {
+        self.approximate_keys
     }
 }
 
@@ -195,8 +195,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.add_pending_tick(PeerTick::PdHeartbeat);
     }
 
-    pub fn on_update_region_key_count(&mut self, keys: u64) {
-        self.split_flow_control_mut().approximate_key_count = Some(keys);
+    pub fn on_update_region_keys(&mut self, keys: u64) {
+        self.split_flow_control_mut().approximate_keys = Some(keys);
         self.add_pending_tick(PeerTick::SplitRegionCheck);
         self.add_pending_tick(PeerTick::PdHeartbeat);
     }
@@ -204,7 +204,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_clear_region_size(&mut self) {
         let control = self.split_flow_control_mut();
         control.approximate_size.take();
-        control.approximate_key_count.take();
+        control.approximate_keys.take();
         self.add_pending_tick(PeerTick::SplitRegionCheck);
     }
 
@@ -492,7 +492,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let new_region_count = res.regions.len() as u64;
         let control = self.split_flow_control_mut();
         let estimated_size = control.approximate_size.map(|v| v / new_region_count);
-        let estimated_keys = control.approximate_key_count.map(|v| v / new_region_count);
+        let estimated_keys = control.approximate_keys.map(|v| v / new_region_count);
 
         self.post_split();
 
@@ -511,7 +511,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let control = self.split_flow_control_mut();
             control.may_skip_split_check = false;
             control.approximate_size = estimated_size;
-            control.approximate_key_count = estimated_keys;
+            control.approximate_keys = estimated_keys;
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
         self.storage_mut().set_has_dirty_data(true);
@@ -653,7 +653,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             *self.txn_ext().pessimistic_locks.write() = split_init.locks;
             let control = self.split_flow_control_mut();
             control.approximate_size = split_init.approximate_size;
-            control.approximate_key_count = split_init.approximate_keys;
+            control.approximate_keys = split_init.approximate_keys;
             // The new peer is likely to become leader, send a heartbeat immediately to
             // reduce client query miss.
             self.region_heartbeat_pd(store_ctx);
