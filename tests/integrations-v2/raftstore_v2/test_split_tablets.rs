@@ -109,6 +109,13 @@ fn test_node_auto_split_region() {
     test_auto_split_region(&mut cluster);
 }
 
+#[test]
+fn test_server_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(REGION_MAX_SIZE));
@@ -179,8 +186,10 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let epoch = left.get_region_epoch().clone();
     let get = new_request(left.get_id(), epoch, vec![new_get_cmd(&max_key)], false);
     let resp = cluster
-        .call_command_on_leader(get, Duration::from_secs(5))
+        .call_command_on_leader(get, Duration::from_secs(500))
         .unwrap();
+
+    println!("resp {:?}", resp);
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
 }

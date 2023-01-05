@@ -4,6 +4,8 @@
 use std::{
     ops::Deref,
     sync::{atomic, Arc, Mutex},
+    thread,
+    time::Duration,
 };
 
 use batch_system::Router;
@@ -165,7 +167,13 @@ where
     ) -> ReadResult<(CachedReadDelegate<E>, ReadRequestPolicy)> {
         let mut delegate = match self.local_reader.validate_request(req) {
             Ok(Some(delegate)) => delegate,
-            Ok(None) => return ReadResult::Redirect,
+            Ok(None) => {
+                println!(
+                    "Delegate for {} is not found",
+                    req.get_header().get_region_id()
+                );
+                return ReadResult::Redirect;
+            }
             Err(e) => return ReadResult::Err(e),
         };
 
@@ -186,7 +194,10 @@ where
             // It can not handle other policies.
             // TODO: we should only abort when lease expires. For other cases we should retry
             // infinitely.
-            Ok(ReadRequestPolicy::ReadIndex) => ReadResult::Redirect,
+            Ok(ReadRequestPolicy::ReadIndex) => {
+                println!("ReadIndex, region_id {}", req.get_header().get_region_id());
+                ReadResult::Redirect
+            }
             Err(e) => ReadResult::Err(e),
         }
     }
@@ -209,6 +220,10 @@ where
                         let snapshot_ts = monotonic_raw_now();
 
                         if !delegate.is_in_leader_lease(snapshot_ts) {
+                            println!(
+                                "nto in leader lease, region id {:?}",
+                                req.get_header().get_region_id()
+                            );
                             return ReadResult::Redirect;
                         }
 

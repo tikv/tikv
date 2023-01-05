@@ -1277,9 +1277,9 @@ impl<T: Simulator> Cluster<T> {
         }
         self.leaders.clear();
         self.store_metas.clear();
-        // for sst_worker in self.sst_workers.drain(..) {
-        //     sst_worker.stop_worker();
-        // }
+        for sst_worker in self.sst_workers.drain(..) {
+            sst_worker.stop_worker();
+        }
         debug!("all nodes are shut down.");
     }
 }
@@ -1303,6 +1303,13 @@ pub fn bootstrap_store<ER: RaftEngine>(
     raft_engine.consume(&mut lb, true)?;
 
     Ok(())
+}
+
+impl<T: Simulator> Drop for Cluster<T> {
+    fn drop(&mut self) {
+        test_util::clear_failpoints();
+        self.shutdown();
+    }
 }
 
 pub struct WrapFactory {

@@ -2,23 +2,23 @@
 
 use std::{
     sync::{Arc, RwLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use engine_traits::{KvEngine, RaftEngine};
-use futures::executor::block_on;
+use futures::{compat::Future01CompatExt, executor::block_on, future::Future, FutureExt};
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
 use raftstore::{
     router::handle_send_error,
-    store::{RegionSnapshot, Transport},
-    Result, Result as RaftStoreResult,
+    store::{cmd_resp, RegionSnapshot, Transport},
+    Error, Result, Result as RaftStoreResult,
 };
 use raftstore_v2::router::{PeerMsg, RaftRouter};
 use test_raftstore::{filter_send, Filter};
-use tikv_util::HandyRwLock;
+use tikv_util::{timer::GLOBAL_TIMER_HANDLE, HandyRwLock};
 
 #[derive(Clone)]
 pub struct SimulateTransport<C> {
@@ -76,16 +76,17 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotRouter<EK> for RaftRouter<EK, ER> {
         req: RaftCmdRequest,
         timeout: Duration,
     ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse> {
-        block_on(self.snapshot(req))
-        // let timeout_f = GLOBAL_TIMER_HANDLE.delay(Instant::now() + timeout);
-        // futures::executor::block_on(async move {
-        //     futures::select! {
-        //         res = self.snapshot(req).fuse() => res,
-        //         e = timeout_f.compat().fuse() => {
-        //             Err(cmd_resp::new_error(Error::Timeout(format!("request
-        // timeout for {:?}: {:?}", timeout,e))))         },
-        //     }
-        // })
+        // block_on(self.snapshot(req))
+        let timeout_f = GLOBAL_TIMER_HANDLE.delay(Instant::now() + timeout).compat();
+        futures::executor::block_on(async move {
+            futures::select! {
+                res = self.snapshot(req).fuse() => res,
+                e = timeout_f.fuse() => {
+                    println!("times up");
+                    Err(cmd_resp::new_error(Error::Timeout(format!("request timeout for {:?}: {:?}", timeout,e))))
+                },
+            }
+        })
     }
 }
 

@@ -228,6 +228,7 @@ where
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
         let Some((_, mut system)) = self.system.take() else { return };
+        println!("Node stop, id {}", store_id);
         info!(self.logger, "stop raft store thread"; "store_id" => store_id);
         system.shutdown();
     }

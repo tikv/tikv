@@ -170,7 +170,7 @@ impl Simulator for NodeCluster {
     fn run_node(
         &mut self,
         node_id: u64,
-        cfg: Config,
+        mut cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
         mut node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
@@ -188,6 +188,7 @@ impl Simulator for NodeCluster {
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();
+        node.store().address = String::from("127.0.0.1:0");
 
         let snap_mgr = if node_id == 0
             || !self
@@ -215,6 +216,10 @@ impl Simulator for NodeCluster {
         // Create coprocessor.
         let mut coprocessor_host =
             CoprocessorHost::new(raft_router.store_router().clone(), cfg.coprocessor.clone());
+
+        // if let Some(f) = self.post_create_coprocessor_host.as_ref() {
+        //     f(node_id, &mut coprocessor_host);
+        // }
 
         let cm = ConcurrencyManager::new(1.into());
         self.concurrency_managers.insert(node_id, cm.clone());
