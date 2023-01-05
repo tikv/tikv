@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
+use std::{cell::RefCell, collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
@@ -49,6 +49,9 @@ impl std::fmt::Debug for CheckpointManager {
 enum SubscriptionOp {
     Add(Subscription),
     Emit(Box<[FlushEvent]>),
+    Shutdown {
+        after_shutdown: Box<dyn FnOnce() + Send + Sync + 'static>,
+    },
 }
 
 struct SubscriptionManager {
@@ -68,44 +71,63 @@ impl SubscriptionManager {
                     self.subscribers.insert(uid, sub);
                 }
                 SubscriptionOp::Emit(events) => {
-                    let mut canceled = vec![];
-                    info!("log backup sending events"; "event_len" => %events.len(), "downstream" => %self.subscribers.len());
-                    for (id, sub) in &mut self.subscribers {
-                        let send_all = async {
-                            for es in events.chunks(1024) {
-                                let mut resp = SubscribeFlushEventResponse::new();
-                                resp.set_events(es.to_vec().into());
-                                sub.feed((resp, WriteFlags::default())).await?;
-                            }
-                            sub.flush().await
-                        };
-
-                        match send_all.await {
-                            Err(grpcio::Error::RemoteStopped) => {
-                                canceled.push(*id);
-                            }
-                            Err(err) => {
-                                Error::from(err).report("sending subscription");
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    for c in canceled {
-                        match self.subscribers.remove(&c) {
-                            Some(mut sub) => {
-                                info!("client is gone, removing subscription"; "id" => %c);
-                                sub.close().await.report_if_err(format_args!(
-                                    "during removing subscription {}",
-                                    c
-                                ))
-                            }
-                            None => {
-                                warn!("BUG: the subscriber has been removed before we are going to remove it."; "id" => %c);
-                            }
-                        }
-                    }
+                    self.emit_events(events).await;
                 }
+                SubscriptionOp::Shutdown { after_shutdown } => {
+                    self.shutdown().await;
+                    after_shutdown();
+                    return;
+                }
+            }
+        }
+    }
+
+    async fn shutdown(mut self) {
+        let subs: Vec<_> = self.subscribers.keys().cloned().collect();
+        for sub in subs {
+            self.remove_subscription(&sub).await;
+        }
+    }
+
+    async fn emit_events(&mut self, events: Box<[FlushEvent]>) {
+        let mut canceled = vec![];
+        info!("log backup sending events"; "event_len" => %events.len(), "downstream" => %self.subscribers.len());
+        for (id, sub) in &mut self.subscribers {
+            let send_all = async {
+                for es in events.chunks(1024) {
+                    let mut resp = SubscribeFlushEventResponse::new();
+                    resp.set_events(es.to_vec().into());
+                    sub.feed((resp, WriteFlags::default())).await?;
+                }
+                sub.flush().await
+            };
+
+            match send_all.await {
+                Err(grpcio::Error::RemoteStopped) => {
+                    canceled.push(*id);
+                }
+                Err(err) => {
+                    Error::from(err).report("sending subscription");
+                }
+                _ => {}
+            }
+        }
+
+        for c in canceled {
+            self.remove_subscription(&c).await;
+        }
+    }
+
+    async fn remove_subscription(&mut self, id: &Uuid) {
+        match self.subscribers.remove(id) {
+            Some(mut sub) => {
+                info!("client is gone, removing subscription"; "id" => %id);
+                sub.close()
+                    .await
+                    .report_if_err(format_args!("during removing subscription {}", id))
+            }
+            None => {
+                warn!("BUG: the subscriber has been removed before we are going to remove it."; "id" => %id);
             }
         }
     }
@@ -160,6 +182,27 @@ impl GetCheckpointResult {
 }
 
 impl CheckpointManager {
+    pub fn shutdown(&mut self) -> future![()] {
+        let handle = self.manager_handle.clone();
+        async {
+            if let Some(mut handle) = handle {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                handle
+                    .send(SubscriptionOp::Shutdown {
+                        after_shutdown: Box::new(move || {
+                            let _ = tx.send(());
+                        }),
+                    })
+                    .await
+                    .map_err(|err| annotate!(err, "failed to send shutdown message"))
+                    .report_if_err("during shuting down the checkpoint manager.");
+                rx.await
+                    .map_err(|err| annotate!(err, "failed to recv shutdown message"))
+                    .report_if_err("during shuting down the checkpoint manager.");
+            }
+        }
+    }
+
     pub fn spawn_subscription_mgr(&mut self) -> future![()] {
         let (tx, rx) = async_mpsc::channel(1024);
         let sub = SubscriptionManager {

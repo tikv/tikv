@@ -44,7 +44,7 @@ use crate::{
         BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
         GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
-    errors::{Error, Result},
+    errors::{Error, ReportableResult, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
     future,
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
@@ -741,13 +741,13 @@ where
         }
     }
 
-    fn block_on_final_flush(&mut self, task: String) {
+    async fn final_flush(&mut self, task: String) {
         let router = self.range_router.clone();
         let store_id = self.store_id;
         let resolved = self.checkpoint_mgr.get_resolved_ts();
         info!("getting resolved ts for final flush."; "task" => %task, "resolved" => ?resolved);
 
-        match self.pool.block_on(self.range_router.get_task_info(&task)) {
+        match self.range_router.get_task_info(&task).await {
             Ok(info) => {
                 if info.set_flushing_status_cas(false, true).is_err() {
                     warn!("background flush is doing, skipping final flush");
@@ -760,7 +760,7 @@ where
         }
 
         if let Some(min_ts) = resolved {
-            if let Some(rts) = self.pool.block_on(router.do_flush(&task, store_id, min_ts)) {
+            if let Some(rts) = router.do_flush(&task, store_id, min_ts).await {
                 info!("flushing and refreshing checkpoint ts at final stage.";
                     "checkpoint_ts" => %rts,
                     "task" => %task,
@@ -1314,14 +1314,24 @@ where
 
     fn shutdown(&mut self) {
         let start = Instant::now();
-        let tasks = self
-            .pool
-            .block_on(self.range_router.select_task(TaskSelector::All.reference()));
-        for task in tasks {
-            info!("log backup doing final flush for a task"; "task" => %task);
-            self.block_on_final_flush(task);
-        }
-        info!("log backup doing final flush done."; "take" => ?start.saturating_elapsed());
+        let _guard = self.pool.enter();
+        let handle = self.pool.handle().clone();
+        let shutdown = async {
+            let tasks = self
+                .range_router
+                .select_task(TaskSelector::All.reference())
+                .await;
+            for task in tasks {
+                info!("log backup doing final flush for a task"; "task" => %task);
+                self.final_flush(task).await;
+            }
+            info!("log backup doing final flush done."; "take" => ?start.saturating_elapsed());
+            self.checkpoint_mgr.shutdown().await;
+        };
+        handle
+            .block_on(tokio::time::timeout(Duration::from_secs(60), shutdown))
+            .map_err(|err| annotate!(err, "wait shutdown timed out"))
+            .report_if_err("during shuting down the worker");
     }
 }
 
