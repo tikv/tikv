@@ -12,10 +12,11 @@ use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
-    util::KeysInfoFormatter, Config, FlowStatsReporter, PdStatsMonitor, ReadStats, SplitInfo,
-    StoreStatsReporter, TxnExt, WriteStats,
+    util::KeysInfoFormatter, AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor,
+    ReadStats, RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TxnExt, WriteStats,
+    NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
 };
-use resource_metering::{Collector, RawRecords};
+use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use slog::{error, Logger};
 use tikv_util::{
     config::VersionTrack,
@@ -160,7 +161,7 @@ where
     raft_engine: ER,
     tablet_registry: TabletRegistry<EK>,
     router: StoreRouter<EK, ER>,
-    stats_monitor: PdStatsMonitor<StoreReporter>,
+    stats_monitor: PdStatsMonitor<PdReporter>,
 
     remote: Remote<TaskCell>,
 
@@ -196,15 +197,29 @@ where
         raft_engine: ER,
         tablet_registry: TabletRegistry<EK>,
         router: StoreRouter<EK, ER>,
-        stats_monitor: PdStatsMonitor<StoreReporter>,
         remote: Remote<TaskCell>,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        pd_scheduler: Scheduler<Task>,
+        auto_split_controller: AutoSplitController,
+        region_read_progress: RegionReadProgressRegistry,
+        collector_reg_handle: CollectorRegHandle,
         logger: Logger,
         shutdown: Arc<AtomicBool>,
         cfg: Arc<VersionTrack<Config>>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, std::io::Error> {
+        let mut stats_monitor = PdStatsMonitor::new(
+            cfg.value().pd_store_heartbeat_tick_interval.0 / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+            cfg.value().report_min_resolved_ts_interval.0,
+            PdReporter::new(pd_scheduler, logger.clone()),
+        );
+        stats_monitor.start(
+            auto_split_controller,
+            region_read_progress,
+            collector_reg_handle,
+            store_id,
+        )?;
+        Ok(Self {
             store_id,
             pd_client,
             raft_engine,
@@ -223,7 +238,7 @@ where
             logger,
             shutdown,
             cfg,
-        }
+        })
     }
 }
 
@@ -273,20 +288,18 @@ where
 }
 
 #[derive(Clone)]
-pub struct SchedulerWithLogger {
+pub struct PdReporter {
     scheduler: Scheduler<Task>,
     logger: Logger,
 }
 
-impl SchedulerWithLogger {
+impl PdReporter {
     pub fn new(scheduler: Scheduler<Task>, logger: Logger) -> Self {
-        SchedulerWithLogger { scheduler, logger }
+        PdReporter { scheduler, logger }
     }
 }
 
-pub type FlowReporter = SchedulerWithLogger;
-
-impl FlowStatsReporter for FlowReporter {
+impl FlowStatsReporter for PdReporter {
     fn report_read_stats(&self, stats: ReadStats) {
         if let Err(e) = self.scheduler.schedule(Task::UpdateReadStats(stats)) {
             error!(self.logger, "Failed to send read flow statistics"; "err" => ?e);
@@ -300,9 +313,7 @@ impl FlowStatsReporter for FlowReporter {
     }
 }
 
-pub type StoreReporter = SchedulerWithLogger;
-
-impl Collector for StoreReporter {
+impl Collector for PdReporter {
     fn collect(&self, records: Arc<RawRecords>) {
         self.scheduler
             .schedule(Task::UpdateRegionCpuRecords(records))
@@ -310,7 +321,7 @@ impl Collector for StoreReporter {
     }
 }
 
-impl StoreStatsReporter for StoreReporter {
+impl StoreStatsReporter for PdReporter {
     fn report_store_infos(
         &self,
         cpu_usages: RecordPairVec,

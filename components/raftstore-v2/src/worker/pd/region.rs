@@ -64,7 +64,7 @@ impl ReportBucket {
         }
     }
 
-    fn new_report(&mut self, report_ts: UnixSecs) -> BucketStat {
+    fn report(&mut self, report_ts: UnixSecs) -> BucketStat {
         self.last_report_ts = report_ts;
         match self.last_report_stat.replace(self.current_stat.clone()) {
             Some(last) => {
@@ -313,7 +313,7 @@ where
         };
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - last_report_ts.into_inner();
-        let delta = report_buckets.new_report(now);
+        let delta = report_buckets.report(now);
         let resp = self
             .pd_client
             .report_region_buckets(&delta, Duration::from_secs(interval_second));

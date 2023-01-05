@@ -26,11 +26,11 @@ use raftstore::{
     store::{
         fsm::store::{PeerTickBatch, ENTRY_CACHE_EVICT_TICK_DURATION},
         local_metrics::RaftMetrics,
-        Config, PdStatsMonitor, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask,
+        AutoSplitController, Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask,
         StoreWriters, TabletSnapManager, Transport, WriteSenders,
-        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
     },
 };
+use resource_metering::CollectorRegHandle;
 use slog::{warn, Logger};
 use tikv_util::{
     box_err,
@@ -479,6 +479,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
+        auto_split_controller: AutoSplitController,
+        collector_reg_handle: CollectorRegHandle,
         background: Worker,
         pd_worker: LazyWorker<pd::Task>,
     ) -> Result<()>
@@ -527,27 +529,23 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         read_runner.set_snap_mgr(snap_mgr.clone());
         let read_scheduler = workers.async_read.start("async-read-worker", read_runner);
 
-        let stats_monitor = PdStatsMonitor::new(
-            cfg.value().pd_store_heartbeat_tick_interval.0 / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
-            cfg.value().report_min_resolved_ts_interval.0,
-            pd::StoreReporter::new(workers.pd.scheduler(), self.logger.clone()),
-        );
-        // TODO: start stats_monitor.
-
         workers.pd.start(pd::Runner::new(
             store_id,
             pd_client,
             raft_engine.clone(),
             tablet_registry.clone(),
             router.clone(),
-            stats_monitor,
             workers.pd.remote(),
             concurrency_manager,
             causal_ts_provider,
+            workers.pd.scheduler(),
+            auto_split_controller,
+            store_meta.lock().unwrap().region_read_progress.clone(),
+            collector_reg_handle,
             self.logger.clone(),
             self.shutdown.clone(),
             cfg.clone(),
-        ));
+        )?);
 
         let split_check_scheduler = workers.background.start(
             "split-check",

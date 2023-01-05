@@ -268,7 +268,7 @@ pub struct PeerStat {
 }
 
 #[derive(Default)]
-pub struct ReportBucket {
+struct ReportBucket {
     current_stat: BucketStat,
     last_report_stat: Option<BucketStat>,
     last_report_ts: UnixSecs,
