@@ -237,6 +237,7 @@ struct TikvServer<ER: RaftEngine> {
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
+    to_early_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
@@ -389,6 +390,7 @@ where
             region_info_accessor,
             coprocessor_host,
             to_stop: vec![],
+            to_early_stop: vec![],
             lock_files: vec![],
             concurrency_manager,
             env,
@@ -1019,7 +1021,7 @@ where
                 self.concurrency_manager.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
-            self.to_stop.push(backup_stream_worker);
+            self.to_early_stop.push(backup_stream_worker);
             Some(backup_stream_scheduler)
         } else {
             None
@@ -1670,6 +1672,7 @@ where
 
     fn stop(self) {
         tikv_util::thread_group::mark_shutdown();
+        self.to_early_stop.into_iter().for_each(|s| s.stop());
         let mut servers = self.servers.unwrap();
         servers
             .server

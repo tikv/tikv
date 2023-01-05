@@ -802,17 +802,24 @@ where
     pub fn on_force_flush(&self, task: String) {
         self.pool.block_on(async move {
             let info = self.range_router.get_task_info(&task).await;
-            // This should only happen in testing, it would be to unwrap...
-            let _ = info.unwrap().set_flushing_status_cas(false, true);
-            let mts = self.prepare_min_ts().await;
-            try_send!(self.scheduler, Task::FlushWithMinTs(task, mts));
+            match info {
+                Ok(info) => {
+                    let _ = info.set_flushing_status_cas(false, true);
+                    let mts = self.prepare_min_ts().await;
+                    info!("min_ts prepared for force flushing"; "min_ts" => %mts, "task" => %task);
+                    try_send!(self.scheduler, Task::FlushWithMinTs(task, mts));
+                }
+                Err(err) => {
+                    warn!("log backup trying to force flush task not exist"; "task" => %task, "err" => %err);
+                }
+            }
         });
     }
 
     pub fn on_flush(&self, task: String) {
         self.pool.block_on(async move {
             let mts = self.prepare_min_ts().await;
-            info!("min_ts prepared for flushing"; "min_ts" => %mts);
+            info!("min_ts prepared for flushing"; "min_ts" => %mts, "task" => %task);
             try_send!(self.scheduler, Task::FlushWithMinTs(task, mts));
         })
     }
@@ -966,7 +973,7 @@ where
                         .pool
                         .block_on(self.range_router.select_task(TaskSelector::All.reference()))
                     {
-                        try_send!(self.scheduler, Task::Flush(task));
+                        try_send!(self.scheduler, Task::ForceFlush(task));
                     }
                     self.bootstrap_flush = true;
                 }
