@@ -269,6 +269,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.serving() {
             return;
         }
+        // TODO: remove following log once stable.
+        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res);
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
             // Ignore admin command side effects, otherwise it may split incomplete
@@ -338,17 +340,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 pub struct ApplyFlowControl {
     timer: Instant,
     last_check_keys: u64,
-    last_flushed_index: u64,
+    need_flush: bool,
     yield_time: Duration,
     yield_written_bytes: u64,
 }
 
 impl ApplyFlowControl {
-    pub fn new(cfg: &Config, applied_index: u64) -> Self {
+    pub fn new(cfg: &Config) -> Self {
         ApplyFlowControl {
             timer: Instant::now_coarse(),
             last_check_keys: 0,
-            last_flushed_index: applied_index,
+            need_flush: false,
             yield_time: cfg.apply_yield_duration.0,
             yield_written_bytes: cfg.apply_yield_write_size.0,
         }
@@ -373,6 +375,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
+        self.apply_flow_control_mut().need_flush = true;
         let decoder = match SimpleWriteReqDecoder::new(&self.logger, &data, u64::MAX, u64::MAX) {
             Ok(decoder) => decoder,
             Err(req) => unreachable!("unexpected request: {:?}", req),
@@ -408,6 +411,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
+        self.apply_flow_control_mut().need_flush = true;
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
         APPLY_TASK_WAIT_TIME_HISTOGRAM
             .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
@@ -610,10 +614,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let (index, term) = self.apply_progress();
         let control = self.apply_flow_control_mut();
         control.last_check_keys = 0;
-        if index == control.last_flushed_index {
+        if !control.need_flush {
             return 0;
         }
-        control.last_flushed_index = index;
+        control.need_flush = false;
         let flush_state = self.flush_state().clone();
         if let Some(wb) = &mut self.write_batch && !wb.is_empty() {
             let mut write_opt = WriteOptions::default();

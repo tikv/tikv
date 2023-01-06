@@ -82,7 +82,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             tablet: remote_tablet.latest().unwrap().clone(),
             write_batch: None,
             callbacks: vec![],
-            flow_control: ApplyFlowControl::new(cfg, applied_index),
+            flow_control: ApplyFlowControl::new(cfg),
             tombstone: false,
             applied_term,
             applied_index: flush_state.applied_index(),
@@ -162,8 +162,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn set_tablet(&mut self, tablet: EK) {
         assert!(
             self.write_batch.as_ref().map_or(true, |wb| wb.is_empty()),
-            "{:?}",
-            self.logger.list()
+            "{} setting tablet while still have dirty write batch",
+            SlogFormat(&self.logger)
         );
         self.write_batch.take();
         self.tablet = tablet;

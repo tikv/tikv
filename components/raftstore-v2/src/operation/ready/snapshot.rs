@@ -215,8 +215,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let path = ctx.tablet_registry.tablet_path(region_id, snapshot_index);
             assert!(
                 path.exists(),
-                "{:?} {} not exists",
-                self.logger.list(),
+                "{} {} not exists",
+                SlogFormat(&self.logger),
                 path.display()
             );
             let tablet = ctx
@@ -224,11 +224,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .tablet_factory()
                 .open_tablet(tablet_ctx, &path)
                 .unwrap_or_else(|e| {
-                    panic!(
-                        "{:?} failed to load tablet at {}: {:?}",
-                        self.logger.list(),
-                        path.display(),
-                        e
+                    slog_panic!(
+                        self.logger,
+                        "failed to load tablet";
+                        "path" => path.display(),
+                        "error" => ?e
                     );
                 });
 
@@ -552,10 +552,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             raft_engine
                 .clean(region.get_id(), 0, self.entry_storage().raft_state(), wb)
                 .unwrap_or_else(|e| {
-                    panic!(
-                        "{:?} failed to clean up region: {:?}",
-                        self.logger().list(),
-                        e
+                    slog_panic!(
+                        self.logger(),
+                        "failed to clean up region";
+                        "error" => ?e
                     )
                 });
             self.entry_storage_mut().clear();
