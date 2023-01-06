@@ -250,9 +250,9 @@ impl CheckpointManager {
         // It is safe given the two closures would only be called once.
         let r = RefCell::new(Some(region));
         e.and_modify(|old_cp| {
-            if old_cp.checkpoint < checkpoint
-                && old_cp.region.get_region_epoch().get_version() <= ver
-            {
+            let old_ver = old_cp.region.get_region_epoch().get_version();
+            let checkpoint_is_newer = old_cp.checkpoint < checkpoint;
+            if old_ver < ver || (old_ver == ver && checkpoint_is_newer) {
                 *old_cp = LastFlushTsOfRegion {
                     checkpoint,
                     region: r.borrow_mut().take().expect(
@@ -578,6 +578,26 @@ pub mod tests {
         r.set_id(id);
         r.set_region_epoch(e);
         r
+    }
+
+    #[test]
+    fn test_flush() {
+        let mut mgr = super::CheckpointManager::default();
+        mgr.do_update(region(1, 32, 8), TimeStamp::new(8));
+        mgr.do_update(region(2, 34, 8), TimeStamp::new(15));
+        mgr.do_update(region(2, 35, 8), TimeStamp::new(16));
+        mgr.do_update(region(2, 35, 8), TimeStamp::new(14));
+        let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
+        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
+
+        mgr.flush();
+        let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
+        assert_matches::assert_matches!(r, GetCheckpointResult::Ok { checkpoint , .. } if checkpoint.into_inner() == 8);
+        let r = mgr.get_from_region(RegionIdWithVersion::new(2, 35));
+        assert_matches::assert_matches!(r, GetCheckpointResult::Ok { checkpoint , .. } if checkpoint.into_inner() == 16);
+        mgr.flush();
+        let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
+        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
     }
 
     #[test]
