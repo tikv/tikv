@@ -237,6 +237,14 @@ struct TikvServer<ER: RaftEngine> {
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
+    /// The services should be stopped BEFORE the gRPC service endpoint stopped.
+    /// If your service need to send some message to clients during shuting
+    /// down, add it to here.
+    ///
+    /// Before adding your service here, also make sure your service:
+    /// - Have well-defined behavior of handling requests during shuting down.
+    /// - After shuting down, other services can handle requests properly too.
+    ///   (i.e. No RPC endpoint relies on your service to work)
     to_early_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
     concurrency_manager: ConcurrencyManager,
