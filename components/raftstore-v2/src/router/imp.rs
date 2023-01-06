@@ -33,12 +33,12 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for StoreRouter<EK, ER> {
-    fn update_approximate_size(&self, _region_id: u64, _size: u64) {
-        // TODO
+    fn update_approximate_size(&self, region_id: u64, size: u64) {
+        let _ = self.send(region_id, PeerMsg::UpdateRegionSize { size });
     }
 
-    fn update_approximate_keys(&self, _region_id: u64, _keys: u64) {
-        // TODO
+    fn update_approximate_keys(&self, region_id: u64, keys: u64) {
+        let _ = self.send(region_id, PeerMsg::UpdateRegionKeys { keys });
     }
 
     fn ask_split(

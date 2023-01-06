@@ -50,6 +50,7 @@ use crate::{
     fsm::{PeerFsmDelegate, Store},
     raft::{Peer, Storage},
     router::{ApplyTask, PeerMsg, PeerTick},
+    worker::tablet_gc,
 };
 
 const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
@@ -80,7 +81,25 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn maybe_pause_for_recovery(&mut self) -> bool {
+    pub fn maybe_pause_for_recovery<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) -> bool {
+        // The task needs to be scheduled even if the tablet may be replaced during
+        // recovery. Otherwise if there are merges during recovery, the FSM may
+        // be paused forever.
+        if self.storage().has_dirty_data() {
+            let region_id = self.region_id();
+            let mailbox = store_ctx.router.mailbox(region_id).unwrap();
+            let tablet_index = self.storage().tablet_index();
+            let _ = store_ctx
+                .schedulers
+                .tablet_gc
+                .schedule(tablet_gc::Task::trim(
+                    self.tablet().unwrap().clone(),
+                    self.region(),
+                    move || {
+                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                    },
+                ));
+        }
         let entry_storage = self.storage().entry_storage();
         let committed_index = entry_storage.commit_index();
         let applied_index = entry_storage.applied_index();
