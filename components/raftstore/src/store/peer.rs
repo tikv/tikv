@@ -1188,6 +1188,9 @@ where
             peer.raft_group.campaign()?;
         }
 
+        let persisted_index = peer.raft_group.raft.raft_log.persisted;
+        peer.mut_store().update_cache_persisted(persisted_index);
+
         Ok(peer)
     }
 
