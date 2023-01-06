@@ -437,7 +437,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         );
 
         let reg = TabletRegistry::new(
-            Box::new(SingletonFactory::new(kv_engine.rocks)),
+            Box::new(SingletonFactory::new(kv_engine.rocks.clone())),
             &self.store_path,
         )
         .unwrap();
