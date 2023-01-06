@@ -473,6 +473,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     }
 
     pub fn record_apply_trace(&mut self, write_task: &mut WriteTask<EK, ER>) {
+        let trace = self.apply_trace();
+        // Maybe tablet index can be different?
+        if trace.persisted_applied > trace.admin.flushed {
+            return;
+        }
         let region_id = self.region().get_id();
         let raft_engine = self.entry_storage().raft_engine();
         let tablet_index = self.tablet_index();
