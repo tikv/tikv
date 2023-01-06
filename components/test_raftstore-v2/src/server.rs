@@ -36,10 +36,11 @@ use raftstore::{
     },
     RegionInfoAccessor,
 };
-use raftstore_v2::{router::RaftRouter, StoreMeta, StoreRouter};
+use raftstore_v2::{router::RaftRouter, StateStorage, StoreMeta, StoreRouter};
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use slog_global::debug;
+use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{AddressMap, Config};
 use tikv::{
@@ -103,6 +104,7 @@ pub struct ServerCluster {
     addrs: AddressMap,
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
+    snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, FakeExtension>,
@@ -146,6 +148,7 @@ impl ServerCluster {
             storages: HashMap::default(),
             region_info_accessors: HashMap::default(),
             snap_mgrs: HashMap::default(),
+            snap_paths: HashMap::default(),
             pending_services: HashMap::default(),
             health_services: HashMap::default(),
             raft_client,
@@ -165,25 +168,28 @@ impl ServerCluster {
         node_id: u64,
         mut cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
-        mut node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
     ) -> ServerResult<u64> {
-        let snap_mgr = if node_id == 0 || !self.snap_mgrs.contains_key(&node_id) {
-            let snap_path = test_util::temp_dir("test_cluster", cfg.prefer_mem)
-                .path()
-                .join(Path::new(format!("snap_{}", node_id).as_str()))
-                .to_str()
-                .unwrap()
-                .to_owned();
-            TabletSnapManager::new(snap_path)?
+        let (snap_mgr, snap_mgs_path) = if !self.snap_mgrs.contains_key(&node_id) {
+            let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
+            let snap_path = tmp.path().to_str().unwrap().to_owned();
+            (TabletSnapManager::new(snap_path)?, Some(tmp))
         } else {
-            self.snap_mgrs[&node_id].clone()
+            (self.snap_mgrs[&node_id].clone(), None)
         };
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
 
-        cfg.server.addr = node.store().address;
+        if cfg.server.addr == "127.0.0.1:0" {
+            // Now we cache the store address, so here we should re-use last
+            // listening address for the same store.
+            if let Some(addr) = self.addrs.get(node_id) {
+                cfg.server.addr = addr;
+            } else {
+                cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
+            }
+        }
 
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
@@ -195,9 +201,19 @@ impl ServerCluster {
             )
             .unwrap();
 
+        let mut node = NodeV2::new(&cfg.server, self.pd_client.clone(), None);
+        node.try_bootstrap_store(&raft_store, &raft_engine).unwrap();
+        assert_eq!(node.id(), node_id);
+
+        tablet_registry
+            .tablet_factory()
+            .set_state_storage(Arc::new(StateStorage::new(
+                raft_engine.clone(),
+                node.router().clone(),
+            )));
+
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
-        let node_id = node.id();
         let raft_router =
             RaftRouter::new_with_store_meta(node.router().clone(), store_meta.clone());
 
@@ -408,6 +424,9 @@ impl ServerCluster {
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         self.snap_mgrs.insert(node_id, snap_mgr);
+        if let Some(tmp) = snap_mgs_path {
+            self.snap_paths.insert(node_id, tmp);
+        }
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
         // todo: importer
@@ -503,13 +522,12 @@ impl Simulator for ServerCluster {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
-        node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
-            self.run_node_impl::<API>(node_id, cfg, store_meta, node,raft_engine, tablet_registry,)
+            self.run_node_impl::<API>(node_id, cfg, store_meta, raft_engine, tablet_registry,)
         )
     }
 

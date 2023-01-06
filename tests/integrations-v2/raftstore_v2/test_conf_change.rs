@@ -240,10 +240,9 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"k2", b"v2");
     must_get_equal(&engine_3, b"k3", b"v3");
 
-    // todo: it's not ready now
-    // // peer 2 has nothing
-    // must_get_none(&engine_2, b"k1");
-    // must_get_none(&engine_2, b"k2");
+    // peer 2 has nothing
+    must_get_none(&engine_2, b"k1");
+    must_get_none(&engine_2, b"k2");
 
     // add peer4 to first region 1.
     let peer4 = new_conf_change_peer(&stores[1], &pd_client);
@@ -260,10 +259,9 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"k1", b"v1");
     must_get_equal(&engine_2, b"k4", b"v4");
 
-    // todo: it's not ready now
-    // // peer 3 has nothing, we check v1 and v4 here.
-    // must_get_none(&engine_3, b"k1");
-    // must_get_none(&engine_3, b"k4");
+    // peer 3 has nothing, we check v1 and v4 here.
+    must_get_none(&engine_3, b"k1");
+    must_get_none(&engine_3, b"k4");
 
     // TODO: add more tests.
 }
@@ -361,7 +359,6 @@ fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize)
     );
 }
 
-// todo(SpadeA): to make it pass
 #[test]
 fn test_node_after_remove_itself() {
     let count = 3;
@@ -533,7 +530,6 @@ fn find_leader_response_header<T: Simulator>(
     resp.unwrap().take_header()
 }
 
-// todo(SpadeA): make it pass
 #[test]
 fn test_node_conf_change_safe() {
     let count = 5;
@@ -708,6 +704,7 @@ fn call_conf_change<T: Simulator>(
     cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
 }
 
+// todo: Make it pass
 #[test]
 fn test_node_learner_conf_change() {
     let count = 5;

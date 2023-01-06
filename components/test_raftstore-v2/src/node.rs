@@ -25,8 +25,9 @@ use raftstore::{
 };
 use raftstore_v2::{
     router::{PeerMsg, RaftRouter},
-    StoreMeta, StoreRouter,
+    StateStorage, StoreMeta, StoreRouter,
 };
+use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{Config, Filter};
 use tikv::server::{
@@ -75,11 +76,11 @@ impl Transport for ChannelTransport {
                 snap,
             );
             let sender_snap_mgr = match self.core.lock().unwrap().snap_paths.get(&from_store) {
-                Some(snap_mgr) => snap_mgr.clone(),
+                Some(snap_mgr) => snap_mgr.0.clone(),
                 None => return Err(box_err!("missing snap manager for store {}", from_store)),
             };
             let recver_snap_mgr = match self.core.lock().unwrap().snap_paths.get(&to_store) {
-                Some(snap_mgr) => snap_mgr.clone(),
+                Some(snap_mgr) => snap_mgr.0.clone(),
                 None => return Err(box_err!("missing snap manager for store {}", to_store)),
             };
 
@@ -113,7 +114,7 @@ impl Transport for ChannelTransport {
 }
 
 pub struct ChannelTransportCore {
-    pub snap_paths: HashMap<u64, TabletSnapManager>,
+    pub snap_paths: HashMap<u64, (TabletSnapManager, TempDir)>,
     pub routers: HashMap<u64, SimulateTransport<RaftRouter<RocksEngine, RaftTestEngine>>>,
 }
 
@@ -170,13 +171,12 @@ impl Simulator for NodeCluster {
     fn run_node(
         &mut self,
         node_id: u64,
-        mut cfg: Config,
+        cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
-        mut node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
     ) -> ServerResult<u64> {
-        assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
+        assert!(!self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
@@ -188,9 +188,20 @@ impl Simulator for NodeCluster {
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();
-        node.store().address = String::from("127.0.0.1:0");
 
-        let snap_mgr = if node_id == 0
+        let mut node = NodeV2::new(&cfg.server, self.pd_client.clone(), None);
+        node.try_bootstrap_store(&raft_store, &raft_engine).unwrap();
+        assert_eq!(node.id(), node_id);
+
+        tablet_registry
+            .tablet_factory()
+            .set_state_storage(Arc::new(StateStorage::new(
+                raft_engine.clone(),
+                node.router().clone(),
+            )));
+
+        // todo: node id 0
+        let (snap_mgr, snap_mgs_path) = if node_id == 0
             || !self
                 .trans
                 .core
@@ -199,17 +210,13 @@ impl Simulator for NodeCluster {
                 .snap_paths
                 .contains_key(&node_id)
         {
-            // todo
-            let snap_path = test_util::temp_dir("test_cluster", cfg.prefer_mem)
-                .path()
-                .join(Path::new(format!("snap_{}", node_id).as_str()))
-                .to_str()
-                .unwrap()
-                .to_owned();
-            TabletSnapManager::new(snap_path)?
+            let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
+            let snap_path = tmp.path().to_str().unwrap().to_owned();
+            (TabletSnapManager::new(snap_path)?, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
-            trans.snap_paths[&node_id].clone()
+            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            (snap_mgr.clone(), None)
         };
 
         let raft_router = RaftRouter::new_with_store_meta(node.router().clone(), store_meta);
@@ -274,12 +281,14 @@ impl Simulator for NodeCluster {
         //     )),
         // );
 
-        self.trans
-            .core
-            .lock()
-            .unwrap()
-            .snap_paths
-            .insert(node_id, snap_mgr);
+        if let Some(tmp) = snap_mgs_path {
+            self.trans
+                .core
+                .lock()
+                .unwrap()
+                .snap_paths
+                .insert(node_id, (snap_mgr, tmp));
+        }
 
         self.trans
             .core
@@ -365,6 +374,7 @@ impl Simulator for NodeCluster {
 
     fn get_snap_dir(&self, node_id: u64) -> String {
         self.trans.core.lock().unwrap().snap_paths[&node_id]
+            .0
             .root_path()
             .to_str()
             .unwrap()

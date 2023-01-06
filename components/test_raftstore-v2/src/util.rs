@@ -7,7 +7,6 @@ use engine_rocks::{RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
-use raftstore_v2::StateStorage;
 use rand::RngCore;
 use server::server2::ConfiguredRaftEngine;
 use tempfile::TempDir;
@@ -32,7 +31,6 @@ pub fn create_test_engine(
     LazyWorker<String>,
     Arc<RocksStatistics>,
     Option<Arc<RocksStatistics>>,
-    NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
@@ -61,14 +59,16 @@ pub fn create_test_engine(
     let builder =
         KvEngineFactoryBuilder::new(env, &cfg.tikv, cache).sst_recovery_sender(Some(scheduler));
 
-    cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
-    let mut node = NodeV2::new(&cfg.server, pd_client.clone(), None);
-    node.try_bootstrap_store(&cfg.raft_store, &raft_engine)
-        .unwrap();
-    assert_ne!(node.id(), 0);
+    // cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
+    // let mut node = NodeV2::new(&cfg.server, pd_client.clone(), None);
+    // node.try_bootstrap_store(&cfg.raft_store, &raft_engine)
+    //     .unwrap();
+    // assert_ne!(node.id(), 0);
 
-    let router = node.router().clone();
-    let builder = builder.state_storage(Arc::new(StateStorage::new(raft_engine.clone(), router)));
+    // let router = node.router().clone();
+    // let builder =
+    // builder.state_storage(Arc::new(StateStorage::new(raft_engine.clone(),
+    // router)));
 
     let factory = Box::new(builder.build());
     let rocks_statistics = factory.rocks_statistics();
@@ -82,7 +82,6 @@ pub fn create_test_engine(
         sst_worker,
         rocks_statistics,
         raft_statistics,
-        node,
     )
 }
 

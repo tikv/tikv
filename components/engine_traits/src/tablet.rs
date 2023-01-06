@@ -13,7 +13,7 @@ use collections::HashMap;
 use kvproto::metapb::Region;
 use tikv_util::box_err;
 
-use crate::{Error, FlushState, Result};
+use crate::{Error, FlushState, Result, StateStorage};
 
 #[derive(Debug)]
 struct LatestTablet<EK> {
@@ -145,6 +145,11 @@ pub trait TabletFactory<EK>: Send + Sync {
 
     /// Check if the tablet with specified path exists
     fn exists(&self, path: &Path) -> bool;
+
+    /// Test only
+    fn set_state_storage(&self, _: Arc<dyn StateStorage>) {
+        unimplemented!()
+    }
 }
 
 pub struct SingletonFactory<EK> {
@@ -273,6 +278,7 @@ impl<EK> TabletRegistry<EK> {
 
     pub fn remove(&self, id: u64) {
         self.tablets.tablets.lock().unwrap().remove(&id);
+        println!("tablet with id {} removed", id);
     }
 
     /// Load the tablet and set it as the latest.

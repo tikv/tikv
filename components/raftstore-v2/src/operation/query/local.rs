@@ -4,8 +4,6 @@
 use std::{
     ops::Deref,
     sync::{atomic, Arc, Mutex},
-    thread,
-    time::Duration,
 };
 
 use batch_system::Router;
