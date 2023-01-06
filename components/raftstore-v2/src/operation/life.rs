@@ -293,7 +293,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// After destroy is finished, `finish_destroy` should be called to clean up
     /// memory states.
-    pub fn start_destroy(&mut self, write_task: &mut WriteTask<EK, ER>) {
+    pub fn start_destroy<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        write_task: &mut WriteTask<EK, ER>,
+    ) {
         if self.postponed_destroy() {
             return;
         }
@@ -311,7 +315,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let applied_index = self.entry_storage().applied_index();
         lb.put_region_state(region_id, applied_index, &region_state)
             .unwrap();
-        self.set_has_extra_write();
+        self.record_tombstone_tablet_for_destroy(ctx, write_task);
         self.destroy_progress_mut().start();
     }
 

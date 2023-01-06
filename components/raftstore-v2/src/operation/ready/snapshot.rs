@@ -232,7 +232,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     );
                 });
 
-            let prev_persisted_applied = self.storage().apply_trace().persisted_apply_index();
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(snapshot_index);
             let read_tablet = SharedReadTablet::new(tablet.clone());
@@ -258,7 +257,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 info!(self.logger, "init split with snapshot finished");
                 self.post_split_init(ctx, init);
             }
-            self.on_advance_persisted_apply_index(ctx, prev_persisted_applied, None);
             self.schedule_apply_fsm(ctx);
         }
     }
@@ -511,7 +509,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let index = entry.truncated_index();
         entry.set_applied_term(term);
         entry.apply_state_mut().set_applied_index(index);
-        self.apply_trace_mut().reset_snapshot(index);
+        self.apply_trace_mut().on_applied_snapshot(index);
     }
 
     pub fn apply_snapshot(
@@ -578,7 +576,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         entry_storage.set_truncated_term(last_term);
         entry_storage.set_last_term(last_term);
 
-        self.apply_trace_mut().reset_should_persist();
+        self.apply_trace_mut().restore_snapshot(last_index);
         self.set_ever_persisted();
         let lb = task
             .extra_write

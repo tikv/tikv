@@ -449,7 +449,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
-        self.on_advance_persisted_apply_index(ctx, prev_persisted, Some(&mut write_task));
+        self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
 
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready
@@ -459,7 +459,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .collect();
         }
         if !self.serving() {
-            self.start_destroy(&mut write_task);
+            self.start_destroy(ctx, &mut write_task);
             ctx.coprocessor_host.on_region_changed(
                 self.region(),
                 RegionChangeEvent::Destroy,
