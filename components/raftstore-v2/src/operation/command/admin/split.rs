@@ -74,7 +74,7 @@ pub struct SplitResult {
     // The index of the derived region in `regions`
     pub derived_index: usize,
     pub tablet_index: u64,
-    // Hack: in common case we should use generic, but split is an unfrequent
+    // Hack: in common case we should use generic, but split is an infrequent
     // event that performance is not critical. And using `Any` can avoid polluting
     // all existing code.
     tablet: Box<dyn Any + Send + Sync>,
@@ -91,6 +91,8 @@ pub struct SplitInit {
 
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
+    approximate_size: Option<u64>,
+    approximate_keys: Option<u64>,
 }
 
 impl SplitInit {
@@ -123,6 +125,20 @@ pub struct SplitFlowControl {
     size_diff_hint: i64,
     skip_split_count: u64,
     may_skip_split_check: bool,
+    approximate_size: Option<u64>,
+    approximate_keys: Option<u64>,
+}
+
+impl SplitFlowControl {
+    #[inline]
+    pub fn approximate_size(&self) -> Option<u64> {
+        self.approximate_size
+    }
+
+    #[inline]
+    pub fn approximate_keys(&self) -> Option<u64> {
+        self.approximate_keys
+    }
 }
 
 pub fn temp_split_path<EK>(registry: &TabletRegistry<EK>, region_id: u64) -> PathBuf {
@@ -171,6 +187,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         control.size_diff_hint = 0;
         control.skip_split_count = 0;
         false
+    }
+
+    pub fn on_update_region_size(&mut self, size: u64) {
+        self.split_flow_control_mut().approximate_size = Some(size);
+        self.add_pending_tick(PeerTick::SplitRegionCheck);
+        self.add_pending_tick(PeerTick::PdHeartbeat);
+    }
+
+    pub fn on_update_region_keys(&mut self, keys: u64) {
+        self.split_flow_control_mut().approximate_keys = Some(keys);
+        self.add_pending_tick(PeerTick::SplitRegionCheck);
+        self.add_pending_tick(PeerTick::PdHeartbeat);
+    }
+
+    pub fn on_clear_region_size(&mut self) {
+        let control = self.split_flow_control_mut();
+        control.approximate_size.take();
+        control.approximate_keys.take();
+        self.add_pending_tick(PeerTick::SplitRegionCheck);
     }
 
     pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics) {
@@ -454,6 +489,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.record_tombstone_tablet(store_ctx, tablet, res.tablet_index);
         }
 
+        let new_region_count = res.regions.len() as u64;
+        let control = self.split_flow_control_mut();
+        let estimated_size = control.approximate_size.map(|v| v / new_region_count);
+        let estimated_keys = control.approximate_keys.map(|v| v / new_region_count);
+
         self.post_split();
 
         if self.is_leader() {
@@ -468,15 +508,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // so we send it independently here.
             self.report_batch_split_pd(store_ctx, res.regions.to_vec());
             // After split, the peer may need to update its metrics.
-            self.split_flow_control_mut().may_skip_split_check = false;
+            let control = self.split_flow_control_mut();
+            control.may_skip_split_check = false;
+            control.approximate_size = estimated_size;
+            control.approximate_keys = estimated_keys;
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
+        self.storage_mut().set_has_dirty_data(true);
+        let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
+        let tablet_index = res.tablet_index;
         let _ = store_ctx
             .schedulers
             .tablet_gc
             .schedule(tablet_gc::Task::trim(
                 self.tablet().unwrap().clone(),
                 derived,
+                move || {
+                    let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                },
             ));
 
         let last_region_id = res.regions.last().unwrap().get_id();
@@ -494,6 +543,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 source_id: region_id,
                 check_split: last_region_id == new_region_id,
                 scheduled: false,
+                approximate_size: estimated_size,
+                approximate_keys: estimated_keys,
                 locks,
             }));
 
@@ -520,6 +571,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_state = self.storage().region_state().clone();
         self.state_changes_mut()
             .put_region_state(region_id, res.tablet_index, &region_state)
+            .unwrap();
+        self.state_changes_mut()
+            .put_dirty_mark(region_id, res.tablet_index, true)
             .unwrap();
         self.set_has_extra_write();
     }
@@ -574,13 +628,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         split_init: Box<SplitInit>,
     ) {
-        let _ = store_ctx
-            .schedulers
-            .tablet_gc
-            .schedule(tablet_gc::Task::trim(
-                self.tablet().unwrap().clone(),
-                self.region(),
-            ));
+        let region_id = self.region_id();
+        if self.storage().has_dirty_data() {
+            let tablet_index = self.storage().tablet_index();
+            let mailbox = store_ctx.router.mailbox(region_id).unwrap();
+            let _ = store_ctx
+                .schedulers
+                .tablet_gc
+                .schedule(tablet_gc::Task::trim(
+                    self.tablet().unwrap().clone(),
+                    self.region(),
+                    move || {
+                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                    },
+                ));
+        }
         if split_init.source_leader
             && self.leader_id() == INVALID_ID
             && self.term() == RAFT_INIT_LOG_TERM
@@ -589,11 +651,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.set_has_ready();
 
             *self.txn_ext().pessimistic_locks.write() = split_init.locks;
+            let control = self.split_flow_control_mut();
+            control.approximate_size = split_init.approximate_size;
+            control.approximate_keys = split_init.approximate_keys;
             // The new peer is likely to become leader, send a heartbeat immediately to
             // reduce client query miss.
             self.region_heartbeat_pd(store_ctx);
         }
-        let region_id = self.region_id();
 
         if split_init.check_split {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
@@ -631,6 +695,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .on_admin_flush(admin_flushed);
             // Persist admin flushed.
             self.set_has_extra_write();
+        }
+    }
+
+    pub fn on_tablet_trimmed(&mut self, tablet_index: u64) {
+        info!(self.logger, "tablet is trimmed"; "tablet_index" => tablet_index);
+        let region_id = self.region_id();
+        let changes = self.state_changes_mut();
+        changes
+            .put_dirty_mark(region_id, tablet_index, false)
+            .unwrap();
+        self.set_has_extra_write();
+        if self.storage().tablet_index() == tablet_index {
+            self.storage_mut().set_has_dirty_data(false);
         }
     }
 }
