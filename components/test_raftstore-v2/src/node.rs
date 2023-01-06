@@ -325,8 +325,11 @@ impl Simulator for NodeCluster {
             return Err(resp);
         }
 
-        let mut guard = self.trans.core.lock().unwrap();
-        let router = guard.routers.get_mut(&node_id).unwrap();
+        let mut router = {
+            let mut guard = self.trans.core.lock().unwrap();
+            guard.routers.get_mut(&node_id).unwrap().clone()
+        };
+
         router.snapshot(request, timeout)
     }
 
