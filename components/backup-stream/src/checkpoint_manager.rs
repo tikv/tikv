@@ -222,6 +222,8 @@ impl CheckpointManager {
     pub fn flush(&mut self) {
         info!("log backup checkpoint manager flushing."; "resolved_ts_len" => %self.resolved_ts.len(), "resolved_ts" => ?self.get_resolved_ts());
         self.checkpoint_ts = std::mem::take(&mut self.resolved_ts);
+        // Clippy doesn't know this iterator borrows `self.checkpoint_ts` :(
+        #[allow(clippy::needless_collect)]
         let items = self
             .checkpoint_ts
             .values()

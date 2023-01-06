@@ -21,7 +21,7 @@ use backup_stream::{
     router::Router,
     Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Service, Task,
 };
-use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt, TryStreamExt};
+use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},

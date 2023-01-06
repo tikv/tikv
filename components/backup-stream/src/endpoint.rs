@@ -52,7 +52,7 @@ use crate::{
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
-    subscription_track::{CheckpointType, ResolveResult, SubscriptionTracer},
+    subscription_track::{ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, StopWatch, Work},
 };
