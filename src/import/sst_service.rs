@@ -24,8 +24,12 @@ use kvproto::{
     errorpb,
     import_sstpb::{
         Error as ImportPbError, ImportSst, Range, RawWriteRequest_oneof_chunk as RawChunk, SstMeta,
+<<<<<<< HEAD
         SuspendImportRpcRequest, SuspendImportRpcResponse, SwitchMode,
         WriteRequest_oneof_chunk as Chunk, *,
+=======
+        SwitchMode, WriteRequest_oneof_chunk as Chunk, *,
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
     },
     kvrpcpb::Context,
     raft_cmdpb::{CmdType, DeleteRequest, PutRequest, RaftCmdRequest, RaftRequestHeader, Request},
@@ -64,6 +68,8 @@ const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
 /// max raft size.
 const WIRE_EXTRA_BYTES: usize = 2;
 
+const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
+
 /// ImportSstService provides tikv-server with the ability to ingest SST files.
 ///
 /// It saves the SST sent from client to a file and then sends a command to
@@ -99,7 +105,10 @@ pub struct SnapshotResult<E: KvEngine> {
 struct RequestCollector {
     context: Context,
     max_raft_req_size: usize,
+<<<<<<< HEAD
 
+=======
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
     /// Retain the last ts of each key in each request.
     /// This is used for write CF because resolved ts observer hates duplicated
     /// key in the same request.
@@ -125,6 +134,7 @@ impl RequestCollector {
         }
     }
 
+<<<<<<< HEAD
     fn record_size_of_message(&mut self, size: usize) {
         // We make a raft command entry when we unpacked size grows to 7/8 of the max
         // raft entry size.
@@ -143,6 +153,9 @@ impl RequestCollector {
         debug!("Accepting KV."; "cf" => %cf, 
             "key" => %log_wrappers::Value::key(&k), 
             "value" => %log_wrappers::Value::key(&v));
+=======
+    fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
         if k.is_empty() || (!is_delete && v.is_empty()) {
@@ -170,6 +183,7 @@ impl RequestCollector {
         self.accept(cf, req);
     }
 
+<<<<<<< HEAD
     /// check whether the unpacked size would exceed the max_raft_req_size after
     /// accepting the modify.
     fn should_send_batch_before_adding(&self, m: &Request) -> bool {
@@ -181,13 +195,18 @@ impl RequestCollector {
         && message_size + self.unpacked_size > self.max_raft_req_size /* exceed the max_raft_req_size */
     }
 
+=======
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
     // we need to remove duplicate keys in here, since
     // in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
     // will panic if found duplicated entry during Vec<PutRequest>.
     fn accept(&mut self, cf: &str, req: Request) {
+<<<<<<< HEAD
         if self.should_send_batch_before_adding(&req) {
             self.pack_all();
         }
+=======
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
         let k = key_from_request(&req);
         match cf {
             CF_WRITE => {
@@ -208,23 +227,44 @@ impl RequestCollector {
                     .map(|(_, old_ts)| *old_ts < ts.into_inner())
                     .unwrap_or(true)
                 {
+<<<<<<< HEAD
                     self.record_size_of_message(req.compute_size() as usize);
+=======
+                    self.unpacked_size += req.compute_size() as usize;
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
                     if let Some((v, _)) = self
                         .write_reqs
                         .insert(encoded_key.to_owned(), (req, ts.into_inner()))
                     {
+<<<<<<< HEAD
                         self.release_message_of_size(v.get_cached_size() as usize);
+=======
+                        self.unpacked_size -= v.get_cached_size() as usize;
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
                     }
                 }
             }
             CF_DEFAULT => {
+<<<<<<< HEAD
                 self.record_size_of_message(req.compute_size() as usize);
                 if let Some(v) = self.default_reqs.insert(k.to_owned(), req) {
                     self.release_message_of_size(v.get_cached_size() as usize);
+=======
+                self.unpacked_size += req.compute_size() as usize;
+                if let Some(v) = self.default_reqs.insert(k.to_owned(), req) {
+                    self.unpacked_size -= v.get_cached_size() as usize;
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
                 }
             }
             _ => unreachable!(),
         }
+<<<<<<< HEAD
+=======
+
+        if self.unpacked_size >= self.max_raft_req_size {
+            self.pack_all();
+        }
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
     }
 
     #[cfg(test)]
@@ -235,7 +275,11 @@ impl RequestCollector {
             self.write_reqs.drain().map(|(_, (req, _))| req).collect()
         };
         for r in &res {
+<<<<<<< HEAD
             self.release_message_of_size(r.get_cached_size() as usize);
+=======
+            self.unpacked_size -= r.get_cached_size() as usize;
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
         }
         res
     }
@@ -517,7 +561,11 @@ where
 
         let mut range: Option<Range> = None;
 
+<<<<<<< HEAD
         let mut collector = RequestCollector::new(req.get_context().clone(), max_raft_size / 2);
+=======
+        let mut collector = RequestCollector::new(req.take_context(), max_raft_size * 7 / 8);
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
         let mut metas = req.take_metas();
         let mut rules = req.take_rewrite_rules();
         // For compatibility with old requests.
@@ -537,6 +585,10 @@ where
         while let Some((meta, rule)) = tasks.next() {
             let buff = importer.read_from_kv_file(
                 meta,
+<<<<<<< HEAD
+=======
+                rule,
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
                 ext_storage.clone(),
                 req.get_storage_backend(),
                 &limiter,
@@ -547,7 +599,10 @@ where
                 meta.get_start_ts(),
                 meta.get_restore_ts(),
                 buff,
+<<<<<<< HEAD
                 rule,
+=======
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
                 |k, v| collector.accept_kv(meta.get_cf(), meta.get_is_delete(), k, v),
             )? {
                 if let Some(range) = range.as_mut() {
@@ -582,6 +637,7 @@ where
 
         Ok(range)
     }
+<<<<<<< HEAD
 
     /// Check whether we should suspend the current request.
     fn check_suspend(&self) -> Result<()> {
@@ -623,6 +679,8 @@ where
         self.suspend_req_until.store(0, Ordering::SeqCst);
         suspended
     }
+=======
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
 }
 
 #[macro_export]
@@ -1256,6 +1314,7 @@ mod test {
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use crate::import::sst_service::{key_from_request, RequestCollector};
+<<<<<<< HEAD
 
     /// The extra size needed in the request header.
     /// They are:
@@ -1265,6 +1324,8 @@ mod test {
     /// use 1/2 of the max raft command size as the goal of batching, where the
     /// extra size is acceptable.
     const HEADER_EXTRA_SIZE: u32 = 40;
+=======
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
 
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
@@ -1472,6 +1533,7 @@ mod test {
             k1.cmp(k2).then(ts1.cmp(&ts2))
         });
         assert_eq!(reqs, reqs_result);
+<<<<<<< HEAD
         assert!(
             request_collector.is_empty(),
             "{}",
@@ -1558,5 +1620,8 @@ mod test {
             assert!(req_size < 1024 + HEADER_EXTRA_SIZE, "{}", req_size);
         }
         assert_eq!(total, 100);
+=======
+        assert!(request_collector.is_empty());
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
     }
 }

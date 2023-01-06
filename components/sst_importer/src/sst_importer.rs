@@ -976,8 +976,12 @@ impl SstImporter {
         end_key: &[u8],
         start_ts: u64,
         restore_ts: u64,
+<<<<<<< HEAD
         file_buff: Arc<[u8]>,
         rewrite_rule: &RewriteRule,
+=======
+        file_buff: Arc<Vec<u8>>,
+>>>>>>> c71fdfc494 (log-backup: limit inflight raft msg from pitr (#13976))
         mut build_fn: impl FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
         let mut event_iter = EventIterator::with_rewriting(
