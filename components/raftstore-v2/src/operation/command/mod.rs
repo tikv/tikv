@@ -337,6 +337,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
+#[derive(Debug)]
 pub struct ApplyFlowControl {
     timer: Instant,
     last_check_keys: u64,
@@ -354,6 +355,11 @@ impl ApplyFlowControl {
             yield_time: cfg.apply_yield_duration.0,
             yield_written_bytes: cfg.apply_yield_write_size.0,
         }
+    }
+
+    #[cfg(test)]
+    pub fn set_need_flush(&mut self, need_flush: bool) {
+        self.need_flush = need_flush;
     }
 }
 
@@ -375,7 +381,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
-        self.apply_flow_control_mut().need_flush = true;
         let decoder = match SimpleWriteReqDecoder::new(&self.logger, &data, u64::MAX, u64::MAX) {
             Ok(decoder) => decoder,
             Err(req) => unreachable!("unexpected request: {:?}", req),
@@ -399,6 +404,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
             }
         }
+        self.apply_flow_control_mut().need_flush = true;
     }
 
     pub async fn on_manual_flush(&mut self) {
@@ -411,7 +417,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
-        self.apply_flow_control_mut().need_flush = true;
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
         APPLY_TASK_WAIT_TIME_HISTOGRAM
             .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
@@ -445,6 +450,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
             // Flush may be triggerred in the middle, so always update the index and term.
             self.set_apply_progress(e.index, e.term);
+            self.apply_flow_control_mut().need_flush = true;
         }
     }
 
