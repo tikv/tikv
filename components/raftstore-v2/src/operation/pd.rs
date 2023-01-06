@@ -7,6 +7,7 @@ use fail::fail_point;
 use kvproto::{metapb, pdpb};
 use raftstore::store::Transport;
 use slog::error;
+use tikv_util::slog_panic;
 
 use crate::{
     batch::StoreContext,
@@ -49,11 +50,9 @@ impl Store {
         stats.set_bytes_written(0);
         stats.set_keys_written(0);
         stats.set_is_busy(false);
-
-        // stats.set_query_stats(query_stats);
-
+        // TODO: add query stats
         let task = pd::Task::StoreHeartbeat { stats };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(self.logger(), "notify pd failed";
                 "store_id" => self.store_id(),
                 "err" => ?e
@@ -76,7 +75,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
-    pub fn region_heartbeat_pd<T>(&self, ctx: &StoreContext<EK, ER, T>) {
+    pub fn region_heartbeat_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
         let task = pd::Task::RegionHeartbeat(pd::RegionHeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
@@ -85,11 +84,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.self_stat().written_bytes,
             written_keys: self.self_stat().written_keys,
-            approximate_size: None,
-            approximate_keys: None,
+            approximate_size: self.split_flow_control_mut().approximate_size(),
+            approximate_keys: self.split_flow_control_mut().approximate_keys(),
             wait_data_peers: Vec::new(),
         });
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd";
@@ -137,10 +136,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     pending_peers.push(p);
                 } else {
                     if ctx.cfg.dev_assert {
-                        panic!(
-                            "{:?} failed to get peer {} from cache",
-                            self.logger.list(),
-                            id
+                        slog_panic!(
+                            self.logger,
+                            "failed to get peer from cache";
+                            "get_peer_id" => id
                         );
                     }
                     error!(
@@ -159,7 +158,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let task = pd::Task::DestroyPeer {
             region_id: self.region_id(),
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with DestroyPeer";
@@ -182,7 +181,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             right_derive: ctx.cfg.right_derive_when_split,
             ch,
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with AskBatchSplit";
@@ -198,7 +197,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         regions: Vec<metapb::Region>,
     ) {
         let task = pd::Task::ReportBatchSplit { regions };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with ReportBatchSplit";
@@ -214,7 +213,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             initial_status,
             txn_ext: self.txn_ext().clone(),
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
                 "failed to notify pd with UpdateMaxTimestamp";

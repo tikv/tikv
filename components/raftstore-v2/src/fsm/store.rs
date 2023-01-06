@@ -1,31 +1,136 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::{Duration, SystemTime};
+use std::{
+    collections::BTreeMap,
+    ops::Bound::{Excluded, Unbounded},
+    time::{Duration, SystemTime},
+};
 
 use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::{compat::Future01CompatExt, FutureExt};
-use raftstore::store::{Config, ReadDelegate, RegionReadProgressRegistry};
+use keys::{data_end_key, data_key};
+use kvproto::metapb::Region;
+use raftstore::store::{fsm::store::StoreRegionMeta, Config, RegionReadProgressRegistry};
 use slog::{info, o, Logger};
 use tikv_util::{
     future::poll_future_notify,
     is_zero_duration,
+    log::SlogFormat,
     mpsc::{self, LooseBoundedSender, Receiver},
+    slog_panic,
 };
 
 use crate::{
     batch::StoreContext,
+    operation::ReadDelegatePair,
     router::{StoreMsg, StoreTick},
 };
 
-#[derive(Default)]
-pub struct StoreMeta {
-    pub store_id: Option<u64>,
+pub struct StoreMeta<EK> {
+    pub store_id: u64,
     /// region_id -> reader
-    pub readers: HashMap<u64, ReadDelegate>,
+    pub readers: HashMap<u64, ReadDelegatePair<EK>>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
+    /// (region_end_key, epoch.version) -> region_id
+    ///
+    /// Unlinke v1, ranges in v2 may be overlapped. So we use version
+    /// to avoid end key conflict.
+    pub(crate) region_ranges: BTreeMap<(Vec<u8>, u64), u64>,
+    /// region_id -> (region, initialized)
+    pub(crate) regions: HashMap<u64, (Region, bool)>,
+}
+
+impl<EK> StoreMeta<EK> {
+    pub fn new(store_id: u64) -> Self {
+        Self {
+            store_id,
+            readers: HashMap::default(),
+            region_read_progress: RegionReadProgressRegistry::default(),
+            region_ranges: BTreeMap::default(),
+            regions: HashMap::default(),
+        }
+    }
+
+    pub fn set_region(&mut self, region: &Region, initialized: bool, logger: &Logger) {
+        let region_id = region.get_id();
+        let version = region.get_region_epoch().get_version();
+        let prev = self
+            .regions
+            .insert(region_id, (region.clone(), initialized));
+        // `prev` only makes sense when it's initialized.
+        if let Some((prev, prev_init)) = prev && prev_init {
+            assert!(initialized, "{} region corrupted", SlogFormat(logger));
+            if prev.get_region_epoch().get_version() != version {
+                let prev_id = self.region_ranges.remove(&(data_end_key(prev.get_end_key()), prev.get_region_epoch().get_version()));
+                assert_eq!(prev_id, Some(region_id), "{} region corrupted", SlogFormat(logger));
+            } else {
+                assert!(self.region_ranges.get(&(data_end_key(prev.get_end_key()), version)).is_some(), "{} region corrupted", SlogFormat(logger));
+                return;
+            }
+        }
+        if initialized {
+            assert!(
+                self.region_ranges
+                    .insert((data_end_key(region.get_end_key()), version), region_id)
+                    .is_none(),
+                "{} region corrupted",
+                SlogFormat(logger)
+            );
+        }
+    }
+
+    pub fn remove_region(&mut self, region_id: u64) {
+        let prev = self.regions.remove(&region_id);
+        if let Some((prev, initialized)) = prev {
+            if initialized {
+                let key = (
+                    data_end_key(prev.get_end_key()),
+                    prev.get_region_epoch().get_version(),
+                );
+                let prev_id = self.region_ranges.remove(&key);
+                assert_eq!(prev_id, Some(prev.get_id()));
+            }
+        }
+    }
+}
+
+impl<EK: Send> StoreRegionMeta for StoreMeta<EK> {
+    #[inline]
+    fn store_id(&self) -> u64 {
+        self.store_id
+    }
+
+    #[inline]
+    fn region_read_progress(&self) -> &RegionReadProgressRegistry {
+        &self.region_read_progress
+    }
+
+    #[inline]
+    fn search_region(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        mut visitor: impl FnMut(&kvproto::metapb::Region),
+    ) {
+        let start_key = data_key(start_key);
+        for (_, id) in self
+            .region_ranges
+            .range((Excluded((start_key, 0)), Unbounded::<(Vec<u8>, u64)>))
+        {
+            let (region, initialized) = &self.regions[id];
+            if !initialized {
+                continue;
+            }
+            if end_key.is_empty() || end_key > region.get_start_key() {
+                visitor(region);
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 pub struct Store {
@@ -113,7 +218,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
 
     fn on_start(&mut self) {
         if self.fsm.store.start_time.is_some() {
-            panic!("{:?} unable to start again", self.fsm.store.logger.list(),);
+            slog_panic!(self.fsm.store.logger, "store is already started");
         }
 
         self.fsm.store.start_time = Some(

@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path};
+use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path, sync::Arc};
 
+use dashmap::DashMap;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -11,6 +12,7 @@ use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
 
 use super::{
+    checkpoint_cache::CheckpointCache,
     keys::{self, KeyValue, MetaKey},
     store::{
         CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot,
@@ -26,6 +28,7 @@ use crate::{
 #[derive(Clone)]
 pub struct MetadataClient<Store> {
     store_id: u64,
+    caches: Arc<DashMap<String, CheckpointCache>>,
     pub(crate) meta_store: Store,
 }
 
@@ -239,6 +242,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
     pub fn new(store: Store, store_id: u64) -> Self {
         Self {
             meta_store: store,
+            caches: Arc::default(),
             store_id,
         }
     }
@@ -698,21 +702,41 @@ impl<Store: MetaStore> MetadataClient<Store> {
         Ok(min_checkpoint)
     }
 
+    fn cached_checkpoint(&self, task: &str) -> Option<Checkpoint> {
+        self.caches
+            .get(task)
+            .and_then(|x| x.value().get())
+            .map(|x| Checkpoint {
+                provider: CheckpointProvider::Global,
+                ts: x,
+            })
+    }
+
+    fn update_cache(&self, task: &str, checkpoint: TimeStamp) {
+        let mut c = self.caches.entry(task.to_owned()).or_default();
+        c.value_mut().update(checkpoint);
+    }
+
     pub async fn get_region_checkpoint(&self, task: &str, region: &Region) -> Result<Checkpoint> {
+        if let Some(c) = self.cached_checkpoint(task) {
+            return Ok(c);
+        }
         let key = MetaKey::next_bakcup_ts_of_region(task, region);
         let s = self.meta_store.snapshot().await?;
         let r = s.get(Keys::Key(key.clone())).await?;
-        match r.len() {
+        let cp = match r.len() {
             0 => {
                 let global_cp = self.global_checkpoint_of(task).await?;
                 let cp = match global_cp {
                     None => self.get_task_start_ts_checkpoint(task).await?,
                     Some(cp) => cp,
                 };
-                Ok(cp)
+                cp
             }
-            _ => Ok(Checkpoint::from_kv(&r[0])?),
-        }
+            _ => Checkpoint::from_kv(&r[0])?,
+        };
+        self.update_cache(task, cp.ts);
+        Ok(cp)
     }
 }
 

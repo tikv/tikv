@@ -31,7 +31,10 @@ pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
         read::{AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask},
-        write::{PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg, WriteTask},
+        write::{
+            write_to_db_for_test, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
+            WriteTask,
+        },
         write_router::{WriteRouter, WriteRouterContext, WriteSenders},
     },
     bootstrap::{
@@ -74,10 +77,10 @@ pub use self::{
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
-        metrics::TLS_LOCAL_READ_METRICS, AutoSplitController, Bucket, BucketRange,
-        CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask, FlowStatistics, FlowStatsReporter,
-        KeyEntry, LocalReadContext, LocalReader, LocalReaderCore, PdTask, ReadDelegate,
-        ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
+        metrics as worker_metrics, AutoSplitController, Bucket, BucketRange, CachedReadDelegate,
+        CheckLeaderRunner, CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry,
+        LocalReadContext, LocalReader, LocalReaderCore, PdTask, ReadDelegate, ReadExecutor,
+        ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
         SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, StoreMetaDelegate,
         TrackVer, WriteStats,
     },
