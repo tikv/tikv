@@ -92,11 +92,6 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     #[allow(dead_code)]
     config: BackupStreamConfig,
     checkpoint_mgr: CheckpointManager,
-
-    // For better advancing the checkpoint while doing rolling updating, once the store
-    // bootstrapped and we successfully resolved (without initial scanning blocks), we need to
-    // flush as soon as possible. (Because the lag might grows hugely while the server is down)
-    bootstrap_flush: bool,
 }
 
 impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
@@ -191,7 +186,6 @@ where
             failover_time: None,
             config,
             checkpoint_mgr,
-            bootstrap_flush: false,
         };
         ep.pool.spawn(ep.min_ts_worker());
         ep
@@ -961,23 +955,6 @@ where
                 checkpoints,
                 start_time,
             } => {
-                if !self.bootstrap_flush
-                    && checkpoints.iter().all(|r| {
-                        matches!(
-                            r.checkpoint_type,
-                            CheckpointType::MinTs | CheckpointType::StartTsOfTxn(_)
-                        )
-                    })
-                {
-                    for task in self
-                        .pool
-                        .block_on(self.range_router.select_task(TaskSelector::All.reference()))
-                    {
-                        try_send!(self.scheduler, Task::ForceFlush(task));
-                    }
-                    self.bootstrap_flush = true;
-                }
-
                 self.checkpoint_mgr.resolve_regions(checkpoints);
                 metrics::MIN_TS_RESOLVE_DURATION.observe(start_time.saturating_elapsed_secs());
             }
