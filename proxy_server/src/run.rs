@@ -32,7 +32,8 @@ use engine_store_ffi::{
 };
 use engine_traits::{
     CachedTablet, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
-    StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    SingletonFactory, StatisticsReporter, TabletContext, TabletRegistry, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -435,6 +436,15 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             Box::new(DbConfigManger::new(proxy_rocks_engine, DbType::Kv)),
         );
 
+        let reg = TabletRegistry::new(
+            Box::new(SingletonFactory::new(kv_engine.rocks)),
+            &self.store_path,
+        )
+        .unwrap();
+        // It always use the singleton kv_engine, use arbitrary id and suffix.
+        let ctx = TabletContext::with_infinite_region(0, Some(0));
+        reg.load(ctx, false).unwrap();
+        self.tablet_registry = Some(reg.clone());
         engines.raft.register_config(cfg_controller);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(

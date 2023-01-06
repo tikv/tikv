@@ -1,6 +1,8 @@
 use engine_store_ffi::TiFlashEngine;
 use engine_traits::{CfOptionsExt, DbOptions, DbOptionsExt, CF_DEFAULT};
 use tikv::config::ConfigurableDb;
+
+#[derive(Clone, Debug)]
 pub struct ProxyRocksEngine {
     pub inner: TiFlashEngine,
 }
