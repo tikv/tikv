@@ -12,7 +12,8 @@ use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
 use raftstore::store::{
-    util::KeysInfoFormatter, Config, FlowStatsReporter, ReadStats, TxnExt, WriteStats,
+    util::KeysInfoFormatter, Config, FlowStatsReporter, ReadStats, TabletSnapManager, TxnExt,
+    WriteStats,
 };
 use slog::{error, info, Logger};
 use tikv_util::{
@@ -105,6 +106,7 @@ where
     pd_client: Arc<T>,
     raft_engine: ER,
     tablet_registry: TabletRegistry<EK>,
+    snap_mgr: TabletSnapManager,
     router: StoreRouter<EK, ER>,
 
     remote: Remote<TaskCell>,
@@ -139,6 +141,7 @@ where
         pd_client: Arc<T>,
         raft_engine: ER,
         tablet_registry: TabletRegistry<EK>,
+        snap_mgr: TabletSnapManager,
         router: StoreRouter<EK, ER>,
         remote: Remote<TaskCell>,
         concurrency_manager: ConcurrencyManager,
@@ -152,6 +155,7 @@ where
             pd_client,
             raft_engine,
             tablet_registry,
+            snap_mgr,
             router,
             remote,
             region_peers: HashMap::default(),
