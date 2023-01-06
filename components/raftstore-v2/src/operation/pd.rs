@@ -50,7 +50,7 @@ impl Store {
         stats.set_bytes_written(0);
         stats.set_keys_written(0);
         stats.set_is_busy(false);
-        // todo: add query stats
+        // TODO: add query stats
         let task = pd::Task::StoreHeartbeat { stats };
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(self.logger(), "notify pd failed";
