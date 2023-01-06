@@ -4236,7 +4236,8 @@ where
                     ctx.prepare_for(&mut self.delegate);
                     self.delegate.write_apply_state(ctx.kv_wb_mut());
                     ctx.commit_opt(&mut self.delegate, true);
-                    ctx.finish_for(&mut self.delegate, VecDeque::new());
+                    // FIXME: find the panic reason then fix it.
+                    // ctx.finish_for(&mut self.delegate, VecDeque::new());
                     ctx.notifier
                         .notify_one(self.delegate.region_id(), PeerMsg::ApplyRes { res });
                 }

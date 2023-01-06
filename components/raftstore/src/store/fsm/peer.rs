@@ -6135,18 +6135,31 @@ where
     }
 
     fn on_check_peers_availability(&mut self) {
+        let mut invalid_peers: Vec<u64> = Vec::new();
         for peer_id in self.fsm.peer.wait_data_peers.iter() {
-            let peer = self.fsm.peer.get_peer_from_cache(*peer_id).unwrap();
-            let mut msg = ExtraMessage::default();
-            msg.set_type(ExtraMessageType::MsgAvailabilityRequest);
-            self.fsm
-                .peer
-                .send_extra_message(msg, &mut self.ctx.trans, &peer);
-            debug!(
-                "check peer availability";
-                "target peer id" => *peer_id,
-            );
+            match self.fsm.peer.get_peer_from_cache(*peer_id) {
+                Some(peer) => {
+                    let mut msg = ExtraMessage::default();
+                    msg.set_type(ExtraMessageType::MsgAvailabilityRequest);
+                    self.fsm
+                        .peer
+                        .send_extra_message(msg, &mut self.ctx.trans, &peer);
+                    debug!(
+                        "check peer availability";
+                        "target peer id" => *peer_id,
+                    );
+                }
+                None => invalid_peers.push(*peer_id),
+            }
         }
+        // For some reasons, the peer corresponding to the previously saved peer_id
+        // no longer exists. In order to avoid passing invalid information to pd when
+        // reporting pending peers and affecting pd scheduling, remove it from the
+        // `wait_data_peers`.
+        self.fsm
+            .peer
+            .wait_data_peers
+            .retain(|peer_id| !invalid_peers.contains(peer_id));
     }
 
     fn register_pull_voter_replicated_index_tick(&mut self) {
