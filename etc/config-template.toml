@@ -271,17 +271,11 @@
 ## Set to 0 to disable this feature if you want to panic immediately when encountering such an error.
 # background-error-recovery-window = "1h"
 
-[storage.block-cache]
-## Whether to create a shared block cache for all RocksDB column families.
-##
 ## Block cache is used by RocksDB to cache uncompressed blocks. Big block cache can speed up read.
 ## It is recommended to turn on shared block cache. Since only the total cache size need to be
 ## set, it is easier to config. In most cases it should be able to auto-balance cache usage
 ## between column families with standard LRU algorithm.
-##
-## The rest of config in the storage.block-cache session is effective only when shared block cache
-## is on.
-# shared = true
+[storage.block-cache]
 
 ## Size of the shared block cache. Normally it should be tuned to 30%-50% of system's total memory.
 ## When the config is not set, it is decided by the sum of the following fields or their default
@@ -565,11 +559,6 @@
 ## Max RocksDB WAL size in total
 # max-total-wal-size = "4GB"
 
-## RocksDB Statistics provides cumulative stats over time.
-## Turning statistics on will introduce about 5%-10% overhead for RocksDB, but it can help you to
-## know the internal status of RocksDB.
-# enable-statistics = true
-
 ## Dump statistics periodically in information logs.
 ## Same as RocksDB's default value (10 min).
 # stats-dump-period = "10m"
@@ -636,6 +625,11 @@
 
 ## RocksDB log levels
 # info-log-level = "info"
+
+## Memory usage limit for Raft Engine. Undersized write buffers will be flushed to satisfy the
+## requirement.
+## No limit when not specified.
+# write-buffer-limit = "1GB"
 
 ## Options for `Titan`.
 [rocksdb.titan]
@@ -859,6 +853,9 @@
 ##
 # checksum = "crc32c"
 
+## The maximum number of concurrent compaction tasks. 0 stands for no limit.
+# max-compactions = 0
+
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
@@ -946,6 +943,7 @@
 # format-version = 2
 # prepopulate-block-cache = "disabled"
 # checksum = "crc32c"
+# max-compactions = 0
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -970,6 +968,7 @@
 # format-version = 2
 # prepopulate-block-cache = "disabled"
 # checksum = "crc32c"
+# max-compactions = 0
 
 [raftdb]
 # max-background-jobs = 4
@@ -978,7 +977,6 @@
 # max-manifest-file-size = "20MB"
 # create-if-missing = true
 
-# enable-statistics = true
 # stats-dump-period = "10m"
 
 ## Raft RocksDB WAL directory.
@@ -1032,6 +1030,7 @@
 # format-version = 2
 # prepopulate-block-cache = "disabled"
 # checksum = "crc32c"
+# max-compactions = 0
 
 [raft-engine]
 ## Determines whether to use Raft Engine to store raft logs. When it is

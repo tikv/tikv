@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-
-use engine_traits::CF_DEFAULT;
+use collections::HashMap;
+use engine_traits::{StatisticsReporter, CF_DEFAULT};
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
@@ -8,7 +8,7 @@ use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
 };
 
-use crate::rocks_metrics_defs::*;
+use crate::{engine::RocksEngine, rocks_metrics_defs::*};
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {
@@ -581,12 +581,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .discardable
                 .inc_by(value);
         }
-        TickerType::TitanGcSample => {
-            STORE_ENGINE_BLOB_GC_ACTION
-                .get(name_enum)
-                .sample
-                .inc_by(value);
-        }
         TickerType::TitanGcSmallFile => {
             STORE_ENGINE_BLOB_GC_ACTION
                 .get(name_enum)
@@ -1118,6 +1112,331 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
             .with_label_values(&[name, "all"])
             .set(block_cache_usage as i64);
+    }
+}
+
+#[derive(Default, Clone)]
+struct CfLevelStats {
+    num_files: Option<u64>,
+    // sum(compression_ratio_i * num_files_i)
+    weighted_compression_ratio: Option<f64>,
+    num_blob_files: Option<u64>,
+}
+
+#[derive(Default)]
+struct CfStats {
+    used_size: Option<u64>,
+    blob_cache_size: Option<u64>,
+    readers_mem: Option<u64>,
+    mem_tables: Option<u64>,
+    num_keys: Option<u64>,
+    pending_compaction_bytes: Option<u64>,
+    num_immutable_mem_table: Option<u64>,
+    live_blob_size: Option<u64>,
+    num_live_blob_file: Option<u64>,
+    num_obsolete_blob_file: Option<u64>,
+    live_blob_file_size: Option<u64>,
+    obsolete_blob_file_size: Option<u64>,
+    blob_file_discardable_ratio_le0: Option<u64>,
+    blob_file_discardable_ratio_le20: Option<u64>,
+    blob_file_discardable_ratio_le50: Option<u64>,
+    blob_file_discardable_ratio_le80: Option<u64>,
+    blob_file_discardable_ratio_le100: Option<u64>,
+    levels: Vec<CfLevelStats>,
+}
+
+#[derive(Default)]
+struct DbStats {
+    num_snapshots: Option<u64>,
+    oldest_snapshot_time: Option<u64>,
+    block_cache_size: Option<u64>,
+    stall_num: Option<[u64; ROCKSDB_IOSTALL_KEY.len()]>,
+}
+
+pub struct RocksStatisticsReporter {
+    name: String,
+    db_stats: DbStats,
+    cf_stats: HashMap<String, CfStats>,
+}
+
+impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            db_stats: DbStats::default(),
+            cf_stats: HashMap::default(),
+        }
+    }
+
+    fn collect(&mut self, engine: &RocksEngine) {
+        let db = engine.as_inner();
+        for cf in db.cf_names() {
+            let cf_stats = self.cf_stats.entry(cf.to_owned()).or_default();
+            let handle = crate::util::get_cf_handle(db, cf).unwrap();
+            // It is important to monitor each cf's size, especially the "raft" and "lock"
+            // column families.
+            *cf_stats.used_size.get_or_insert_default() +=
+                crate::util::get_engine_cf_used_size(db, handle);
+            *cf_stats.blob_cache_size.get_or_insert_default() += db.get_blob_cache_usage_cf(handle);
+            // TODO: find a better place to record these metrics.
+            // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
+            // For index and filter blocks memory
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TABLE_READERS_MEM) {
+                *cf_stats.readers_mem.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
+                *cf_stats.mem_tables.get_or_insert_default() += v;
+            }
+            // TODO: add cache usage and pinned usage.
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
+                *cf_stats.num_keys.get_or_insert_default() += v;
+            }
+            if let Some(v) = crate::util::get_cf_pending_compaction_bytes(db, handle) {
+                *cf_stats.pending_compaction_bytes.get_or_insert_default() += v;
+            }
+            if let Some(v) = crate::util::get_cf_num_immutable_mem_table(db, handle) {
+                *cf_stats.num_immutable_mem_table.get_or_insert_default() += v;
+            }
+            // Titan.
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_SIZE) {
+                *cf_stats.live_blob_size.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE) {
+                *cf_stats.num_live_blob_file.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE)
+            {
+                *cf_stats.num_obsolete_blob_file.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE) {
+                *cf_stats.live_blob_file_size.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
+            {
+                *cf_stats.obsolete_blob_file_size.get_or_insert_default() += v;
+            }
+            if let Some(v) =
+                db.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE0_FILE)
+            {
+                *cf_stats
+                    .blob_file_discardable_ratio_le0
+                    .get_or_insert_default() += v;
+            }
+            if let Some(v) =
+                db.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE20_FILE)
+            {
+                *cf_stats
+                    .blob_file_discardable_ratio_le20
+                    .get_or_insert_default() += v;
+            }
+            if let Some(v) =
+                db.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE50_FILE)
+            {
+                *cf_stats
+                    .blob_file_discardable_ratio_le50
+                    .get_or_insert_default() += v;
+            }
+            if let Some(v) =
+                db.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE)
+            {
+                *cf_stats
+                    .blob_file_discardable_ratio_le80
+                    .get_or_insert_default() += v;
+            }
+            if let Some(v) =
+                db.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE)
+            {
+                *cf_stats
+                    .blob_file_discardable_ratio_le100
+                    .get_or_insert_default() += v;
+            }
+            // Level stats.
+            let opts = db.get_options_cf(handle);
+            if cf_stats.levels.len() < opts.get_num_levels() {
+                cf_stats
+                    .levels
+                    .resize(opts.get_num_levels(), CfLevelStats::default());
+            }
+            for level in 0..opts.get_num_levels() {
+                if let Some(num_files) = crate::util::get_cf_num_files_at_level(db, handle, level) {
+                    *cf_stats.levels[level].num_files.get_or_insert_default() += num_files;
+                    if let Some(ratio) =
+                        crate::util::get_engine_compression_ratio_at_level(db, handle, level)
+                    {
+                        *cf_stats.levels[level]
+                            .weighted_compression_ratio
+                            .get_or_insert_default() += num_files as f64 * ratio;
+                    }
+                }
+                if let Some(v) = crate::util::get_cf_num_blob_files_at_level(db, handle, level) {
+                    *cf_stats.levels[level]
+                        .num_blob_files
+                        .get_or_insert_default() += v;
+                }
+            }
+
+            if let Some(info) = db.get_map_property_cf(handle, ROCKSDB_CFSTATS) {
+                let stall_num = self.db_stats.stall_num.get_or_insert_default();
+                for (key, val) in ROCKSDB_IOSTALL_KEY.iter().zip(stall_num) {
+                    *val += info.get_property_int_value(key);
+                }
+            }
+        }
+
+        // For snapshot
+        *self.db_stats.num_snapshots.get_or_insert_default() +=
+            db.get_property_int(ROCKSDB_NUM_SNAPSHOTS).unwrap_or(0);
+        let oldest_snapshot_time =
+            db.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME)
+                .map_or(0, |t| {
+                    let now = time::get_time().sec as u64;
+                    // RocksDB returns 0 if no snapshots.
+                    if t > 0 && now > t { now - t } else { 0 }
+                });
+        if oldest_snapshot_time > self.db_stats.oldest_snapshot_time.unwrap_or(0) {
+            *self.db_stats.oldest_snapshot_time.get_or_insert_default() = oldest_snapshot_time;
+        }
+
+        // Since block cache is shared, getting cache size from any CF/DB is fine. Here
+        // we get from default CF.
+        if self.db_stats.block_cache_size.is_none() {
+            let handle = crate::util::get_cf_handle(db, CF_DEFAULT).unwrap();
+            *self.db_stats.block_cache_size.get_or_insert_default() =
+                db.get_block_cache_usage_cf(handle);
+        }
+    }
+
+    fn flush(&mut self) {
+        for (cf, cf_stats) in &self.cf_stats {
+            if let Some(v) = cf_stats.used_size {
+                STORE_ENGINE_SIZE_GAUGE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_cache_size {
+                STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.readers_mem {
+                STORE_ENGINE_MEMORY_GAUGE_VEC
+                    .with_label_values(&[&self.name, cf, "readers-mem"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.mem_tables {
+                STORE_ENGINE_MEMORY_GAUGE_VEC
+                    .with_label_values(&[&self.name, cf, "mem-tables"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.num_keys {
+                STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.pending_compaction_bytes {
+                STORE_ENGINE_PENDING_COMPACTION_BYTES_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            for (level, level_stats) in cf_stats.levels.iter().enumerate() {
+                if let Some(num_files) = level_stats.num_files {
+                    STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
+                        .with_label_values(&[&self.name, cf, &level.to_string()])
+                        .set(num_files as i64);
+                    if num_files > 0 && let Some(ratio) = level_stats.weighted_compression_ratio {
+                        let normalized_compression_ratio =
+                        ratio / num_files as f64;
+                        STORE_ENGINE_COMPRESSION_RATIO_VEC
+                            .with_label_values(&[&self.name, cf, &level.to_string()])
+                            .set(normalized_compression_ratio);
+                    }
+                }
+                if let Some(v) = level_stats.num_blob_files {
+                    STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC
+                        .with_label_values(&[&self.name, cf, &level.to_string()])
+                        .set(v as i64);
+                }
+            }
+
+            if let Some(v) = cf_stats.num_immutable_mem_table {
+                STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.live_blob_size {
+                STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.num_live_blob_file {
+                STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.num_obsolete_blob_file {
+                STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.live_blob_file_size {
+                STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.obsolete_blob_file_size {
+                STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_file_discardable_ratio_le0 {
+                STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, "le0"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_file_discardable_ratio_le20 {
+                STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, "le20"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_file_discardable_ratio_le50 {
+                STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, "le50"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_file_discardable_ratio_le80 {
+                STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, "le80"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.blob_file_discardable_ratio_le100 {
+                STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+                    .with_label_values(&[&self.name, cf, "le100"])
+                    .set(v as i64);
+            }
+        }
+
+        if let Some(v) = self.db_stats.num_snapshots {
+            STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
+                .with_label_values(&[&self.name])
+                .set(v as i64);
+        }
+        if let Some(v) = self.db_stats.oldest_snapshot_time {
+            STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC
+                .with_label_values(&[&self.name])
+                .set(v as i64);
+        }
+        if let Some(v) = self.db_stats.block_cache_size {
+            STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+                .with_label_values(&[&self.name, "all"])
+                .set(v as i64);
+        }
+        if let Some(stall_num) = &self.db_stats.stall_num {
+            for (ty, val) in ROCKSDB_IOSTALL_TYPE.iter().zip(stall_num) {
+                STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
+                    .with_label_values(&[&self.name, ty])
+                    .set(*val as i64);
+            }
+        }
     }
 }
 

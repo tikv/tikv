@@ -294,8 +294,6 @@ pub trait ReadExecutorProvider: Send + Clone + 'static {
     /// get the ReadDelegate with region_id and the number of delegates in the
     /// StoreMeta
     fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>);
-
-    fn store_meta(&self) -> &Self::StoreMeta;
 }
 
 #[derive(Clone)]
@@ -345,10 +343,6 @@ where
             );
         }
         (meta.readers.len(), None)
-    }
-
-    fn store_meta(&self) -> &Self::StoreMeta {
-        &self.store_meta
     }
 }
 
@@ -716,8 +710,8 @@ where
         }
     }
 
-    pub fn store_meta(&self) -> &S::StoreMeta {
-        self.store_meta.store_meta()
+    pub fn store_meta(&self) -> &S {
+        &self.store_meta
     }
 
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the
@@ -760,7 +754,7 @@ where
         }
         let store_id = self.store_id.get().unwrap();
 
-        if let Err(e) = util::check_store_id(req, store_id) {
+        if let Err(e) = util::check_store_id(req.get_header(), store_id) {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.store_id_mismatch.inc());
             debug!("rejected by store id not match"; "err" => %e);
             return Err(e);
@@ -780,13 +774,13 @@ where
         fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
-        if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
+        if let Err(e) = util::check_peer_id(req.get_header(), delegate.peer_id) {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.peer_id_mismatch.inc());
             return Err(e);
         }
 
         // Check term.
-        if let Err(e) = util::check_term(req, delegate.term) {
+        if let Err(e) = util::check_term(req.get_header(), delegate.term) {
             debug!(
                 "check term";
                 "delegate_term" => delegate.term,
@@ -797,7 +791,7 @@ where
         }
 
         // Check region epoch.
-        if util::check_region_epoch(req, &delegate.region, false).is_err() {
+        if util::check_req_region_epoch(req, &delegate.region, false).is_err() {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.epoch.inc());
             // Stale epoch, redirect it to raftstore to get the latest region.
             debug!("rejected by epoch not match"; "tag" => &delegate.tag);
@@ -813,7 +807,7 @@ where
         // Check whether the region is in the flashback state and the local read could
         // be performed.
         let is_in_flashback = delegate.region.is_in_flashback;
-        if let Err(e) = util::check_flashback_state(is_in_flashback, req, region_id) {
+        if let Err(e) = util::check_flashback_state(is_in_flashback, req, region_id, false) {
             TLS_LOCAL_READ_METRICS.with(|m| match e {
                 Error::FlashbackNotPrepared(_) => {
                     m.borrow_mut().reject_reason.flashback_not_prepared.inc()

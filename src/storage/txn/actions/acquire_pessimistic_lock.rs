@@ -171,7 +171,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 last_change_ts: lock.last_change_ts,
                 versions_to_last_change: lock.versions_to_last_change,
             };
-            txn.put_pessimistic_lock(key, lock);
+            txn.put_pessimistic_lock(key, lock, false);
         } else {
             MVCC_DUPLICATE_CMD_COUNTER_VEC
                 .acquire_pessimistic_lock
@@ -325,7 +325,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // When lock_only_if_exists is false, always acquire pessimistic lock, otherwise
     // do it when val exists
     if !lock_only_if_exists || val.is_some() {
-        txn.put_pessimistic_lock(key, lock);
+        txn.put_pessimistic_lock(key, lock, true);
     }
     // TODO don't we need to commit the modifies in txn?
 

@@ -8,8 +8,8 @@ use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
-    engine::RocksEngine, r2e, rocks_metrics_defs::*, sst::RocksSstWriterBuilder, util,
-    RocksSstWriter,
+    engine::RocksEngine, r2e, rocks_metrics::RocksStatisticsReporter, rocks_metrics_defs::*,
+    sst::RocksSstWriterBuilder, util, RocksSstWriter,
 };
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -126,10 +126,17 @@ impl RocksEngine {
 }
 
 impl MiscExt for RocksEngine {
-    fn flush_cfs(&self, wait: bool) -> Result<()> {
+    type StatisticsReporter = RocksStatisticsReporter;
+
+    fn flush_cfs(&self, cfs: &[&str], wait: bool) -> Result<()> {
         let mut handles = vec![];
-        for cf in self.cf_names() {
+        for cf in cfs {
             handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+        }
+        if handles.is_empty() {
+            for cf in self.cf_names() {
+                handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+            }
         }
         self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
     }
@@ -231,6 +238,24 @@ impl MiscExt for RocksEngine {
         Ok(false)
     }
 
+    fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        let ret = self
+            .as_inner()
+            .get_column_family_meta_data(handle)
+            .get_level(level)
+            .get_files()
+            .iter()
+            .map(|sst_meta| {
+                (
+                    sst_meta.get_smallestkey().to_vec(),
+                    sst_meta.get_largestkey().to_vec(),
+                )
+            })
+            .collect();
+        Ok(ret)
+    }
+
     fn get_engine_used_size(&self) -> Result<u64> {
         let mut used_size: u64 = 0;
         for cf in ALL_CFS {
@@ -248,8 +273,18 @@ impl MiscExt for RocksEngine {
         self.as_inner().sync_wal().map_err(r2e)
     }
 
+    fn pause_background_work(&self) -> Result<()> {
+        self.as_inner().pause_bg_work();
+        Ok(())
+    }
+
     fn exists(path: &str) -> bool {
         crate::util::db_exist(path)
+    }
+
+    fn locked(path: &str) -> Result<bool> {
+        let env = rocksdb::Env::default();
+        env.is_db_locked(path).map_err(r2e)
     }
 
     fn dump_stats(&self) -> Result<String> {
@@ -269,11 +304,6 @@ impl MiscExt for RocksEngine {
         }
 
         if let Some(v) = self.as_inner().get_property_value(ROCKSDB_DB_STATS_KEY) {
-            s.extend_from_slice(v.as_bytes());
-        }
-
-        // more stats if enable_statistics is true.
-        if let Some(v) = self.as_inner().get_statistics() {
             s.extend_from_slice(v.as_bytes());
         }
 
@@ -331,7 +361,8 @@ impl MiscExt for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt, ALL_CFS,
+        CompactExt, DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt,
+        ALL_CFS,
     };
     use tempfile::Builder;
 
@@ -578,5 +609,71 @@ mod tests {
         )
         .unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
+    }
+
+    #[test]
+    fn test_get_sst_key_ranges() {
+        let path = Builder::new()
+            .prefix("test_get_sst_key_ranges")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        let mut opts = RocksDbOptions::default();
+        opts.create_if_missing(true);
+        opts.enable_multi_batch_write(true);
+
+        let mut cf_opts = RocksCfOptions::default();
+        // Prefix extractor(trim the timestamp at tail) for write cf.
+        cf_opts
+            .set_prefix_extractor(
+                "FixedSuffixSliceTransform",
+                crate::util::FixedSuffixSliceTransform::new(8),
+            )
+            .unwrap_or_else(|err| panic!("{:?}", err));
+        // Create prefix bloom filter for memtable.
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1_f64);
+        let cf = "default";
+        let db = new_engine_opt(path_str, opts, vec![(cf, cf_opts)]).unwrap();
+        let mut wb = db.write_batch();
+        let kvs: Vec<(&[u8], &[u8])> = vec![
+            (b"k1", b"v1"),
+            (b"k2", b"v2"),
+            (b"k6", b"v3"),
+            (b"k7", b"v4"),
+        ];
+
+        for &(k, v) in kvs.as_slice() {
+            wb.put_cf(cf, k, v).unwrap();
+        }
+        wb.write().unwrap();
+
+        db.flush_cf(cf, true).unwrap();
+        let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
+        let expected = vec![(b"k1".to_vec(), b"k7".to_vec())];
+        assert_eq!(sst_range, expected);
+
+        let mut wb = db.write_batch();
+        let kvs: Vec<(&[u8], &[u8])> = vec![(b"k3", b"v1"), (b"k4", b"v2"), (b"k8", b"v3")];
+
+        for &(k, v) in kvs.as_slice() {
+            wb.put_cf(cf, k, v).unwrap();
+        }
+        wb.write().unwrap();
+
+        db.flush_cf(cf, true).unwrap();
+        let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
+        let expected = vec![
+            (b"k3".to_vec(), b"k8".to_vec()),
+            (b"k1".to_vec(), b"k7".to_vec()),
+        ];
+        assert_eq!(sst_range, expected);
+
+        db.compact_range_cf(cf, None, None, false, 1).unwrap();
+        let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
+        assert_eq!(sst_range.len(), 0);
+        let sst_range = db.get_sst_key_ranges(cf, 1).unwrap();
+        let expected = vec![(b"k1".to_vec(), b"k8".to_vec())];
+        assert_eq!(sst_range, expected);
     }
 }

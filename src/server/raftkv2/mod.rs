@@ -1,0 +1,296 @@
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
+mod node;
+mod raft_extension;
+
+use std::{
+    mem,
+    pin::Pin,
+    sync::{Arc, RwLock},
+    task::Poll,
+};
+
+use collections::HashSet;
+use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
+use futures::{Future, Stream, StreamExt};
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
+pub use node::NodeV2;
+use raftstore::store::RegionSnapshot;
+use raftstore_v2::{
+    router::{
+        message::SimpleWrite, CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter,
+    },
+    SimpleWriteBinary, SimpleWriteEncoder,
+};
+use tikv_kv::{Modify, WriteEvent};
+use tikv_util::{codec::number::NumberEncoder, time::Instant};
+use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
+
+use super::{
+    metrics::{ASYNC_REQUESTS_COUNTER_VEC, ASYNC_REQUESTS_DURATIONS_VEC},
+    raftkv::{get_status_kind_from_engine_error, new_request_header},
+};
+
+struct Transform {
+    resp: CmdResStream,
+    early_err: Option<tikv_kv::Error>,
+}
+
+impl Stream for Transform {
+    type Item = WriteEvent;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let stream = self.get_mut();
+        if stream.early_err.is_some() {
+            return Poll::Ready(Some(WriteEvent::Finished(Err(stream
+                .early_err
+                .take()
+                .unwrap()))));
+        }
+        match stream.resp.poll_next_unpin(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(CmdResEvent::Proposed)) => Poll::Ready(Some(WriteEvent::Proposed)),
+            Poll::Ready(Some(CmdResEvent::Committed)) => Poll::Ready(Some(WriteEvent::Committed)),
+            Poll::Ready(Some(CmdResEvent::Finished(mut resp))) => {
+                let res = if !resp.get_header().has_error() {
+                    Ok(())
+                } else {
+                    Err(tikv_kv::Error::from(resp.take_header().take_error()))
+                };
+                Poll::Ready(Some(WriteEvent::Finished(res)))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+        }
+    }
+}
+
+fn modifies_to_simple_write(modifies: Vec<Modify>) -> SimpleWriteBinary {
+    let mut encoder = SimpleWriteEncoder::with_capacity(128);
+    for m in modifies {
+        match m {
+            Modify::Put(cf, k, v) => encoder.put(cf, k.as_encoded(), &v),
+            Modify::Delete(cf, k) => encoder.delete(cf, k.as_encoded()),
+            Modify::PessimisticLock(k, lock) => {
+                encoder.put(CF_LOCK, k.as_encoded(), &lock.into_lock().to_bytes())
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => encoder.delete_range(
+                cf,
+                start_key.as_encoded(),
+                end_key.as_encoded(),
+                notify_only,
+            ),
+        }
+    }
+    encoder.encode()
+}
+
+#[derive(Clone)]
+pub struct RaftKv2<EK: KvEngine, ER: RaftEngine> {
+    router: RaftRouter<EK, ER>,
+    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
+    region_leaders: Arc<RwLock<HashSet<u64>>>,
+}
+
+impl<EK: KvEngine, ER: RaftEngine> RaftKv2<EK, ER> {
+    #[allow(unused)]
+    pub fn new(
+        router: RaftRouter<EK, ER>,
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
+    ) -> RaftKv2<EK, ER> {
+        RaftKv2 {
+            router,
+            region_leaders,
+            txn_extra_scheduler: None,
+        }
+    }
+
+    pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
+        self.txn_extra_scheduler = Some(txn_extra_scheduler);
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
+    type Snap = RegionSnapshot<EK::Snapshot>;
+    type Local = EK;
+
+    #[inline]
+    fn kv_engine(&self) -> Option<Self::Local> {
+        None
+    }
+
+    type RaftExtension = raft_extension::Extension<EK, ER>;
+    #[inline]
+    fn raft_extension(&self) -> Self::RaftExtension {
+        raft_extension::Extension::new(self.router.store_router().clone())
+    }
+
+    fn modify_on_kv_engine(
+        &self,
+        region_modifies: collections::HashMap<u64, Vec<tikv_kv::Modify>>,
+    ) -> tikv_kv::Result<()> {
+        for (region_id, batch) in region_modifies {
+            let bin = modifies_to_simple_write(batch);
+            let _ = self.router.send(region_id, PeerMsg::unsafe_write(bin));
+        }
+        Ok(())
+    }
+
+    type SnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send;
+    fn async_snapshot(&mut self, mut ctx: tikv_kv::SnapContext<'_>) -> Self::SnapshotRes {
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        if !ctx.key_ranges.is_empty() && ctx.start_ts.map_or(false, |ts| !ts.is_zero()) {
+            req.mut_read_index()
+                .set_start_ts(ctx.start_ts.as_ref().unwrap().into_inner());
+            req.mut_read_index()
+                .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
+        }
+        ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
+        let begin_instant = Instant::now_coarse();
+
+        let mut header = new_request_header(ctx.pb_ctx);
+        let mut flags = 0;
+        if ctx.pb_ctx.get_stale_read() && ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
+            let mut data = [0u8; 8];
+            (&mut data[..])
+                .encode_u64(ctx.start_ts.unwrap_or_default().into_inner())
+                .unwrap();
+            flags |= WriteBatchFlags::STALE_READ.bits();
+            header.set_flag_data(data.into());
+        }
+        if ctx.allowed_in_flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
+
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header);
+        cmd.set_requests(vec![req].into());
+        let f = self.router.snapshot(cmd);
+        async move {
+            let res = f.await;
+            match res {
+                Ok(snap) => {
+                    ASYNC_REQUESTS_DURATIONS_VEC
+                        .snapshot
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
+                    Ok(snap)
+                }
+                Err(mut resp) => {
+                    if resp
+                        .get_responses()
+                        .get(0)
+                        .map_or(false, |r| r.get_read_index().has_locked())
+                    {
+                        let locked = resp.mut_responses()[0].mut_read_index().take_locked();
+                        Err(tikv_kv::Error::from(tikv_kv::ErrorInner::KeyIsLocked(
+                            locked,
+                        )))
+                    } else if resp.get_header().has_error() {
+                        let err = tikv_kv::Error::from(resp.take_header().take_error());
+                        let status_kind = get_status_kind_from_engine_error(&err);
+                        ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
+                        Err(err)
+                    } else {
+                        Err(box_err!("unexpected response: {:?}", resp))
+                    }
+                }
+            }
+        }
+    }
+
+    type WriteRes = impl Stream<Item = WriteEvent> + Send + Unpin;
+    fn async_write(
+        &self,
+        ctx: &kvproto::kvrpcpb::Context,
+        batch: tikv_kv::WriteData,
+        subscribed: u8,
+        on_applied: Option<tikv_kv::OnAppliedCb>,
+    ) -> Self::WriteRes {
+        let region_id = ctx.region_id;
+        ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
+        let begin_instant = Instant::now_coarse();
+        let mut header = Box::new(new_request_header(ctx));
+        let mut flags = 0;
+        if batch.extra.one_pc {
+            flags |= WriteBatchFlags::ONE_PC.bits();
+        }
+        if batch.extra.allowed_in_flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
+
+        self.schedule_txn_extra(batch.extra);
+        let data = modifies_to_simple_write(batch.modifies);
+        let mut builder = CmdResChannelBuilder::default();
+        if WriteEvent::subscribed_proposed(subscribed) {
+            builder.subscribe_proposed();
+        }
+        if WriteEvent::subscribed_committed(subscribed) {
+            builder.subscribe_committed();
+        }
+        if let Some(cb) = on_applied {
+            builder.before_set(move |resp| {
+                let mut res = if !resp.get_header().has_error() {
+                    Ok(())
+                } else {
+                    Err(tikv_kv::Error::from(resp.get_header().get_error().clone()))
+                };
+                cb(&mut res);
+            });
+        }
+        let (ch, sub) = builder.build();
+        let msg = PeerMsg::SimpleWrite(SimpleWrite {
+            header,
+            data,
+            ch,
+            send_time: Instant::now_coarse(),
+        });
+        let res = self
+            .router
+            .store_router()
+            .check_send(region_id, msg)
+            .map_err(tikv_kv::Error::from);
+        (Transform {
+            resp: CmdResStream::new(sub),
+            early_err: res.err(),
+        })
+        .inspect(move |ev| {
+            let WriteEvent::Finished(res) = ev else { return };
+            match res {
+                Ok(()) => {
+                    ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
+                    ASYNC_REQUESTS_DURATIONS_VEC
+                        .write
+                        .observe(begin_instant.saturating_elapsed_secs());
+                }
+                Err(e) => {
+                    let status_kind = get_status_kind_from_engine_error(e);
+                    ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
+                }
+            }
+        })
+    }
+
+    #[inline]
+    fn precheck_write_with_ctx(&self, ctx: &kvproto::kvrpcpb::Context) -> tikv_kv::Result<()> {
+        let region_id = ctx.get_region_id();
+        match self.region_leaders.read().unwrap().get(&region_id) {
+            Some(_) => Ok(()),
+            None => Err(raftstore_v2::Error::NotLeader(region_id, None).into()),
+        }
+    }
+
+    #[inline]
+    fn schedule_txn_extra(&self, txn_extra: TxnExtra) {
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !txn_extra.is_empty() {
+                tx.schedule(txn_extra);
+            }
+        }
+    }
+}

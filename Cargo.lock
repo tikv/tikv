@@ -1427,12 +1427,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "doc-comment"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
-
-[[package]]
 name = "dyn-clone"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1722,9 +1716,11 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "case_macros",
+ "collections",
  "error_code",
  "fail",
  "file_system",
+ "keys",
  "kvproto",
  "log_wrappers",
  "protobuf",
@@ -3001,7 +2997,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/tikv/rust-rocksdb.git#14e4fe7f47054408cf3d2905beeca798c6656191"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -3020,7 +3016,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/tikv/rust-rocksdb.git#14e4fe7f47054408cf3d2905beeca798c6656191"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3535,9 +3531,9 @@ dependencies = [
 
 [[package]]
 name = "ntapi"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f26e041cd983acbc087e30fcba770380cfa352d0e392e175b2344ebaf7ea0602"
+checksum = "bc51db7b362b205941f71232e56c625156eb9a929f8cf74a428fd5bc094a4afc"
 dependencies = [
  "winapi 0.3.9",
 ]
@@ -4610,6 +4606,7 @@ dependencies = [
 name = "raft_log_engine"
 version = "0.0.1"
 dependencies = [
+ "codec",
  "encryption",
  "engine_traits",
  "file_system",
@@ -4624,6 +4621,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv_util",
  "time",
  "tracker",
@@ -4711,6 +4709,7 @@ name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
  "batch-system",
+ "bytes",
  "causal_ts",
  "collections",
  "concurrency_manager",
@@ -4725,12 +4724,14 @@ dependencies = [
  "keys",
  "kvproto",
  "log_wrappers",
+ "parking_lot 0.12.0",
  "pd_client",
  "prometheus",
  "protobuf",
  "raft",
  "raft-proto",
  "raftstore",
+ "rand 0.8.5",
  "resource_metering",
  "slog",
  "slog-global",
@@ -4738,6 +4739,7 @@ dependencies = [
  "tempfile",
  "test_pd",
  "test_util",
+ "thiserror",
  "tikv_util",
  "time",
  "tracker",
@@ -4873,9 +4875,9 @@ dependencies = [
 
 [[package]]
 name = "rayon"
-version = "1.5.0"
+version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b0d8e0819fadc20c74ea8373106ead0600e3a67ef1fe8da56e39b9ae7275674"
+checksum = "bd99e5772ead8baa5215278c9b15bf92087709e9c1b2d1f97cdb5a183c933a7d"
 dependencies = [
  "autocfg",
  "crossbeam-deque",
@@ -4885,14 +4887,13 @@ dependencies = [
 
 [[package]]
 name = "rayon-core"
-version = "1.9.0"
+version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ab346ac5921dc62ffa9f89b7a773907511cdfa5490c572ae9be1be33e8afa4a"
+checksum = "258bcdb5ac6dad48491bb2992db6b7cf74878b0384908af124823d118c99683f"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-deque",
  "crossbeam-utils 0.8.8",
- "lazy_static",
  "num_cpus",
 ]
 
@@ -5096,7 +5097,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/tikv/rust-rocksdb.git#14e4fe7f47054408cf3d2905beeca798c6656191"
 dependencies = [
  "libc 0.2.132",
  "librocksdb_sys",
@@ -5562,6 +5563,7 @@ dependencies = [
  "raft",
  "raft_log_engine",
  "raftstore",
+ "raftstore-v2",
  "rand 0.8.5",
  "resolved_ts",
  "resource_metering",
@@ -5981,13 +5983,12 @@ checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
 
 [[package]]
 name = "sysinfo"
-version = "0.16.4"
+version = "0.26.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c280c91abd1aed2e36be1bc8f56fbc7a2acbb2b58fbcac9641510179cc72dd9"
+checksum = "ade661fa5e048ada64ad7901713301c21d2dbc5b65ee7967de8826c111452960"
 dependencies = [
  "cfg-if 1.0.0",
  "core-foundation-sys",
- "doc-comment",
  "libc 0.2.132",
  "ntapi",
  "once_cell",
@@ -6551,7 +6552,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.5.0-alpha"
+version = "6.6.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6631,6 +6632,7 @@ dependencies = [
  "raft",
  "raft_log_engine",
  "raftstore",
+ "raftstore-v2",
  "rand 0.7.3",
  "regex",
  "reqwest",

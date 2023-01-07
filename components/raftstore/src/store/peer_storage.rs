@@ -183,7 +183,9 @@ fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
         raft_state.last_index = RAFT_INIT_LOG_INDEX;
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-        engines.raft.put_raft_state(region.get_id(), &raft_state)?;
+        let mut lb = engines.raft.log_batch(0);
+        lb.put_raft_state(region.get_id(), &raft_state)?;
+        engines.raft.consume(&mut lb, true)?;
     }
     Ok(raft_state)
 }
@@ -2077,32 +2079,35 @@ pub mod tests {
         let initial_state = s.initial_state().unwrap();
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
 
+        let mut lb = engines.raft.log_batch(4096);
         // last_index < commit_index is invalid.
         raft_state.set_last_index(11);
-        engines
-            .raft
-            .append(1, vec![new_entry(11, RAFT_INIT_LOG_TERM)])
+        lb.append(1, vec![new_entry(11, RAFT_INIT_LOG_TERM)])
             .unwrap();
         raft_state.mut_hard_state().set_commit(12);
-        engines.raft.put_raft_state(1, &raft_state).unwrap();
+        lb.put_raft_state(1, &raft_state).unwrap();
+        engines.raft.consume(&mut lb, false).unwrap();
         assert!(build_storage().is_err());
 
         raft_state.set_last_index(20);
         let entries = (12..=20)
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
-        engines.raft.append(1, entries).unwrap();
-        engines.raft.put_raft_state(1, &raft_state).unwrap();
+        lb.append(1, entries).unwrap();
+        lb.put_raft_state(1, &raft_state).unwrap();
+        engines.raft.consume(&mut lb, false).unwrap();
         s = build_storage().unwrap();
         let initial_state = s.initial_state().unwrap();
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
 
         // Missing last log is invalid.
         raft_state.set_last_index(21);
-        engines.raft.put_raft_state(1, &raft_state).unwrap();
+        lb.put_raft_state(1, &raft_state).unwrap();
+        engines.raft.consume(&mut lb, false).unwrap();
         assert!(build_storage().is_err());
         raft_state.set_last_index(20);
-        engines.raft.put_raft_state(1, &raft_state).unwrap();
+        lb.put_raft_state(1, &raft_state).unwrap();
+        engines.raft.consume(&mut lb, false).unwrap();
 
         // applied_index > commit_index is invalid.
         let mut apply_state = RaftApplyState::default();
@@ -2119,7 +2124,8 @@ pub mod tests {
         assert!(build_storage().is_err());
 
         // It should not recover if corresponding log doesn't exist.
-        engines.raft.gc(1, 14, 15).unwrap();
+        engines.raft.gc(1, 14, 15, &mut lb).unwrap();
+        engines.raft.consume(&mut lb, false).unwrap();
         apply_state.set_commit_index(14);
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
         engines
@@ -2131,8 +2137,9 @@ pub mod tests {
         let entries = (14..=20)
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
-        engines.raft.gc(1, 0, 21).unwrap();
-        engines.raft.append(1, entries).unwrap();
+        engines.raft.gc(1, 0, 21, &mut lb).unwrap();
+        lb.append(1, entries).unwrap();
+        engines.raft.consume(&mut lb, false).unwrap();
         raft_state.mut_hard_state().set_commit(14);
         s = build_storage().unwrap();
         let initial_state = s.initial_state().unwrap();
@@ -2143,27 +2150,28 @@ pub mod tests {
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
         entries[0].set_term(RAFT_INIT_LOG_TERM - 1);
-        engines.raft.append(1, entries).unwrap();
+        lb.append(1, entries).unwrap();
+        engines.raft.consume(&mut lb, false).unwrap();
         assert!(build_storage().is_err());
 
         // hard state term miss match is invalid.
         let entries = (14..=20)
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
-        engines.raft.append(1, entries).unwrap();
+        lb.append(1, entries).unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM - 1);
-        engines.raft.put_raft_state(1, &raft_state).unwrap();
+        lb.put_raft_state(1, &raft_state).unwrap();
+        engines.raft.consume(&mut lb, false).unwrap();
         assert!(build_storage().is_err());
 
         // last index < recorded_commit_index is invalid.
-        engines.raft.gc(1, 0, 21).unwrap();
+        engines.raft.gc(1, 0, 21, &mut lb).unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.set_last_index(13);
-        engines
-            .raft
-            .append(1, vec![new_entry(13, RAFT_INIT_LOG_TERM)])
+        lb.append(1, vec![new_entry(13, RAFT_INIT_LOG_TERM)])
             .unwrap();
-        engines.raft.put_raft_state(1, &raft_state).unwrap();
+        lb.put_raft_state(1, &raft_state).unwrap();
+        engines.raft.consume(&mut lb, false).unwrap();
         assert!(build_storage().is_err());
     }
 

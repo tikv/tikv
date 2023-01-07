@@ -5,6 +5,7 @@ publish = false
 edition = "2018"
 
 [dependencies]
+codec = { workspace = true }
 encryption = { workspace = true }
 engine_traits = { workspace = true }
 file_system = { workspace = true }
@@ -22,3 +23,6 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tikv_util = { workspace = true }
 time = "0.1"
 tracker = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.0"

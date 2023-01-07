@@ -5,6 +5,7 @@ use std::{
     iter::FromIterator,
     path::Path,
     result,
+    sync::Arc,
     thread::{Builder as ThreadBuilder, JoinHandle},
 };
 
@@ -12,12 +13,12 @@ use collections::HashSet;
 use engine_rocks::{
     raw::{CompactOptions, DBBottommostLevelCompaction},
     util::get_cf_handle,
-    RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksWriteBatchVec,
+    RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksStatistics, RocksWriteBatchVec,
 };
 use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, MvccProperties, Peekable,
-    RaftEngine, Range, RangePropertiesExt, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    Engines, IterOptions, Iterable, Iterator as EngineIterator, MiscExt, Mutable, MvccProperties,
+    Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt, SyncMutable, WriteBatch,
+    WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use kvproto::{
     debugpb::{self, Db as DbType},
@@ -127,6 +128,8 @@ trait InnerRocksEngineExtractor {
 #[derive(Clone)]
 pub struct Debugger<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
+    kv_statistics: Option<Arc<RocksStatistics>>,
+    raft_statistics: Option<Arc<RocksStatistics>>,
     reset_to_version_manager: ResetToVersionManager,
     cfg_controller: ConfigController,
 }
@@ -159,13 +162,39 @@ impl<ER: RaftEngine> Debugger<ER> {
         let reset_to_version_manager = ResetToVersionManager::new(engines.kv.clone());
         Debugger {
             engines,
+            kv_statistics: None,
+            raft_statistics: None,
             reset_to_version_manager,
             cfg_controller,
         }
     }
 
+    pub fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
+        self.kv_statistics = s;
+    }
+
+    pub fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
+        self.raft_statistics = s;
+    }
+
     pub fn get_engine(&self) -> &Engines<RocksEngine, ER> {
         &self.engines
+    }
+
+    pub fn dump_kv_stats(&self) -> Result<String> {
+        let mut kv_str = box_try!(MiscExt::dump_stats(&self.engines.kv));
+        if let Some(s) = self.kv_statistics.as_ref() && let Some(s) = s.to_string() {
+            kv_str.push_str(&s);
+        }
+        Ok(kv_str)
+    }
+
+    pub fn dump_raft_stats(&self) -> Result<String> {
+        let mut raft_str = box_try!(RaftEngine::dump_stats(&self.engines.raft));
+        if let Some(s) = self.raft_statistics.as_ref() && let Some(s) = s.to_string() {
+            raft_str.push_str(&s);
+        }
+        Ok(raft_str)
     }
 
     /// Get all regions holding region meta data from raft CF in KV storage.
@@ -735,9 +764,10 @@ impl<ER: RaftEngine> Debugger<ER> {
                 &keys::apply_state_key(region_id),
                 &new_raft_apply_state
             ));
-            box_try!(raft.put_raft_state(region_id, &new_raft_local_state));
-            let deleted_logs = box_try!(raft.gc(region_id, applied_index + 1, last_index + 1));
-            raft.sync().unwrap();
+            let mut lb = raft.log_batch(0);
+            box_try!(lb.put_raft_state(region_id, &new_raft_local_state));
+            box_try!(raft.gc(region_id, applied_index + 1, last_index + 1, &mut lb));
+            box_try!(raft.consume(&mut lb, true));
             kv.sync().unwrap();
 
             info!(
@@ -747,7 +777,6 @@ impl<ER: RaftEngine> Debugger<ER> {
                 "new_raft_local_state" => ?new_raft_local_state,
                 "old_raft_apply_state" => ?old_raft_apply_state,
                 "new_raft_apply_state" => ?new_raft_apply_state,
-                "deleted logs" => deleted_logs,
             );
         }
 

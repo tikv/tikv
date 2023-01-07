@@ -12,7 +12,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
@@ -170,6 +170,8 @@ pub struct Cluster<T: Simulator> {
     group_props: HashMap<u64, GroupProperties>,
     pub sst_workers: Vec<LazyWorker<String>>,
     pub sst_workers_map: HashMap<u64, usize>,
+    pub kv_statistics: Vec<Arc<RocksStatistics>>,
+    pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
 }
@@ -205,6 +207,8 @@ impl<T: Simulator> Cluster<T> {
             pd_client,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
+            kv_statistics: vec![],
+            raft_statistics: vec![],
         }
     }
 
@@ -240,12 +244,14 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
-        let (engines, key_manager, dir, sst_worker) =
+        let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
             create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
         self.sst_workers.push(sst_worker);
+        self.kv_statistics.push(kv_statistics);
+        self.raft_statistics.push(raft_statistics);
     }
 
     pub fn create_engines(&mut self) {
@@ -302,7 +308,8 @@ impl<T: Simulator> Cluster<T> {
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
             let db = &engine.kv;
-            db.compact_range(CF_DEFAULT, None, None, false, 1).unwrap();
+            db.compact_range_cf(CF_DEFAULT, None, None, false, 1)
+                .unwrap();
         }
     }
 

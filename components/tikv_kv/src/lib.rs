@@ -294,8 +294,8 @@ pub struct SnapContext<'a> {
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
-    // Marks that this read is a FlashbackToVersionReadPhase.
-    pub for_flashback: bool,
+    // Marks that this snapshot request is allowed in the flashback state.
+    pub allowed_in_flashback: bool,
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -311,7 +311,7 @@ pub trait Engine: Send + Clone + 'static {
 
     type RaftExtension: raft_extension::RaftExtension = FakeExtension;
     /// Get the underlying raft extension.
-    fn raft_extension(&self) -> &Self::RaftExtension {
+    fn raft_extension(&self) -> Self::RaftExtension {
         unimplemented!()
     }
 

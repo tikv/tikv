@@ -18,7 +18,6 @@ use engine_traits::{
     Result, SyncMutable,
 };
 use rocksdb::{Writable, DB};
-use tikv_util::box_err;
 
 use crate::{r2e, util::get_cf_handle};
 
@@ -118,10 +117,6 @@ impl RocksEngine {
         fs::read_dir(&path).unwrap().next().is_some()
     }
 
-    pub fn set_shared_block_cache(&mut self, enable: bool) {
-        self.rocks.set_shared_block_cache(enable);
-    }
-
     pub fn support_multi_batch_write(&self) -> bool {
         self.rocks.support_multi_batch_write()
     }
@@ -140,10 +135,6 @@ impl KvEngine for RocksEngine {
 
     fn flush_metrics(&self, instance: &str) {
         self.rocks.flush_metrics(instance);
-    }
-
-    fn reset_statistics(&self) {
-        self.rocks.reset_statistics();
     }
 
     fn bad_downcast<T: 'static>(&self) -> &T {

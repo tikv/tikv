@@ -26,6 +26,14 @@ pub use crate::storage::{Callback, Error, ErrorInner, Result};
 // Returns true if it needs gc.
 // This is for optimization purpose, does not mean to be accurate.
 fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccProperties) -> bool {
+    // Disable GC directly once the config is negative or +inf.
+    // Disabling GC is useful in some abnormal scenarios where the transaction model
+    // would be break (e.g. writes with higher commit TS would be written BEFORE
+    // writes with lower commit TS, or write data with TS lower than current GC safe
+    // point). Use this at your own risk.
+    if ratio_threshold.is_sign_negative() || ratio_threshold.is_infinite() {
+        return false;
+    }
     // Always GC.
     if ratio_threshold < 1.0 {
         return true;
@@ -75,6 +83,14 @@ mod tests {
             .unwrap();
         assert_eq!(check_need_gc(safe_point, 1.0, &props), need_gc);
         props
+    }
+
+    #[test]
+    fn test_check_need_gc() {
+        let props = MvccProperties::default();
+        assert!(!check_need_gc(TimeStamp::max(), -1.0, &props));
+        assert!(!check_need_gc(TimeStamp::max(), f64::INFINITY, &props));
+        assert!(check_need_gc(TimeStamp::max(), 0.9, &props));
     }
 
     #[test]

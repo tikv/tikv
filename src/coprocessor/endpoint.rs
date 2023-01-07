@@ -171,7 +171,7 @@ impl<E: Engine> Endpoint<E> {
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
 
-        let req_ctx: ReqContext;
+        let mut req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
         match req.get_tp() {
@@ -316,6 +316,9 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                // Checksum is allowed during the flashback period to make sure the tool such
+                // like BR can work.
+                req_ctx.allowed_in_flashback = true;
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorChecksum;
                     tracker.req_info.start_ts = start_ts;
@@ -358,6 +361,7 @@ impl<E: Engine> Endpoint<E> {
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx.context,
             start_ts: Some(ctx.txn_start_ts),
+            allowed_in_flashback: ctx.allowed_in_flashback,
             ..Default::default()
         };
         // need to pass start_ts and ranges to check memory locks for replica read

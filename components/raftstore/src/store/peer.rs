@@ -76,8 +76,8 @@ use super::{
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
-        self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
-        Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+        self, check_req_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI,
+        ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
     DestroyPeerJob, LocalReadContext,
 };
@@ -1030,8 +1030,6 @@ where
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    // Used as the memory state for Flashback to reject RW/Schedule before proposing.
-    pub is_in_flashback: bool,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 }
 
@@ -1167,7 +1165,6 @@ where
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
-            is_in_flashback: region.get_is_in_flashback(),
             snapshot_recovery_state: None,
         };
 
@@ -2285,6 +2282,7 @@ where
                     leader_id: ss.leader_id,
                     prev_lead_transferee: self.lead_transferee,
                     vote: self.raft_group.raft.vote,
+                    initialized: self.is_initialized(),
                 },
             );
             self.cmd_epoch_checker.maybe_update_term(self.term());
@@ -3531,7 +3529,7 @@ where
             self.force_leader.is_some(),
         ) {
             None
-        } else if self.is_in_flashback {
+        } else if self.region().is_in_flashback {
             debug!(
                 "prevents renew lease while in flashback state";
                 "region_id" => self.region_id,
@@ -4516,7 +4514,7 @@ where
         self.raft_group.raft.msgs.push(msg);
     }
 
-    /// Return true to if the transfer leader request is accepted.
+    /// Return true if the transfer leader request is accepted.
     ///
     /// When transferring leadership begins, leader sends a pre-transfer
     /// to target follower first to ensures it's ready to become leader.
@@ -4711,7 +4709,7 @@ where
     ) -> ReadResponse<EK::Snapshot> {
         let region = self.region().clone();
         if check_epoch {
-            if let Err(e) = check_region_epoch(&req, &region, true) {
+            if let Err(e) = check_req_region_epoch(&req, &region, true) {
                 debug!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
                 let mut response = cmd_resp::new_error(e);
                 cmd_resp::bind_term(&mut response, self.term());
@@ -5658,7 +5656,7 @@ fn is_request_urgent(req: &RaftCmdRequest) -> bool {
     )
 }
 
-fn make_transfer_leader_response() -> RaftCmdResponse {
+pub fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut response = AdminResponse::default();
     response.set_cmd_type(AdminCmdType::TransferLeader);
     response.set_transfer_leader(TransferLeaderResponse::default());

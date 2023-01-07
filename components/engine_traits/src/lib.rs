@@ -251,6 +251,9 @@
 #![cfg_attr(test, feature(test))]
 #![feature(min_specialization)]
 #![feature(assert_matches)]
+#![feature(linked_list_cursors)]
+#![feature(let_chains)]
+#![feature(str_split_as_str)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -277,6 +280,8 @@ mod engine;
 pub use crate::engine::*;
 mod file_system;
 pub use crate::file_system::*;
+mod flush;
+pub use flush::*;
 mod import;
 pub use import::*;
 mod misc;
@@ -294,6 +299,8 @@ mod sst_partitioner;
 pub use crate::sst_partitioner::*;
 mod range_properties;
 pub use crate::{mvcc_properties::*, range_properties::*};
+mod tablet;
+pub use tablet::*;
 mod ttl_properties;
 pub use crate::ttl_properties::*;
 mod perf_context;
@@ -333,7 +340,7 @@ pub use crate::range::*;
 
 mod raft_engine;
 pub use raft_engine::{
-    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask,
+    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
     RAFT_LOG_MULTI_GET_CNT,
 };
 

@@ -115,7 +115,6 @@ pub struct UpdateWaitForEvent {
     pub start_ts: TimeStamp,
     pub is_first_lock: bool,
     pub wait_info: KeyLockWaitInfo,
-    pub diag_ctx: DiagnosticContext,
 }
 
 /// `LockManager` manages transactions waiting for locks held by other

@@ -12,6 +12,7 @@ use collections::HashSet;
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{future::join_all, sink::SinkExt, stream::TryStreamExt, TryFutureExt};
+use futures_executor::{ThreadPool, ThreadPoolBuilder};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -56,6 +57,12 @@ where
     engine: E,
     router: Router,
     threads: Arc<Runtime>,
+    // For now, PiTR cannot be executed in the tokio runtime because it is synchronous and may
+    // blocks. (tokio is so strict... it panics if we do insane things like blocking in an async
+    // context.)
+    // We need to execute these code in a context which allows blocking.
+    // FIXME: Make PiTR restore asynchronous. Get rid of this pool.
+    block_threads: Arc<ThreadPool>,
     importer: Arc<SstImporter>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
@@ -92,6 +99,18 @@ where
             .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .build()
             .unwrap();
+        let props = tikv_util::thread_group::current_properties();
+        let block_threads = ThreadPoolBuilder::new()
+            .pool_size(cfg.num_threads)
+            .name_prefix("sst-importer")
+            .after_start_wrapper(move || {
+                tikv_util::thread_group::set_properties(props.clone());
+                tikv_alloc::add_thread_memory_accessor();
+                set_io_type(IoType::Import);
+            })
+            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
+            .create()
+            .unwrap();
         importer.start_switch_mode_check(threads.handle(), engine.clone());
         threads.spawn(Self::tick(importer.clone()));
 
@@ -99,6 +118,7 @@ where
             cfg,
             engine,
             threads: Arc::new(threads),
+            block_threads: Arc::new(block_threads),
             router,
             importer,
             limiter: Limiter::new(f64::INFINITY),
@@ -165,6 +185,17 @@ where
                 .ingest_maybe_slowdown_writes(CF_WRITE)
                 .expect("cf")
         {
+            match self.engine.get_sst_key_ranges(CF_WRITE, 0) {
+                Ok(l0_sst_ranges) => {
+                    warn!(
+                        "sst ingest is too slow";
+                        "sst_ranges" => ?l0_sst_ranges,
+                    );
+                }
+                Err(e) => {
+                    error!("get sst key ranges failed"; "err" => ?e);
+                }
+            }
             let mut errorpb = errorpb::Error::default();
             let err = "too many sst files are ingesting";
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
@@ -596,7 +627,7 @@ where
             debug!("finished apply kv file with {:?}", resp);
             crate::send_rpc_response!(resp, sink, label, timer);
         };
-        self.threads.spawn(handle_task);
+        self.block_threads.spawn_ok(handle_task);
     }
 
     /// Downloads the file and performs key-rewrite for later ingesting.
@@ -1044,7 +1075,7 @@ where
     Box::new(move |k: Vec<u8>, v: Vec<u8>| {
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
-        if k.is_empty() || v.is_empty() {
+        if k.is_empty() || (!is_delete && v.is_empty()) {
             return;
         }
 

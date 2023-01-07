@@ -1,30 +1,27 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    task::{Context, Poll},
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{KvEngine, TabletFactory};
-use futures::{Future, StreamExt};
+use engine_traits::{FlushState, KvEngine, TabletRegistry};
+use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use raftstore::store::ReadTask;
 use slog::Logger;
 use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
+    timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
 
 use crate::{
+    operation::DataTrace,
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
-    tablet::CachedTablet,
 };
 
 /// A trait for reporting apply result.
@@ -37,7 +34,7 @@ pub trait ApplyResReporter {
 impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for Mailbox<F, S> {
     fn report(&self, apply_res: ApplyRes) {
         // TODO: check shutdown.
-        self.force_send(PeerMsg::ApplyRes(apply_res)).unwrap();
+        let _ = self.force_send(PeerMsg::ApplyRes(apply_res));
     }
 }
 
@@ -64,9 +61,10 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
-        remote_tablet: CachedTablet<EK>,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        flush_state: Arc<FlushState>,
+        log_recovery: Option<Box<DataTrace>>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
@@ -74,9 +72,10 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             peer,
             region_state,
             res_reporter,
-            remote_tablet,
-            tablet_factory,
+            tablet_registry,
             read_scheduler,
+            flush_state,
+            log_recovery,
             logger,
         );
         (
@@ -92,15 +91,29 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
 impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
     pub async fn handle_all_tasks(&mut self) {
         loop {
-            let mut task = match self.receiver.next().await {
-                Some(t) => t,
-                None => return,
+            let timeout = GLOBAL_TIMER_HANDLE
+                .delay(Instant::now() + Duration::from_secs(10))
+                .compat();
+            let res = futures::select! {
+                res = self.receiver.next().fuse() => res,
+                _ = timeout.fuse() => None,
+            };
+            let mut task = match res {
+                Some(r) => r,
+                None => {
+                    self.apply.release_memory();
+                    match self.receiver.next().await {
+                        Some(t) => t,
+                        None => return,
+                    }
+                }
             };
             loop {
                 match task {
                     // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
                     ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
+                    ApplyTask::UnsafeWrite(raw_write) => self.apply.apply_unsafe_write(raw_write),
                 }
 
                 // TODO: yield after some time.

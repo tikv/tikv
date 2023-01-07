@@ -7,7 +7,6 @@ use std::{
 
 use causal_ts::CausalTsProvider;
 use engine_traits::{KvEngine, RaftEngine};
-use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
 use pd_client::PdClient;
 use raftstore::{store::TxnExt, Result};
@@ -96,7 +95,7 @@ where
 
         #[cfg(feature = "failpoints")]
         let delay = (|| {
-            fail_point!("delay_update_max_ts", |_| true);
+            fail::fail_point!("delay_update_max_ts", |_| true);
             false
         })();
         #[cfg(not(feature = "failpoints"))]

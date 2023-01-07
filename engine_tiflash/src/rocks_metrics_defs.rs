@@ -138,7 +138,6 @@ pub const TITAN_ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::TitanGcNoNeed,
     TickerType::TitanGcRemain,
     TickerType::TitanGcDiscardable,
-    TickerType::TitanGcSample,
     TickerType::TitanGcSmallFile,
     TickerType::TitanGcFailure,
     TickerType::TitanGcSuccess,

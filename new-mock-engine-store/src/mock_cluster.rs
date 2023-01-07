@@ -514,35 +514,36 @@ pub fn create_tiflash_test_engine(
     .map(Arc::new);
 
     let env = engine_rocks::get_env(key_manager.clone(), limiter).unwrap();
-    let cache = cfg.storage.block_cache.build_shared_cache();
 
     let kv_path = dir.path().join(tikv::config::DEFAULT_ROCKSDB_SUB_DIR);
     let kv_path_str = kv_path.to_str().unwrap();
 
-    let mut kv_db_opt = cfg.rocksdb.build_opt();
-    kv_db_opt.set_env(env.clone());
-
-    let kv_cfs_opt = cfg
+    let kv_db_opt = cfg
         .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.api_version());
+        .build_opt(&cfg.rocksdb.build_resources(env.clone()));
+
+    let cache = cfg.storage.block_cache.build_shared_cache();
+    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
+
+    let kv_cfs_opt = cfg.rocksdb.build_cf_opts(
+        &cfg.rocksdb.build_cf_resources(cache),
+        None,
+        cfg.storage.api_version(),
+        cfg.storage.engine,
+    );
 
     let engine = engine_rocks::util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap();
-    let mut engine = TiFlashEngine::from_rocks(engine);
+    let engine = TiFlashEngine::from_rocks(engine);
 
     let raft_path = dir.path().join("raft");
     let raft_path_str = raft_path.to_str().unwrap();
 
-    let mut raft_db_opt = cfg.raftdb.build_opt();
-    raft_db_opt.set_env(env);
+    let raft_db_opt = cfg.raftdb.build_opt(env.clone(), None);
 
-    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
-    let mut raft_engine =
+    let raft_engine =
         engine_rocks::util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap();
 
     // FFI is not usable, until create_engine.
-    let shared_block_cache = cache.is_some();
-    engine.set_shared_block_cache(shared_block_cache);
-    raft_engine.set_shared_block_cache(shared_block_cache);
     let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir)
 }

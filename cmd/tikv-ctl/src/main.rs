@@ -59,7 +59,7 @@ fn main() {
 
     // Initialize configuration and security manager.
     let cfg_path = opt.config.as_ref();
-    let cfg = cfg_path.map_or_else(
+    let mut cfg = cfg_path.map_or_else(
         || {
             let mut cfg = TikvConfig::default();
             cfg.log.level = tikv_util::logger::get_level_by_string("warn")
@@ -249,9 +249,8 @@ fn main() {
                 .exit();
             }
 
-            let skip_paranoid_checks = opt.skip_paranoid_checks;
-            let debug_executor =
-                new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
+            cfg.rocksdb.paranoid_checks = Some(!opt.skip_paranoid_checks);
+            let debug_executor = new_debug_executor(&cfg, data_dir, host, Arc::clone(&mgr));
 
             match cmd {
                 Cmd::Print { cf, key } => {
@@ -643,7 +642,7 @@ fn compact_whole_cluster(
             .name(format!("compact-{}", addr))
             .spawn_wrapper(move || {
                 tikv_alloc::add_thread_memory_accessor();
-                let debug_executor = new_debug_executor(&cfg, None, false, Some(&addr), mgr);
+                let debug_executor = new_debug_executor(&cfg, None, Some(&addr), mgr);
                 for cf in cfs {
                     debug_executor.compact(
                         Some(&addr),
@@ -682,20 +681,20 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
     list
 }
 
-fn run_ldb_command(args: Vec<String>, cfg: &TikvConfig) {
+fn build_rocks_opts(cfg: &TikvConfig) -> engine_rocks::RocksDbOptions {
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
     let env = get_env(key_manager, None /* io_rate_limiter */).unwrap();
-    let mut opts = cfg.rocksdb.build_opt();
-    opts.set_env(env);
+    cfg.rocksdb.build_opt(&cfg.rocksdb.build_resources(env))
+}
 
-    engine_rocks::raw::run_ldb_tool(&args, &opts);
+fn run_ldb_command(args: Vec<String>, cfg: &TikvConfig) {
+    engine_rocks::raw::run_ldb_tool(&args, &build_rocks_opts(cfg));
 }
 
 fn run_sst_dump_command(args: Vec<String>, cfg: &TikvConfig) {
-    let opts = cfg.rocksdb.build_opt();
-    engine_rocks::raw::run_sst_dump_tool(&args, &opts);
+    engine_rocks::raw::run_sst_dump_tool(&args, &build_rocks_opts(cfg));
 }
 
 fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TikvConfig) {
@@ -714,7 +713,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
 
     let stderr = BufferRedirect::stderr().unwrap();
     let stdout = BufferRedirect::stdout().unwrap();
-    let opts = cfg.rocksdb.build_opt();
+    let opts = build_rocks_opts(cfg);
 
     match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)) {
         Ok(code) => {
