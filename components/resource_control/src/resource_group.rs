@@ -9,7 +9,7 @@ use std::{
 };
 
 use dashmap::{mapref::one::Ref, DashMap};
-use kvproto::resource_manager::{GroupMode, GroupSettings, ResourceGroup};
+use kvproto::resource_manager::{GroupMode, ResourceGroup};
 use tikv_util::sys::SysQuota;
 use yatp::queue::priority::TaskPriorityProvider;
 
@@ -29,7 +29,7 @@ pub enum ResourceConsumeType {
 
 /// ResourceGroupManager manages the metadata of each resource group.
 pub struct ResourceGroupManager {
-    resource_groups: DashMap<String, GroupSettings>,
+    resource_groups: DashMap<String, ResourceGroup>,
     registry: Mutex<Vec<Arc<ResourceController>>>,
     /// total_ru_quota is an estimated upper bound of RU, used to calculate the
     /// weight of each resource.
@@ -48,34 +48,36 @@ impl Default for ResourceGroupManager {
 }
 
 impl ResourceGroupManager {
-    fn get_ru_setting(setting: &GroupSettings, is_read: bool) -> f64 {
-        match (setting.get_mode(), is_read) {
-            (GroupMode::RuMode, true) => setting.get_r_u_settings().get_r_r_u().get_tokens(),
-            (GroupMode::RuMode, false) => setting.get_r_u_settings().get_w_r_u().get_tokens(),
+    fn get_ru_setting(rg: &ResourceGroup, is_read: bool) -> f64 {
+        match (rg.get_mode(), is_read) {
+            (GroupMode::RuMode, true) => rg.get_r_u_settings().get_r_r_u().get_tokens(),
+            (GroupMode::RuMode, false) => rg.get_r_u_settings().get_w_r_u().get_tokens(),
             // TODO: currently we only consider the cpu usage in the read path, we may also take
             // io read bytes into account later.
-            (GroupMode::NativeMode, true) => setting.get_resource_settings().get_cpu().get_tokens(),
-            (GroupMode::NativeMode, false) => {
-                setting.get_resource_settings().get_io_write().get_tokens()
+            (GroupMode::RawMode, true) => rg.get_resource_settings().get_cpu().get_tokens(),
+            (GroupMode::RawMode, false) => {
+                rg.get_resource_settings().get_io_write().get_tokens()
             }
+            // return a default value for unsupported config.
+            (GroupMode::Unknown, _) => 1.0,
         }
     }
 
-    fn gen_group_priority_factor(&self, setting: &GroupSettings, is_read: bool) -> u64 {
-        let ru_settings = Self::get_ru_setting(setting, is_read);
+    fn gen_group_priority_factor(&self, rg: &ResourceGroup, is_read: bool) -> u64 {
+        let ru_settings = Self::get_ru_setting(rg, is_read);
         // TODO: ensure the result is a valid positive integer
         (self.total_ru_quota / ru_settings * 10.0) as u64
     }
 
-    pub fn add_resource_group(&self, config: ResourceGroup) {
-        let group_name = config.get_name().to_ascii_lowercase();
+    pub fn add_resource_group(&self, rg: ResourceGroup) {
+        let group_name = rg.get_name().to_ascii_lowercase();
         self.registry.lock().unwrap().iter().for_each(|controller| {
             let priority_factor =
-                self.gen_group_priority_factor(config.get_settings(), controller.is_read);
+                self.gen_group_priority_factor(&rg, controller.is_read);
             controller.add_resource_group(group_name.clone().into_bytes(), priority_factor);
         });
         self.resource_groups
-            .insert(group_name, config.get_settings().clone());
+            .insert(group_name, rg);
     }
 
     pub fn remove_resource_group(&self, name: &str) {
@@ -90,11 +92,11 @@ impl ResourceGroupManager {
         self.resource_groups.remove(&group_name);
     }
 
-    pub fn get_resource_group(&self, name: &str) -> Option<Ref<'_, String, GroupSettings>> {
+    pub fn get_resource_group(&self, name: &str) -> Option<Ref<'_, String, ResourceGroup>> {
         self.resource_groups.get(&name.to_ascii_lowercase())
     }
 
-    pub fn get_all_resource_groups(&self) -> Vec<GroupSettings> {
+    pub fn get_all_resource_groups(&self) -> Vec<ResourceGroup> {
         self.resource_groups.iter().map(|g| g.clone()).collect()
     }
 
@@ -278,26 +280,23 @@ mod tests {
     ) -> ResourceGroup {
         let mut group = ResourceGroup::new();
         group.set_name(name);
-        let mut settings = GroupSettings::new();
         let mode = if is_ru_mode {
             GroupMode::RuMode
         } else {
             GroupMode::NativeMode
         };
-        settings.set_mode(mode);
+        group.set_mode(mode);
         if is_ru_mode {
             let mut ru_setting = GroupRequestUnitSettings::new();
             ru_setting.mut_r_r_u().set_tokens(read_tokens);
             ru_setting.mut_w_r_u().set_tokens(write_tokens);
-            settings.set_r_u_settings(ru_setting);
+            group.set_r_u_settings(ru_setting);
         } else {
             let mut resource_setting = GroupResourceSettings::new();
             resource_setting.mut_cpu().set_tokens(read_tokens);
             resource_setting.mut_io_write().set_tokens(write_tokens);
-            settings.set_resource_settings(resource_setting);
+            group.set_resource_settings(resource_setting);
         }
-
-        group.set_settings(settings);
         group
     }
 
