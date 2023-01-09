@@ -219,6 +219,8 @@ cmake = { git = "https://github.com/rust-lang/cmake-rs" }
 # This is a workaround for cargo can't resolving the this patch in yatp.
 crossbeam-deque = { git = "https://github.com/crossbeam-rs/crossbeam", rev = "41ed3d948720f26149b2ebeaf58fe8a193134056" }
 
+# remove this when https://github.com/rust-lang/backtrace-rs/pull/503 is merged.
+backtrace = { git = 'https://github.com/hehechen/backtrace-rs', branch = "v0.3.61" }
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
