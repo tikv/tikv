@@ -508,6 +508,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone()),
             ),
             engines.kv.clone(),
+            self.region_info_accessor.region_leaders(),
         );
 
         self.engines = Some(TiKvEngines {
@@ -792,7 +793,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         self.config
             .raft_store
-            .validate(self.config.coprocessor.region_split_size)
+            .validate(
+                self.config.coprocessor.region_split_size,
+                self.config.coprocessor.enable_region_bucket,
+                self.config.coprocessor.region_bucket_size,
+            )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
         let health_service = HealthService::default();
@@ -1398,6 +1403,8 @@ impl ConfiguredRaftEngine for RocksEngine {
                 RaftLogEngine::new(config.raft_engine.config(), key_manager.clone(), None)
                     .expect("failed to open raft engine for migration");
             dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
+            raft_engine.stop();
+            drop(raft_engine);
             raft_data_state_machine.after_dump_data();
         }
         raftdb
@@ -1447,6 +1454,8 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             .expect("failed to open raftdb for migration");
             let raftdb = RocksEngine::from_db(Arc::new(raftdb));
             dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
+            raftdb.stop();
+            drop(raftdb);
             raft_data_state_machine.after_dump_data();
         }
         raft_engine

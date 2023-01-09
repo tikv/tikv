@@ -360,7 +360,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
             .spawn(async move {
                 let mut resp = GetMetricsResponse::default();
                 resp.set_store_id(debugger.get_store_ident()?.store_id);
-                resp.set_prometheus(metrics::dump());
+                resp.set_prometheus(metrics::dump(false));
                 if req.get_all() {
                     let engines = debugger.get_engine();
                     resp.set_rocksdb_kv(box_try!(MiscExt::dump_stats(&engines.kv)));

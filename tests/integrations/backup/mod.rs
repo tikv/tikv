@@ -21,11 +21,11 @@ fn assert_same_file_name(s1: String, s2: String) {
     let tokens1: Vec<&str> = s1.split('_').collect();
     let tokens2: Vec<&str> = s2.split('_').collect();
     assert_eq!(tokens1.len(), tokens2.len());
-    // 2_1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693105_write.sst
-    // 2_1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693199_write.sst
+    // 2/1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693105_write.sst
+    // 2/1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693199_write.sst
     // should be equal
     for i in 0..tokens1.len() {
-        if i != 4 {
+        if i != 3 {
             assert_eq!(tokens1[i], tokens2[i]);
         }
     }
@@ -174,7 +174,9 @@ fn test_backup_huge_range_and_import() {
         backup_ts,
         &storage_path,
     );
-    let resps1 = block_on(rx.collect::<Vec<_>>());
+    let mut resps1 = block_on(rx.collect::<Vec<_>>());
+    resps1.sort_by(|r1, r2| r1.start_key.cmp(&r2.start_key));
+
     // Only leader can handle backup.
     // ... But the response may be split into two parts (when meeting huge region).
     assert_eq!(resps1.len(), 2, "{:?}", resps1);
@@ -187,9 +189,8 @@ fn test_backup_huge_range_and_import() {
     assert!(!resps1[0].get_files().is_empty());
 
     // Sort the files for avoiding race conditions. (would this happen?)
-    if files1[0].start_key > files1[1].start_key {
-        files1.swap(0, 1);
-    }
+    files1.sort_by(|f1, f2| f1.start_key.cmp(&f2.start_key));
+
     assert_eq!(resps1[0].start_key, b"".to_vec());
     assert_eq!(resps1[0].end_key, resps1[1].start_key);
     assert_eq!(resps1[1].end_key, b"".to_vec());

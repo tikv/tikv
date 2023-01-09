@@ -279,6 +279,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -395,6 +396,8 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "async-channel",
+ "aws",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crc64fast",
@@ -4041,8 +4044,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine.git#0e066f8626b43b2a8a0a6bc9c7f0502b6fdc3d05"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f0c797114b1503093f19fb2cb81eaf399b2e9a8c5ac04670910ed53cca3fb2b"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4072,8 +4076,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine.git#0e066f8626b43b2a8a0a6bc9c7f0502b6fdc3d05"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ad2f818a3c64f3228efd18c44bffbc27c5c6987d01919dbcd35eeb13b278550"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -5937,7 +5942,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.1.0"
+version = "6.1.3"
 dependencies = [
  "anyhow",
  "api_version",
@@ -5966,6 +5971,7 @@ dependencies = [
  "example_plugin",
  "fail",
  "file_system",
+ "flate2",
  "futures 0.3.15",
  "futures-executor",
  "futures-timer",

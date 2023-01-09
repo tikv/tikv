@@ -1,7 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
+use collections::HashSet;
 use crossbeam::channel::TrySendError;
 use engine_rocks::{raw::DB, RocksEngine, RocksSnapshot};
 use engine_traits::{ALL_CFS, CF_DEFAULT};
@@ -182,6 +183,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     let kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         RocksEngine::from_db(db),
+        Arc::new(RwLock::new(HashSet::default())),
     );
 
     let mut ctx = Context::default();
@@ -214,6 +216,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     let kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         RocksEngine::from_db(db),
+        Arc::new(RwLock::new(HashSet::default())),
     );
 
     let mut ctx = Context::default();
