@@ -255,7 +255,7 @@ pub type SenderVec<EK, ER> = Vec<Sender<WriteMsg<EK, ER>>>;
 #[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
     senders: Tracker<SenderVec<EK, ER>>,
-    _cached_senders: SenderVec<EK, ER>,
+    cached_senders: SenderVec<EK, ER>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
 }
 
@@ -264,20 +264,20 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
         let cached_senders = senders.value().clone();
         WriteSenders {
             senders: senders.tracker("async writers' trackers".to_owned()),
-            _cached_senders: cached_senders,
+            cached_senders,
             io_reschedule_concurrent_count: Arc::default(),
         }
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self._cached_senders.is_empty()
+        self.cached_senders.is_empty()
     }
 
     #[inline]
     /// Returns the valid capacity of async senders.
     pub fn capacity(&self) -> usize {
-        self._cached_senders.len()
+        self.cached_senders.len()
     }
 }
 
@@ -285,7 +285,7 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
     #[inline]
     pub fn refresh(&mut self) {
         if let Some(senders) = self.senders.any_new() {
-            self._cached_senders = senders.clone();
+            self.cached_senders = senders.clone();
         }
     }
 
@@ -301,7 +301,7 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
         // `idx` for accessing the senders might be obsolete when resizing the
         // size of async-ios, so we should correct it by mod `capacity` to avoid
         // out of bound.
-        self._cached_senders[idx % self.capacity()].send(msg)
+        self.cached_senders[idx % self.capacity()].send(msg)
     }
 
     #[inline]
@@ -311,7 +311,7 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
         msg: WriteMsg<EK, ER>,
     ) -> Result<(), TrySendError<WriteMsg<EK, ER>>> {
         debug_assert!(!self.is_empty());
-        self._cached_senders[idx % self.capacity()].try_send(msg)
+        self.cached_senders[idx % self.capacity()].try_send(msg)
     }
 }
 
