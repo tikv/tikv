@@ -763,7 +763,7 @@ impl SstImporter {
         start_ts: u64,
         restore_ts: u64,
         file_buff: Arc<Vec<u8>>,
-        build_fn: &mut dyn FnMut(Vec<u8>, Vec<u8>),
+        mut build_fn: impl FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
         let mut event_iter = EventIterator::new(file_buff.as_slice());
         let mut smallest_key = None;

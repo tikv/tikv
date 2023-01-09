@@ -731,7 +731,7 @@ mod test {
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
         raft_serverpb::{PeerState, RegionLocalState},
     };
-    use raftstore::store::cmd_resp::new_error;
+    use raftstore::store::{cmd_resp::new_error, Config};
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
@@ -872,6 +872,7 @@ mod test {
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let mut apply = Apply::new(
+            &Config::default(),
             region
                 .get_peers()
                 .iter()
@@ -1059,6 +1060,7 @@ mod test {
         // Split will create checkpoint tablet, so if there are some writes before
         // split, they should be flushed immediately.
         apply.apply_put(CF_DEFAULT, 50, b"k04", b"v4").unwrap();
+        apply.apply_flow_control_mut().set_need_flush(true);
         assert!(!WriteBatch::is_empty(apply.write_batch.as_ref().unwrap()));
         splits.mut_requests().clear();
         splits
