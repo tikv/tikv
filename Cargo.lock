@@ -440,8 +440,7 @@ dependencies = [
 [[package]]
 name = "backtrace"
 version = "0.3.61"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7a905d892734eea339e896738c14b9afce22b5318f64b951e70bf3844419b01"
+source = "git+https://github.com/hehechen/backtrace-rs?branch=v0.3.61#d0aeebbea2298174e4c6edd3d1e54bda0e6624e4"
 dependencies = [
  "addr2line",
  "cc",
