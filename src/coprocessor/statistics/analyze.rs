@@ -386,6 +386,10 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 let columns_slice = result.physical_columns.as_slice();
 
                 for logical_row in &result.logical_rows {
+                    let cur_rng = collector.mut_base().rng.gen_range(0.0, 1.0);
+                    if cur_rng >= self.sample_rate {
+                        continue;
+                    }
                     let mut column_vals: Vec<Vec<u8>> = Vec::new();
                     let mut collation_key_vals: Vec<Vec<u8>> = Vec::new();
                     for i in 0..self.columns_info.len() {
@@ -526,7 +530,7 @@ impl BaseRowSampleCollector {
     ) {
         let col_len = columns_val.len();
         for i in 0..column_groups.len() {
-            self.row_buf.clear();
+            // self.row_buf.clear();
             let offsets = column_groups[i].get_column_offsets();
             let mut has_null = true;
             for j in offsets {
@@ -542,15 +546,15 @@ impl BaseRowSampleCollector {
                 continue;
             }
             // Use a in place murmur3 to replace this memory copy.
-            for j in offsets {
-                if columns_info[*j as usize].as_accessor().is_string_like() {
-                    self.row_buf
-                        .extend_from_slice(&collation_keys_val[*j as usize]);
-                } else {
-                    self.row_buf.extend_from_slice(&columns_val[*j as usize]);
-                }
-            }
-            self.fm_sketches[col_len + i].insert(&self.row_buf);
+            // for j in offsets {
+            //     if columns_info[*j as usize].as_accessor().is_string_like() {
+            //         self.row_buf
+            //             .extend_from_slice(&collation_keys_val[*j as usize]);
+            //     } else {
+            //         self.row_buf.extend_from_slice(&columns_val[*j as usize]);
+            //     }
+            // }
+            // self.fm_sketches[col_len + i].insert(&self.row_buf);
         }
     }
 
@@ -565,11 +569,11 @@ impl BaseRowSampleCollector {
                 self.null_count[i] += 1;
                 continue;
             }
-            if columns_info[i].as_accessor().is_string_like() {
-                self.fm_sketches[i].insert(&collation_keys_val[i]);
-            } else {
-                self.fm_sketches[i].insert(&columns_val[i]);
-            }
+            // if columns_info[i].as_accessor().is_string_like() {
+            //     self.fm_sketches[i].insert(&collation_keys_val[i]);
+            // } else {
+            //     self.fm_sketches[i].insert(&columns_val[i]);
+            // }
             self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
     }
@@ -659,10 +663,10 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         self.sampling(columns_val);
     }
     fn sampling(&mut self, data: Vec<Vec<u8>>) {
-        let cur_rng = self.base.rng.gen_range(0.0, 1.0);
-        if cur_rng >= self.sample_rate {
-            return;
-        }
+        // let cur_rng = self.base.rng.gen_range(0.0, 1.0);
+        // if cur_rng >= self.sample_rate {
+        //     return;
+        // }
         self.base.memory_usage += data.iter().map(|x| x.capacity()).sum::<usize>();
         self.base.report_memory_usage(false);
         self.samples.push(data);
