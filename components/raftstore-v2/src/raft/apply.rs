@@ -6,13 +6,13 @@ use engine_traits::{FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_L
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::{
     fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
-    ReadTask,
+    Config, ReadTask,
 };
 use slog::Logger;
 use tikv_util::{log::SlogFormat, worker::Scheduler};
 
 use crate::{
-    operation::{AdminCmdResult, DataTrace},
+    operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
     router::CmdResChannel,
 };
 
@@ -27,6 +27,8 @@ pub struct Apply<EK: KvEngine, R> {
     tablet_registry: TabletRegistry<EK>,
 
     callbacks: Vec<(Vec<CmdResChannel>, RaftCmdResponse)>,
+
+    flow_control: ApplyFlowControl,
 
     /// A flag indicates whether the peer is destroyed by applying admin
     /// command.
@@ -58,6 +60,7 @@ pub struct Apply<EK: KvEngine, R> {
 impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn new(
+        cfg: &Config,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
@@ -79,6 +82,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             tablet: remote_tablet.latest().unwrap().clone(),
             write_batch: None,
             callbacks: vec![],
+            flow_control: ApplyFlowControl::new(cfg),
             tombstone: false,
             applied_term,
             applied_index: flush_state.applied_index(),
@@ -158,8 +162,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn set_tablet(&mut self, tablet: EK) {
         assert!(
             self.write_batch.as_ref().map_or(true, |wb| wb.is_empty()),
-            "{:?}",
-            self.logger.list()
+            "{} setting tablet while still have dirty write batch",
+            SlogFormat(&self.logger)
         );
         self.write_batch.take();
         self.tablet = tablet;
@@ -221,5 +225,14 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn log_recovery(&self) -> &Option<Box<DataTrace>> {
         &self.log_recovery
+    }
+
+    #[inline]
+    pub fn apply_flow_control_mut(&mut self) -> &mut ApplyFlowControl {
+        &mut self.flow_control
+    }
+
+    pub fn apply_flow_control(&self) -> &ApplyFlowControl {
+        &self.flow_control
     }
 }

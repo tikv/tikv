@@ -332,8 +332,8 @@ mod tests {
     };
     use raft::{Error as RaftError, StorageError};
     use raftstore::store::{
-        util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, FetchedLogs, GenSnapRes,
-        ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX,
+        util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, Config, FetchedLogs,
+        GenSnapRes, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX,
         RAFT_INIT_LOG_TERM,
     };
     use slog::o;
@@ -500,6 +500,7 @@ mod tests {
         state.set_region(region.clone());
         // setup peer applyer
         let mut apply = Apply::new(
+            &Config::default(),
             region.get_peers()[0].clone(),
             state,
             router,
