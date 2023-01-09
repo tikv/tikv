@@ -386,6 +386,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 let columns_slice = result.physical_columns.as_slice();
 
                 for logical_row in &result.logical_rows {
+                    collector.mut_base().count += 1;
                     let cur_rng = collector.mut_base().rng.gen_range(0.0, 1.0);
                     if cur_rng >= self.sample_rate {
                         continue;
@@ -424,7 +425,6 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                         read_size += val.len();
                         column_vals.push(val);
                     }
-                    collector.mut_base().count += 1;
                     collector.collect_column_group(
                         &column_vals,
                         &collation_key_vals,
