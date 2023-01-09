@@ -84,6 +84,8 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool>;
 
+    fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>>;
+
     /// Gets total used size of rocksdb engine, including:
     /// * total size (bytes) of all SST files.
     /// * total size (bytes) of active and unflushed immutable memtables.
@@ -95,8 +97,12 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn sync_wal(&self) -> Result<()>;
 
+    fn pause_background_work(&self) -> Result<()>;
+
     /// Check whether a database exists at a given path
     fn exists(path: &str) -> bool;
+
+    fn locked(path: &str) -> Result<bool>;
 
     /// Dump stats about the database into a string.
     ///

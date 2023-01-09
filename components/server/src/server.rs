@@ -92,7 +92,6 @@ use tikv::{
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
-        create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
@@ -108,7 +107,7 @@ use tikv::{
         config_manager::StorageConfigManger,
         mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{EngineFlowController, FlowController},
-        Engine,
+        Engine, Storage,
     },
 };
 use tikv_util::{
@@ -124,6 +123,7 @@ use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
+    Either,
 };
 use tokio::runtime::Builder;
 
@@ -797,7 +797,7 @@ where
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage::<_, _, _, F, _>(
+        let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -825,7 +825,7 @@ where
         let (resolver, state) = resolve::new_resolver(
             self.pd_client.clone(),
             &self.background_worker,
-            storage.get_engine().raft_extension().clone(),
+            storage.get_engine().raft_extension(),
         );
         self.resolver = Some(resolver);
 
@@ -960,7 +960,7 @@ where
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
-            snap_mgr.clone(),
+            Either::Left(snap_mgr.clone()),
             gc_worker.clone(),
             check_leader_scheduler,
             self.env.clone(),
@@ -1216,7 +1216,7 @@ where
             self.kv_statistics.clone(),
             self.raft_statistics.clone(),
             servers.server.get_debug_thread_pool().clone(),
-            engines.engine.raft_extension().clone(),
+            engines.engine.raft_extension(),
             self.cfg_controller.as_ref().unwrap().clone(),
         );
         if servers
@@ -1650,7 +1650,7 @@ where
                 self.config.server.status_thread_pool_size,
                 self.cfg_controller.take().unwrap(),
                 Arc::new(self.config.security.clone()),
-                self.router.clone(),
+                self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.store_path.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
@@ -1731,10 +1731,8 @@ impl ConfiguredRaftEngine for RocksEngine {
 
         let raft_db_path = &config.raft_store.raftdb_path;
         let config_raftdb = &config.raftdb;
-        let mut raft_db_opts = config_raftdb.build_opt();
-        raft_db_opts.set_env(env.clone());
         let statistics = Arc::new(RocksStatistics::new_titan());
-        raft_db_opts.set_statistics(statistics.as_ref());
+        let raft_db_opts = config_raftdb.build_opt(env.clone(), Some(&statistics));
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
         let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
             .expect("failed to open raftdb");
@@ -1784,8 +1782,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
 
         if should_dump {
             let config_raftdb = &config.raftdb;
-            let mut raft_db_opts = config_raftdb.build_opt();
-            raft_db_opts.set_env(env.clone());
+            let raft_db_opts = config_raftdb.build_opt(env.clone(), None);
             let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
             let raftdb = engine_rocks::util::new_engine_opt(
                 &config.raft_store.raftdb_path,
@@ -1952,13 +1949,12 @@ fn get_lock_dir() -> String {
 
 /// A small trait for components which can be trivially stopped. Lets us keep
 /// a list of these in `TiKV`, rather than storing each component individually.
-trait Stop {
+pub(crate) trait Stop {
     fn stop(self: Box<Self>);
 }
 
-impl<E, R> Stop for StatusServer<E, R>
+impl<R> Stop for StatusServer<R>
 where
-    E: 'static,
     R: 'static + Send,
 {
     fn stop(self: Box<Self>) {

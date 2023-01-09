@@ -286,7 +286,7 @@ impl Drop for ReadDelegate {
 
 /// #[RaftstoreCommon]
 pub trait ReadExecutorProvider: Send + Clone + 'static {
-    type Executor: ReadExecutor;
+    type Executor;
     type StoreMeta;
 
     fn store_id(&self) -> Option<u64>;
@@ -294,8 +294,6 @@ pub trait ReadExecutorProvider: Send + Clone + 'static {
     /// get the ReadDelegate with region_id and the number of delegates in the
     /// StoreMeta
     fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>);
-
-    fn store_meta(&self) -> &Self::StoreMeta;
 }
 
 #[derive(Clone)]
@@ -345,10 +343,6 @@ where
             );
         }
         (meta.readers.len(), None)
-    }
-
-    fn store_meta(&self) -> &Self::StoreMeta {
-        &self.store_meta
     }
 }
 
@@ -693,11 +687,7 @@ where
 /// #[RaftstoreCommon]: LocalReader is an entry point where local read requests are dipatch to the
 /// relevant regions by LocalReader so that these requests can be handled by the
 /// relevant ReadDelegate respectively.
-pub struct LocalReaderCore<D, S>
-where
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
-{
+pub struct LocalReaderCore<D, S> {
     pub store_id: Cell<Option<u64>>,
     store_meta: S,
     pub delegates: LruCache<u64, D>,
@@ -705,7 +695,7 @@ where
 
 impl<D, S> LocalReaderCore<D, S>
 where
-    D: ReadExecutor + Deref<Target = ReadDelegate> + Clone,
+    D: Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<Executor = D>,
 {
     pub fn new(store_meta: S) -> Self {
@@ -716,8 +706,8 @@ where
         }
     }
 
-    pub fn store_meta(&self) -> &S::StoreMeta {
-        self.store_meta.store_meta()
+    pub fn store_meta(&self) -> &S {
+        &self.store_meta
     }
 
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the
@@ -833,8 +823,7 @@ where
 
 impl<D, S> Clone for LocalReaderCore<D, S>
 where
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
+    S: Clone,
 {
     fn clone(&self) -> Self {
         LocalReaderCore {

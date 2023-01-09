@@ -39,6 +39,7 @@ use parking_lot::RwLockUpgradableReadGuard;
 use protobuf::Message;
 use raft::{eraftpb::EntryType, GetEntriesContext, ProgressState, INVALID_INDEX, NO_LIMIT};
 use raftstore::{
+    coprocessor::RegionChangeReason,
     store::{metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext},
     Error, Result,
 };
@@ -104,7 +105,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             let store_meta = store_ctx.store_meta.lock().unwrap();
             match store_meta.readers.get(&target_region.get_id()) {
-                Some(reader) if *reader.region != *target_region => {
+                Some((reader, _)) if *reader.region != *target_region => {
                     return Err(box_err!(
                         "target region not matched, skip proposing: {:?} != {:?}",
                         reader.region,
@@ -382,11 +383,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         res: PrepareMergeResult,
     ) {
-        self.set_region(
-            &mut store_ctx.store_meta.lock().unwrap(),
-            res.region.clone(),
-            res.state.get_commit(),
-        );
+        {
+            let mut meta = store_ctx.store_meta.lock().unwrap();
+            meta.set_region(&res.region, true, &self.logger);
+            let (reader, _) = meta.readers.get_mut(&res.region.get_id()).unwrap();
+            self.set_region(
+                &store_ctx.coprocessor_host,
+                reader,
+                res.region.clone(),
+                RegionChangeReason::PrepareMerge,
+                res.state.get_commit(),
+            );
+        }
 
         self.set_pending_merge_state(Some(res.state));
 

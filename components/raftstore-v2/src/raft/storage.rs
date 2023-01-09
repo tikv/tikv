@@ -5,6 +5,7 @@ use std::{
     fmt::{self, Debug, Formatter},
 };
 
+use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb,
@@ -34,11 +35,14 @@ pub struct Storage<EK: KvEngine, ER> {
     /// by messages, it has not persisted any states, we need to persist them
     /// at least once dispite whether the state changes since create.
     ever_persisted: bool,
+    /// It may have dirty data after split. Use a flag to indicate whether it
+    /// has finished clean up.
+    has_dirty_data: bool,
     logger: Logger,
 
     /// Snapshot part.
-    snap_state: RefCell<SnapState>,
-    gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
+    pub snap_states: RefCell<HashMap<u64, SnapState>>,
+    pub gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
     split_init: Option<Box<SplitInit>>,
     /// The flushed index of all CFs.
     apply_trace: ApplyTrace,
@@ -87,13 +91,23 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     }
 
     #[inline]
-    pub fn snap_state_mut(&self) -> RefMut<'_, SnapState> {
-        self.snap_state.borrow_mut()
+    pub fn gen_snap_task_mut(&self) -> RefMut<'_, Box<Option<GenSnapTask>>> {
+        self.gen_snap_task.borrow_mut()
     }
 
     #[inline]
-    pub fn gen_snap_task_mut(&self) -> RefMut<'_, Box<Option<GenSnapTask>>> {
-        self.gen_snap_task.borrow_mut()
+    pub fn cancel_snap_task(&self, to_peer_id: Option<u64>) {
+        if to_peer_id.is_none() {
+            self.gen_snap_task.borrow_mut().take();
+            return;
+        }
+        let to = to_peer_id.unwrap();
+        let mut task = self.gen_snap_task.borrow_mut();
+        if let Some(t) = &**task {
+            if to == t.to_peer() {
+                *task = Box::new(None);
+            };
+        }
     }
 
     #[inline]
@@ -104,6 +118,16 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     #[inline]
     pub fn apply_trace(&self) -> &ApplyTrace {
         &self.apply_trace
+    }
+
+    #[inline]
+    pub fn set_has_dirty_data(&mut self, has_dirty_data: bool) {
+        self.has_dirty_data = has_dirty_data;
+    }
+
+    #[inline]
+    pub fn has_dirty_data(&self) -> bool {
+        self.has_dirty_data
     }
 }
 
@@ -128,6 +152,17 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         };
         let region = region_state.get_region();
         let logger = logger.new(o!("region_id" => region.id, "peer_id" => peer.get_id()));
+        let has_dirty_data =
+            match engine.get_dirty_mark(region.get_id(), region_state.get_tablet_index()) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Err(box_err!(
+                        "failed to get dirty mark for {}: {:?}",
+                        region.get_id(),
+                        e
+                    ));
+                }
+            };
         let entry_storage = EntryStorage::new(
             peer.get_id(),
             engine,
@@ -142,8 +177,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             peer: peer.clone(),
             region_state,
             ever_persisted: persisted,
+            has_dirty_data,
             logger,
-            snap_state: RefCell::new(SnapState::Relax),
+            snap_states: RefCell::new(HashMap::default()),
             gen_snap_task: RefCell::new(Box::new(None)),
             split_init: None,
             apply_trace,
@@ -287,15 +323,18 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::TestTabletFactory,
     };
-    use engine_traits::{RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS};
+    use engine_traits::{
+        FlushState, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
+    };
     use kvproto::{
         metapb::{Peer, Region},
         raft_serverpb::PeerState,
     };
     use raft::{Error as RaftError, StorageError};
     use raftstore::store::{
-        util::new_empty_snapshot, AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner,
-        TabletSnapKey, TabletSnapManager, WriteTask,
+        util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, Config, FetchedLogs,
+        GenSnapRes, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX,
+        RAFT_INIT_LOG_TERM,
     };
     use slog::o;
     use tempfile::TempDir;
@@ -344,15 +383,20 @@ mod tests {
         region
     }
 
+    fn new_entry(index: u64, term: u64) -> Entry {
+        let mut e = Entry::default();
+        e.set_index(index);
+        e.set_term(term);
+        e
+    }
+
     #[test]
     fn test_apply_snapshot() {
         let region = new_region();
         let path = TempDir::new().unwrap();
-        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap());
-        mgr.init().unwrap();
-        let raft_engine =
-            engine_test::raft::new_engine(&format!("{}", path.path().join("raft").display()), None)
-                .unwrap();
+        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
+        let engines = engine_test::new_temp_engine(&path);
+        let raft_engine = engines.raft.clone();
         let mut wb = raft_engine.log_batch(10);
         write_initial_states(&mut wb, region.clone()).unwrap();
         assert!(!wb.is_empty());
@@ -369,26 +413,57 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let snapshot = new_empty_snapshot(region.clone(), 10, 1, false);
-        let mut task = WriteTask::new(region.get_id(), 5, 0);
-        s.apply_snapshot(&snapshot, &mut task, mgr, reg).unwrap();
+        let mut task = WriteTask::new(region.get_id(), 5, 1);
+        let entries = (RAFT_INIT_LOG_INDEX + 1..RAFT_INIT_LOG_INDEX + 10)
+            .map(|i| new_entry(i, RAFT_INIT_LOG_TERM))
+            .collect();
+        s.entry_storage_mut().append(entries, &mut task);
+        write_to_db_for_test(&engines, task);
+
+        let snap_index = RAFT_INIT_LOG_INDEX + 20;
+        let snap_term = 9;
+        let path = mgr.final_recv_path(&TabletSnapKey::new(
+            region.get_id(),
+            5,
+            snap_term,
+            snap_index,
+        ));
+        reg.tablet_factory()
+            .open_tablet(TabletContext::new(&region, Some(snap_index)), &path)
+            .unwrap();
+        let snapshot = new_empty_snapshot(region.clone(), snap_index, snap_term, false);
+        let mut task = WriteTask::new(region.get_id(), 5, 1);
+        s.apply_snapshot(&snapshot, &mut task, mgr, reg.clone())
+            .unwrap();
+        // Add more entries to check if old entries are cleared. If not, it should panic
+        // with memtable hole when using raft engine.
+        let entries = (snap_index + 1..=snap_index + 10)
+            .map(|i| new_entry(i, snap_term))
+            .collect();
+        s.entry_storage_mut().append(entries, &mut task);
+
+        assert!(!reg.tablet_path(region.get_id(), snap_index).exists());
+        assert!(!task.persisted_cbs.is_empty());
+
+        write_to_db_for_test(&engines, task);
+
+        assert!(reg.tablet_path(region.get_id(), snap_index).exists());
 
         // It can be set before load tablet.
         assert_eq!(PeerState::Normal, s.region_state().get_state());
-        assert_eq!(10, s.entry_storage().truncated_index());
-        assert_eq!(1, s.entry_storage().truncated_term());
-        assert_eq!(1, s.entry_storage().last_term());
-        assert_eq!(10, s.entry_storage().raft_state().last_index);
+        assert_eq!(snap_index, s.entry_storage().truncated_index());
+        assert_eq!(snap_term, s.entry_storage().truncated_term());
+        assert_eq!(snap_term, s.entry_storage().last_term());
+        assert_eq!(snap_index + 10, s.entry_storage().raft_state().last_index);
         // This index can't be set before load tablet.
-        assert_ne!(10, s.entry_storage().applied_index());
-        assert_ne!(1, s.entry_storage().applied_term());
-        assert_eq!(10, s.region_state().get_tablet_index());
-        assert!(task.persisted_cb.is_some());
+        assert_ne!(snap_index, s.entry_storage().applied_index());
+        assert_ne!(snap_term, s.entry_storage().applied_term());
+        assert_eq!(snap_index, s.region_state().get_tablet_index());
 
         s.on_applied_snapshot();
-        assert_eq!(10, s.entry_storage().applied_index());
-        assert_eq!(1, s.entry_storage().applied_term());
-        assert_eq!(10, s.region_state().get_tablet_index());
+        assert_eq!(snap_index, s.entry_storage().applied_index());
+        assert_eq!(snap_term, s.entry_storage().applied_term());
+        assert_eq!(snap_index, s.region_state().get_tablet_index());
     }
 
     #[test]
@@ -402,8 +477,7 @@ mod tests {
         write_initial_states(&mut wb, region.clone()).unwrap();
         assert!(!wb.is_empty());
         raft_engine.consume(&mut wb, true).unwrap();
-        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap());
-        mgr.init().unwrap();
+        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
@@ -426,44 +500,49 @@ mod tests {
         state.set_region(region.clone());
         // setup peer applyer
         let mut apply = Apply::new(
+            &Config::default(),
             region.get_peers()[0].clone(),
             state,
             router,
             reg,
             sched,
-            Arc::default(),
+            Arc::new(FlushState::new(5)),
             None,
+            5,
             logger,
         );
 
         // Test get snapshot
-        let snap = s.snapshot(0, 7);
+        let to_peer_id = 7;
+        let snap = s.snapshot(0, to_peer_id);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.on_snapshot_generated(res);
-        let snap = match *s.snap_state.borrow() {
+        assert_eq!(s.snapshot(0, 8).unwrap_err(), unavailable);
+        assert!(s.snap_states.borrow().get(&8).is_some());
+        let snap = match *s.snap_states.borrow().get(&to_peer_id).unwrap() {
             SnapState::Generated(ref snap) => *snap.clone(),
             ref s => panic!("unexpected state: {:?}", s),
         };
-        assert_eq!(snap.get_metadata().get_index(), 0);
-        assert_eq!(snap.get_metadata().get_term(), 0);
+        assert_eq!(snap.get_metadata().get_index(), 5);
+        assert_eq!(snap.get_metadata().get_term(), 5);
         assert_eq!(snap.get_data().is_empty(), false);
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
         let checkpointer_path = mgr.tablet_gen_path(&snap_key);
         assert!(checkpointer_path.exists());
-        s.snapshot(0, 7).unwrap();
+        s.snapshot(0, to_peer_id).unwrap();
 
         // Test cancel snapshot
-        let snap = s.snapshot(0, 0);
+        let snap = s.snapshot(0, 7);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
-        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let _res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.cancel_generating_snap(None);
-        assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
+        assert!(s.snap_states.borrow().get(&to_peer_id).is_none());
 
         // Test get twice snapshot and cancel once.
         // get snapshot a

@@ -1,88 +1,35 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{mem, pin::Pin, task::Poll};
+mod node;
+mod raft_extension;
 
+use std::{
+    mem,
+    pin::Pin,
+    sync::{Arc, RwLock},
+    task::Poll,
+};
+
+use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
 use futures::{Future, Stream, StreamExt};
-use kvproto::{
-    raft_cmdpb::{CmdType, RaftCmdRequest, Request},
-    raft_serverpb::RaftMessage,
-};
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
+pub use node::NodeV2;
 use raftstore::store::RegionSnapshot;
 use raftstore_v2::{
     router::{
         message::SimpleWrite, CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter,
     },
-    SimpleWriteEncoder, StoreRouter,
+    SimpleWriteBinary, SimpleWriteEncoder,
 };
-use tikv_kv::{Modify, RaftExtension, WriteEvent};
+use tikv_kv::{Modify, WriteEvent};
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
-use txn_types::WriteBatchFlags;
+use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::{
     metrics::{ASYNC_REQUESTS_COUNTER_VEC, ASYNC_REQUESTS_DURATIONS_VEC},
     raftkv::{get_status_kind_from_engine_error, new_request_header},
 };
-
-#[derive(Clone)]
-pub struct RaftExtensionImpl<EK: KvEngine, ER: RaftEngine> {
-    router: StoreRouter<EK, ER>,
-}
-
-impl<EK: KvEngine, ER: RaftEngine> RaftExtension for RaftExtensionImpl<EK, ER> {
-    #[inline]
-    fn feed(&self, msg: RaftMessage, key_message: bool) {
-        let region_id = msg.get_region_id();
-        let msg_ty = msg.get_message().get_msg_type();
-        // Channel full and region not found are ignored unless it's a key message.
-        if let Err(e) = self.router.send_raft_message(Box::new(msg)) && key_message {
-            error!("failed to send raft message"; "region_id" => region_id, "msg_ty" => ?msg_ty, "err" => ?e);
-        }
-    }
-
-    fn report_reject_message(&self, _region_id: u64, _from_peer_id: u64) {
-        // TODO：reject the message on connection side instead of go through
-        // raft layer.
-    }
-
-    fn report_peer_unreachable(&self, region_id: u64, to_peer_id: u64) {
-        let _ = self
-            .router
-            .send(region_id, PeerMsg::PeerUnreachable { to_peer_id });
-    }
-
-    fn report_store_unreachable(&self, _store_id: u64) {}
-
-    fn report_snapshot_status(
-        &self,
-        _region_id: u64,
-        _to_peer_id: u64,
-        _status: raft::SnapshotStatus,
-    ) {
-    }
-
-    fn report_resolved(&self, _store_id: u64, _group_id: u64) {}
-
-    fn split(
-        &self,
-        _region_id: u64,
-        _region_epoch: kvproto::metapb::RegionEpoch,
-        _split_keys: Vec<Vec<u8>>,
-        _source: String,
-    ) -> futures::future::BoxFuture<'static, tikv_kv::Result<Vec<kvproto::metapb::Region>>> {
-        Box::pin(async move { Err(box_err!("raft split is not supported")) })
-    }
-
-    fn query_region(
-        &self,
-        _region_id: u64,
-    ) -> futures::future::BoxFuture<
-        'static,
-        tikv_kv::Result<raftstore::store::region_meta::RegionMeta>,
-    > {
-        Box::pin(async move { Err(box_err!("query region is not supported")) })
-    }
-}
 
 struct Transform {
     resp: CmdResStream,
@@ -120,15 +67,48 @@ impl Stream for Transform {
     }
 }
 
+fn modifies_to_simple_write(modifies: Vec<Modify>) -> SimpleWriteBinary {
+    let mut encoder = SimpleWriteEncoder::with_capacity(128);
+    for m in modifies {
+        match m {
+            Modify::Put(cf, k, v) => encoder.put(cf, k.as_encoded(), &v),
+            Modify::Delete(cf, k) => encoder.delete(cf, k.as_encoded()),
+            Modify::PessimisticLock(k, lock) => {
+                encoder.put(CF_LOCK, k.as_encoded(), &lock.into_lock().to_bytes())
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => encoder.delete_range(
+                cf,
+                start_key.as_encoded(),
+                end_key.as_encoded(),
+                notify_only,
+            ),
+        }
+    }
+    encoder.encode()
+}
+
 #[derive(Clone)]
 pub struct RaftKv2<EK: KvEngine, ER: RaftEngine> {
     router: RaftRouter<EK, ER>,
+    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
+    region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftKv2<EK, ER> {
     #[allow(unused)]
-    pub fn new(router: RaftRouter<EK, ER>) -> RaftKv2<EK, ER> {
-        RaftKv2 { router }
+    pub fn new(
+        router: RaftRouter<EK, ER>,
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
+    ) -> RaftKv2<EK, ER> {
+        RaftKv2 {
+            router,
+            region_leaders,
+            txn_extra_scheduler: None,
+        }
+    }
+
+    pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
+        self.txn_extra_scheduler = Some(txn_extra_scheduler);
     }
 }
 
@@ -141,13 +121,20 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         None
     }
 
-    type RaftExtension = RaftExtensionImpl<EK, ER>;
+    type RaftExtension = raft_extension::Extension<EK, ER>;
+    #[inline]
+    fn raft_extension(&self) -> Self::RaftExtension {
+        raft_extension::Extension::new(self.router.store_router().clone())
+    }
 
     fn modify_on_kv_engine(
         &self,
-        _region_modifies: collections::HashMap<u64, Vec<tikv_kv::Modify>>,
+        region_modifies: collections::HashMap<u64, Vec<tikv_kv::Modify>>,
     ) -> tikv_kv::Result<()> {
-        // TODO
+        for (region_id, batch) in region_modifies {
+            let bin = modifies_to_simple_write(batch);
+            let _ = self.router.send(region_id, PeerMsg::unsafe_write(bin));
+        }
         Ok(())
     }
 
@@ -238,23 +225,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         header.set_flags(flags);
 
         self.schedule_txn_extra(batch.extra);
-        let mut encoder = SimpleWriteEncoder::with_capacity(128);
-        for m in batch.modifies {
-            match m {
-                Modify::Put(cf, k, v) => encoder.put(cf, k.as_encoded(), &v),
-                Modify::Delete(cf, k) => encoder.delete(cf, k.as_encoded()),
-                Modify::PessimisticLock(k, lock) => {
-                    encoder.put(CF_LOCK, k.as_encoded(), &lock.into_lock().to_bytes())
-                }
-                Modify::DeleteRange(cf, start_key, end_key, notify_only) => encoder.delete_range(
-                    cf,
-                    start_key.as_encoded(),
-                    end_key.as_encoded(),
-                    notify_only,
-                ),
-            }
-        }
-        let data = encoder.encode();
+        let data = modifies_to_simple_write(batch.modifies);
         let mut builder = CmdResChannelBuilder::default();
         if WriteEvent::subscribed_proposed(subscribed) {
             builder.subscribe_proposed();
@@ -282,8 +253,8 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         let res = self
             .router
             .store_router()
-            .send(region_id, msg)
-            .map_err(|e| tikv_kv::Error::from(raftstore_v2::Error::from(e)));
+            .check_send(region_id, msg)
+            .map_err(tikv_kv::Error::from);
         (Transform {
             resp: CmdResStream::new(sub),
             early_err: res.err(),
@@ -303,5 +274,23 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                 }
             }
         })
+    }
+
+    #[inline]
+    fn precheck_write_with_ctx(&self, ctx: &kvproto::kvrpcpb::Context) -> tikv_kv::Result<()> {
+        let region_id = ctx.get_region_id();
+        match self.region_leaders.read().unwrap().get(&region_id) {
+            Some(_) => Ok(()),
+            None => Err(raftstore_v2::Error::NotLeader(region_id, None).into()),
+        }
+    }
+
+    #[inline]
+    fn schedule_txn_extra(&self, txn_extra: TxnExtra) {
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !txn_extra.is_empty() {
+                tx.schedule(txn_extra);
+            }
+        }
     }
 }

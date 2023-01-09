@@ -184,7 +184,7 @@ where
                             change_peer.get_change_type(),
                             change_peer.take_peer(),
                         );
-                        send_admin_request(&logger, &router, region_id, epoch, peer, req);
+                        send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
                     } else if resp.has_change_peer_v2() {
                         PD_HEARTBEAT_COUNTER_VEC
                             .with_label_values(&["change peer"])
@@ -198,7 +198,7 @@ where
                             "changes" => ?change_peer_v2.get_changes(),
                         );
                         let req = new_change_peer_v2_request(change_peer_v2.take_changes().into());
-                        send_admin_request(&logger, &router, region_id, epoch, peer, req);
+                        send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
                     } else if resp.has_transfer_leader() {
                         PD_HEARTBEAT_COUNTER_VEC
                             .with_label_values(&["transfer leader"])
@@ -217,7 +217,7 @@ where
                             transfer_leader.take_peer(),
                             transfer_leader.take_peers().into(),
                         );
-                        send_admin_request(&logger, &router, region_id, epoch, peer, req);
+                        send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
                     } else if resp.has_split_region() {
                         // TODO
                         info!(logger, "pd asks for split but ignored");

@@ -766,10 +766,8 @@ impl<ER: RaftEngine> Debugger<ER> {
             ));
             let mut lb = raft.log_batch(0);
             box_try!(lb.put_raft_state(region_id, &new_raft_local_state));
-            // Will sync later.
-            box_try!(raft.consume(&mut lb, false));
-            let deleted_logs = box_try!(raft.gc(region_id, applied_index + 1, last_index + 1));
-            raft.sync().unwrap();
+            box_try!(raft.gc(region_id, applied_index + 1, last_index + 1, &mut lb));
+            box_try!(raft.consume(&mut lb, true));
             kv.sync().unwrap();
 
             info!(
@@ -779,7 +777,6 @@ impl<ER: RaftEngine> Debugger<ER> {
                 "new_raft_local_state" => ?new_raft_local_state,
                 "old_raft_apply_state" => ?old_raft_apply_state,
                 "new_raft_apply_state" => ?new_raft_apply_state,
-                "deleted logs" => deleted_logs,
             );
         }
 

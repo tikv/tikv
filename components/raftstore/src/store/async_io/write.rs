@@ -185,9 +185,9 @@ where
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
     // called after writing to kvdb and raftdb.
-    pub persisted_cb: Option<Box<dyn FnOnce() + Send>>,
-    pub entries: Vec<Entry>,
-    pub cut_logs: Option<(u64, u64)>,
+    pub persisted_cbs: Vec<Box<dyn FnOnce() + Send>>,
+    overwrite_to: Option<u64>,
+    entries: Vec<Entry>,
     pub raft_state: Option<RaftLocalState>,
     pub extra_write: ExtraWrite<EK::WriteBatch, ER::LogBatch>,
     pub messages: Vec<RaftMessage>,
@@ -207,13 +207,13 @@ where
             ready_number,
             send_time: Instant::now(),
             raft_wb: None,
+            overwrite_to: None,
             entries: vec![],
-            cut_logs: None,
             raft_state: None,
             extra_write: ExtraWrite::None,
             messages: vec![],
             trackers: vec![],
-            persisted_cb: None,
+            persisted_cbs: Vec::new(),
             has_snapshot: false,
         }
     }
@@ -221,9 +221,19 @@ where
     pub fn has_data(&self) -> bool {
         !(self.raft_state.is_none()
             && self.entries.is_empty()
-            && self.cut_logs.is_none()
             && self.extra_write.is_empty()
             && self.raft_wb.as_ref().map_or(true, |wb| wb.is_empty()))
+    }
+
+    /// Append continous entries.
+    ///
+    /// All existing entries with same index will be overwritten. If
+    /// `overwrite_to` is set to a larger value, then entries in
+    /// `[entries.last().get_index(), overwrite_to)` will be deleted. If
+    /// entries is empty, nothing will be deleted.
+    pub fn set_append(&mut self, overwrite_to: Option<u64>, entries: Vec<Entry>) {
+        self.entries = entries;
+        self.overwrite_to = overwrite_to;
     }
 
     #[inline]
@@ -387,11 +397,12 @@ where
             raft_wb.merge(wb).unwrap();
         }
         raft_wb
-            .append(task.region_id, std::mem::take(&mut task.entries))
+            .append(
+                task.region_id,
+                task.overwrite_to,
+                std::mem::take(&mut task.entries),
+            )
             .unwrap();
-        if let Some((from, to)) = task.cut_logs {
-            raft_wb.cut_logs(task.region_id, from, to);
-        }
 
         if let Some(raft_state) = task.raft_state.take()
             && self.raft_states.insert(task.region_id, raft_state).is_none() {
@@ -419,9 +430,9 @@ where
                 );
             }
         }
-        if let Some(v) = task.persisted_cb.take() {
+        for v in task.persisted_cbs.drain(..) {
             self.persisted_cbs.push(v);
-        };
+        }
         self.tasks.push(task);
     }
 
@@ -718,6 +729,11 @@ where
 
         self.batch.after_write_to_raft_db(&self.metrics);
 
+        fail_point!(
+            "async_write_before_cb",
+            !self.batch.persisted_cbs.is_empty(),
+            |_| ()
+        );
         self.batch.after_write_all();
 
         fail_point!("raft_before_follower_send");
@@ -896,7 +912,6 @@ where
 }
 
 /// Used for test to write task to kv db and raft db.
-#[cfg(test)]
 pub fn write_to_db_for_test<EK, ER>(
     engines: &engine_traits::Engines<EK, ER>,
     task: WriteTask<EK, ER>,
@@ -906,7 +921,8 @@ pub fn write_to_db_for_test<EK, ER>(
 {
     let mut batch = WriteTaskBatch::new(engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE));
     batch.add_write_task(&engines.raft, task);
-    batch.before_write_to_db(&StoreWriteMetrics::new(false));
+    let metrics = StoreWriteMetrics::new(false);
+    batch.before_write_to_db(&metrics);
     if let ExtraBatchWrite::V1(kv_wb) = &mut batch.extra_batch_write {
         if !kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
@@ -923,6 +939,8 @@ pub fn write_to_db_for_test<EK, ER>(
             });
         }
     }
+    batch.after_write_to_raft_db(&metrics);
+    batch.after_write_all();
 }
 
 #[cfg(test)]
