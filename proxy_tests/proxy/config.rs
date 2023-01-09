@@ -119,6 +119,10 @@ fn test_config_proxy_default_no_config_item() {
 
     assert_eq!(config.import.num_threads, 4);
     assert_eq!(config.server.status_thread_pool_size, 2);
+
+    assert_eq!(config.raft_store.evict_cache_on_memory_ratio, 0.1);
+    assert_eq!(config.memory_usage_high_water, 0.1);
+    assert_eq!(config.server.reject_messages_on_memory_ratio, 0.05);
 }
 
 /// We test if the engine-label is set properly.

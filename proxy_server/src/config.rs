@@ -28,6 +28,7 @@ pub struct RaftstoreConfig {
     #[online_config(skip)]
     pub region_worker_tick_interval: ReadableDuration,
     pub apply_low_priority_pool_size: usize,
+    pub evict_cache_on_memory_ratio: f64,
 }
 
 impl Default for RaftstoreConfig {
@@ -44,6 +45,7 @@ impl Default for RaftstoreConfig {
             // This pool is used when handling ingest SST raft messages, e.g.
             // when using BR / lightning.
             apply_low_priority_pool_size: (cpu_num * 0.3).clamp(2.0, 8.0) as usize,
+            evict_cache_on_memory_ratio: 0.1,
         }
     }
 }
@@ -62,6 +64,7 @@ pub struct ServerConfig {
     #[online_config(skip)]
     pub background_thread_count: usize,
     pub status_thread_pool_size: usize,
+    pub reject_messages_on_memory_ratio: f64,
 }
 
 impl Default for ServerConfig {
@@ -78,6 +81,7 @@ impl Default for ServerConfig {
             advertise_addr: TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR.to_string(),
             background_thread_count,
             status_thread_pool_size: 2,
+            reject_messages_on_memory_ratio: 0.05,
         }
     }
 }
@@ -251,6 +255,10 @@ pub struct ProxyConfig {
     #[online_config(skip)]
     pub enable_io_snoop: bool,
 
+    #[doc(hidden)]
+    #[online_config(skip)]
+    pub memory_usage_high_water: f64,
+
     #[online_config(submodule)]
     pub readpool: ReadPoolConfig,
 
@@ -269,6 +277,7 @@ impl Default for ProxyConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             enable_io_snoop: false,
+            memory_usage_high_water: 0.1,
             readpool: ReadPoolConfig::default(),
             import: ImportConfig::default(),
         }
@@ -374,6 +383,9 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
     config.raft_store.clean_stale_ranges_tick = clean_stale_ranges_tick;
     config.raft_store.apply_batch_system.low_priority_pool_size =
         proxy_config.raft_store.apply_low_priority_pool_size;
+    config.raft_store.evict_cache_on_memory_ratio =
+        proxy_config.raft_store.evict_cache_on_memory_ratio;
+
     config.raftdb.defaultcf.block_cache_size = proxy_config.raftdb.defaultcf.block_cache_size;
     config.rocksdb.defaultcf.block_cache_size = proxy_config.rocksdb.defaultcf.block_cache_size;
     config.rocksdb.writecf.block_cache_size = proxy_config.rocksdb.writecf.block_cache_size;
@@ -382,6 +394,8 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
     config.storage.reserve_space = proxy_config.storage.reserve_space;
 
     config.enable_io_snoop = proxy_config.enable_io_snoop;
+    config.memory_usage_high_water = proxy_config.memory_usage_high_water;
+
     config.server.addr = proxy_config.server.addr.clone();
     config.server.advertise_addr = proxy_config.server.advertise_addr.clone();
     config.server.status_addr = proxy_config.server.status_addr.clone();
@@ -394,6 +408,8 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
     config.server.background_thread_count = proxy_config.server.background_thread_count;
     config.import.num_threads = proxy_config.import.num_threads;
     config.server.status_thread_pool_size = proxy_config.server.status_thread_pool_size;
+    config.server.reject_messages_on_memory_ratio =
+        proxy_config.server.reject_messages_on_memory_ratio;
 }
 
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {
