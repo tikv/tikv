@@ -705,7 +705,7 @@ mod tests {
         batch_expect_rows: &[usize],
     ) {
         let columns_info = helper.columns_info_by_idx(col_idxs);
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             helper.store(),
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -789,7 +789,7 @@ mod tests {
     fn test_execution_summary() {
         let helper = TableScanTestHelper::new();
 
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             helper.store(),
             Arc::new(EvalConfig::default()),
             helper.columns_info_by_idx(&[0]),
@@ -928,7 +928,7 @@ mod tests {
         // For row 0 + row 1 + (row 2 ~ row 4), we should only get row 0, row 1 and an
         // error.
         for corrupted_row_index in 2..=4 {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1035,7 +1035,7 @@ mod tests {
         // We should get row 0 and error because no further rows should be scanned when
         // there is an error.
         {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1083,7 +1083,7 @@ mod tests {
             });
             let mut schema = schema.clone();
             schema.push(FieldTypeTp::LongLong.into());
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info,
@@ -1125,7 +1125,7 @@ mod tests {
 
         // Let's also repeat case 1 for smaller batch size
         {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1168,7 +1168,7 @@ mod tests {
         // Case 2: row 1 + row 2
         // We should get error and no row, for the same reason as above.
         {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1189,7 +1189,7 @@ mod tests {
         // Case 3: row 2 + row 0
         // We should get row 2 and row 0. There is no error.
         {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1223,7 +1223,7 @@ mod tests {
         // Case 4: row 1
         // We should get error.
         {
-            let mut executor = BatchTableScanExecutor::new(
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store,
                 Arc::new(EvalConfig::default()),
                 columns_info,
@@ -1273,7 +1273,7 @@ mod tests {
 
         let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
 
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1381,7 +1381,7 @@ mod tests {
 
         let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
 
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1562,7 +1562,7 @@ mod tests {
 
         let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
 
-        let mut executor = BatchTableScanExecutor::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),

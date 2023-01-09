@@ -80,7 +80,7 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
                 return Err(box_err!("Wrong prefix expect: {:?}", new_prefix));
             }
             checksum =
-                checksum_crc64_xor(checksum, prefix_digest.clone(), &k[new_prefix.len()..], &v);
+                checksum_crc64_xor(checksum, prefix_digest.clone(), &k[new_prefix.len()..], v);
             total_kvs += 1;
             total_bytes += k.len() + v.len() + old_prefix.len() - new_prefix.len();
         }

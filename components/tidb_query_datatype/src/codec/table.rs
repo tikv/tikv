@@ -548,6 +548,7 @@ pub fn generate_index_data_for_test(
 mod tests {
     use std::{i64, iter::FromIterator};
 
+    use api_version::ApiV1;
     use collections::{HashMap, HashSet};
     use tipb::ColumnInfo;
 
@@ -794,18 +795,18 @@ mod tests {
         let mut range = KeyRange::default();
         range.set_start(small_key.clone());
         range.set_end(large_key.clone());
-        check_table_ranges(&[range]).unwrap();
+        check_table_ranges::<ApiV1>(&[range]).unwrap();
         // test range.start > range.end
         let mut range = KeyRange::default();
         range.set_end(small_key.clone());
         range.set_start(large_key);
-        check_table_ranges(&[range]).unwrap_err();
+        check_table_ranges::<ApiV1>(&[range]).unwrap_err();
 
         // test invalid end
         let mut range = KeyRange::default();
         range.set_start(small_key);
         range.set_end(b"xx".to_vec());
-        check_table_ranges(&[range]).unwrap_err();
+        check_table_ranges::<ApiV1>(&[range]).unwrap_err();
     }
 
     #[test]

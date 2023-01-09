@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{fmt::Debug, marker::PhantomData};
 
 use engine_traits::{Error, Result};
 use tikv_util::box_err;
@@ -33,7 +33,7 @@ impl Keyspace for ApiV2 {
     }
 }
 
-pub struct KeyspaceKv<F> {
+pub struct KeyspaceKv<F: KvFormat> {
     keyspace: Option<KeyspaceId>,
     k: Vec<u8>,
     v: Vec<u8>,
@@ -71,5 +71,27 @@ impl<F: KvFormat> KeyspaceKv<F> {
 
     pub fn keyspace(&self) -> Option<KeyspaceId> {
         self.keyspace
+    }
+}
+
+impl<F: KvFormat> PartialEq<(Vec<u8>, Vec<u8>)> for KeyspaceKv<F> {
+    fn eq(&self, other: &(Vec<u8>, Vec<u8>)) -> bool {
+        self.kv() == (&other.0, &other.1)
+    }
+}
+
+impl<F: KvFormat> PartialEq for KeyspaceKv<F> {
+    fn eq(&self, other: &Self) -> bool {
+        self.k == other.k && self.v == other.v
+    }
+}
+
+impl<F: KvFormat> Debug for KeyspaceKv<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyspaceKv")
+            .field("key", &log_wrappers::Value(self.key()))
+            .field("value", &log_wrappers::Value(self.value()))
+            .field("keyspace", &self.keyspace())
+            .finish()
     }
 }
