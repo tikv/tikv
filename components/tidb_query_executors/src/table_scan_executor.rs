@@ -2,6 +2,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
+use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
@@ -23,13 +24,15 @@ use tipb::{ColumnInfo, FieldType, TableScan};
 use super::util::scan_executor::*;
 use crate::interface::*;
 
-pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
+pub struct BatchTableScanExecutor<S: Storage, F: KvFormat>(
+    ScanExecutor<S, TableScanExecutorImpl, F>,
+);
 
 type HandleIndicesVec = SmallVec<[usize; 2]>;
 
 // We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can
 // omit the type when calling `check_supported`.
-impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
+impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>, ApiV1> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
@@ -37,7 +40,7 @@ impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
     }
 }
 
-impl<S: Storage> BatchTableScanExecutor<S> {
+impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: S,
@@ -110,7 +113,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
 }
 
 #[async_trait]
-impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
+impl<S: Storage, F: KvFormat> BatchExecutor for BatchTableScanExecutor<S, F> {
     type StorageStats = S::Statistics;
 
     #[inline]

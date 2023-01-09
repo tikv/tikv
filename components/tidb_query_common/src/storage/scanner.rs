@@ -1,7 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{marker::PhantomData, time::Duration};
 
+use api_version::{keyspace::KeyspaceKv, KvFormat};
 use tikv_util::time::Instant;
 use yatp::task::future::reschedule;
 
@@ -17,7 +18,7 @@ const CHECK_KEYS: usize = 32;
 
 /// A scanner that scans over multiple ranges. Each range can be a point range
 /// containing only one row, or an interval range containing multiple rows.
-pub struct RangesScanner<T> {
+pub struct RangesScanner<T, F> {
     storage: T,
     ranges_iter: RangesIterator,
 
@@ -34,6 +35,8 @@ pub struct RangesScanner<T> {
     working_range_begin_key: Vec<u8>,
     working_range_end_key: Vec<u8>,
     rescheduler: RescheduleChecker,
+
+    _phantom: PhantomData<F>,
 }
 
 // TODO: maybe it's better to make it generic to avoid directly depending
@@ -72,7 +75,7 @@ pub struct RangesScannerOptions<T> {
     pub is_scanned_range_aware: bool, // TODO: This can be const generics
 }
 
-impl<T: Storage> RangesScanner<T> {
+impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
     pub fn new(
         RangesScannerOptions {
             storage,
@@ -81,7 +84,7 @@ impl<T: Storage> RangesScanner<T> {
             is_key_only,
             is_scanned_range_aware,
         }: RangesScannerOptions<T>,
-    ) -> RangesScanner<T> {
+    ) -> RangesScanner<T, F> {
         let ranges_len = ranges.len();
         let ranges_iter = RangesIterator::new(ranges);
         RangesScanner {
@@ -98,13 +101,14 @@ impl<T: Storage> RangesScanner<T> {
             working_range_begin_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
             working_range_end_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
             rescheduler: RescheduleChecker::new(),
+            _phantom: PhantomData,
         }
     }
 
     /// Fetches next row.
     // Note: This is not implemented over `Iterator` since it can fail.
     // TODO: Change to use reference to avoid allocation and copy.
-    pub async fn next(&mut self) -> Result<Option<OwnedKvPair>, StorageError> {
+    pub async fn next(&mut self) -> Result<Option<KeyspaceKv<F>>, StorageError> {
         self.next_opt(true).await
     }
 
@@ -114,7 +118,7 @@ impl<T: Storage> RangesScanner<T> {
     pub async fn next_opt(
         &mut self,
         update_scanned_range: bool,
-    ) -> Result<Option<OwnedKvPair>, StorageError> {
+    ) -> Result<Option<KeyspaceKv<F>>, StorageError> {
         loop {
             let mut force_check = true;
             let range = self.ranges_iter.next();
@@ -150,14 +154,15 @@ impl<T: Storage> RangesScanner<T> {
             if self.is_scanned_range_aware && update_scanned_range {
                 self.update_scanned_range_from_scanned_row(&some_row);
             }
-            if some_row.is_some() {
+            if let Some(row) = some_row {
                 // Retrieved one row from point range or interval range.
                 if let Some(r) = self.scanned_rows_per_range.last_mut() {
                     *r += 1;
                 }
                 self.rescheduler.check_reschedule(force_check).await;
-
-                return Ok(some_row);
+                let kv = KeyspaceKv::from_kv_pair(row)
+                    .map_err(|e| StorageError(anyhow::Error::from(e)))?;
+                return Ok(Some(kv));
             } else {
                 // No more row in the range.
                 self.ranges_iter.notify_drained();

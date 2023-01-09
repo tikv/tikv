@@ -2,6 +2,7 @@
 
 use std::{cmp, convert::TryInto, io::Write, sync::Arc, u8};
 
+use api_version::KvFormat;
 use codec::prelude::*;
 use collections::{HashMap, HashSet};
 use kvproto::coprocessor::KeyRange;
@@ -75,10 +76,13 @@ pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
 }
 
 /// Checks if the range is for table record or index.
-pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
+pub fn check_table_ranges<F: KvFormat>(ranges: &[KeyRange]) -> Result<()> {
     for range in ranges {
-        extract_table_prefix(range.get_start())?;
-        extract_table_prefix(range.get_end())?;
+        let (_, start) =
+            F::parse_keyspace(range.get_start()).map_err(|e| Error::Other(Box::new(e)))?;
+        let (_, end) = F::parse_keyspace(range.get_end()).map_err(|e| Error::Other(Box::new(e)))?;
+        extract_table_prefix(start)?;
+        extract_table_prefix(end)?;
         if range.get_start() >= range.get_end() {
             return Err(invalid_type!(
                 "invalid range,range.start should be smaller than range.end, but got [{:?},{:?})",

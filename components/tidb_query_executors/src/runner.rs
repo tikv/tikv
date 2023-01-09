@@ -2,6 +2,7 @@
 
 use std::{convert::TryFrom, sync::Arc};
 
+use api_version::KvFormat;
 use fail::fail_point;
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
@@ -15,6 +16,9 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext, EvalWarnings},
     EvalType, FieldTypeAccessor,
 };
+// TODO: This value is chosen based on MonetDB/X100's research without our own
+// benchmarks.
+pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 use tikv_util::{
     deadline::Deadline,
     metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
@@ -34,10 +38,6 @@ use super::{
 // is not tuned carefully. We need to benchmark to find a best value. Also we
 // may consider accepting this value from TiDB side.
 const BATCH_INITIAL_SIZE: usize = 32;
-
-// TODO: This value is chosen based on MonetDB/X100's research without our own
-// benchmarks.
-pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
@@ -164,7 +164,7 @@ fn is_arrow_encodable(schema: &[FieldType]) -> bool {
 }
 
 #[allow(clippy::explicit_counter_loop)]
-pub fn build_executors<S: Storage + 'static>(
+pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     executor_descriptors: Vec<tipb::Executor>,
     storage: S,
     ranges: Vec<KeyRange>,
@@ -192,7 +192,7 @@ pub fn build_executors<S: Storage + 'static>(
             let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
             Box::new(
-                BatchTableScanExecutor::new(
+                BatchTableScanExecutor::<_, F>::new(
                     storage,
                     config.clone(),
                     columns_info,
@@ -212,7 +212,7 @@ pub fn build_executors<S: Storage + 'static>(
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids_len = descriptor.take_primary_column_ids().len();
             Box::new(
-                BatchIndexScanExecutor::new(
+                BatchIndexScanExecutor::<_, F>::new(
                     storage,
                     config.clone(),
                     columns_info,
@@ -364,7 +364,7 @@ pub fn build_executors<S: Storage + 'static>(
 }
 
 impl<SS: 'static> BatchExecutorsRunner<SS> {
-    pub fn from_request<S: Storage<Statistics = SS> + 'static>(
+    pub fn from_request<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
         mut req: DagRequest,
         ranges: Vec<KeyRange>,
         storage: S,
@@ -380,7 +380,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         config.paging_size = paging_size;
         let config = Arc::new(config);
 
-        let out_most_executor = build_executors(
+        let out_most_executor = build_executors::<_, F>(
             req.take_executors().into(),
             storage,
             ranges,
