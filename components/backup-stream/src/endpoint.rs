@@ -26,7 +26,7 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     warn,
-    worker::{Runnable, Scheduler},
+    worker::{PreventShutdown, Runnable, Scheduler},
     HandyRwLock,
 };
 use tokio::{
@@ -1289,7 +1289,7 @@ where
         self.run_task(task)
     }
 
-    fn shutdown(&mut self) {
+    fn on_about_to_shutdown(&mut self, _g: PreventShutdown) {
         let start = Instant::now();
         let _guard = self.pool.enter();
         let handle = self.pool.handle().clone();

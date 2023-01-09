@@ -53,7 +53,7 @@ use file_system::{
     get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor,
     MetricsManager as IoMetricsManager,
 };
-use futures::executor::block_on;
+use futures::{executor::block_on, future::BoxFuture};
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
 use kvproto::{
@@ -237,15 +237,6 @@ struct TikvServer<ER: RaftEngine> {
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
-    /// The services should be stopped BEFORE the gRPC service endpoint stopped.
-    /// If your service need to send some message to clients during shuting
-    /// down, add it to here.
-    ///
-    /// Before adding your service here, also make sure your service:
-    /// - Have well-defined behavior of handling requests during shuting down.
-    /// - After shuting down, other services can handle requests properly too.
-    ///   (i.e. No RPC endpoint relies on your service to work)
-    to_early_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
@@ -398,7 +389,6 @@ where
             region_info_accessor,
             coprocessor_host,
             to_stop: vec![],
-            to_early_stop: vec![],
             lock_files: vec![],
             concurrency_manager,
             env,
@@ -1029,7 +1019,7 @@ where
                 self.concurrency_manager.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
-            self.to_early_stop.push(backup_stream_worker);
+            self.to_stop.push(backup_stream_worker);
             Some(backup_stream_scheduler)
         } else {
             None
@@ -1678,9 +1668,11 @@ where
         }
     }
 
-    fn stop(self) {
+    fn stop(mut self) {
+        self.to_stop
+            .iter_mut()
+            .for_each(|s| s.as_mut().about_to_stop());
         tikv_util::thread_group::mark_shutdown();
-        self.to_early_stop.into_iter().for_each(|s| s.stop());
         let mut servers = self.servers.unwrap();
         servers
             .server
@@ -1962,6 +1954,7 @@ fn get_lock_dir() -> String {
 /// a list of these in `TiKV`, rather than storing each component individually.
 pub(crate) trait Stop {
     fn stop(self: Box<Self>);
+    fn about_to_stop(self: &mut self) {}
 }
 
 impl<R> Stop for StatusServer<R>
@@ -1982,6 +1975,10 @@ impl Stop for Worker {
 impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     fn stop(self: Box<Self>) {
         self.stop_worker();
+    }
+
+    fn about_to_stop(self: &mut self) {
+        self.scheduler().about_to_stop();
     }
 }
 

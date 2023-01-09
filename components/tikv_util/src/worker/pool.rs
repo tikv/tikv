@@ -25,6 +25,7 @@ use yatp::{Remote, ThreadPool};
 use super::metrics::*;
 use crate::{
     future::poll_future_notify,
+    mpsc::Sender,
     timer::GLOBAL_TIMER_HANDLE,
     yatp_pool::{DefaultTicker, YatpPoolBuilder},
 };
@@ -69,7 +70,30 @@ pub trait Runnable: Send {
         unimplemented!()
     }
     fn on_tick(&mut self) {}
+
+    /// The lifetime hook invoked while TiKV is about to stop.
+    /// Unlike [`shutdown`](Runnable::shutdown), this hook would be invoked
+    /// BEFORE some important services (e.g. gRPC service) shutting down.
+    /// The server would wait until the returned future resolved or timed out.
+    /// The the shutdown procedure won't start before the [`PreventShutdown`]
+    /// get dropped.
+    /// FIXME: Because [`Worker`] forgets the scheduler after creating and
+    /// return it, this hook won't be executed once your service is started
+    /// by it for now.
+    fn on_about_to_shutdown(&mut self, _g: PreventShutdown) {}
+
+    /// The lifetime hook invoked while shutting down.
+    /// In the context this method invoked, almost all other service have
+    /// shutdown, in this hook, only basic operations (i.e. operations doesn't
+    /// rely on other services) should be done.
     fn shutdown(&mut self) {}
+}
+
+/// A guard for preventing TiKV from shutting down.
+pub struct PreventShutdown {
+    // Once it dropped, the channel would be closed.
+    // So the receiver knows it can shutdown.
+    _tx: Sender<()>,
 }
 
 pub trait RunnableWithTimer: Runnable {
@@ -90,6 +114,7 @@ impl<R: Runnable + 'static> Drop for RunnableWrapper<R> {
 enum Msg<T: Display + Send> {
     Task(T),
     Timeout,
+    AboutToShutdown { tx: Sender<()> },
 }
 
 /// Scheduler provides interface to schedule task to underlying workers.
@@ -151,6 +176,14 @@ impl<T: Display + Send> Scheduler<T> {
 
     pub fn stop(&self) {
         self.sender.close_channel();
+    }
+
+    pub fn about_to_stop(&self) {
+        let (tx, rx) = crate::mpsc::bounded(0);
+        self.sender.unbounded_send(Msg::AboutToShutdown { tx });
+        // Either it is closed (dropped) or received anything means the work has been
+        // done.
+        let _ = rx.recv();
     }
 
     pub fn pending_tasks(&self) -> usize {
@@ -469,6 +502,10 @@ impl Worker {
                         counter.fetch_sub(1, Ordering::SeqCst);
                         metrics_pending_task_count.dec();
                     }
+                    Msg::AboutToShutdown { tx } => handle
+                        .inner
+                        // Note: can we omit this once the runner doesn't register the `about_to_shutdown` handle?
+                        .on_about_to_shutdown(PreventShutdown { _tx: tx }),
                     Msg::Timeout => (),
                 }
             }
@@ -500,6 +537,11 @@ impl Worker {
                         handle.inner.on_timeout();
                         let timeout = handle.inner.get_interval();
                         Self::delay_notify(tx.clone(), timeout);
+                    }
+                    Msg::AboutToShutdown { tx } => {
+                        handle
+                            .inner
+                            .on_about_to_shutdown(PreventShutdown { _tx: tx });
                     }
                 }
             }
