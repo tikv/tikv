@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 byteorder = "1.2"
-crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
+crossbeam-skiplist = "0.1"
 dashmap = "5.1"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.0"

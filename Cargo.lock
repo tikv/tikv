@@ -1037,7 +1037,7 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "criterion",
- "crossbeam-skiplist 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-skiplist",
  "fail",
  "futures 0.3.15",
  "kvproto",
@@ -1214,7 +1214,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.8",
  "lazy_static",
- "memoffset 0.6.4",
+ "memoffset",
  "scopeguard",
 ]
 
@@ -1226,20 +1226,8 @@ dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.11",
- "memoffset 0.6.4",
+ "memoffset",
  "once_cell",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-epoch"
-version = "0.9.13"
-source = "git+https://github.com/crossbeam-rs/crossbeam#8903ff063216f815f9ee4dcc1a715a88b5806007"
-dependencies = [
- "autocfg",
- "cfg-if 1.0.0",
- "crossbeam-utils 0.8.14",
- "memoffset 0.7.1",
  "scopeguard",
 ]
 
@@ -1255,24 +1243,13 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-skiplist"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af28cff91e276c27eb739e14b0dda13dfd4cbab8364ebdb8d517a4c5454a227a"
+checksum = "883a5821d7d079fcf34ac55f27a833ee61678110f6b97637cc74513c0d0b42fc"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch 0.9.8",
  "crossbeam-utils 0.8.8",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-skiplist"
-version = "0.1.0"
-source = "git+https://github.com/crossbeam-rs/crossbeam#8903ff063216f815f9ee4dcc1a715a88b5806007"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.13",
- "crossbeam-utils 0.8.14",
  "scopeguard",
 ]
 
@@ -1304,14 +1281,6 @@ source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2
 dependencies = [
  "cfg-if 1.0.0",
  "once_cell",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.14"
-source = "git+https://github.com/crossbeam-rs/crossbeam#8903ff063216f815f9ee4dcc1a715a88b5806007"
-dependencies = [
- "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -3067,15 +3036,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "memoffset"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
 name = "memory_trace_macros"
 version = "0.1.0"
 dependencies = [
@@ -3276,7 +3236,7 @@ dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
  "libc 0.2.132",
- "memoffset 0.6.4",
+ "memoffset",
 ]
 
 [[package]]
@@ -3289,7 +3249,7 @@ dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
  "libc 0.2.132",
- "memoffset 0.6.4",
+ "memoffset",
  "pin-utils",
 ]
 
@@ -4701,7 +4661,7 @@ name = "resource_control"
 version = "0.0.1"
 dependencies = [
  "byteorder",
- "crossbeam-skiplist 0.1.0 (git+https://github.com/crossbeam-rs/crossbeam)",
+ "crossbeam-skiplist",
  "dashmap",
  "kvproto",
  "lazy_static",
@@ -6555,7 +6515,7 @@ dependencies = [
  "cpu-time",
  "crc32fast",
  "crossbeam",
- "crossbeam-skiplist 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-skiplist",
  "derive_more",
  "error_code",
  "fail",
@@ -7427,7 +7387,7 @@ version = "0.0.1"
 source = "git+https://github.com/tikv/yatp.git?branch=master#bcf431a2619c06ab7fa0c72073a0c775646c484f"
 dependencies = [
  "crossbeam-deque",
- "crossbeam-skiplist 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-skiplist",
  "crossbeam-utils 0.8.8",
  "dashmap",
  "fail",
