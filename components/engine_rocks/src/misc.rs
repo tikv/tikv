@@ -2,7 +2,7 @@
 
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
-    Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
+    Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
@@ -258,7 +258,7 @@ impl MiscExt for RocksEngine {
 
     fn get_engine_used_size(&self) -> Result<u64> {
         let mut used_size: u64 = 0;
-        for cf in ALL_CFS {
+        for cf in self.cf_names() {
             let handle = util::get_cf_handle(self.as_inner(), cf)?;
             used_size += util::get_engine_cf_used_size(self.as_inner(), handle);
         }

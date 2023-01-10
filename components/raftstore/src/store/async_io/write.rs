@@ -718,7 +718,11 @@ where
                 .batch
                 .tasks
                 .iter()
-                .flat_map(|task| task.trackers.iter().flat_map(|t| t.as_tracker_token()))
+                .flat_map(|task| {
+                    task.trackers
+                        .iter()
+                        .flat_map(|t| t.as_tracker_token().cloned())
+                })
                 .collect();
             self.perf_context.report_metrics(&trackers);
             write_raft_time = duration_to_sec(now.saturating_elapsed());
