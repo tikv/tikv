@@ -22,7 +22,7 @@ use mnt::get_mount;
 use sysinfo::RefreshKind;
 pub use sysinfo::{CpuExt, DiskExt, NetworkExt, ProcessExt, SystemExt};
 
-use crate::config::{ReadableSize, KIB};
+use crate::config::ReadableSize;
 
 pub const HIGH_PRI: i32 = -1;
 const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
