@@ -406,10 +406,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         // smaller than propose_time of a command, which was
                         // proposed in another thread while this thread receives its
                         // AppendEntriesResponse and is ready to calculate its commit-log-duration.
-                        ctx.current_time.replace(monotonic_raw_now());
-                        ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                            (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
-                        ));
+                        let current_time = monotonic_raw_now();
+                        ctx.current_time.replace(current_time);
+                        if current_time >= propose_time {
+                            ctx.raft_metrics.commit_log.observe(duration_to_sec(
+                                (current_time - propose_time).to_std().unwrap(),
+                            ));
+                        }
                         self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
                         update_lease = false;
                     }
@@ -740,6 +743,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.region_heartbeat_pd(ctx);
                     self.add_pending_tick(PeerTick::CompactLog);
                     self.add_pending_tick(PeerTick::SplitRegionCheck);
+                    self.add_pending_tick(PeerTick::CheckLongUncommitted);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
