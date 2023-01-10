@@ -669,7 +669,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
         control.need_flush = false;
         let flush_state = self.flush_state().clone();
-        if self.write_batch.as_ref().map_or(false, |wb| !wb.is_empty()) {
+        if let Some(wb) = &self.write_batch && !wb.is_empty() {
             self.perf_context().start_observe();
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);

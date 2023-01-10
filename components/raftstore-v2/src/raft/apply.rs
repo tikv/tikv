@@ -84,7 +84,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let perf_context = tablet.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply);
         Apply {
             peer,
-            tablet: remote_tablet.latest().unwrap().clone(),
+            tablet,
             perf_context,
             write_batch: None,
             callbacks: vec![],
