@@ -50,9 +50,7 @@ impl Store {
         stats.set_bytes_written(0);
         stats.set_keys_written(0);
         stats.set_is_busy(false);
-
-        // stats.set_query_stats(query_stats);
-
+        // TODO: add query stats
         let task = pd::Task::StoreHeartbeat { stats };
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(self.logger(), "notify pd failed";
@@ -86,8 +84,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.self_stat().written_bytes,
             written_keys: self.self_stat().written_keys,
-            approximate_size: self.tablet().map(|e| e.get_engine_used_size().unwrap()),
-            approximate_keys: self.tablet().map(|e| e.get_num_keys().unwrap()),
+            approximate_size: self.split_flow_control_mut().approximate_size(),
+            approximate_keys: self.split_flow_control_mut().approximate_keys(),
             wait_data_peers: Vec::new(),
         });
         if let Err(e) = ctx.schedulers.pd.schedule(task) {

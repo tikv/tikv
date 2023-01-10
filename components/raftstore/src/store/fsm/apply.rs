@@ -582,8 +582,7 @@ where
                 .cb_batch
                 .iter()
                 .flat_map(|(cb, _)| cb.write_trackers())
-                .flat_map(|trackers| trackers.iter().map(|t| t.as_tracker_token()))
-                .flatten()
+                .flat_map(|trackers| trackers.as_tracker_token().cloned())
                 .collect();
             self.perf_context.report_metrics(&trackers);
             self.sync_log_hint = false;
@@ -620,7 +619,7 @@ where
         // Invoke callbacks
         let now = std::time::Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers() {
                 tracker.observe(now, &self.apply_time, |t| &mut t.metrics.apply_time_nanos);
             }
             cb.invoke_with_response(resp);
@@ -3333,15 +3332,13 @@ impl<C: WriteCallback> Apply<C> {
     pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
         let now = std::time::Instant::now();
         for cb in &mut self.cbs {
-            if let Some(trackers) = cb.cb.write_trackers_mut() {
-                for tracker in trackers {
-                    tracker.observe(now, &metrics.store_time, |t| {
-                        t.metrics.write_instant = Some(now);
-                        &mut t.metrics.store_time_nanos
-                    });
-                    if let TimeTracker::Instant(t) = tracker {
-                        *t = now;
-                    }
+            for tracker in cb.cb.write_trackers_mut() {
+                tracker.observe(now, &metrics.store_time, |t| {
+                    t.metrics.write_instant = Some(now);
+                    &mut t.metrics.store_time_nanos
+                });
+                if let TimeTracker::Instant(t) = tracker {
+                    *t = now;
                 }
             }
         }
@@ -3410,6 +3407,7 @@ pub struct Proposal<C> {
     /// lease.
     pub propose_time: Option<Timespec>,
     pub must_pass_epoch_check: bool,
+    pub sent: bool,
 }
 
 impl<C> Proposal<C> {
@@ -3421,6 +3419,7 @@ impl<C> Proposal<C> {
             propose_time: None,
             must_pass_epoch_check: false,
             is_conf_change: false,
+            sent: false,
         }
     }
 }
@@ -4170,9 +4169,9 @@ where
                         .cbs
                         .iter()
                         .flat_map(|p| p.cb.write_trackers())
-                        .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
+                        .flat_map(|ts| ts.as_tracker_token())
                     {
-                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                        GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
                             t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
                         });
                     }
@@ -5082,6 +5081,7 @@ mod tests {
             cb,
             propose_time: None,
             must_pass_epoch_check: false,
+            sent: true,
         }
     }
 

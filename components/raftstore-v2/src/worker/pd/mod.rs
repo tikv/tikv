@@ -13,8 +13,8 @@ use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
     util::KeysInfoFormatter, AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor,
-    ReadStats, RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TxnExt, WriteStats,
-    NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+    ReadStats, RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TabletSnapManager,
+    TxnExt, WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use slog::{error, Logger};
@@ -160,6 +160,7 @@ where
     pd_client: Arc<T>,
     raft_engine: ER,
     tablet_registry: TabletRegistry<EK>,
+    snap_mgr: TabletSnapManager,
     router: StoreRouter<EK, ER>,
     stats_monitor: PdStatsMonitor<PdReporter>,
 
@@ -196,6 +197,7 @@ where
         pd_client: Arc<T>,
         raft_engine: ER,
         tablet_registry: TabletRegistry<EK>,
+        snap_mgr: TabletSnapManager,
         router: StoreRouter<EK, ER>,
         remote: Remote<TaskCell>,
         concurrency_manager: ConcurrencyManager,
@@ -224,6 +226,7 @@ where
             pd_client,
             raft_engine,
             tablet_registry,
+            snap_mgr,
             router,
             stats_monitor,
             remote,

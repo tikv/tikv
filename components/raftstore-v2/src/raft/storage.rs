@@ -35,6 +35,9 @@ pub struct Storage<EK: KvEngine, ER> {
     /// by messages, it has not persisted any states, we need to persist them
     /// at least once dispite whether the state changes since create.
     ever_persisted: bool,
+    /// It may have dirty data after split. Use a flag to indicate whether it
+    /// has finished clean up.
+    has_dirty_data: bool,
     logger: Logger,
 
     /// Snapshot part.
@@ -116,6 +119,16 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     pub fn apply_trace(&self) -> &ApplyTrace {
         &self.apply_trace
     }
+
+    #[inline]
+    pub fn set_has_dirty_data(&mut self, has_dirty_data: bool) {
+        self.has_dirty_data = has_dirty_data;
+    }
+
+    #[inline]
+    pub fn has_dirty_data(&self) -> bool {
+        self.has_dirty_data
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
@@ -139,6 +152,17 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         };
         let region = region_state.get_region();
         let logger = logger.new(o!("region_id" => region.id, "peer_id" => peer.get_id()));
+        let has_dirty_data =
+            match engine.get_dirty_mark(region.get_id(), region_state.get_tablet_index()) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Err(box_err!(
+                        "failed to get dirty mark for {}: {:?}",
+                        region.get_id(),
+                        e
+                    ));
+                }
+            };
         let entry_storage = EntryStorage::new(
             peer.get_id(),
             engine,
@@ -153,6 +177,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             peer: peer.clone(),
             region_state,
             ever_persisted: persisted,
+            has_dirty_data,
             logger,
             snap_states: RefCell::new(HashMap::default()),
             gen_snap_task: RefCell::new(Box::new(None)),
@@ -307,8 +332,8 @@ mod tests {
     };
     use raft::{Error as RaftError, StorageError};
     use raftstore::store::{
-        util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, FetchedLogs, GenSnapRes,
-        ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX,
+        util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, Config, FetchedLogs,
+        GenSnapRes, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX,
         RAFT_INIT_LOG_TERM,
     };
     use slog::o;
@@ -475,6 +500,7 @@ mod tests {
         state.set_region(region.clone());
         // setup peer applyer
         let mut apply = Apply::new(
+            &Config::default(),
             region.get_peers()[0].clone(),
             state,
             router,

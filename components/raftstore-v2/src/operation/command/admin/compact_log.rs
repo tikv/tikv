@@ -23,7 +23,7 @@ use raftstore::{
     Result,
 };
 use slog::{debug, error, info};
-use tikv_util::box_err;
+use tikv_util::{box_err, log::SlogFormat};
 
 use crate::{
     batch::StoreContext,
@@ -303,6 +303,41 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn has_pending_tombstone_tablets(&self) -> bool {
+        !self
+            .compact_log_context()
+            .tombstone_tablets_wait_index
+            .is_empty()
+    }
+
+    #[inline]
+    pub fn record_tombstone_tablet_for_destroy<T>(
+        &mut self,
+        ctx: &StoreContext<EK, ER, T>,
+        task: &mut WriteTask<EK, ER>,
+    ) {
+        assert!(
+            !self.has_pending_tombstone_tablets(),
+            "{} all tombstone should be cleared before being destroyed.",
+            SlogFormat(&self.logger)
+        );
+        let tablet = match self.tablet() {
+            Some(tablet) => tablet.clone(),
+            None => return,
+        };
+        let region_id = self.region_id();
+        let applied_index = self.entry_storage().applied_index();
+        let sched = ctx.schedulers.tablet_gc.clone();
+        let _ = sched.schedule(tablet_gc::Task::prepare_destroy(
+            tablet,
+            self.region_id(),
+            applied_index,
+        ));
+        task.persisted_cbs.push(Box::new(move || {
+            let _ = sched.schedule(tablet_gc::Task::destroy(region_id, applied_index));
+        }));
+    }
+
     pub fn on_apply_res_compact_log<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -342,8 +377,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.set_has_extra_write();
 
         // All logs < perssited_apply will be deleted, so should check with +1.
-        if old_truncated + 1 < self.storage().apply_trace().persisted_apply_index() {
-            self.compact_log_from_engine(store_ctx);
+        if old_truncated + 1 < self.storage().apply_trace().persisted_apply_index()
+            && let Some(index) = self.compact_log_index() {
+            // Raft Engine doesn't care about first index.
+            if let Err(e) =
+            store_ctx
+                .engine
+                .gc(self.region_id(), 0, index, self.state_changes_mut())
+            {
+                error!(self.logger, "failed to compact raft logs"; "err" => ?e);
+            }
+            // Extra write set right above.
         }
 
         let context = self.compact_log_context_mut();
@@ -354,38 +398,44 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             (context.approximate_log_size as f64 * (remain_cnt as f64 / total_cnt as f64)) as u64;
     }
 
-    /// Called when apply index is persisted. There are two different situation:
-    ///
-    /// Generally, additional writes are triggered to persist apply index. In
-    /// this case task is `Some`. But after applying snapshot, the apply
-    /// index is persisted ahead of time. In this case task is `None`.
+    /// Called when apply index is persisted.
     #[inline]
     pub fn on_advance_persisted_apply_index<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         old_persisted: u64,
-        task: Option<&mut WriteTask<EK, ER>>,
+        task: &mut WriteTask<EK, ER>,
     ) {
         let new_persisted = self.storage().apply_trace().persisted_apply_index();
         if old_persisted < new_persisted {
             let region_id = self.region_id();
             // TODO: batch it.
+            // TODO: avoid allocation if there is nothing to delete.
             if let Err(e) = store_ctx.engine.delete_all_but_one_states_before(
                 region_id,
                 new_persisted,
-                self.state_changes_mut(),
+                task.extra_write
+                    .ensure_v2(|| self.entry_storage().raft_engine().log_batch(0)),
             ) {
                 error!(self.logger, "failed to delete raft states"; "err" => ?e);
-            } else {
-                self.set_has_extra_write();
             }
             // If it's snapshot, logs are gc already.
-            if task.is_some() && old_persisted < self.entry_storage().truncated_index() + 1 {
-                self.compact_log_from_engine(store_ctx);
+            if !task.has_snapshot
+                && old_persisted < self.entry_storage().truncated_index() + 1
+                && let Some(index) = self.compact_log_index() {
+                let batch = task.extra_write.ensure_v2(|| self.entry_storage().raft_engine().log_batch(0));
+                // Raft Engine doesn't care about first index.
+                if let Err(e) =
+                store_ctx
+                    .engine
+                    .gc(self.region_id(), 0, index, batch)
+                {
+                    error!(self.logger, "failed to compact raft logs"; "err" => ?e);
+                }
             }
             if self.remove_tombstone_tablets(new_persisted) {
                 let sched = store_ctx.schedulers.tablet_gc.clone();
-                if let Some(task) = task {
+                if !task.has_snapshot {
                     task.persisted_cbs.push(Box::new(move || {
                         let _ = sched.schedule(tablet_gc::Task::destroy(region_id, new_persisted));
                     }));
@@ -397,28 +447,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    fn compact_log_from_engine<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+    fn compact_log_index(&mut self) -> Option<u64> {
         let truncated = self.entry_storage().truncated_index() + 1;
         let persisted_applied = self.storage().apply_trace().persisted_apply_index();
         let compact_index = std::cmp::min(truncated, persisted_applied);
         if compact_index == RAFT_INIT_LOG_INDEX + 1 {
             // There is no logs at RAFT_INIT_LOG_INDEX, nothing to delete.
-            return;
+            return None;
         }
-        // Raft Engine doesn't care about first index.
-        if let Err(e) =
-            store_ctx
-                .engine
-                .gc(self.region_id(), 0, compact_index, self.state_changes_mut())
-        {
-            error!(self.logger, "failed to compact raft logs"; "err" => ?e);
-        } else {
-            // TODO: make this debug when stable.
-            info!(self.logger, "compact log";
-                "index" => compact_index,
-                "apply_trace" => ?self.storage().apply_trace(),
-                "truncated" => ?self.entry_storage().apply_state());
-            self.set_has_extra_write();
-        }
+        // TODO: make this debug when stable.
+        info!(self.logger, "compact log";
+            "index" => compact_index,
+            "apply_trace" => ?self.storage().apply_trace(),
+            "truncated" => ?self.entry_storage().apply_state());
+        Some(compact_index)
     }
 }
