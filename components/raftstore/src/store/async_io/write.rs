@@ -465,11 +465,15 @@ where
         self.flush_states_to_raft_wb();
         if metrics.waterfall_metrics {
             let now = std::time::Instant::now();
-            for task in &self.tasks {
-                for tracker in &task.trackers {
+            for task in &mut self.tasks {
+                for tracker in &mut task.trackers {
                     tracker.observe(now, &metrics.wf_before_write, |t| {
+                        t.metrics.write_instant = Some(now);
                         &mut t.metrics.wf_before_write_nanos
                     });
+                    if let TimeTracker::Instant(t) = tracker {
+                        *t = now;
+                    }
                 }
             }
         }
