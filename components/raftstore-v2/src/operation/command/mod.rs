@@ -314,7 +314,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         // TODO: remove following log once stable.
-        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res);
+        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
             // Ignore admin command side effects, otherwise it may split incomplete
