@@ -266,11 +266,6 @@ struct GroupPriorityTracker {
 
 impl GroupPriorityTracker {
     fn get_priority(&self, level: usize) -> u64 {
-        // let level = match priority {
-        //     CommandPri::High => 0,
-        //     CommandPri::Normal => 0,
-        //     CommandPri::Low => 2,
-        // };
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
         (if self.vt_delta_for_get > 0 {
             self.virtual_time
