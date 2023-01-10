@@ -160,6 +160,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Returns true means the check tick is consumed, no need to schedule
     /// another tick.
     pub fn on_split_region_check<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) -> bool {
+        println!("on_split_region_check 2222");
         if !self.is_leader() {
             return true;
         }
@@ -177,8 +178,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             control.skip_split_count += 1;
             return false;
         }
-        let task =
-            SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan, None);
+        let task = SplitCheckTask::split_check(
+            self.region().clone(),
+            false,
+            CheckPolicy::Approximate,
+            None,
+        );
         if let Err(e) = ctx.schedulers.split_check.schedule(task) {
             info!(self.logger, "failed to schedule split check"; "err" => ?e);
         }

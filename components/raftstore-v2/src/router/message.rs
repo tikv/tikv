@@ -4,7 +4,7 @@
 
 use kvproto::{
     metapb,
-    metapb::{Region, RegionEpoch},
+    metapb::RegionEpoch,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
@@ -183,7 +183,6 @@ pub enum PeerMsg {
         ch: CmdResChannel,
     },
     RefreshRegionBuckets {
-        region_id: u64,
         region_epoch: RegionEpoch,
         buckets: Vec<raftstore::store::Bucket>,
         bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,

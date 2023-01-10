@@ -242,6 +242,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         router: S,
         coprocessor: CoprocessorHost<EK>,
     ) -> Runner<EK, S> {
+        println!(" with_registry new split checker");
         Runner {
             engine: Either::Right(registry),
             router,
@@ -273,9 +274,13 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 bucket_entry.size,
                 bucket_entry.keys.len()
             );
+            println!(
+                "bucket_entry size:{},keys count {}",
+                bucket_entry.size,
+                bucket_entry.keys.len()
+            );
             buckets.push(bucket_entry);
         }
-
         self.on_buckets_created(&mut buckets, region, &ranges);
         self.refresh_region_buckets(buckets, region, bucket_ranges);
         Ok(())
@@ -291,11 +296,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             let mut bucket_region = region.clone();
             bucket_region.set_start_key(bucket_range.0.clone());
             bucket_region.set_end_key(bucket_range.1.clone());
-            println!(
-                "on buckets created,start:{},end:{}",
-                log_wrappers::Value::key(bucket_region.get_start_key()),
-                log_wrappers::Value::key(bucket_region.get_end_key())
-            );
             let adjusted_keys = std::mem::take(&mut bucket.keys)
                 .into_iter()
                 .enumerate()
@@ -332,6 +332,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                     }
                 })
                 .collect::<Vec<_>>();
+            println!("on buckets created,adjusted_keys:{}", adjusted_keys.len(),);
             bucket.keys = adjusted_keys;
         }
     }
@@ -361,6 +362,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) {
+        println!("check_split_and_bucket");
         let mut cached;
         let tablet = match &self.engine {
             Either::Left(e) => e,
@@ -400,7 +402,12 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         let mut host = self
             .coprocessor
             .new_split_checker_host(region, tablet, auto_split, policy);
-
+        println!(
+            "check_split_and_bucket,skip:{:?},auto_split:{},policy:{:?}",
+            host.skip(),
+            auto_split,
+            policy
+        );
         if host.skip() {
             debug!("skip split check";
                 "region_id" => region.get_id(),
@@ -410,7 +417,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             );
             return;
         }
-
+        println!("check_split_and_bucket,policy:{:?}", host.policy());
         let split_keys = match host.policy() {
             CheckPolicy::Scan => {
                 match self.scan_split_keys(
@@ -672,10 +679,6 @@ where
             ),
             Task::ChangeConfig(c) => self.change_cfg(c),
             Task::ApproximateBuckets(region) => {
-                println!(
-                    "handle approximate buckets, enable_region_buckets:{}",
-                    self.coprocessor.cfg.enable_region_bucket
-                );
                 if self.coprocessor.cfg.enable_region_bucket {
                     let mut cached;
                     let tablet = match &self.engine {
@@ -691,6 +694,7 @@ where
                             None => return,
                         },
                     };
+                    println!("task ApproximateBuckets");
                     let mut host = self.coprocessor.new_split_checker_host(
                         &region,
                         tablet,

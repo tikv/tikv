@@ -11,16 +11,19 @@
 //! Follower's read index and replica read is implemenented replica module.
 //! Leader's read index and lease renew is implemented in lease module.
 
-use std::cmp;
+use std::{cmp, sync::Arc};
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     errorpb,
+    metapb::RegionEpoch,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType},
 };
+use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use raft::{Ready, StateRole};
 use raftstore::{
+    coprocessor::RegionChangeEvent,
     errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp, local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT,
@@ -29,7 +32,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::{debug, info};
+use slog::{debug, error, info};
 use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;
 
@@ -69,6 +72,171 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
                 Ok(RequestPolicy::ReadIndex)
             }
         }
+    }
+
+    pub fn on_refresh_region_buckets(
+        &mut self,
+        region_epoch: RegionEpoch,
+        mut buckets: Vec<raftstore::store::Bucket>,
+        bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
+    ) {
+        println!("on_refresh_region_buckets,111");
+        // bucket version layout
+        //   term       logical counter
+        // |-----------|-----------|
+        //  high bits     low bits
+        // term: given 10s election timeout, the 32 bit means 1362 year running time
+        let gen_bucket_version = |term, current_version| {
+            let current_version_term = current_version >> 32;
+            let bucket_version: u64 = if current_version_term == term {
+                current_version + 1
+            } else {
+                if term > u32::MAX.into() {
+                    error!(
+                        self.fsm.peer().logger,
+                        "unexpected term {} more than u32::MAX. Bucket
+                    version will be backward.",
+                        term
+                    );
+                }
+                term << 32
+            };
+            bucket_version
+        };
+
+        let region = self.fsm.peer().region();
+        if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
+            error!(
+                 self.fsm.peer().logger,
+                "receive a stale refresh region bucket message";
+                "region_id" => self.fsm.peer().region_id(),
+                "peer_id" => self.fsm.peer().peer_id(),
+                "epoch" => ?region_epoch,
+                "current_epoch" => ?region.get_region_epoch(),
+            );
+
+            return;
+        }
+
+        let mut current_version = self
+            .fsm
+            .peer()
+            .region_buckets()
+            .as_ref()
+            .map(|b| b.meta.version)
+            .unwrap_or_default();
+        if current_version == 0 {
+            current_version = self
+                .fsm
+                .peer()
+                .last_region_buckets()
+                .as_ref()
+                .map(|b| b.meta.version)
+                .unwrap_or_default();
+        }
+        let mut region_buckets: BucketStat;
+        if let Some(bucket_ranges) = bucket_ranges {
+            assert_eq!(buckets.len(), bucket_ranges.len());
+            let mut i = 0;
+            region_buckets = self.fsm.peer().region_buckets().clone().unwrap();
+            let mut meta = (*region_buckets.meta).clone();
+            if !buckets.is_empty() {
+                meta.version = gen_bucket_version(self.fsm.peer().term(), current_version);
+            }
+            meta.region_epoch = region_epoch;
+            for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
+                while i < meta.keys.len() && meta.keys[i] != bucket_range.0 {
+                    i += 1;
+                }
+                assert!(i != meta.keys.len());
+                // the bucket size is small and does not have split keys,
+                // then it should be merged with its left neighbor
+                let region_bucket_merge_size = self
+                    .store_ctx
+                    .coprocessor_host
+                    .cfg
+                    .region_bucket_merge_size_ratio
+                    * (self.store_ctx.coprocessor_host.cfg.region_bucket_size.0 as f64);
+                if bucket.keys.is_empty() && bucket.size <= (region_bucket_merge_size as u64) {
+                    meta.sizes[i] = bucket.size;
+                    // i is not the last entry (which is end key)
+                    assert!(i < meta.keys.len() - 1);
+                    // the region has more than one bucket
+                    // and the left neighbor + current bucket size is not very big
+                    if meta.keys.len() > 2
+                        && i != 0
+                        && meta.sizes[i - 1] + bucket.size
+                            < self.store_ctx.coprocessor_host.cfg.region_bucket_size.0 * 2
+                    {
+                        // bucket is too small
+                        region_buckets.left_merge(i);
+                        meta.left_merge(i);
+                        continue;
+                    }
+                } else {
+                    // update size
+                    meta.sizes[i] = bucket.size / (bucket.keys.len() + 1) as u64;
+                    // insert new bucket keys (split the original bucket)
+                    for bucket_key in bucket.keys {
+                        i += 1;
+                        region_buckets.split(i);
+                        meta.split(i, bucket_key);
+                    }
+                }
+                i += 1;
+            }
+            region_buckets.meta = Arc::new(meta);
+        } else {
+            assert_eq!(buckets.len(), 1);
+            let bucket_keys = buckets.pop().unwrap().keys;
+            let bucket_count = bucket_keys.len() + 1;
+
+            let mut meta = BucketMeta {
+                region_id: self.fsm.peer().region_id(),
+                region_epoch,
+                version: gen_bucket_version(self.fsm.peer().term(), current_version),
+                keys: bucket_keys,
+                sizes: vec![self.store_ctx.coprocessor_host.cfg.region_bucket_size.0; bucket_count],
+            };
+            meta.keys.insert(0, region.get_start_key().to_vec());
+            meta.keys.push(region.get_end_key().to_vec());
+
+            let stats = new_bucket_stats(&meta);
+            region_buckets = BucketStat::new(Arc::new(meta), stats);
+        }
+
+        let buckets_count = region_buckets.meta.keys.len() - 1;
+        self.store_ctx.coprocessor_host.on_region_changed(
+            region,
+            RegionChangeEvent::UpdateBuckets(buckets_count),
+            self.fsm.peer().get_role(),
+        );
+        self.fsm.peer_mut().set_region_buckets(region_buckets);
+        let mut store_meta = self.store_ctx.store_meta.lock().unwrap();
+        if let Some(reader) = store_meta.readers.get_mut(&self.fsm.peer().region_id()) {
+            reader.0.update(ReadProgress::region_buckets(
+                self.fsm
+                    .peer()
+                    .region_buckets()
+                    .as_ref()
+                    .unwrap()
+                    .meta
+                    .clone(),
+            ));
+        }
+        // debug!(
+        //     "finished on_refresh_region_buckets";
+        //     "region_id" => self.fsm.region_id(),
+        //     "buckets count" => buckets_count,
+        //     "buckets size" =>
+        // ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
+        // );
+        // test purpose
+        // #[cfg(any(test, feature = "testexport"))]
+        // test_only_callback(
+        //     _cb,
+        //     self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
+        // );
     }
 
     #[inline]

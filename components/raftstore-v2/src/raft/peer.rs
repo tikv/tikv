@@ -23,7 +23,7 @@ use raftstore::{
         ReadProgress, SplitCheckTask, TabletSnapManager, TxnExt, WriteTask,
     },
 };
-use slog::Logger;
+use slog::{error, Logger};
 
 use super::storage::Storage;
 use crate::{
@@ -198,23 +198,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        println!(
-            "may gen buckets approximate buckets,enable_buckets:{}",
-            ctx.coprocessor_host.cfg.enable_region_bucket
-        );
         if ctx.coprocessor_host.cfg.enable_region_bucket && !self.region().get_peers().is_empty() {
-            if let Err(_e) = ctx
+            if let Err(e) = ctx
                 .schedulers
                 .split_check
                 .schedule(SplitCheckTask::ApproximateBuckets(self.region().clone()))
             {
-                // error!(
-                //     self.logger(),
-                //     "failed to schedule check approximate buckets";
-                //     "region_id" => self.region().get_id(),
-                //     "peer_id" => self.peer_id(),
-                //     "err" => %e,
-                // );
+                error!(
+                    self.logger,
+                    "failed to schedule check approximate buckets";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.peer_id(),
+                    "err" => %e,
+                );
             }
         }
     }
@@ -227,6 +223,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn region_buckets(&self) -> &Option<BucketStat> {
         &self.region_buckets
+    }
+
+    #[inline]
+    pub fn set_region_buckets(&mut self, buckets: BucketStat) {
+        let old = self.region_buckets.replace(buckets);
+        self.last_region_buckets = old
+    }
+
+    #[inline]
+    pub fn last_region_buckets(&self) -> &Option<BucketStat> {
+        &self.last_region_buckets
+    }
+
+    #[inline]
+    pub fn get_role(&self) -> StateRole {
+        self.raft_group.raft.state
     }
 
     #[inline]

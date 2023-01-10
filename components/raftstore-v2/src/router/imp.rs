@@ -80,7 +80,6 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
         let res = self.send(
             region_id,
             PeerMsg::RefreshRegionBuckets {
-                region_id,
                 region_epoch,
                 buckets,
                 bucket_ranges,

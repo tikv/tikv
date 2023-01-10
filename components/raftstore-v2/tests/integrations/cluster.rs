@@ -45,7 +45,7 @@ use slog::{debug, o, Logger};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::{
-    config::{ReadableDuration, VersionTrack},
+    config::{ReadableDuration, ReadableSize, VersionTrack},
     store::new_peer,
     worker::{LazyWorker, Worker},
 };
@@ -282,7 +282,9 @@ impl RunningState {
 
         let mut coprocessor = raftstore::coprocessor::Config::default();
         coprocessor.enable_region_bucket = true;
+        coprocessor.region_bucket_size = ReadableSize::mb(1);
         let coprocessor_host = CoprocessorHost::new(router.store_router().clone(), coprocessor);
+
         let background = Worker::new("background");
         let pd_worker = LazyWorker::new("pd-worker");
         system

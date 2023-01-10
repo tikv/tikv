@@ -1,8 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Duration;
+
+use engine_traits::{Peekable, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
 use pd_client::PdClient;
+use raftstore_v2::{
+    router::{PeerMsg, PeerTick},
+    SimpleWriteEncoder,
+};
 use tikv_util::store::new_peer;
 
 use crate::cluster::Cluster;
@@ -63,8 +70,8 @@ fn test_store_heartbeat() {
 #[test]
 fn test_report_buckets() {
     let region_id = 2;
-    let cluster = Cluster::with_node_count(1, None);
-    let router = &cluster.routers[0];
+    let mut cluster = Cluster::with_node_count(1, None);
+    let router = &mut cluster.routers[0];
 
     // When there is only one peer, it should campaign immediately.
     let mut req = RaftCmdRequest::default();
@@ -78,6 +85,31 @@ fn test_report_buckets() {
         new_peer(1, 3)
     );
 
+    let header = Box::new(router.new_request_for(region_id).take_header());
+    router.wait_applied_to_current_term(region_id, Duration::from_secs(3));
+    let mut suffix = String::from("");
+    for _ in 0..200 {
+        suffix.push_str("fake ");
+    }
+    for i in 0..10000 {
+        let mut put = SimpleWriteEncoder::with_capacity(64);
+        let mut key = format!("key-{}", i);
+        key.push_str(&suffix);
+        put.put(CF_DEFAULT, key.as_bytes(), b"value");
+        let (msg, mut sub) = PeerMsg::simple_write(header.clone(), put.clone().encode());
+        router.send(region_id, msg).unwrap();
+        assert!(block_on(sub.wait_proposed()));
+        assert!(block_on(sub.wait_committed()));
+        let _resp = block_on(sub.result()).unwrap();
+        let snap = router.stale_snapshot(region_id);
+        assert!(snap.get_value(key.as_bytes()).is_ok());
+    }
+
+    cluster.routers[0]
+        .send(region_id, PeerMsg::Tick(PeerTick::SplitRegionCheck))
+        .unwrap();
+    cluster.dispatch(region_id, vec![]);
+    std::thread::sleep(std::time::Duration::from_secs(5));
     for _ in 0..5 {
         let resp = block_on(
             cluster

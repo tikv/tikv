@@ -222,6 +222,7 @@ pub fn get_approximate_split_keys(
     region: &Region,
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
+    println!("batch_split_limit:{}", batch_split_limit);
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
