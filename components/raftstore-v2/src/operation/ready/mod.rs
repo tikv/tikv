@@ -408,11 +408,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         // AppendEntriesResponse and is ready to calculate its commit-log-duration.
                         let current_time = monotonic_raw_now();
                         ctx.current_time.replace(current_time);
-                        if current_time >= propose_time {
-                            ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                                (current_time - propose_time).to_std().unwrap(),
-                            ));
-                        }
+                        ctx.raft_metrics.commit_log.observe(duration_to_sec(
+                            (current_time - propose_time).to_std().unwrap(),
+                        ));
                         self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
                         update_lease = false;
                     }

@@ -188,6 +188,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
             self.poll_ctx.update_ticks_timeout();
         }
         self.poll_ctx.has_ready = false;
+        self.poll_ctx.current_time = None;
         self.timer = tikv_util::time::Instant::now();
     }
 
