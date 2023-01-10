@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crossbeam::channel::RecvTimeoutError;
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
     compat::{Future01CompatExt, Stream01CompatExt},
@@ -114,7 +115,7 @@ impl<R: Runnable + 'static> Drop for RunnableWrapper<R> {
 enum Msg<T: Display + Send> {
     Task(T),
     Timeout,
-    AboutToShutdown { tx: Sender<()> },
+    AboutToShutdown(PreventShutdown),
 }
 
 /// Scheduler provides interface to schedule task to underlying workers.
@@ -178,12 +179,20 @@ impl<T: Display + Send> Scheduler<T> {
         self.sender.close_channel();
     }
 
-    pub fn about_to_stop(&self) {
+    /// hint the scheduler is about to stop and wait the [`PreventShutdown`]
+    /// dropped with timeout. return true if the [`PreventShutdown`] dropped
+    /// in time.
+    pub fn about_to_stop(&self, max_wait: Duration) -> bool {
         let (tx, rx) = crate::mpsc::bounded(0);
-        self.sender.unbounded_send(Msg::AboutToShutdown { tx });
+        self.sender
+            .unbounded_send(Msg::AboutToShutdown(PreventShutdown { _tx: tx }))
+            .expect("about_to_stop: the scheduler already stopped while calling `about_to_stop`");
         // Either it is closed (dropped) or received anything means the work has been
         // done.
-        let _ = rx.recv();
+        match rx.recv_timeout(max_wait) {
+            Err(RecvTimeoutError::Timeout) => false,
+            _ => true,
+        }
     }
 
     pub fn pending_tasks(&self) -> usize {
@@ -502,10 +511,10 @@ impl Worker {
                         counter.fetch_sub(1, Ordering::SeqCst);
                         metrics_pending_task_count.dec();
                     }
-                    Msg::AboutToShutdown { tx } => handle
+                    Msg::AboutToShutdown(p) => handle
                         .inner
                         // Note: can we omit this once the runner doesn't register the `about_to_shutdown` handle?
-                        .on_about_to_shutdown(PreventShutdown { _tx: tx }),
+                        .on_about_to_shutdown(p),
                     Msg::Timeout => (),
                 }
             }
@@ -538,10 +547,8 @@ impl Worker {
                         let timeout = handle.inner.get_interval();
                         Self::delay_notify(tx.clone(), timeout);
                     }
-                    Msg::AboutToShutdown { tx } => {
-                        handle
-                            .inner
-                            .on_about_to_shutdown(PreventShutdown { _tx: tx });
+                    Msg::AboutToShutdown(p) => {
+                        handle.inner.on_about_to_shutdown(p);
                     }
                 }
             }
@@ -550,7 +557,6 @@ impl Worker {
 }
 
 mod tests {
-
     use std::{
         sync::{
             atomic::{self, AtomicU64},
@@ -567,12 +573,19 @@ mod tests {
         tasks: Arc<Mutex<Vec<u64>>>,
     }
 
+    const TASK_ABOUT_TO_STOP: u64 = 42;
+
     impl Runnable for StepRunner {
         type Task = u64;
 
         fn run(&mut self, step: u64) {
             let mut tasks = self.tasks.lock().unwrap();
             tasks.push(step);
+        }
+
+        fn on_about_to_shutdown(&mut self, _g: PreventShutdown) {
+            let mut tasks = self.tasks.lock().unwrap();
+            tasks.push(TASK_ABOUT_TO_STOP)
         }
 
         fn shutdown(&mut self) {
@@ -624,5 +637,53 @@ mod tests {
         // The worker need some time to trigger shutdown.
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(12, count.load(atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_before_shutting_down() {
+        let mut worker = LazyWorker::new("test_lazy_worker_with_timer");
+        let scheduler = worker.scheduler();
+        let count = Arc::new(AtomicU64::new(0));
+        let tasks = Arc::new(Mutex::new(vec![]));
+        worker.start(StepRunner {
+            count: count.clone(),
+            tasks: tasks.clone(),
+            timeout_duration: Duration::ZERO,
+        });
+
+        scheduler.schedule(0).unwrap();
+        scheduler.schedule(1).unwrap();
+        assert!(scheduler.about_to_stop(Duration::from_secs(1)));
+        scheduler.stop();
+        let ts = tasks.lock().unwrap();
+        assert_eq!(ts.as_slice(), &[0, 1, TASK_ABOUT_TO_STOP], "{:?}", ts);
+    }
+
+    #[test]
+    fn test_block_during_about_to_shutdown() {
+        struct Block(Arc<AtomicBool>);
+        impl Runnable for Block {
+            type Task = String;
+            fn on_about_to_shutdown(&mut self, _g: PreventShutdown) {
+                std::thread::sleep(Duration::from_secs(1));
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let mut worker = LazyWorker::new("test_lazy_worker_with_timer");
+        let scheduler = worker.scheduler();
+        let stopped = Arc::default();
+        worker.start(Block(Arc::clone(&stopped)));
+
+        let now = Instant::now();
+        assert!(!scheduler.about_to_stop(Duration::from_millis(50)));
+        let elapsed = now.elapsed();
+        assert!(
+            elapsed > Duration::from_millis(50),
+            "elapsed = {}s",
+            elapsed.as_secs_f64()
+        );
+        assert!(!stopped.load(Ordering::SeqCst));
+        scheduler.stop()
     }
 }

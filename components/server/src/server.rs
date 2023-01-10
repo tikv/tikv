@@ -53,7 +53,7 @@ use file_system::{
     get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor,
     MetricsManager as IoMetricsManager,
 };
-use futures::{executor::block_on, future::BoxFuture};
+use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
 use kvproto::{
@@ -144,6 +144,8 @@ const SYSTEM_BUSY_THRESHOLD: f64 = 0.80;
 const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
 // pace of cpu quota adjustment
 const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
+// the max wait time for the about to shutdown hook.
+const ABOUT_TO_SHUTDOWN_WAIT_TIME_FOR_EACH_SERVICE: Duration = Duration::from_secs(60);
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
@@ -1954,7 +1956,7 @@ fn get_lock_dir() -> String {
 /// a list of these in `TiKV`, rather than storing each component individually.
 pub(crate) trait Stop {
     fn stop(self: Box<Self>);
-    fn about_to_stop(self: &mut self) {}
+    fn about_to_stop(self: &mut Self) {}
 }
 
 impl<R> Stop for StatusServer<R>
@@ -1977,8 +1979,9 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
         self.stop_worker();
     }
 
-    fn about_to_stop(self: &mut self) {
-        self.scheduler().about_to_stop();
+    fn about_to_stop(self: &mut Self) {
+        self.scheduler()
+            .about_to_stop(ABOUT_TO_SHUTDOWN_WAIT_TIME_FOR_EACH_SERVICE);
     }
 }
 

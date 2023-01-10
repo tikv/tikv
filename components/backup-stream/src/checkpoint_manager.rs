@@ -4,7 +4,8 @@ use std::{cell::RefCell, collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
-    SinkExt, StreamExt,
+    future::BoxFuture,
+    FutureExt, SinkExt, StreamExt, TryFutureExt,
 };
 use grpcio::{RpcStatus, RpcStatusCode, ServerStreamingSink, WriteFlags};
 use kvproto::{
@@ -36,6 +37,7 @@ pub struct CheckpointManager {
     checkpoint_ts: HashMap<u64, LastFlushTsOfRegion>,
     resolved_ts: HashMap<u64, LastFlushTsOfRegion>,
     manager_handle: Option<Sender<SubscriptionOp>>,
+    shutdown: bool,
 }
 
 impl std::fmt::Debug for CheckpointManager {
@@ -184,6 +186,7 @@ impl GetCheckpointResult {
 impl CheckpointManager {
     pub fn shutdown(&mut self) -> future![()] {
         let handle = self.manager_handle.clone();
+        self.shutdown = true;
         async {
             if let Some(mut handle) = handle {
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -270,7 +273,16 @@ impl CheckpointManager {
         });
     }
 
-    pub fn add_subscriber(&mut self, sub: Subscription) -> future![Result<()>] {
+    pub fn add_subscriber(&mut self, sub: Subscription) -> BoxFuture<'static, Result<()>> {
+        if self.shutdown {
+            return sub
+                .fail(RpcStatus::with_message(
+                    RpcStatusCode::UNAVAILABLE,
+                    "server is shutting down.".to_owned(),
+                ))
+                .err_into()
+                .boxed();
+        }
         let mgr = self.manager_handle.as_ref().cloned();
         let initial_data = self
             .checkpoint_ts
@@ -311,6 +323,7 @@ impl CheckpointManager {
                 })?;
             Ok(())
         }
+        .boxed()
     }
 
     fn notify(&mut self, items: impl Iterator<Item = (Region, TimeStamp)>) {
