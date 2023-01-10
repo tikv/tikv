@@ -225,8 +225,16 @@ pub trait WriteCallback: ErrorCallback {
 
     fn notify_proposed(&mut self);
     fn notify_committed(&mut self);
-    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>>;
-    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>>;
+
+    type TimeTrackerListRef<'a>: IntoIterator<Item = &'a TimeTracker>
+    where
+        Self: 'a;
+    fn write_trackers(&self) -> Self::TimeTrackerListRef<'_>;
+
+    type TimeTrackerListMut<'a>: IntoIterator<Item = &'a mut TimeTracker>
+    where
+        Self: 'a;
+    fn write_trackers_mut(&mut self) -> Self::TimeTrackerListMut<'_>;
     fn set_result(self, result: Self::Response);
 }
 
@@ -276,16 +284,24 @@ impl<S: Snapshot> WriteCallback for Callback<S> {
         self.invoke_committed();
     }
 
+    type TimeTrackerListRef<'a> = impl IntoIterator<Item = &'a TimeTracker>;
     #[inline]
-    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
-        let Callback::Write { trackers, .. } = self else { return None; };
-        Some(trackers)
+    fn write_trackers(&self) -> Self::TimeTrackerListRef<'_> {
+        let trackers = match self {
+            Callback::Write { trackers, .. } => Some(trackers),
+            _ => None,
+        };
+        trackers.into_iter().flatten()
     }
 
+    type TimeTrackerListMut<'a> = impl IntoIterator<Item = &'a mut TimeTracker>;
     #[inline]
-    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
-        let Callback::Write { trackers, .. } = self else { return None; };
-        Some(trackers)
+    fn write_trackers_mut(&mut self) -> Self::TimeTrackerListMut<'_> {
+        let trackers = match self {
+            Callback::Write { trackers, .. } => Some(trackers),
+            _ => None,
+        };
+        trackers.into_iter().flatten()
     }
 
     #[inline]
@@ -296,7 +312,7 @@ impl<S: Snapshot> WriteCallback for Callback<S> {
 
 impl<C> WriteCallback for Vec<C>
 where
-    C: WriteCallback,
+    C: WriteCallback + 'static,
     C::Response: Clone,
 {
     type Response = C::Response;
@@ -315,14 +331,16 @@ where
         }
     }
 
+    type TimeTrackerListRef<'a> = impl Iterator<Item = &'a TimeTracker> + 'a;
     #[inline]
-    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
-        None
+    fn write_trackers(&self) -> Self::TimeTrackerListRef<'_> {
+        self.iter().flat_map(|c| c.write_trackers())
     }
 
+    type TimeTrackerListMut<'a> = impl Iterator<Item = &'a mut TimeTracker> + 'a;
     #[inline]
-    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
-        None
+    fn write_trackers_mut(&mut self) -> Self::TimeTrackerListMut<'_> {
+        self.iter_mut().flat_map(|c| c.write_trackers_mut())
     }
 
     #[inline]
@@ -375,6 +393,7 @@ pub enum PeerTick {
     ReportBuckets = 9,
     CheckLongUncommitted = 10,
     CheckPeersAvailability = 11,
+    RequestVoterReplicatedIndex = 12,
 }
 
 impl PeerTick {
@@ -395,6 +414,7 @@ impl PeerTick {
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
             PeerTick::CheckPeersAvailability => "check_peers_availability",
+            PeerTick::RequestVoterReplicatedIndex => "request_voter_replicated_index",
         }
     }
 
@@ -412,6 +432,7 @@ impl PeerTick {
             PeerTick::ReportBuckets,
             PeerTick::CheckLongUncommitted,
             PeerTick::CheckPeersAvailability,
+            PeerTick::RequestVoterReplicatedIndex,
         ];
         TICKS
     }

@@ -53,7 +53,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
-    store::{find_peer, is_learner, region_on_same_stores},
+    store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
     trace, warn,
@@ -524,13 +524,14 @@ where
                 }))
             };
 
-            let tokens: SmallVec<[TimeTracker; 4]> = cbs
+            let trackers: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
-                .filter_map(|cb| cb.write_trackers().map(|t| t[0]))
+                .flat_map(|cb| cb.write_trackers())
+                .cloned()
                 .collect();
 
-            let mut cb = Callback::write_ext(
-                Box::new(move |resp| {
+            let cb = Callback::Write {
+                cb: Box::new(move |resp| {
                     for cb in cbs {
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
@@ -539,12 +540,8 @@ where
                 }),
                 proposed_cb,
                 committed_cb,
-            );
-
-            if let Some(trackers) = cb.write_trackers_mut() {
-                *trackers = tokens;
-            }
-
+                trackers,
+            };
             return Some((req, cb));
         }
         None
@@ -1195,6 +1192,7 @@ where
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
             PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
+            PeerTick::RequestVoterReplicatedIndex => self.on_request_voter_replicated_index(),
         }
     }
 
@@ -1217,6 +1215,9 @@ where
             self.fsm.has_ready = true;
         }
         self.fsm.peer.maybe_gen_approximate_buckets(self.ctx);
+        if self.fsm.peer.is_witness() {
+            self.register_pull_voter_replicated_index_tick();
+        }
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
@@ -2310,6 +2311,21 @@ where
                     *is_ready = true;
                 }
             }
+            ApplyTaskRes::Compact {
+                state,
+                first_index,
+                has_pending,
+            } => {
+                self.fsm.peer.has_pending_compact_cmd = has_pending;
+                // When the witness restarts, the pending compact cmds will be lost. We will try
+                // to use `voter_replicated_index` as the `compact index` to avoid log
+                // accumulation, but if `voter_replicated_index` is less than `first_index`,
+                // then gc is not needed. In this case, the `first_index` we pass back will be
+                // 0, and `has_pending` set to false.
+                if first_index != 0 {
+                    self.on_ready_compact_log(first_index, state);
+                }
+            }
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.check_unsafe_recovery_state();
@@ -2667,6 +2683,53 @@ where
         );
     }
 
+    fn on_voter_replicated_index_request(&mut self, from: &metapb::Peer) {
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+        let mut voter_replicated_idx = self.fsm.peer.get_store().last_index();
+        for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
+            let peer = find_peer_by_id(self.region(), *peer_id).unwrap();
+            if voter_replicated_idx > p.matched && !is_learner(peer) {
+                voter_replicated_idx = p.matched;
+            }
+        }
+        let first_index = self.fsm.peer.get_store().first_index();
+        if voter_replicated_idx > first_index {
+            voter_replicated_idx = first_index;
+        }
+        let mut resp = ExtraMessage::default();
+        resp.set_type(ExtraMessageType::MsgVoterReplicatedIndexResponse);
+        resp.voter_replicated_index = voter_replicated_idx;
+        self.fsm
+            .peer
+            .send_extra_message(resp, &mut self.ctx.trans, from);
+        debug!(
+            "leader responses voter_replicated_index to witness";
+            "region_id" => self.region().get_id(),
+            "witness_id" => from.id,
+            "leader_id" => self.fsm.peer.peer.get_id(),
+            "voter_replicated_index" => voter_replicated_idx,
+        );
+    }
+
+    fn on_voter_replicated_index_response(&mut self, msg: &ExtraMessage) {
+        if self.fsm.peer.is_leader() || !self.fsm.peer.is_witness() {
+            return;
+        }
+        let voter_replicated_index = msg.voter_replicated_index;
+        if let Ok(voter_replicated_term) = self.fsm.peer.get_store().term(voter_replicated_index) {
+            self.ctx.apply_router.schedule_task(
+                self.region_id(),
+                ApplyTask::CheckCompact {
+                    region_id: self.region_id(),
+                    voter_replicated_index,
+                    voter_replicated_term,
+                },
+            )
+        }
+    }
+
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
@@ -2715,6 +2778,12 @@ where
             }
             ExtraMessageType::MsgAvailabilityResponse => {
                 self.on_availability_response(msg.get_from_peer(), msg.get_extra_msg());
+            }
+            ExtraMessageType::MsgVoterReplicatedIndexRequest => {
+                self.on_voter_replicated_index_request(msg.get_from_peer());
+            }
+            ExtraMessageType::MsgVoterReplicatedIndexResponse => {
+                self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
         }
     }
@@ -3871,6 +3940,9 @@ where
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
         self.fsm.peer.mut_store().on_compact_raftlog(compact_to);
+        if self.fsm.peer.is_witness() {
+            self.fsm.peer.last_compacted_time = Instant::now();
+        }
     }
 
     fn on_ready_split_region(
@@ -4897,6 +4969,10 @@ where
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
                 ExecResult::SetFlashbackState { region } => self.on_set_flashback_state(region),
+                ExecResult::PendingCompactCmd => {
+                    self.fsm.peer.has_pending_compact_cmd = true;
+                    self.register_pull_voter_replicated_index_tick();
+                }
             }
         }
 
@@ -5166,7 +5242,7 @@ where
 
         if self.ctx.raft_metrics.waterfall_metrics {
             let now = Instant::now();
-            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers() {
                 tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
                     &mut t.metrics.wf_batch_wait_nanos
                 });
@@ -5315,8 +5391,13 @@ where
         let first_idx = self.fsm.peer.get_store().first_index();
         let last_idx = self.fsm.peer.get_store().last_index();
 
+        let mut voter_replicated_idx = last_idx;
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
+            let peer = find_peer_by_id(self.region(), *peer_id).unwrap();
+            if !is_learner(peer) && voter_replicated_idx > p.matched {
+                voter_replicated_idx = p.matched;
+            }
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
@@ -5405,7 +5486,8 @@ where
         let region_id = self.fsm.peer.region().get_id();
         let peer = self.fsm.peer.peer.clone();
         let term = self.fsm.peer.get_index_term(compact_idx);
-        let request = new_compact_log_request(region_id, peer, compact_idx, term);
+        let request =
+            new_compact_log_request(region_id, peer, compact_idx, term, voter_replicated_idx);
         self.propose_raft_command_internal(
             request,
             Callback::None,
@@ -5442,6 +5524,27 @@ where
         }
         self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
         self.register_check_long_uncommitted_tick();
+    }
+
+    fn on_request_voter_replicated_index(&mut self) {
+        if !self.fsm.peer.is_witness() || !self.fsm.peer.has_pending_compact_cmd {
+            return;
+        }
+        // TODO: make it configurable
+        if self.fsm.peer.last_compacted_time.elapsed()
+            > self.ctx.cfg.raft_log_gc_tick_interval.0 * 2
+        {
+            let mut msg = ExtraMessage::default();
+            msg.set_type(ExtraMessageType::MsgVoterReplicatedIndexRequest);
+            let leader_id = self.fsm.peer.leader_id();
+            let leader = self.fsm.peer.get_peer_from_cache(leader_id);
+            if let Some(leader) = leader {
+                self.fsm
+                    .peer
+                    .send_extra_message(msg, &mut self.ctx.trans, &leader);
+            }
+        }
+        self.register_pull_voter_replicated_index_tick();
     }
 
     fn register_check_leader_lease_tick(&mut self) {
@@ -5979,6 +6082,10 @@ where
         }
     }
 
+    fn register_pull_voter_replicated_index_tick(&mut self) {
+        self.schedule_tick(PeerTick::RequestVoterReplicatedIndex);
+    }
+
     fn on_check_peer_stale_state_tick(&mut self) {
         if self.fsm.peer.pending_remove {
             return;
@@ -6421,6 +6528,7 @@ fn new_compact_log_request(
     peer: metapb::Peer,
     compact_index: u64,
     compact_term: u64,
+    voter_replicated_index: u64,
 ) -> RaftCmdRequest {
     let mut request = new_admin_request(region_id, peer);
 
@@ -6428,6 +6536,9 @@ fn new_compact_log_request(
     admin.set_cmd_type(AdminCmdType::CompactLog);
     admin.mut_compact_log().set_compact_index(compact_index);
     admin.mut_compact_log().set_compact_term(compact_term);
+    admin
+        .mut_compact_log()
+        .set_voter_replicated_index(voter_replicated_index);
     request.set_admin_request(admin);
     request
 }

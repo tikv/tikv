@@ -31,7 +31,10 @@ pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
         read::{AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask},
-        write::{PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg, WriteTask},
+        write::{
+            write_to_db_for_test, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
+            WriteTask,
+        },
         write_router::{WriteRouter, WriteRouterContext, WriteSenders},
     },
     bootstrap::{

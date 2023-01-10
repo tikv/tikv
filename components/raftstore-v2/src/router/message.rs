@@ -4,6 +4,7 @@
 
 use kvproto::{
     metapb,
+    metapb::{Region, RegionEpoch},
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
@@ -181,12 +182,22 @@ pub enum PeerMsg {
         request: RequestSplit,
         ch: CmdResChannel,
     },
-
     RefreshRegionBuckets {
         region_id: u64,
         region_epoch: RegionEpoch,
-        buckets: Vec<Bucket>,
-        bucket_ranges: Option<Vec<BucketRange>>,
+        buckets: Vec<raftstore::store::Bucket>,
+        bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
+    },
+    UpdateRegionSize {
+        size: u64,
+    },
+    UpdateRegionKeys {
+        keys: u64,
+    },
+    ClearRegionSize,
+    ForceCompactLog,
+    TabletTrimmed {
+        tablet_index: u64,
     },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]

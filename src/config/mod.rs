@@ -98,6 +98,8 @@ pub const MIN_BLOCK_CACHE_SHARD_SIZE: usize = 128 * MIB as usize;
 /// Maximum of 15% of system memory can be used by Raft Engine. Normally its
 /// memory usage is much smaller than that.
 const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
+/// Tentative value.
+const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.25;
 
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
@@ -342,7 +344,7 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub enable_doubly_skiplist: bool,
             #[online_config(skip)]
-            pub enable_compaction_guard: bool,
+            pub enable_compaction_guard: Option<bool>,
             #[online_config(skip)]
             pub compaction_guard_min_output_file_size: ReadableSize,
             #[online_config(skip)]
@@ -594,7 +596,7 @@ macro_rules! build_cf_opt {
         if $opt.enable_doubly_skiplist {
             cf_opts.set_doubly_skiplist();
         }
-        if $opt.enable_compaction_guard {
+        if $opt.enable_compaction_guard.unwrap_or(false) {
             if let Some(provider) = $region_info_provider {
                 let factory = CompactionGuardGeneratorFactory::new(
                     $cf_name,
@@ -669,7 +671,7 @@ impl Default for DefaultCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: true,
+            enable_compaction_guard: None,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
@@ -794,7 +796,7 @@ impl Default for WriteCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: true,
+            enable_compaction_guard: None,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
@@ -900,7 +902,7 @@ impl Default for LockCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: false,
+            enable_compaction_guard: None,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
@@ -983,7 +985,7 @@ impl Default for RaftCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: false,
+            enable_compaction_guard: None,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
@@ -1216,10 +1218,16 @@ impl DbConfig {
         match engine {
             EngineType::RaftKv => {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
+                self.defaultcf.enable_compaction_guard.get_or_insert(true);
+                self.writecf.enable_compaction_guard.get_or_insert(true);
             }
             EngineType::RaftKv2 => {
                 self.enable_multi_batch_write.get_or_insert(false);
                 self.allow_concurrent_memtable_write.get_or_insert(false);
+                let total_mem = SysQuota::memory_limit_in_bytes() as f64;
+                self.write_buffer_limit.get_or_insert(ReadableSize(
+                    (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
+                ));
             }
         }
     }
@@ -1469,7 +1477,7 @@ impl Default for RaftDefaultCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: false,
+            enable_compaction_guard: None,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
@@ -3116,6 +3124,9 @@ impl TikvConfig {
 
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
+            if !self.raft_engine.enable {
+                panic!("raft-kv2 only supports raft log engine.");
+            }
         }
 
         self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
@@ -5194,7 +5205,7 @@ mod tests {
         // Test comopaction guard disabled.
         let config = DefaultCfConfig {
             target_file_size_base: ReadableSize::mb(16),
-            enable_compaction_guard: false,
+            enable_compaction_guard: Some(false),
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
@@ -5207,7 +5218,7 @@ mod tests {
         // Test compaction guard enabled but region info provider is missing.
         let config = DefaultCfConfig {
             target_file_size_base: ReadableSize::mb(16),
-            enable_compaction_guard: true,
+            enable_compaction_guard: Some(true),
             ..Default::default()
         };
         let provider: Option<MockRegionInfoProvider> = None;
@@ -5220,7 +5231,7 @@ mod tests {
         // Test compaction guard enabled.
         let config = DefaultCfConfig {
             target_file_size_base: ReadableSize::mb(16),
-            enable_compaction_guard: true,
+            enable_compaction_guard: Some(true),
             compaction_guard_min_output_file_size: ReadableSize::mb(4),
             compaction_guard_max_output_file_size: ReadableSize::mb(64),
             ..Default::default()
@@ -5532,22 +5543,27 @@ mod tests {
         cfg.raft_engine.mut_config().memory_limit = None;
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
         cfg.rocksdb.write_buffer_limit = None;
+        cfg.rocksdb.defaultcf.enable_compaction_guard = None;
         cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = None;
         cfg.rocksdb.defaultcf.level0_stop_writes_trigger = None;
         cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = None;
         cfg.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.writecf.enable_compaction_guard = None;
         cfg.rocksdb.writecf.level0_slowdown_writes_trigger = None;
         cfg.rocksdb.writecf.level0_stop_writes_trigger = None;
         cfg.rocksdb.writecf.soft_pending_compaction_bytes_limit = None;
         cfg.rocksdb.writecf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.lockcf.enable_compaction_guard = None;
         cfg.rocksdb.lockcf.level0_slowdown_writes_trigger = None;
         cfg.rocksdb.lockcf.level0_stop_writes_trigger = None;
         cfg.rocksdb.lockcf.soft_pending_compaction_bytes_limit = None;
         cfg.rocksdb.lockcf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.raftcf.enable_compaction_guard = None;
         cfg.rocksdb.raftcf.level0_slowdown_writes_trigger = None;
         cfg.rocksdb.raftcf.level0_stop_writes_trigger = None;
         cfg.rocksdb.raftcf.soft_pending_compaction_bytes_limit = None;
         cfg.rocksdb.raftcf.hard_pending_compaction_bytes_limit = None;
+        cfg.raftdb.defaultcf.enable_compaction_guard = None;
         cfg.raftdb.defaultcf.level0_slowdown_writes_trigger = None;
         cfg.raftdb.defaultcf.level0_stop_writes_trigger = None;
         cfg.raftdb.defaultcf.soft_pending_compaction_bytes_limit = None;

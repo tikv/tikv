@@ -61,6 +61,7 @@ use raftstore::{
     },
     RegionInfoAccessor,
 };
+use raftstore_v2::{router::RaftRouter, StateStorage};
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
@@ -136,8 +137,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.init_encryption();
     let fetcher = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
-    let (raft_engine, engines_info) = tikv.init_raw_engines(listener);
-    tikv.init_engines(raft_engine);
+    let engines_info = tikv.init_engines(listener);
     let server_config = tikv.init_servers::<F>();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
@@ -201,6 +201,7 @@ struct TikvServer<ER: RaftEngine> {
     pd_client: Arc<RpcClient>,
     flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
     flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
+    router: Option<RaftRouter<RocksEngine, ER>>,
     node: Option<NodeV2<RpcClient, RocksEngine, ER>>,
     resolver: Option<resolve::PdStoreAddrResolver>,
     store_path: PathBuf,
@@ -310,6 +311,7 @@ where
             cfg_controller: Some(cfg_controller),
             security_mgr,
             pd_client,
+            router: None,
             node: None,
             resolver: None,
             store_path,
@@ -567,36 +569,6 @@ where
         engine_rocks::FlowListener::new(tx)
     }
 
-    fn init_engines(&mut self, raft_engine: ER) {
-        let tablet_registry = self.tablet_registry.clone().unwrap();
-        let mut node = NodeV2::new(
-            &self.config.server,
-            self.pd_client.clone(),
-            None,
-            tablet_registry,
-        );
-        node.try_bootstrap_store(&self.config.raft_store, &raft_engine)
-            .unwrap_or_else(|e| fatal!("failed to bootstrap store: {:?}", e));
-        assert_ne!(node.id(), 0);
-
-        let router = node.router();
-        let mut coprocessor_host: CoprocessorHost<RocksEngine> = CoprocessorHost::new(
-            router.store_router().clone(),
-            self.config.coprocessor.clone(),
-        );
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
-
-        let engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
-
-        self.engines = Some(TikvEngines {
-            raft_engine,
-            engine,
-        });
-        self.node = Some(node);
-        self.coprocessor_host = Some(coprocessor_host);
-        self.region_info_accessor = Some(region_info_accessor);
-    }
-
     fn init_gc_worker(&mut self) -> GcWorker<RaftKv2<RocksEngine, ER>> {
         let engines = self.engines.as_ref().unwrap();
         let gc_worker = GcWorker::new(
@@ -774,7 +746,7 @@ where
         };
 
         let check_leader_runner = CheckLeaderRunner::new(
-            self.node.as_ref().unwrap().router().store_meta().clone(),
+            self.router.as_ref().unwrap().store_meta().clone(),
             self.coprocessor_host.clone().unwrap(),
         );
         let check_leader_scheduler = self
@@ -855,6 +827,8 @@ where
             .unwrap()
             .start(
                 engines.raft_engine.clone(),
+                self.tablet_registry.clone().unwrap(),
+                self.router.as_ref().unwrap(),
                 server.transport(),
                 snap_mgr,
                 self.concurrency_manager.clone(),
@@ -1392,10 +1366,10 @@ impl ConfiguredRaftEngine for RaftLogEngine {
 }
 
 impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
-    fn init_raw_engines(
+    fn init_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (CER, Arc<EnginesResourceInfo>) {
+    ) -> Arc<EnginesResourceInfo> {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
             .config
@@ -1415,6 +1389,19 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let builder = KvEngineFactoryBuilder::new(env, &self.config, block_cache)
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
+
+        let mut node = NodeV2::new(&self.config.server, self.pd_client.clone(), None);
+        node.try_bootstrap_store(&self.config.raft_store, &raft_engine)
+            .unwrap_or_else(|e| fatal!("failed to bootstrap store: {:?}", e));
+        assert_ne!(node.id(), 0);
+
+        let router = node.router().clone();
+
+        // Create kv engine.
+        let builder = builder.state_storage(Arc::new(StateStorage::new(
+            raft_engine.clone(),
+            router.clone(),
+        )));
         let factory = Box::new(builder.build());
         self.kv_statistics = Some(factory.rocks_statistics());
         let registry = TabletRegistry::new(factory, self.store_path.join("tablets"))
@@ -1433,7 +1420,25 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             180, // max_samples_to_preserve
         ));
 
-        (raft_engine, engines_info)
+        let router = RaftRouter::new(node.id(), router);
+        let mut coprocessor_host: CoprocessorHost<RocksEngine> = CoprocessorHost::new(
+            router.store_router().clone(),
+            self.config.coprocessor.clone(),
+        );
+        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+
+        let engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
+
+        self.engines = Some(TikvEngines {
+            raft_engine,
+            engine,
+        });
+        self.router = Some(router);
+        self.node = Some(node);
+        self.coprocessor_host = Some(coprocessor_host);
+        self.region_info_accessor = Some(region_info_accessor);
+
+        engines_info
     }
 }
 

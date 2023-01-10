@@ -181,6 +181,11 @@ impl ProposalControl {
         }
     }
 
+    #[inline]
+    pub fn has_uncommitted_admin(&self) -> bool {
+        !self.proposed_admin_cmd.is_empty() && !self.proposed_admin_cmd.back().unwrap().committed
+    }
+
     pub fn advance_apply(&mut self, index: u64, term: u64, region: &metapb::Region) {
         while !self.proposed_admin_cmd.is_empty() {
             let cmd = self.proposed_admin_cmd.front_mut().unwrap();

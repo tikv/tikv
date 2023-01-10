@@ -93,13 +93,10 @@ where
             }
         };
 
-        #[cfg(feature = "failpoints")]
         let delay = (|| {
             fail::fail_point!("delay_update_max_ts", |_| true);
             false
         })();
-        #[cfg(not(feature = "failpoints"))]
-        let delay = false;
 
         if delay {
             info!(self.logger, "[failpoint] delay update max ts for 1s"; "region_id" => region_id);

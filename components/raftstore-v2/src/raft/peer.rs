@@ -20,7 +20,7 @@ use raftstore::{
         fsm::ApplyMetrics,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-        ReadProgress, SplitCheckTask, TxnExt, WriteTask,
+        ReadProgress, SplitCheckTask, TabletSnapManager, TxnExt, WriteTask,
     },
 };
 use slog::Logger;
@@ -30,7 +30,8 @@ use crate::{
     batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
+        AsyncWriter, CompactLogContext, DestroyProgress, ProposalControl, SimpleWriteReqEncoder,
+        SplitFlowControl,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -54,8 +55,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     peer_heartbeats: HashMap<u64, Instant>,
 
     /// For raft log compaction.
-    skip_compact_log_ticks: usize,
-    approximate_raft_log_size: u64,
+    compact_log_context: CompactLogContext,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -67,6 +67,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     has_ready: bool,
     /// Sometimes there is no ready at all, but we need to trigger async write.
     has_extra_write: bool,
+    pause_for_recovery: bool,
     /// Writer for persisting side effects asynchronously.
     pub(crate) async_writer: AsyncWriter<EK, ER>,
 
@@ -112,6 +113,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_registry: &TabletRegistry<EK>,
+        snap_mgr: &TabletSnapManager,
         storage: Storage<EK, ER>,
     ) -> Result<Self> {
         let logger = storage.logger().clone();
@@ -126,17 +128,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
 
-        let cached_tablet = tablet_registry.get_or_default(region_id);
-        let flush_state: Arc<FlushState> = Arc::default();
+        let flush_state: Arc<FlushState> = Arc::new(FlushState::new(applied_index));
         // We can't create tablet if tablet index is 0. It can introduce race when gc
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.
         if tablet_index != 0 {
+            raft_group.store().recover_tablet(tablet_registry, snap_mgr);
             let mut ctx = TabletContext::new(&region, Some(tablet_index));
             ctx.flush_state = Some(flush_state.clone());
             // TODO: Perhaps we should stop create the tablet automatically.
             tablet_registry.load(ctx, false)?;
         }
+        let cached_tablet = tablet_registry.get_or_default(region_id);
 
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
@@ -144,14 +147,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
-            skip_compact_log_ticks: 0,
-            approximate_raft_log_size: 0,
+            compact_log_context: CompactLogContext::new(applied_index),
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
             apply_scheduler: None,
             has_ready: false,
             has_extra_write: false,
+            pause_for_recovery: false,
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
@@ -360,13 +363,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn tablet(&self) -> &CachedTablet<EK> {
-        &self.tablet
+    pub fn tablet(&mut self) -> Option<&EK> {
+        self.tablet.latest()
     }
 
     #[inline]
-    pub fn tablet_mut(&mut self) -> &mut CachedTablet<EK> {
-        &mut self.tablet
+    pub fn set_tablet(&mut self, tablet: EK) -> Option<EK> {
+        self.tablet.set(tablet)
+    }
+
+    #[inline]
+    pub fn compact_log_context_mut(&mut self) -> &mut CompactLogContext {
+        &mut self.compact_log_context
+    }
+
+    #[inline]
+    pub fn compact_log_context(&self) -> &CompactLogContext {
+        &self.compact_log_context
     }
 
     #[inline]
@@ -422,6 +435,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn reset_has_extra_write(&mut self) -> bool {
         mem::take(&mut self.has_extra_write)
+    }
+
+    #[inline]
+    pub fn set_pause_for_recovery(&mut self, pause: bool) {
+        self.pause_for_recovery = pause;
+    }
+
+    #[inline]
+    pub fn pause_for_recovery(&self) -> bool {
+        self.pause_for_recovery
     }
 
     #[inline]
@@ -517,31 +540,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: `refill_disk_full_peers`
         down_peers
-    }
-
-    #[inline]
-    pub fn reset_skip_compact_log_ticks(&mut self) {
-        self.skip_compact_log_ticks = 0;
-    }
-
-    #[inline]
-    pub fn maybe_skip_compact_log(&mut self, max_skip_ticks: usize) -> bool {
-        if self.skip_compact_log_ticks < max_skip_ticks {
-            self.skip_compact_log_ticks += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    #[inline]
-    pub fn approximate_raft_log_size(&self) -> u64 {
-        self.approximate_raft_log_size
-    }
-
-    #[inline]
-    pub fn update_approximate_raft_log_size(&mut self, f: impl Fn(u64) -> u64) {
-        self.approximate_raft_log_size = f(self.approximate_raft_log_size);
     }
 
     #[inline]
@@ -647,8 +645,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// See the comments of `check_snap_status` for more details.
     #[inline]
     pub fn is_handling_snapshot(&self) -> bool {
-        // todo: This method may be unnecessary now?
-        false
+        self.persisted_index() < self.entry_storage().truncated_index()
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not
@@ -767,8 +764,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.flush_state
     }
 
-    pub fn reset_flush_state(&mut self) {
-        self.flush_state = Arc::default();
+    pub fn reset_flush_state(&mut self, index: u64) {
+        self.flush_state = Arc::new(FlushState::new(index));
     }
 
     // Note: Call `set_has_extra_write` after adding new state changes.

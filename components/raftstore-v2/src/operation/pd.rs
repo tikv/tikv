@@ -8,6 +8,7 @@ use kvproto::{metapb, pdpb};
 use pd_client::new_bucket_stats;
 use raftstore::store::Transport;
 use slog::error;
+use tikv_util::slog_panic;
 
 use crate::{
     batch::StoreContext,
@@ -50,9 +51,7 @@ impl Store {
         stats.set_bytes_written(0);
         stats.set_keys_written(0);
         stats.set_is_busy(false);
-
-        // stats.set_query_stats(query_stats);
-
+        // TODO: add query stats
         let task = pd::Task::StoreHeartbeat { stats };
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(self.logger(), "notify pd failed";
@@ -86,6 +85,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
+
     pub fn report_region_buckets_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
         let region_buckets = self.region_buckets_mut();
         let task = pd::Task::ReportBuckets(region_buckets.clone());
@@ -100,9 +100,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         region_buckets.stats = new_bucket_stats(&region_buckets.meta);
     }
-
-    #[inline]
-    pub fn region_heartbeat_pd<T>(&self, ctx: &StoreContext<EK, ER, T>) {
+    pub fn region_heartbeat_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
         let task = pd::Task::RegionHeartbeat(pd::RegionHeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
@@ -111,8 +109,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.self_stat().written_bytes,
             written_keys: self.self_stat().written_keys,
-            approximate_size: None,
-            approximate_keys: None,
+            approximate_size: self.split_flow_control_mut().approximate_size(),
+            approximate_keys: self.split_flow_control_mut().approximate_keys(),
             wait_data_peers: Vec::new(),
         });
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
@@ -163,10 +161,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     pending_peers.push(p);
                 } else {
                     if ctx.cfg.dev_assert {
-                        panic!(
-                            "{:?} failed to get peer {} from cache",
-                            self.logger.list(),
-                            id
+                        slog_panic!(
+                            self.logger,
+                            "failed to get peer from cache";
+                            "get_peer_id" => id
                         );
                     }
                     error!(
