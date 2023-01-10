@@ -93,7 +93,7 @@ impl SysQuota {
 
     fn sysinfo_memory_limit_in_bytes() -> u64 {
         let system = sysinfo::System::new_with_specifics(RefreshKind::new().with_memory());
-        system.total_memory() * KIB
+        system.total_memory()
     }
 }
 
