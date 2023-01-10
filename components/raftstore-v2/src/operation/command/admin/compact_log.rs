@@ -304,7 +304,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn has_pending_tombstone_tablets(&self) -> bool {
-        self.compact_log_context()
+        !self
+            .compact_log_context()
             .tombstone_tablets_wait_index
             .is_empty()
     }
