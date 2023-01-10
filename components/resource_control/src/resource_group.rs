@@ -10,7 +10,6 @@ use std::{
 
 use dashmap::{mapref::one::Ref, DashMap};
 use kvproto::resource_manager::{GroupMode, ResourceGroup};
-use tikv_util::sys::SysQuota;
 use yatp::queue::priority::TaskPriorityProvider;
 
 // a read task cost at least 50us.
@@ -21,6 +20,8 @@ const TASK_EXTRA_FACTOR_BY_LEVEL: [u64; 3] = [0, 20, 100];
 pub const MIN_PRIORITY_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 /// default resource group name
 const DEFAULT_RESOURCE_GROUP_NAME: &str = "default";
+/// default value of max RU quota.
+const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 
 pub enum ResourceConsumeType {
     CpuTime(Duration),
@@ -31,61 +32,58 @@ pub enum ResourceConsumeType {
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroup>,
     registry: Mutex<Vec<Arc<ResourceController>>>,
-    /// total_ru_quota is an estimated upper bound of RU, used to calculate the
-    /// weight of each resource.
-    total_ru_quota: f64,
 }
 
 impl Default for ResourceGroupManager {
     fn default() -> Self {
-        let total_ru_quota = SysQuota::cpu_cores_quota() * 10000.0;
         Self {
             resource_groups: DashMap::new(),
             registry: Mutex::new(vec![]),
-            total_ru_quota,
         }
     }
 }
 
 impl ResourceGroupManager {
-    fn get_ru_setting(rg: &ResourceGroup, is_read: bool) -> f64 {
+    fn get_ru_setting(rg: &ResourceGroup, is_read: bool) -> u64 {
         match (rg.get_mode(), is_read) {
-            (GroupMode::RuMode, true) => rg.get_r_u_settings().get_r_r_u().get_tokens(),
-            (GroupMode::RuMode, false) => rg.get_r_u_settings().get_w_r_u().get_tokens(),
+            (GroupMode::RuMode, true) => rg
+                .get_r_u_settings()
+                .get_r_r_u()
+                .get_settings()
+                .get_fill_rate(),
+            (GroupMode::RuMode, false) => rg
+                .get_r_u_settings()
+                .get_w_r_u()
+                .get_settings()
+                .get_fill_rate(),
             // TODO: currently we only consider the cpu usage in the read path, we may also take
             // io read bytes into account later.
-            (GroupMode::RawMode, true) => rg.get_resource_settings().get_cpu().get_tokens(),
-            (GroupMode::RawMode, false) => {
-                rg.get_resource_settings().get_io_write().get_tokens()
-            }
+            (GroupMode::RawMode, true) => rg
+                .get_resource_settings()
+                .get_cpu()
+                .get_settings()
+                .get_fill_rate(),
+            (GroupMode::RawMode, false) => rg
+                .get_resource_settings()
+                .get_io_write()
+                .get_settings()
+                .get_fill_rate(),
             // return a default value for unsupported config.
-            (GroupMode::Unknown, _) => 1.0,
+            (GroupMode::Unknown, _) => 1,
         }
-    }
-
-    fn gen_group_priority_factor(&self, rg: &ResourceGroup, is_read: bool) -> u64 {
-        let ru_settings = Self::get_ru_setting(rg, is_read);
-        // TODO: ensure the result is a valid positive integer
-        (self.total_ru_quota / ru_settings * 10.0) as u64
     }
 
     pub fn add_resource_group(&self, rg: ResourceGroup) {
         let group_name = rg.get_name().to_ascii_lowercase();
         self.registry.lock().unwrap().iter().for_each(|controller| {
-            let priority_factor =
-                self.gen_group_priority_factor(&rg, controller.is_read);
-            controller.add_resource_group(group_name.clone().into_bytes(), priority_factor);
+            let ru_quota = Self::get_ru_setting(&rg, controller.is_read);
+            controller.add_resource_group(group_name.clone().into_bytes(), ru_quota);
         });
-        self.resource_groups
-            .insert(group_name, rg);
+        self.resource_groups.insert(group_name, rg);
     }
 
     pub fn remove_resource_group(&self, name: &str) {
         let group_name = name.to_ascii_lowercase();
-        // do not remove the default resource group.
-        if DEFAULT_RESOURCE_GROUP_NAME == group_name {
-            return;
-        }
         self.registry.lock().unwrap().iter().for_each(|controller| {
             controller.remove_resource_group(group_name.as_bytes());
         });
@@ -104,8 +102,8 @@ impl ResourceGroupManager {
         let controller = Arc::new(ResourceController::new(name, is_read));
         self.registry.lock().unwrap().push(controller.clone());
         for g in &self.resource_groups {
-            let priority_factor = self.gen_group_priority_factor(g.value(), is_read);
-            controller.add_resource_group(g.key().clone().into_bytes(), priority_factor);
+            let ru_quota = Self::get_ru_setting(g.value(), controller.is_read);
+            controller.add_resource_group(g.key().clone().into_bytes(), ru_quota);
         }
 
         controller
@@ -129,8 +127,12 @@ pub struct ResourceController {
     //    increase the real cost after task is executed; but don't increase it at write because
     //    the cost is known so we just pre-consume it.
     is_read: bool,
+    // Track the maximum ru quota used to calculate the factor of each resource group.
+    // factor = max_ru_quota * 10.0 / group_ru_quota
+    max_ru_quota: Mutex<u64>,
     // record consumption of each resource group, name --> resource_group
     resource_consumptions: DashMap<Vec<u8>, GroupPriorityTracker>,
+
     last_min_vt: AtomicU64,
 }
 
@@ -139,22 +141,40 @@ impl ResourceController {
         let controller = Self {
             name,
             is_read,
+            max_ru_quota: Mutex::new(DEFAULT_MAX_RU_QUOTA),
             resource_consumptions: DashMap::new(),
             last_min_vt: AtomicU64::new(0),
         };
         // add the "default" resource group
-        controller.add_resource_group(DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(), 1);
+        controller.add_resource_group(DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(), 0);
         controller
     }
 
-    fn add_resource_group(&self, name: Vec<u8>, priority_factor: u64) {
+    fn calculate_factor(max_quota: u64, quota: u64) -> u64 {
+        if quota > 0 {
+            (max_quota as f64 * 10.0 / quota as f64).round() as u64
+        } else {
+            1
+        }
+    }
+
+    fn add_resource_group(&self, name: Vec<u8>, ru_quota: u64) {
+        let mut max_ru_quota = self.max_ru_quota.lock().unwrap();
+        if ru_quota > *max_ru_quota {
+            *max_ru_quota = ru_quota;
+            // adjust all group weight because the currenet value is too small.
+            self.adjust_all_resource_group_factors(ru_quota);
+        }
+        let weight = Self::calculate_factor(*max_ru_quota, ru_quota);
+
         let vt_delta_for_get = if self.is_read {
-            DEFAULT_PRIORITY_PER_READ_TASK * priority_factor
+            DEFAULT_PRIORITY_PER_READ_TASK * weight
         } else {
             0
         };
         let group = GroupPriorityTracker {
-            weight: priority_factor,
+            ru_quota,
+            weight,
             virtual_time: AtomicU64::new(self.last_min_vt.load(Ordering::Acquire)),
             vt_delta_for_get,
         };
@@ -162,7 +182,22 @@ impl ResourceController {
         self.resource_consumptions.insert(name, group);
     }
 
+    // we calculate the weight of each resource group based on the currently maximum
+    // ru quota, if a incoming resource group has a bigger quota, we need to
+    // adjust all the existing groups. As we expect this won't happen very
+    // often, and iterate 10k entry cost less than 5ms, so the performance is
+    // acceptable.
+    fn adjust_all_resource_group_factors(&self, max_ru_quota: u64) {
+        self.resource_consumptions.iter_mut().for_each(|mut g| {
+            g.value_mut().weight = Self::calculate_factor(max_ru_quota, g.ru_quota);
+        });
+    }
+
     fn remove_resource_group(&self, name: &[u8]) {
+        // do not remove the default resource group, reset to default setting instead.
+        if DEFAULT_RESOURCE_GROUP_NAME.as_bytes() == name {
+            self.add_resource_group(DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(), 0);
+        }
         self.resource_consumptions.remove(name);
     }
 
@@ -221,8 +256,10 @@ impl TaskPriorityProvider for ResourceController {
 }
 
 struct GroupPriorityTracker {
-    virtual_time: AtomicU64,
+    // the ru setting of this group.
+    ru_quota: u64,
     weight: u64,
+    virtual_time: AtomicU64,
     // the constant delta value for each `get_priority` call,
     vt_delta_for_get: u64,
 }
@@ -275,26 +312,38 @@ mod tests {
     fn new_resource_group(
         name: String,
         is_ru_mode: bool,
-        read_tokens: f64,
-        write_tokens: f64,
+        read_tokens: u64,
+        write_tokens: u64,
     ) -> ResourceGroup {
         let mut group = ResourceGroup::new();
         group.set_name(name);
         let mode = if is_ru_mode {
             GroupMode::RuMode
         } else {
-            GroupMode::NativeMode
+            GroupMode::RawMode
         };
         group.set_mode(mode);
         if is_ru_mode {
             let mut ru_setting = GroupRequestUnitSettings::new();
-            ru_setting.mut_r_r_u().set_tokens(read_tokens);
-            ru_setting.mut_w_r_u().set_tokens(write_tokens);
+            ru_setting
+                .mut_r_r_u()
+                .mut_settings()
+                .set_fill_rate(read_tokens);
+            ru_setting
+                .mut_w_r_u()
+                .mut_settings()
+                .set_fill_rate(write_tokens);
             group.set_r_u_settings(ru_setting);
         } else {
             let mut resource_setting = GroupResourceSettings::new();
-            resource_setting.mut_cpu().set_tokens(read_tokens);
-            resource_setting.mut_io_write().set_tokens(write_tokens);
+            resource_setting
+                .mut_cpu()
+                .mut_settings()
+                .set_fill_rate(read_tokens);
+            resource_setting
+                .mut_io_write()
+                .mut_settings()
+                .set_fill_rate(write_tokens);
             group.set_resource_settings(resource_setting);
         }
         group
@@ -302,33 +351,42 @@ mod tests {
 
     #[test]
     fn test_resource_group() {
-        let mut resource_manager = ResourceGroupManager::default();
-        resource_manager.total_ru_quota = 10000.0;
+        let resource_manager = ResourceGroupManager::default();
 
-        let group1 = new_resource_group("TEST".into(), true, 100.0, 100.0);
+        let group1 = new_resource_group("TEST".into(), true, 100, 100);
         resource_manager.add_resource_group(group1);
 
         assert!(resource_manager.get_resource_group("test1").is_none());
 
         let group = resource_manager.get_resource_group("test").unwrap();
         assert_eq!(
-            group.value().get_r_u_settings().get_r_r_u().get_tokens(),
-            100.0
+            group
+                .value()
+                .get_r_u_settings()
+                .get_r_r_u()
+                .get_settings()
+                .get_fill_rate(),
+            100
         );
         drop(group);
         assert_eq!(resource_manager.resource_groups.len(), 1);
 
-        let group1 = new_resource_group("Test".into(), true, 200.0, 100.0);
+        let group1 = new_resource_group("Test".into(), true, 200, 100);
         resource_manager.add_resource_group(group1);
         let group = resource_manager.get_resource_group("test").unwrap();
         assert_eq!(
-            group.value().get_r_u_settings().get_r_r_u().get_tokens(),
-            200.0
+            group
+                .value()
+                .get_r_u_settings()
+                .get_r_r_u()
+                .get_settings()
+                .get_fill_rate(),
+            200
         );
         drop(group);
         assert_eq!(resource_manager.resource_groups.len(), 1);
 
-        let group2 = new_resource_group("test2".into(), true, 400.0, 200.0);
+        let group2 = new_resource_group("test2".into(), true, 400, 200);
         resource_manager.add_resource_group(group2);
         assert_eq!(resource_manager.resource_groups.len(), 2);
 
@@ -389,12 +447,44 @@ mod tests {
         drop(group2);
 
         // test add 1 new resource group
-        let new_group = new_resource_group("new_group".into(), true, 500.0, 500.0);
+        let new_group = new_resource_group("new_group".into(), true, 500, 500);
         resource_manager.add_resource_group(new_group);
 
         assert_eq!(resouce_ctl.resource_consumptions.len(), 4);
         let group3 = resouce_ctl.resource_group("new_group".as_bytes());
         assert_eq!(group3.weight, 200);
         assert!(group3.current_vt() >= group1_vt / 2);
+    }
+
+    #[test]
+    fn test_adjust_resource_group_weight() {
+        let resource_manager = ResourceGroupManager::default();
+        let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
+        let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
+
+        let group1 = new_resource_group("test1".into(), true, 5000, 1000);
+        resource_manager.add_resource_group(group1);
+        assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 20);
+        assert_eq!(
+            resource_ctl_write.resource_group("test1".as_bytes()).weight,
+            100
+        );
+
+        // add a resource group with big ru
+        let group1 = new_resource_group("test2".into(), true, 50000, 2000);
+        resource_manager.add_resource_group(group1);
+        assert_eq!(*resource_ctl.max_ru_quota.lock().unwrap(), 50000);
+        assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 100);
+        assert_eq!(resource_ctl.resource_group("test2".as_bytes()).weight, 10);
+        // resource_ctl_write should be unchanged.
+        assert_eq!(*resource_ctl_write.max_ru_quota.lock().unwrap(), 10000);
+        assert_eq!(
+            resource_ctl_write.resource_group("test1".as_bytes()).weight,
+            100
+        );
+        assert_eq!(
+            resource_ctl_write.resource_group("test2".as_bytes()).weight,
+            50
+        );
     }
 }
