@@ -116,7 +116,7 @@ To run TiKV as an actual key-value store, you will need to run it as a cluster (
 
 Use [PD](https://github.com/tikv/pd) to manage the cluster (even if just one node on a single machine). 
 
-Instructions are in our [docs](https://tikv.org/docs/6.5/deploy/install/test/#install-binary-manually) (if you build TiKV from source, you could skip `1. Download package` and `tikv-server` is in directory `/target`).
+Instructions are in our [docs](https://tikv.org/docs/latest/deploy/install/test/#install-binary-manually) (if you build TiKV from source, you could skip `1. Download package` and `tikv-server` is in directory `/target`).
 
 Tips: It's recommended to increase the open file limit above 82920. WSL2 users may refer to [the comment](https://github.com/Microsoft/WSL/issues/1688#issuecomment-532767317) if having difficulty in changing the `ulimit`.
 
