@@ -9,7 +9,7 @@ use std::{
 use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry};
 use kvproto::metapb::Region;
-use slog::{error, warn, Logger};
+use slog::{debug, error, warn, Logger};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 pub enum Task<EK> {
@@ -17,6 +17,7 @@ pub enum Task<EK> {
         tablet: EK,
         start_key: Box<[u8]>,
         end_key: Box<[u8]>,
+        cb: Box<dyn FnOnce() + Send>,
     },
     PrepareDestroy {
         tablet: EK,
@@ -31,11 +32,9 @@ pub enum Task<EK> {
 
 impl<EK> Display for Task<EK> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
+        match self {
             Task::Trim {
-                ref start_key,
-                ref end_key,
-                ..
+                start_key, end_key, ..
             } => write!(
                 f,
                 "trim tablet for start_key {}, end_key {}",
@@ -65,11 +64,12 @@ impl<EK> Display for Task<EK> {
 
 impl<EK> Task<EK> {
     #[inline]
-    pub fn trim(tablet: EK, region: &Region) -> Self {
+    pub fn trim(tablet: EK, region: &Region, cb: impl FnOnce() + Send + 'static) -> Self {
         Task::Trim {
             tablet,
             start_key: region.get_start_key().into(),
             end_key: region.get_end_key().into(),
+            cb: Box::new(cb),
         }
     }
 
@@ -110,7 +110,12 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
-    fn trim(tablet: &EK, start_key: &[u8], end_key: &[u8]) -> engine_traits::Result<()> {
+    fn trim(
+        tablet: &EK,
+        start_key: &[u8],
+        end_key: &[u8],
+        cb: Box<dyn FnOnce() + Send>,
+    ) -> engine_traits::Result<()> {
         let start_key = keys::data_key(start_key);
         let end_key = keys::data_end_key(end_key);
         let range1 = Range::new(&[], &start_key);
@@ -121,6 +126,7 @@ impl<EK: KvEngine> Runner<EK> {
         for r in [range1, range2] {
             tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1)?;
         }
+        cb();
         Ok(())
     }
 
@@ -156,10 +162,15 @@ impl<EK: KvEngine> Runner<EK> {
                 "path" => path.display(),
             ),
             Ok(false) => {
+                let (_, region_id, tablet_index) =
+                    registry.parse_tablet_name(path).unwrap_or(("", 0, 0));
                 // TODO: use a meaningful table context.
                 let _ = registry
                     .tablet_factory()
-                    .destroy_tablet(TabletContext::with_infinite_region(0, None), path)
+                    .destroy_tablet(
+                        TabletContext::with_infinite_region(region_id, Some(tablet_index)),
+                        path,
+                    )
                     .map_err(|e| {
                         warn!(
                             logger,
@@ -170,7 +181,9 @@ impl<EK: KvEngine> Runner<EK> {
                     });
                 return true;
             }
-            _ => {}
+            Ok(true) => {
+                debug!(logger, "ignore locked tablet"; "path" => path.display());
+            }
         }
         false
     }
@@ -188,8 +201,9 @@ where
                 tablet,
                 start_key,
                 end_key,
+                cb,
             } => {
-                if let Err(e) = Self::trim(&tablet, &start_key, &end_key) {
+                if let Err(e) = Self::trim(&tablet, &start_key, &end_key, cb) {
                     error!(
                         self.logger,
                         "failed to trim tablet";
@@ -222,6 +236,6 @@ where
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(2)
+        Duration::from_secs(10)
     }
 }

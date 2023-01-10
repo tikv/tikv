@@ -167,7 +167,9 @@ fn delete_kv(wb: Option<&mut TestKvWriteBatch>, key: &[u8]) {
 
 /// Simulate kv puts on raft engine.
 fn put_raft_kv(wb: Option<&mut TestRaftLogBatch>, key: u64) {
-    wb.unwrap().append(key, vec![new_entry(key, key)]).unwrap();
+    wb.unwrap()
+        .append(key, None, vec![new_entry(key, key)])
+        .unwrap();
 }
 
 fn delete_raft_kv(engine: &RaftTestEngine, wb: Option<&mut TestRaftLogBatch>, key: u64) {
@@ -294,10 +296,7 @@ fn test_worker() {
     put_kv(task_3.extra_write.v1_mut(), b"kv_k3", b"kv_v3");
     put_raft_kv(task_3.raft_wb.as_mut(), 37);
     delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), 17);
-    task_3
-        .entries
-        .append(&mut vec![new_entry(6, 6), new_entry(7, 7)]);
-    task_3.cut_logs = Some((8, 9));
+    task_3.set_append(Some(9), vec![new_entry(6, 6), new_entry(7, 7)]);
     task_3.raft_state = Some(new_raft_state(7, 124, 6, 7));
     task_3
         .messages
@@ -392,10 +391,7 @@ fn test_worker_split_raft_wb() {
         lb.put_apply_state(region_1, 25, &apply_state_3).unwrap();
         put_raft_kv(task_3.raft_wb.as_mut(), raft_key_3);
         delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), raft_key_1);
-        task_3
-            .entries
-            .append(&mut vec![new_entry(6, 6), new_entry(7, 7)]);
-        task_3.cut_logs = Some((8, 9));
+        task_3.set_append(Some(9), vec![new_entry(6, 6), new_entry(7, 7)]);
         task_3.raft_state = Some(new_raft_state(7, 124, 6, 7));
         if split.1 {
             expected_wbs += 1;
@@ -500,8 +496,7 @@ fn test_basic_flow() {
     delete_kv(task_3.extra_write.v1_mut(), b"kv_k1");
     put_raft_kv(task_3.raft_wb.as_mut(), 37);
     delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), 17);
-    task_3.entries.append(&mut vec![new_entry(6, 6)]);
-    task_3.cut_logs = Some((7, 8));
+    task_3.set_append(Some(8), vec![new_entry(6, 6)]);
     task_3.raft_state = Some(new_raft_state(6, 345, 6, 6));
     task_3
         .messages
@@ -603,8 +598,7 @@ fn test_basic_flow_with_states() {
     lb.put_apply_state(region_1, 5, &apply_state_3).unwrap();
     put_raft_kv(task_3.raft_wb.as_mut(), 37);
     delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), 17);
-    task_3.entries.append(&mut vec![new_entry(6, 6)]);
-    task_3.cut_logs = Some((7, 8));
+    task_3.set_append(Some(8), vec![new_entry(6, 6)]);
     task_3.raft_state = Some(new_raft_state(6, 345, 6, 6));
     task_3
         .messages

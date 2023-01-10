@@ -25,7 +25,7 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{borrow::Cow, cmp, path::PathBuf};
+use std::{any::Any, borrow::Cow, cmp, path::PathBuf};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
@@ -54,11 +54,12 @@ use raftstore::{
     Result,
 };
 use slog::info;
+use tikv_util::{log::SlogFormat, slog_panic};
 
 use crate::{
     batch::StoreContext,
     fsm::{ApplyResReporter, PeerFsmDelegate},
-    operation::AdminCmdResult,
+    operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
     worker::tablet_gc,
@@ -73,6 +74,10 @@ pub struct SplitResult {
     // The index of the derived region in `regions`
     pub derived_index: usize,
     pub tablet_index: u64,
+    // Hack: in common case we should use generic, but split is an infrequent
+    // event that performance is not critical. And using `Any` can avoid polluting
+    // all existing code.
+    tablet: Box<dyn Any + Send + Sync>,
 }
 
 #[derive(Debug)]
@@ -86,6 +91,8 @@ pub struct SplitInit {
 
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
+    approximate_size: Option<u64>,
+    approximate_keys: Option<u64>,
 }
 
 impl SplitInit {
@@ -118,6 +125,20 @@ pub struct SplitFlowControl {
     size_diff_hint: i64,
     skip_split_count: u64,
     may_skip_split_check: bool,
+    approximate_size: Option<u64>,
+    approximate_keys: Option<u64>,
+}
+
+impl SplitFlowControl {
+    #[inline]
+    pub fn approximate_size(&self) -> Option<u64> {
+        self.approximate_size
+    }
+
+    #[inline]
+    pub fn approximate_keys(&self) -> Option<u64> {
+        self.approximate_keys
+    }
 }
 
 pub fn temp_split_path<EK>(registry: &TabletRegistry<EK>, region_id: u64) -> PathBuf {
@@ -166,6 +187,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         control.size_diff_hint = 0;
         control.skip_split_count = 0;
         false
+    }
+
+    pub fn on_update_region_size(&mut self, size: u64) {
+        self.split_flow_control_mut().approximate_size = Some(size);
+        self.add_pending_tick(PeerTick::SplitRegionCheck);
+        self.add_pending_tick(PeerTick::PdHeartbeat);
+    }
+
+    pub fn on_update_region_keys(&mut self, keys: u64) {
+        self.split_flow_control_mut().approximate_keys = Some(keys);
+        self.add_pending_tick(PeerTick::SplitRegionCheck);
+        self.add_pending_tick(PeerTick::PdHeartbeat);
+    }
+
+    pub fn on_clear_region_size(&mut self) {
+        let control = self.split_flow_control_mut();
+        control.approximate_size.take();
+        control.approximate_keys.take();
+        self.add_pending_tick(PeerTick::SplitRegionCheck);
     }
 
     pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics) {
@@ -326,10 +366,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // We will freeze the memtable rather than flush it in the following PR.
         let tablet = self.tablet().clone();
         let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
-            panic!(
-                "{:?} fails to create checkpoint object: {:?}",
-                self.logger.list(),
-                e
+            slog_panic!(
+                self.logger,
+                "fails to create checkpoint object";
+                "error" => ?e
             )
         });
 
@@ -344,11 +384,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             checkpointer
                 .create_at(&split_temp_path, None, 0)
                 .unwrap_or_else(|e| {
-                    panic!(
-                        "{:?} fails to create checkpoint with path {:?}: {:?}",
-                        self.logger.list(),
-                        split_temp_path,
-                        e
+                    slog_panic!(
+                        self.logger,
+                        "fails to create checkpoint";
+                        "path" => %split_temp_path.display(),
+                        "error" => ?e
                     )
                 });
         }
@@ -362,16 +402,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             checkpointer
                 .create_at(&derived_path, None, 0)
                 .unwrap_or_else(|e| {
-                    panic!(
-                        "{:?} fails to create checkpoint with path {:?}: {:?}",
-                        self.logger.list(),
-                        derived_path,
-                        e
+                    slog_panic!(
+                        self.logger,
+                        "fails to create checkpoint";
+                        "path" => %derived_path.display(),
+                        "error" => ?e
                     )
                 });
         }
-        // Remove the old write batch.
-        self.write_batch.take();
         let reg = self.tablet_registry();
         let path = reg.tablet_path(region_id, log_index);
         let mut ctx = TabletContext::new(&regions[derived_index], Some(log_index));
@@ -380,7 +418,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // TODO: Should we avoid flushing for the old tablet?
         ctx.flush_state = Some(self.flush_state().clone());
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
-        self.publish_tablet(tablet);
+        self.set_tablet(tablet.clone());
 
         self.region_state_mut()
             .set_region(regions[derived_index].clone());
@@ -396,6 +434,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 regions,
                 derived_index,
                 tablet_index: log_index,
+                tablet: Box::new(tablet),
             }),
         ))
     }
@@ -427,10 +466,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         fail_point!("on_split_invalidate_locks");
 
+        let tablet: EK = match res.tablet.downcast() {
+            Ok(t) => *t,
+            Err(t) => unreachable!("tablet type should be the same: {:?}", t),
+        };
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
             meta.set_region(derived, true, &self.logger);
-            let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
+            let (reader, read_tablet) = meta.readers.get_mut(&derived.get_id()).unwrap();
             self.set_region(
                 &store_ctx.coprocessor_host,
                 reader,
@@ -438,7 +481,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 RegionChangeReason::Split,
                 res.tablet_index,
             );
+
+            // Tablet should be updated in lock to match the epoch.
+            *read_tablet = SharedReadTablet::new(tablet.clone());
         }
+        if let Some(tablet) = self.set_tablet(tablet) {
+            self.record_tombstone_tablet(store_ctx, tablet, res.tablet_index);
+        }
+
+        let new_region_count = res.regions.len() as u64;
+        let control = self.split_flow_control_mut();
+        let estimated_size = control.approximate_size.map(|v| v / new_region_count);
+        let estimated_keys = control.approximate_keys.map(|v| v / new_region_count);
 
         self.post_split();
 
@@ -454,17 +508,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // so we send it independently here.
             self.report_batch_split_pd(store_ctx, res.regions.to_vec());
             // After split, the peer may need to update its metrics.
-            self.split_flow_control_mut().may_skip_split_check = false;
+            let control = self.split_flow_control_mut();
+            control.may_skip_split_check = false;
+            control.approximate_size = estimated_size;
+            control.approximate_keys = estimated_keys;
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
-
-        self.record_tablet_as_tombstone_and_refresh(res.tablet_index, store_ctx);
+        self.storage_mut().set_has_dirty_data(true);
+        let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
+        let tablet_index = res.tablet_index;
         let _ = store_ctx
             .schedulers
             .tablet_gc
             .schedule(tablet_gc::Task::trim(
                 self.tablet().unwrap().clone(),
                 derived,
+                move || {
+                    let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                },
             ));
 
         let last_region_id = res.regions.last().unwrap().get_id();
@@ -482,6 +543,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 source_id: region_id,
                 check_split: last_region_id == new_region_id,
                 scheduled: false,
+                approximate_size: estimated_size,
+                approximate_keys: estimated_keys,
                 locks,
             }));
 
@@ -494,10 +557,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .router
                         .force_send_control(StoreMsg::SplitInit(msg))
                         .unwrap_or_else(|e| {
-                            panic!(
-                                "{:?} fails to send split peer intialization msg to store : {:?}",
-                                self.logger.list(),
-                                e
+                            slog_panic!(
+                                self.logger,
+                                "fails to send split peer intialization msg to store";
+                                "error" => ?e,
                             )
                         });
                 }
@@ -508,6 +571,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_state = self.storage().region_state().clone();
         self.state_changes_mut()
             .put_region_state(region_id, res.tablet_index, &region_state)
+            .unwrap();
+        self.state_changes_mut()
+            .put_dirty_mark(region_id, res.tablet_index, true)
             .unwrap();
         self.set_has_extra_write();
     }
@@ -545,11 +611,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let res = self.raft_group_mut().step(msg);
         let accept_snap = self.raft_group().snap().is_some();
         if res.is_err() || !accept_snap {
-            panic!(
-                "{:?} failed to accept snapshot {:?} with error {}",
-                self.logger.list(),
-                res,
-                accept_snap
+            slog_panic!(
+                self.logger,
+                "failed to accept snapshot";
+                "accept_snapshot" => accept_snap,
+                "res" => ?res,
             );
         }
         let prev = self.storage_mut().split_init_mut().replace(split_init);
@@ -562,13 +628,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         split_init: Box<SplitInit>,
     ) {
-        let _ = store_ctx
-            .schedulers
-            .tablet_gc
-            .schedule(tablet_gc::Task::trim(
-                self.tablet().unwrap().clone(),
-                self.region(),
-            ));
+        let region_id = self.region_id();
+        if self.storage().has_dirty_data() {
+            let tablet_index = self.storage().tablet_index();
+            let mailbox = store_ctx.router.mailbox(region_id).unwrap();
+            let _ = store_ctx
+                .schedulers
+                .tablet_gc
+                .schedule(tablet_gc::Task::trim(
+                    self.tablet().unwrap().clone(),
+                    self.region(),
+                    move || {
+                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                    },
+                ));
+        }
         if split_init.source_leader
             && self.leader_id() == INVALID_ID
             && self.term() == RAFT_INIT_LOG_TERM
@@ -577,11 +651,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.set_has_ready();
 
             *self.txn_ext().pessimistic_locks.write() = split_init.locks;
+            let control = self.split_flow_control_mut();
+            control.approximate_size = split_init.approximate_size;
+            control.approximate_keys = split_init.approximate_keys;
             // The new peer is likely to become leader, send a heartbeat immediately to
             // reduce client query miss.
             self.region_heartbeat_pd(store_ctx);
         }
-        let region_id = self.region_id();
 
         if split_init.check_split {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
@@ -599,7 +675,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 break;
             }
         }
-        assert!(found, "{:?} {}", self.logger.list(), region_id);
+        assert!(found, "{} {}", SlogFormat(&self.logger), region_id);
         let split_trace = self.split_trace_mut();
         let mut off = 0;
         let mut admin_flushed = 0;
@@ -621,6 +697,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.set_has_extra_write();
         }
     }
+
+    pub fn on_tablet_trimmed(&mut self, tablet_index: u64) {
+        info!(self.logger, "tablet is trimmed"; "tablet_index" => tablet_index);
+        let region_id = self.region_id();
+        let changes = self.state_changes_mut();
+        changes
+            .put_dirty_mark(region_id, tablet_index, false)
+            .unwrap();
+        self.set_has_extra_write();
+        if self.storage().tablet_index() == tablet_index {
+            self.storage_mut().set_has_dirty_data(false);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -632,7 +721,7 @@ mod test {
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::TestTabletFactory,
+        kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
         FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
@@ -642,7 +731,7 @@ mod test {
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
         raft_serverpb::{PeerState, RegionLocalState},
     };
-    use raftstore::store::cmd_resp::new_error;
+    use raftstore::store::{cmd_resp::new_error, Config};
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
@@ -679,7 +768,7 @@ mod test {
     }
 
     fn assert_split(
-        apply: &mut Apply<engine_test::kv::KvTestEngine, MockReporter>,
+        apply: &mut Apply<KvTestEngine, MockReporter>,
         parent_id: u64,
         right_derived: bool,
         new_region_ids: Vec<u64>,
@@ -783,6 +872,7 @@ mod test {
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let mut apply = Apply::new(
+            &Config::default(),
             region
                 .get_peers()
                 .iter()
@@ -970,6 +1060,7 @@ mod test {
         // Split will create checkpoint tablet, so if there are some writes before
         // split, they should be flushed immediately.
         apply.apply_put(CF_DEFAULT, 50, b"k04", b"v4").unwrap();
+        apply.apply_flow_control_mut().set_need_flush(true);
         assert!(!WriteBatch::is_empty(apply.write_batch.as_ref().unwrap()));
         splits.mut_requests().clear();
         splits

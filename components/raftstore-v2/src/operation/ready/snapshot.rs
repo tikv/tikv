@@ -41,11 +41,11 @@ use raftstore::{
     },
 };
 use slog::{error, info, warn};
-use tikv_util::box_err;
+use tikv_util::{box_err, log::SlogFormat, slog_panic};
 
 use crate::{
     fsm::ApplyResReporter,
-    operation::command::temp_split_path,
+    operation::{command::temp_split_path, SharedReadTablet},
     raft::{Apply, Peer, Storage},
     Result, StoreContext,
 };
@@ -197,7 +197,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             StateRole::Follower,
         );
         let persisted_index = self.persisted_index();
-        *self.last_applying_index_mut() = persisted_index;
+        self.compact_log_context_mut()
+            .set_last_applying_index(persisted_index);
         let snapshot_index = self.entry_storage().truncated_index();
         assert!(snapshot_index >= RAFT_INIT_LOG_INDEX, "{:?}", self.logger);
         // If leader sends a message append to the follower while it's applying
@@ -211,17 +212,39 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let mut tablet_ctx = TabletContext::new(self.region(), Some(snapshot_index));
             // Use a new FlushState to avoid conflicts with the old one.
             tablet_ctx.flush_state = Some(flush_state);
-            ctx.tablet_registry.load(tablet_ctx, false).unwrap();
-            self.record_tablet_as_tombstone_and_refresh(snapshot_index, ctx);
+            let path = ctx.tablet_registry.tablet_path(region_id, snapshot_index);
+            assert!(
+                path.exists(),
+                "{} {} not exists",
+                SlogFormat(&self.logger),
+                path.display()
+            );
+            let tablet = ctx
+                .tablet_registry
+                .tablet_factory()
+                .open_tablet(tablet_ctx, &path)
+                .unwrap_or_else(|e| {
+                    slog_panic!(
+                        self.logger,
+                        "failed to load tablet";
+                        "path" => path.display(),
+                        "error" => ?e
+                    );
+                });
+
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(snapshot_index);
+            let read_tablet = SharedReadTablet::new(tablet.clone());
             {
                 let mut meta = ctx.store_meta.lock().unwrap();
                 meta.set_region(self.region(), true, &self.logger);
                 meta.readers
-                    .insert(region_id, self.generate_read_delegate());
+                    .insert(region_id, (self.generate_read_delegate(), read_tablet));
                 meta.region_read_progress
                     .insert(region_id, self.read_progress().clone());
+            }
+            if let Some(tablet) = self.set_tablet(tablet) {
+                self.record_tombstone_tablet(ctx, tablet, snapshot_index);
             }
             self.read_progress_mut().update_applied_core(snapshot_index);
             let split = self.storage_mut().split_init_mut().take();
@@ -320,12 +343,23 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             };
         }
 
-        info!(
-            self.logger(),
-            "requesting snapshot";
-            "request_index" => request_index,
-            "request_peer" => to,
-        );
+        if self.has_dirty_data() {
+            info!(self.logger(), "delay generating snapshot as there are still dirty data"; "request_index" => request_index, "request_peer" => to);
+            // It's OK to delay. If there are still dirty data, it means the tablet is just
+            // split. In normal cases, all peers will apply split, so reject generates
+            // snapshot may actually good for all peers as they are more likely
+            // to be initialized by split.
+            return Err(raft::Error::Store(
+                raft::StorageError::SnapshotTemporarilyUnavailable,
+            ));
+        } else {
+            info!(
+                self.logger(),
+                "requesting snapshot";
+                "request_index" => request_index,
+                "request_peer" => to,
+            );
+        }
         let canceled = Arc::new(AtomicBool::new(false));
         let index = Arc::new(AtomicU64::new(0));
         let mut gen_snap_task = self.gen_snap_task_mut();
@@ -475,7 +509,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let index = entry.truncated_index();
         entry.set_applied_term(term);
         entry.apply_state_mut().set_applied_index(index);
-        self.apply_trace_mut().reset_snapshot(index);
+        self.apply_trace_mut().on_applied_snapshot(index);
     }
 
     pub fn apply_snapshot(
@@ -506,8 +540,22 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let old_last_index = self.entry_storage().last_index();
         if self.entry_storage().first_index() <= old_last_index {
             // All states are rewritten in the following blocks. Stale states will be
-            // cleaned up by compact worker.
-            task.cut_logs = Some((0, old_last_index + 1));
+            // cleaned up by compact worker. Have to use raft write batch here becaue
+            // raft log engine expects deletes before writes.
+            let raft_engine = self.entry_storage().raft_engine();
+            if task.raft_wb.is_none() {
+                task.raft_wb = Some(raft_engine.log_batch(64));
+            }
+            let wb = task.raft_wb.as_mut().unwrap();
+            raft_engine
+                .clean(region.get_id(), 0, self.entry_storage().raft_state(), wb)
+                .unwrap_or_else(|e| {
+                    slog_panic!(
+                        self.logger(),
+                        "failed to clean up region";
+                        "error" => ?e
+                    )
+                });
             self.entry_storage_mut().clear();
         }
 
@@ -515,8 +563,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let last_term = snap.get_metadata().get_term();
         assert!(
             last_index >= RAFT_INIT_LOG_INDEX && last_term >= RAFT_INIT_LOG_TERM,
-            "{:?}",
-            self.logger().list()
+            "{}",
+            SlogFormat(self.logger())
         );
         let region_state = self.region_state_mut();
         region_state.set_state(PeerState::Normal);
@@ -528,7 +576,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         entry_storage.set_truncated_term(last_term);
         entry_storage.set_last_term(last_term);
 
-        self.apply_trace_mut().reset_should_persist();
+        self.apply_trace_mut().restore_snapshot(last_index);
         self.set_ever_persisted();
         let lb = task
             .extra_write
@@ -547,6 +595,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let (path, clean_split) = match self.split_init_mut() {
             // If index not match, the peer may accept a newer snapshot after split.
             Some(init) if init.scheduled && last_index == RAFT_INIT_LOG_INDEX => {
+                lb.put_dirty_mark(region_id, last_index, true).unwrap();
+                self.set_has_dirty_data(true);
                 (temp_split_path(&reg, region_id), false)
             }
             si => (
@@ -560,12 +610,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         // it should load it into the factory after it persisted.
         let hook = move || {
             if !install_tablet(&reg, &path, region_id, last_index) {
-                panic!(
-                    "{:?} failed to install tablet, path: {}, region_id: {}, tablet_index: {}",
-                    logger.list(),
-                    path.display(),
-                    region_id,
-                    last_index
+                slog_panic!(
+                    logger,
+                    "failed to install tablet";
+                    "path" => %path.display(),
+                    "tablet_index" => last_index
                 );
             }
             if clean_split {
