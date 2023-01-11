@@ -681,6 +681,50 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
+    fn test_memory() {
+        let mut mem_total_kb: u64 = 0;
+        {
+            use std::io::BufRead;
+
+            let f = std::fs::File::open("/proc/meminfo").unwrap();
+            let reader = std::io::BufReader::new(f);
+            for line in reader.lines() {
+                let l = line.unwrap();
+                let mut parts = l.split_whitespace();
+                if parts.next().unwrap() != "MemTotal:" {
+                    continue;
+                }
+                mem_total_kb = parts.next().unwrap().parse().unwrap();
+                let unit = parts.next().unwrap();
+                assert_eq!(unit, "kB");
+            }
+        }
+        assert!(mem_total_kb > 0);
+
+        let mut collector = vec![];
+        hardware_info(&mut collector);
+
+        let mut memory_checked = false;
+
+        'outer: for item in &collector {
+            if item.get_tp() != "memory" {
+                continue;
+            }
+            for pair in item.get_pairs() {
+                if pair.get_key() != "capacity" {
+                    continue;
+                }
+                assert_eq!(pair.get_value(), (mem_total_kb * 1024).to_string());
+                memory_checked = true;
+                break 'outer;
+            }
+        }
+
+        assert!(memory_checked);
+    }
+
+    #[test]
     fn test_hardware_info() {
         let mut collector = vec![];
         hardware_info(&mut collector);
