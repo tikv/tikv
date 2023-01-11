@@ -1853,7 +1853,7 @@ pub mod tests {
             let key = &[b'k', (return_values as u8 * 2) + check_existence as u8] as &[u8];
 
             // An empty key.
-            must_succeed(&mut engine, &key, &key, 10, 10);
+            must_succeed(&mut engine, key, key, 10, 10);
             let res = must_succeed_impl(
                 &mut engine,
                 key,
