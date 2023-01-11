@@ -30,8 +30,7 @@ use raftstore::store::{
     local_metrics::TimeTracker, msg::ErrorCallback, region_meta::RegionMeta, ReadCallback,
     WriteCallback,
 };
-use smallvec::SmallVec;
-use tracker::TrackerToken;
+use tracker::{TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
 /// A struct allows to watch and notify specific events.
 ///
@@ -54,6 +53,7 @@ struct EventCore<Res> {
     before_set: UnsafeCell<Option<Box<dyn FnOnce(&mut Res) + Send>>>,
     // Waker can be changed, need to use `AtomicWaker` to guarantee no data race.
     waker: AtomicWaker,
+    tracker: UnsafeCell<TimeTracker>,
 }
 
 unsafe impl<Res: Send> Send for EventCore<Res> {}
@@ -244,16 +244,19 @@ impl<Res> BaseChannel<Res> {
     /// Creates a pair of channel and subscriber.
     #[inline]
     pub fn pair() -> (Self, BaseSubscriber<Res>) {
-        Self::with_mask(u32::MAX)
+        let tracker_token = tracker::get_tls_tracker_token();
+        Self::with_mask(u32::MAX, TimeTracker::Tracker(tracker_token))
     }
 
-    fn with_mask(mask: u32) -> (Self, BaseSubscriber<Res>) {
+    #[inline]
+    fn with_mask(mask: u32, tracker: TimeTracker) -> (Self, BaseSubscriber<Res>) {
         let core: Arc<EventCore<Res>> = Arc::new(EventCore {
             event: AtomicU64::new(0),
             res: UnsafeCell::new(None),
             event_mask: mask,
             before_set: UnsafeCell::new(None),
             waker: AtomicWaker::new(),
+            tracker: UnsafeCell::new(tracker),
         });
         (Self { core: core.clone() }, BaseSubscriber { core })
     }
@@ -449,7 +452,17 @@ impl CmdResChannelBuilder {
 
     #[inline]
     pub fn build(self) -> (CmdResChannel, CmdResSubscriber) {
-        let (c, s) = CmdResChannel::with_mask(self.event_mask);
+        let tracker_token = tracker::get_tls_tracker_token();
+        let now = std::time::Instant::now();
+        let tracker = if tracker_token == INVALID_TRACKER_TOKEN {
+            TimeTracker::Instant(now)
+        } else {
+            GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
+                tracker.metrics.write_instant = Some(now);
+            });
+            TimeTracker::Tracker(tracker_token)
+        };
+        let (c, s) = CmdResChannel::with_mask(self.event_mask, tracker);
         if let Some(f) = self.before_set {
             unsafe {
                 *c.core.before_set.get() = Some(f);
@@ -493,12 +506,15 @@ impl WriteCallback for CmdResChannel {
         self.core.notify_event(Self::COMMITTED_EVENT);
     }
 
-    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
-        None
+    type TimeTrackerListRef<'a> = &'a [TimeTracker];
+    #[inline]
+    fn write_trackers(&self) -> Self::TimeTrackerListRef<'_> {
+        std::slice::from_ref(unsafe { &*self.core.tracker.get() })
     }
 
-    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
-        None
+    type TimeTrackerListMut<'a> = &'a mut [TimeTracker];
+    fn write_trackers_mut(&mut self) -> Self::TimeTrackerListMut<'_> {
+        std::slice::from_mut(unsafe { &mut *self.core.tracker.get() })
     }
 
     // TODO: support executing hooks inside setting result.
@@ -577,7 +593,7 @@ impl ReadCallback for QueryResChannel {
     }
 
     fn read_tracker(&self) -> Option<&TrackerToken> {
-        None
+        unsafe { (*self.core.tracker.get()).as_tracker_token() }
     }
 }
 

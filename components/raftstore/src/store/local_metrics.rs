@@ -214,9 +214,9 @@ pub enum TimeTracker {
 }
 
 impl TimeTracker {
-    pub fn as_tracker_token(&self) -> Option<TrackerToken> {
+    pub fn as_tracker_token(&self) -> Option<&TrackerToken> {
         match self {
-            TimeTracker::Tracker(tt) => Some(*tt),
+            TimeTracker::Tracker(tt) => Some(tt),
             TimeTracker::Instant(_) => None,
         }
     }
