@@ -637,23 +637,28 @@ impl Debug for DebugInfoChannel {
 }
 
 #[cfg(feature = "testexport")]
-pub type FlushChannel = BaseChannel<()>;
-#[cfg(feature = "testexport")]
-pub type FlushSubscriber = BaseSubscriber<()>;
+mod flush_channel {
+    use super::*;
 
-impl FlushChannel {
-    #[inline]
-    pub fn pair() -> (Self, FlushSubscriber) {
-        pair()
+    pub type FlushChannel = BaseChannel<()>;
+    pub type FlushSubscriber = BaseSubscriber<()>;
+
+    impl FlushChannel {
+        #[inline]
+        pub fn pair() -> (Self, FlushSubscriber) {
+            pair()
+        }
+    }
+
+    impl Debug for FlushChannel {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "FlushChannel")
+        }
     }
 }
 
 #[cfg(feature = "testexport")]
-impl Debug for FlushChannel {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "FlushChannel")
-    }
-}
+pub use flush_channel::{FlushChannel, FlushSubscriber};
 
 #[cfg(test)]
 mod tests {
