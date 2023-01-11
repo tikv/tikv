@@ -469,7 +469,8 @@ impl Suite {
     }
 
     fn force_flush_files(&self, task: &str) {
-        self.run(|| Task::ForceFlush(task.to_owned()));
+        // TODO: use the callback to make the test more stable.
+        self.run(|| Task::ForceFlush(task.to_owned(), Box::new(|| {})));
         self.sync();
     }
 
@@ -1317,7 +1318,7 @@ mod test {
             .get(&leader.store_id)
             .unwrap()
             .scheduler()
-            .schedule(Task::ForceFlush("r".to_owned()))
+            .schedule(Task::ForceFlush("r".to_owned(), Box::new(|| {})))
             .unwrap();
         suite.sync();
         std::thread::sleep(Duration::from_secs(1));

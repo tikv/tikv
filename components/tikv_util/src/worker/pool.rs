@@ -75,12 +75,14 @@ pub trait Runnable: Send {
     /// The lifetime hook invoked while TiKV is about to stop.
     /// Unlike [`shutdown`](Runnable::shutdown), this hook would be invoked
     /// BEFORE some important services (e.g. gRPC service) shutting down.
-    /// The server would wait until the returned future resolved or timed out.
-    /// The the shutdown procedure won't start before the [`PreventShutdown`]
-    /// get dropped.
+    ///
+    /// The the shutdown procedure won't start before all clones of the
+    /// [`PreventShutdown`] get dropped, or after a fixed long duration.
+    ///
     /// FIXME: Because [`Worker`] forgets the scheduler after creating and
     /// return it, this hook won't be executed once your service is started
-    /// by it for now.
+    /// by it for now. If you want to use this hook, use [`LazyWorker`] to
+    /// start your service instead.
     fn on_about_to_shutdown(&mut self, _g: PreventShutdown) {}
 
     /// The lifetime hook invoked while shutting down.
@@ -91,6 +93,7 @@ pub trait Runnable: Send {
 }
 
 /// A guard for preventing TiKV from shutting down.
+#[derive(Clone)]
 pub struct PreventShutdown {
     // Once it dropped, the channel would be closed.
     // So the receiver knows it can shutdown.
