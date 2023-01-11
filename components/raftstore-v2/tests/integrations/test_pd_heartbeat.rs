@@ -116,17 +116,10 @@ fn test_report_buckets() {
     cluster.dispatch(region_id, vec![]);
     std::thread::sleep(std::time::Duration::from_secs(5));
     for _ in 0..5 {
-        let resp = block_on(
-            cluster
-                .node(0)
-                .pd_client()
-                .get_region_leader_by_id(region_id),
-        )
-        .unwrap();
-        if let Some((region, peer)) = resp {
-            assert_eq!(region.get_id(), region_id);
-            assert_eq!(peer.get_id(), 3);
-            assert_eq!(peer.get_store_id(), 1);
+        let resp = block_on(cluster.node(0).pd_client().get_buckets_by_id(region_id)).unwrap();
+        if let Some(buckets) = resp {
+            assert!(buckets.get_keys().len() > 2);
+            assert_eq!(buckets.get_region_id(), region_id);
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
