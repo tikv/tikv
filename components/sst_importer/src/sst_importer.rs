@@ -904,19 +904,15 @@ impl SstImporter {
         let sst_reader = RocksSstReader::open_with_env(dst_file_name, Some(env))?;
         sst_reader.verify_checksum()?;
 
-        debug!("downloaded file and verified";
-            "meta" => ?meta,
-            "name" => name,
-            "path" => dst_file_name,
-        );
-
         // undo key rewrite so we could compare with the keys inside SST
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
         let req_type = ext.req_type;
 
-        debug!(
-            "begin to rewrite keys";
+        debug!("downloaded file and verified";
+            "meta" => ?meta,
+            "name" => name,
+            "path" => dst_file_name,
             "old_prefix" => log_wrappers::Value::key(old_prefix),
             "new_prefix" => log_wrappers::Value::key(new_prefix),
             "req_type" => ?req_type,
