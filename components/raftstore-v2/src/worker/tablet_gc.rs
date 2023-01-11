@@ -131,6 +131,7 @@ impl<EK: KvEngine> Runner<EK> {
     }
 
     fn prepare_destroy(&mut self, region_id: u64, tablet: EK, wait_for_persisted: u64) {
+        let _ = tablet.set_db_options(&[("avoid_flush_during_shutdown", "true")]);
         let _ = tablet.pause_background_work();
         self.waiting_destroy_tasks
             .entry(region_id)
