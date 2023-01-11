@@ -83,7 +83,7 @@ use crate::{
         cmd_resp,
         entry_storage::{self, CachedEntries},
         fsm::RaftPollerBuilder,
-        local_metrics::{RaftMetrics, TimeTracker},
+        local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
         msg::{Callback, ErrorCallback, PeerMsg, ReadResponse, SignificantMsg},
@@ -582,7 +582,7 @@ where
                 .cb_batch
                 .iter()
                 .flat_map(|(cb, _)| cb.write_trackers())
-                .flat_map(|trackers| trackers.as_tracker_token().cloned())
+                .flat_map(|trackers| trackers.as_tracker_token())
                 .collect();
             self.perf_context.report_metrics(&trackers);
             self.sync_log_hint = false;
@@ -3337,9 +3337,7 @@ impl<C: WriteCallback> Apply<C> {
                     t.metrics.write_instant = Some(now);
                     &mut t.metrics.store_time_nanos
                 });
-                if let TimeTracker::Instant(t) = tracker {
-                    *t = now;
-                }
+                tracker.reset(now);
             }
         }
     }
@@ -4171,7 +4169,7 @@ where
                         .flat_map(|p| p.cb.write_trackers())
                         .flat_map(|ts| ts.as_tracker_token())
                     {
-                        GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                             t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
                         });
                     }

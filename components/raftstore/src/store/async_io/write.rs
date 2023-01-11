@@ -468,12 +468,9 @@ where
             for task in &mut self.tasks {
                 for tracker in &mut task.trackers {
                     tracker.observe(now, &metrics.wf_before_write, |t| {
-                        t.metrics.write_instant = Some(now);
                         &mut t.metrics.wf_before_write_nanos
                     });
-                    if let TimeTracker::Instant(t) = tracker {
-                        *t = now;
-                    }
+                    tracker.reset(now);
                 }
             }
         }
@@ -722,11 +719,7 @@ where
                 .batch
                 .tasks
                 .iter()
-                .flat_map(|task| {
-                    task.trackers
-                        .iter()
-                        .flat_map(|t| t.as_tracker_token().cloned())
-                })
+                .flat_map(|task| task.trackers.iter().flat_map(|t| t.as_tracker_token()))
                 .collect();
             self.perf_context.report_metrics(&trackers);
             write_raft_time = duration_to_sec(now.saturating_elapsed());

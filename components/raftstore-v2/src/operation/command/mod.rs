@@ -32,7 +32,7 @@ use raftstore::{
             apply::{self, APPLY_WB_SHRINK_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP},
             Proposal,
         },
-        local_metrics::{RaftMetrics, TimeTracker},
+        local_metrics::RaftMetrics,
         metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
         msg::ErrorCallback,
         util, Config, WriteCallback,
@@ -302,9 +302,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     t.metrics.write_instant = Some(now);
                     &mut t.metrics.store_time_nanos
                 });
-                if let TimeTracker::Instant(t) = tracker {
-                    *t = now;
-                }
+                tracker.reset(now);
             }
         }
     }
@@ -691,7 +689,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 .iter()
                 .flat_map(|(v, _)| {
                     v.write_trackers()
-                        .flat_map(|t| t.as_tracker_token().cloned())
+                        .flat_map(|t| t.as_tracker_token())
                 })
                 .collect();
             self.perf_context().report_metrics(&tokens);

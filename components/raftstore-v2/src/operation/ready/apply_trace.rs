@@ -262,11 +262,12 @@ impl ApplyTrace {
             // Only unflushed CFs are considered. Flushed CF always have uptodate changes
             // persisted.
             .filter_map(|pr| {
-                // All modifications before mem_index must be seen. If following condition is true,
-                // it means the modification comes beyond general apply process (like transaction GC unsafe write). Align `last_modified`
-                // to `flushed` to avoid blocking raft log GC.
+                // All modifications before mem_index must be seen. If following condition is
+                // true, it means the modification comes beyond general apply process (like
+                // transaction GC unsafe write). Align `last_modified` to `flushed` to avoid
+                // blocking raft log GC.
                 if mem_index >= pr.flushed && pr.flushed > pr.last_modified {
-                        pr.last_modified = pr.flushed;
+                    pr.last_modified = pr.flushed;
                 }
                 if pr.last_modified != pr.flushed {
                     Some(pr.flushed)
