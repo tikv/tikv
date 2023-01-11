@@ -16,7 +16,7 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::mem;
+use std::{mem, time::Duration};
 
 use engine_traits::{KvEngine, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
@@ -33,13 +33,17 @@ use raftstore::{
             Proposal,
         },
         local_metrics::RaftMetrics,
+        metrics::APPLY_TASK_WAIT_TIME_HISTOGRAM,
         msg::ErrorCallback,
-        util, WriteCallback,
+        util, Config, WriteCallback,
     },
     Error, Result,
 };
 use slog::{info, warn};
-use tikv_util::{box_err, time::monotonic_raw_now};
+use tikv_util::{
+    box_err, slog_panic,
+    time::{duration_to_sec, monotonic_raw_now, Instant},
+};
 
 use crate::{
     batch::StoreContext,
@@ -53,7 +57,8 @@ mod control;
 mod write;
 
 pub use admin::{
-    temp_split_path, AdminCmdResult, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
+    temp_split_path, AdminCmdResult, CompactLogContext, RequestSplit, SplitFlowControl, SplitInit,
+    SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
 pub use write::{
@@ -66,12 +71,12 @@ fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64,
     let mut m = M::default();
     match m.merge_from_bytes(buf) {
         Ok(()) => m,
-        Err(e) => panic!(
-            "{:?} data is corrupted at [{}] {}: {:?}",
-            logger.list(),
-            term,
-            index,
-            e
+        Err(e) => slog_panic!(
+            logger,
+            "data is corrupted";
+            "term" => term,
+            "index" => index,
+            "error" => ?e,
         ),
     }
 }
@@ -81,6 +86,7 @@ pub struct CommittedEntries {
     /// Entries need to be applied. Note some entries may not be included for
     /// flow control.
     entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
+    committed_time: Instant,
 }
 
 fn new_response(header: &RaftRequestHeader) -> RaftCmdResponse {
@@ -105,6 +111,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
+            &store_ctx.cfg,
             self.peer().clone(),
             region_state,
             mailbox,
@@ -246,6 +253,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // memtables in kv engine is flushed.
         let apply = CommittedEntries {
             entry_and_proposals,
+            committed_time: Instant::now(),
         };
         assert!(
             self.apply_scheduler().is_some(),
@@ -261,6 +269,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.serving() {
             return;
         }
+        // TODO: remove following log once stable.
+        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res);
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
             // Ignore admin command side effects, otherwise it may split incomplete
@@ -327,7 +337,38 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
+#[derive(Debug)]
+pub struct ApplyFlowControl {
+    timer: Instant,
+    last_check_keys: u64,
+    need_flush: bool,
+    yield_time: Duration,
+    yield_written_bytes: u64,
+}
+
+impl ApplyFlowControl {
+    pub fn new(cfg: &Config) -> Self {
+        ApplyFlowControl {
+            timer: Instant::now_coarse(),
+            last_check_keys: 0,
+            need_flush: false,
+            yield_time: cfg.apply_yield_duration.0,
+            yield_written_bytes: cfg.apply_yield_write_size.0,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn set_need_flush(&mut self, need_flush: bool) {
+        self.need_flush = need_flush;
+    }
+}
+
 impl<EK: KvEngine, R> Apply<EK, R> {
+    #[inline]
+    pub fn on_start_apply(&mut self) {
+        self.apply_flow_control_mut().timer = Instant::now_coarse();
+    }
+
     #[inline]
     fn should_skip(&self, off: usize, index: u64) -> bool {
         let log_recovery = self.log_recovery();
@@ -363,18 +404,22 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
             }
         }
+        self.apply_flow_control_mut().need_flush = true;
     }
 
-    pub fn on_manual_flush(&mut self) {
-        self.flush();
+    pub async fn on_manual_flush(&mut self) {
+        let written_bytes = self.flush();
         if let Err(e) = self.tablet().flush_cfs(&[], false) {
             warn!(self.logger, "failed to flush: {:?}", e);
         }
+        self.maybe_reschedule(written_bytes).await
     }
 
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
+        APPLY_TASK_WAIT_TIME_HISTOGRAM
+            .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
         for (e, ch) in ce.entry_and_proposals {
             if self.tombstone() {
                 apply::notify_req_region_removed(self.region_state().get_region().get_id(), ch);
@@ -405,6 +450,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
             // Flush may be triggerred in the middle, so always update the index and term.
             self.set_apply_progress(e.index, e.term);
+            self.apply_flow_control_mut().need_flush = true;
         }
     }
 
@@ -535,10 +581,49 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
     }
 
+    fn should_reschedule(&self, written_bytes: u64) -> bool {
+        let control = self.apply_flow_control();
+        written_bytes >= control.yield_written_bytes
+            || control.timer.saturating_elapsed() >= control.yield_time
+    }
+
+    pub async fn maybe_reschedule(&mut self, written_bytes: u64) {
+        if self.should_reschedule(written_bytes) {
+            yatp::task::future::reschedule().await;
+            self.apply_flow_control_mut().timer = Instant::now_coarse();
+        }
+    }
+
+    /// Check whether it needs to flush.
+    ///
+    /// We always batch as much inputs as possible, flush will only be triggered
+    /// when it has been processing too long.
+    pub async fn maybe_flush(&mut self) {
+        let buffer_keys = self.metrics.written_keys;
+        let control = self.apply_flow_control_mut();
+        if buffer_keys >= control.last_check_keys + 128 {
+            // Reschedule by write size was designed to avoid too many deletes impacts
+            // performance so it doesn't need pricise control. If checking bytes here may
+            // make the batch too small and hurt performance.
+            if self.should_reschedule(0) {
+                let written_bytes = self.flush();
+                self.maybe_reschedule(written_bytes).await;
+            } else {
+                self.apply_flow_control_mut().last_check_keys = self.metrics.written_keys;
+            }
+        }
+    }
+
     #[inline]
-    pub fn flush(&mut self) {
+    pub fn flush(&mut self) -> u64 {
         // TODO: maybe we should check whether there is anything to flush.
         let (index, term) = self.apply_progress();
+        let control = self.apply_flow_control_mut();
+        control.last_check_keys = 0;
+        if !control.need_flush {
+            return 0;
+        }
+        control.need_flush = false;
         let flush_state = self.flush_state().clone();
         if let Some(wb) = &mut self.write_batch && !wb.is_empty() {
             let mut write_opt = WriteOptions::default();
@@ -546,7 +631,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             if let Err(e) = wb.write_callback_opt(&write_opt, || {
                 flush_state.set_applied_index(index);
             }) {
-                panic!("failed to write data: {:?}: {:?}", self.logger.list(), e);
+                slog_panic!(self.logger, "failed to write data"; "error" => ?e);
             }
             self.metrics.written_bytes += wb.data_size() as u64;
             self.metrics.written_keys += wb.count() as u64;
@@ -569,6 +654,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.admin_result = self.take_admin_result().into_boxed_slice();
         apply_res.modifications = *self.modifications_mut();
         apply_res.metrics = mem::take(&mut self.metrics);
+        let written_bytes = apply_res.metrics.written_bytes;
         self.res_reporter().report(apply_res);
+        written_bytes
     }
 }

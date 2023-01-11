@@ -34,6 +34,8 @@ use raftstore::{
 };
 use slog::{debug, error, info, trace, warn};
 use tikv_util::{
+    log::SlogFormat,
+    slog_panic,
     store::find_peer,
     time::{duration_to_sec, monotonic_raw_now},
 };
@@ -48,6 +50,7 @@ use crate::{
     fsm::{PeerFsmDelegate, Store},
     raft::{Peer, Storage},
     router::{ApplyTask, PeerMsg, PeerTick},
+    worker::tablet_gc,
 };
 
 const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
@@ -78,7 +81,25 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn maybe_pause_for_recovery(&mut self) -> bool {
+    pub fn maybe_pause_for_recovery<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) -> bool {
+        // The task needs to be scheduled even if the tablet may be replaced during
+        // recovery. Otherwise if there are merges during recovery, the FSM may
+        // be paused forever.
+        if self.storage().has_dirty_data() {
+            let region_id = self.region_id();
+            let mailbox = store_ctx.router.mailbox(region_id).unwrap();
+            let tablet_index = self.storage().tablet_index();
+            let _ = store_ctx
+                .schedulers
+                .tablet_gc
+                .schedule(tablet_gc::Task::trim(
+                    self.tablet().unwrap().clone(),
+                    self.region(),
+                    move || {
+                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                    },
+                ));
+        }
         let entry_storage = self.storage().entry_storage();
         let committed_index = entry_storage.commit_index();
         let applied_index = entry_storage.applied_index();
@@ -306,7 +327,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut update_lease = self.is_leader();
         if update_lease {
             for entry in committed_entries.iter().rev() {
-                self.update_approximate_raft_log_size(|s| s + entry.get_data().len() as u64);
+                self.compact_log_context_mut()
+                    .add_log_size(entry.get_data().len() as u64);
                 if update_lease {
                     let propose_time = self
                         .proposals()
@@ -329,7 +351,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let applying_index = committed_entries.last().unwrap().index;
         let commit_to_current_term = committed_entries.last().unwrap().term == self.term();
-        *self.last_applying_index_mut() = applying_index;
+        self.compact_log_context_mut()
+            .set_last_applying_index(applying_index);
         if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
             // Compact all cached entries instead of half evict.
             self.entry_storage_mut().evict_entry_cache(false);
@@ -386,8 +409,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let prev_commit_index = self.entry_storage().commit_index();
             assert!(
                 hs.get_commit() >= prev_commit_index,
-                "{:?} {:?} {}",
-                self.logger.list(),
+                "{} {:?} {}",
+                SlogFormat(&self.logger),
                 hs,
                 prev_commit_index
             );
@@ -436,7 +459,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .collect();
         }
         if !self.serving() {
-            self.start_destroy(&mut write_task);
+            self.start_destroy(ctx, &mut write_task);
             ctx.coprocessor_host.on_region_changed(
                 self.region(),
                 RegionChangeEvent::Destroy,
@@ -454,11 +477,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             if !light_rd.messages().is_empty() || light_rd.commit_index().is_some() {
-                panic!(
-                    "{:?} unexpected messages [{}] commit index [{:?}]",
-                    self.logger.list(),
-                    light_rd.messages().len(),
-                    light_rd.commit_index()
+                slog_panic!(
+                    self.logger,
+                    "unexpected messages";
+                    "messages_count" => ?light_rd.messages().len(),
+                    "commit_index" => ?light_rd.commit_index()
                 );
             }
             if !light_rd.committed_entries().is_empty() {
@@ -612,9 +635,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // leader apply the split command or an election timeout is passed since split
         // is committed. We already forbid renewing lease after committing split, and
         // original leader will update the reader delegate with latest epoch after
-        // applying split before the split peer starts campaign, so here the only thing
-        // we need to do is marking split is committed (which is done by `commit_to`
-        // above). It's correct to allow local read during split.
+        // applying split before the split peer starts campaign, so what needs to be
+        // done are 1. mark split is committed, which is done by `commit_to` above,
+        // 2. make sure split result is invisible until epoch is updated or reader may
+        // miss data from the new tablet. This is done by always publish tablet in
+        // `on_apply_res_split`. So it's correct to allow local read during split.
         //
         // - For merge, after the prepare merge command is committed, the target peers
         // may apply commit merge at any time, so we need to forbid any type of read

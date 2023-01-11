@@ -1415,12 +1415,12 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         raft_engine.register_config(cfg_controller);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
-            registry.clone(),
+            registry,
             raft_engine.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
         ));
 
-        let router = RaftRouter::new(node.id(), registry, router);
+        let router = RaftRouter::new(node.id(), router);
         let mut coprocessor_host: CoprocessorHost<RocksEngine> = CoprocessorHost::new(
             router.store_router().clone(),
             self.config.coprocessor.clone(),

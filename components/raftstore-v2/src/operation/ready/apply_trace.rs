@@ -41,7 +41,7 @@ use raftstore::store::{
     ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{trace, Logger};
-use tikv_util::{box_err, worker::Scheduler};
+use tikv_util::{box_err, slog_panic, worker::Scheduler};
 
 use crate::{
     operation::{
@@ -301,19 +301,24 @@ impl ApplyTrace {
         None
     }
 
-    pub fn reset_snapshot(&mut self, index: u64) {
+    pub fn restore_snapshot(&mut self, index: u64) {
         for pr in self.data_cfs.iter_mut() {
-            pr.flushed = index;
             pr.last_modified = index;
         }
-        self.admin.flushed = index;
+        self.admin.last_modified = index;
+        // Snapshot is a special case that KVs are not flushed yet, so all flushed
+        // state should not be changed. But persisted_applied is updated whenever an
+        // asynchronous write is triggered. So it can lead to a special case that
+        // persisted_applied < admin.flushed. It seems no harm ATM though.
         self.persisted_applied = index;
         self.try_persist = false;
     }
 
-    #[inline]
-    pub fn reset_should_persist(&mut self) {
-        self.try_persist = false;
+    pub fn on_applied_snapshot(&mut self, index: u64) {
+        for pr in self.data_cfs.iter_mut() {
+            pr.flushed = index;
+        }
+        self.admin.flushed = index;
     }
 
     #[inline]
@@ -444,11 +449,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 return;
             }
         }
-        panic!(
-            "{:?} data loss detected: {}_{} not found",
-            self.logger().list(),
-            region_id,
-            tablet_index
+        slog_panic!(
+            self.logger(),
+            "tablet loss detected";
+            "tablet_index" => tablet_index
         );
     }
 

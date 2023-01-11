@@ -34,6 +34,7 @@ use slog::{warn, Logger};
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
+    log::SlogFormat,
     sys::SysQuota,
     time::Instant as TiInstant,
     timer::SteadyTimer,
@@ -45,7 +46,7 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    operation::SPLIT_PREFIX,
+    operation::{SharedReadTablet, SPLIT_PREFIX},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
     worker::{pd, tablet_gc},
@@ -72,7 +73,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub timer: SteadyTimer,
     pub schedulers: Schedulers<EK, ER>,
     /// store meta
-    pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
     pub engine: ER,
     pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
@@ -153,6 +154,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePoller<EK, ER, T> {
 
     fn flush_events(&mut self) {
         self.schedule_ticks();
+        self.poll_ctx.raft_metrics.maybe_flush();
     }
 
     fn schedule_ticks(&mut self) {
@@ -258,7 +260,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     schedulers: Schedulers<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Arc<Mutex<StoreMeta<EK>>>,
     snap_mgr: TabletSnapManager,
 }
 
@@ -272,7 +274,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         router: StoreRouter<EK, ER>,
         schedulers: Schedulers<EK, ER>,
         logger: Logger,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
         snap_mgr: TabletSnapManager,
         coprocessor_host: CoprocessorHost<EK>,
     ) -> Self {
@@ -338,9 +340,9 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 let prev = regions.insert(region_id, (sender, peer_fsm));
                 if let Some((_, p)) = prev {
                     return Err(box_err!(
-                        "duplicate region {:?} vs {:?}",
-                        p.logger().list(),
-                        regions[&region_id].1.logger().list()
+                        "duplicate region {} vs {}",
+                        SlogFormat(p.logger()),
+                        SlogFormat(regions[&region_id].1.logger())
                     ));
                 }
                 Ok(())
@@ -428,13 +430,22 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub split_check: Scheduler<SplitCheckTask>,
 }
 
+impl<EK: KvEngine, ER: RaftEngine> Schedulers<EK, ER> {
+    fn stop(&self) {
+        self.read.stop();
+        self.pd.stop();
+        self.tablet_gc.stop();
+        self.split_check.stop();
+    }
+}
+
 /// A set of background threads that will processing offloaded work from
 /// raftstore.
 struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
     async_read: Worker,
     pd: LazyWorker<pd::Task>,
-    tablet_gc_worker: Worker,
+    tablet_gc: Worker,
     async_write: StoreWriters<EK, ER>,
     purge: Option<Worker>,
 
@@ -447,10 +458,20 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
-            tablet_gc_worker: Worker::new("tablet-gc-worker"),
+            tablet_gc: Worker::new("tablet-gc-worker"),
             async_write: StoreWriters::default(),
             purge,
             background,
+        }
+    }
+
+    fn stop(mut self) {
+        self.async_write.shutdown();
+        self.async_read.stop();
+        self.pd.stop();
+        self.tablet_gc.stop();
+        if let Some(w) = self.purge {
+            w.stop();
         }
     }
 }
@@ -459,6 +480,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
 pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
     workers: Option<Workers<EK, ER>>,
+    schedulers: Option<Schedulers<EK, ER>>,
     logger: Logger,
     shutdown: Arc<AtomicBool>,
 }
@@ -473,7 +495,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         trans: T,
         pd_client: Arc<C>,
         router: &StoreRouter<EK, ER>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
@@ -529,6 +551,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             pd_client,
             raft_engine.clone(),
             tablet_registry.clone(),
+            snap_mgr.clone(),
             router.clone(),
             workers.pd.remote(),
             concurrency_manager,
@@ -547,7 +570,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
-        let tablet_gc_scheduler = workers.tablet_gc_worker.start(
+        let tablet_gc_scheduler = workers.tablet_gc.start_with_timer(
             "tablet-gc-worker",
             tablet_gc::Runner::new(tablet_registry.clone(), self.logger.clone()),
         );
@@ -567,13 +590,14 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             tablet_registry,
             trans,
             router.clone(),
-            schedulers,
+            schedulers.clone(),
             self.logger.clone(),
             store_meta.clone(),
             snap_mgr,
             coprocessor_host,
         );
         self.workers = Some(workers);
+        self.schedulers = Some(schedulers);
         let peers = builder.init()?;
         // Choose a different name so we know what version is actually used. rs stands
         // for raft store.
@@ -584,9 +608,14 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let mut address = Vec::with_capacity(peers.len());
         {
             let mut meta = store_meta.as_ref().lock().unwrap();
-            for (region_id, (tx, fsm)) in peers {
-                meta.readers
-                    .insert(region_id, fsm.peer().generate_read_delegate());
+            for (region_id, (tx, mut fsm)) in peers {
+                if let Some(tablet) = fsm.peer_mut().tablet() {
+                    let read_tablet = SharedReadTablet::new(tablet.clone());
+                    meta.readers.insert(
+                        region_id,
+                        (fsm.peer().generate_read_delegate(), read_tablet),
+                    );
+                }
 
                 address.push(region_id);
                 mailboxes.push((
@@ -611,18 +640,16 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         if self.workers.is_none() {
             return;
         }
-        let mut workers = self.workers.take().unwrap();
+        let workers = self.workers.take().unwrap();
 
-        // TODO: gracefully shutdown future pool
+        // TODO: gracefully shutdown future apply pool
 
+        // Stop schedulers first, so all background future worker pool will be stopped
+        // gracefully.
+        self.schedulers.take().unwrap().stop();
         self.system.shutdown();
 
-        workers.async_write.shutdown();
-        workers.async_read.stop();
-        workers.pd.stop();
-        if let Some(w) = workers.purge {
-            w.stop();
-        }
+        workers.stop();
     }
 }
 
@@ -706,6 +733,7 @@ where
     let system = StoreSystem {
         system,
         workers: None,
+        schedulers: None,
         logger: logger.clone(),
         shutdown: Arc::new(AtomicBool::new(false)),
     };

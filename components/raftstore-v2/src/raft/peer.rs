@@ -30,10 +30,10 @@ use crate::{
     batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
+        AsyncWriter, CompactLogContext, DestroyProgress, ProposalControl, SimpleWriteReqEncoder,
+        SplitFlowControl,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
-    worker::tablet_gc,
     Result,
 };
 
@@ -43,11 +43,6 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
-    /// Tombstone tablets can only be destroyed when the tablet that replaces it
-    /// is persisted. This is a list of tablet index that awaits to be
-    /// persisted. When persisted_apply is advanced, we need to notify tablet_gc
-    /// worker to destroy them.
-    pending_tombstone_tablets: Vec<u64>,
 
     /// Statistics for self.
     self_stat: PeerStat,
@@ -60,9 +55,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     peer_heartbeats: HashMap<u64, Instant>,
 
     /// For raft log compaction.
-    skip_compact_log_ticks: usize,
-    approximate_raft_log_size: u64,
-    last_applying_index: u64,
+    compact_log_context: CompactLogContext,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -151,13 +144,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: cached_tablet,
-            pending_tombstone_tablets: Vec::new(),
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
-            skip_compact_log_ticks: 0,
-            approximate_raft_log_size: 0,
-            last_applying_index: raft_group.store().apply_state().get_applied_index(),
+            compact_log_context: CompactLogContext::new(applied_index),
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
@@ -346,41 +336,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn record_tablet_as_tombstone_and_refresh<T>(
-        &mut self,
-        new_tablet_index: u64,
-        ctx: &StoreContext<EK, ER, T>,
-    ) {
-        if let Some(old_tablet) = self.tablet.cache() {
-            self.pending_tombstone_tablets.push(new_tablet_index);
-            let _ = ctx
-                .schedulers
-                .tablet_gc
-                .schedule(tablet_gc::Task::prepare_destroy(
-                    old_tablet.clone(),
-                    self.region_id(),
-                    new_tablet_index,
-                ));
-        }
-        // TODO: Handle race between split and snapshot. So that we can assert
-        // `self.tablet.refresh() == 1`
-        assert!(self.tablet.refresh() > 0);
+    pub fn set_tablet(&mut self, tablet: EK) -> Option<EK> {
+        self.tablet.set(tablet)
     }
 
-    /// Returns if there's any tombstone being removed.
     #[inline]
-    pub fn remove_tombstone_tablets_before(&mut self, persisted: u64) -> bool {
-        let removed = self
-            .pending_tombstone_tablets
-            .iter()
-            .take_while(|i| **i <= persisted)
-            .count();
-        if removed > 0 {
-            self.pending_tombstone_tablets.drain(..removed);
-            true
-        } else {
-            false
-        }
+    pub fn compact_log_context_mut(&mut self) -> &mut CompactLogContext {
+        &mut self.compact_log_context
+    }
+
+    #[inline]
+    pub fn compact_log_context(&self) -> &CompactLogContext {
+        &self.compact_log_context
     }
 
     #[inline]
@@ -541,35 +508,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: `refill_disk_full_peers`
         down_peers
-    }
-
-    #[inline]
-    pub fn reset_skip_compact_log_ticks(&mut self) {
-        self.skip_compact_log_ticks = 0;
-    }
-
-    #[inline]
-    pub fn maybe_skip_compact_log(&mut self, max_skip_ticks: usize) -> bool {
-        if self.skip_compact_log_ticks < max_skip_ticks {
-            self.skip_compact_log_ticks += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    #[inline]
-    pub fn approximate_raft_log_size(&self) -> u64 {
-        self.approximate_raft_log_size
-    }
-
-    #[inline]
-    pub fn update_approximate_raft_log_size(&mut self, f: impl Fn(u64) -> u64) {
-        self.approximate_raft_log_size = f(self.approximate_raft_log_size);
-    }
-
-    pub fn last_applying_index_mut(&mut self) -> &mut u64 {
-        &mut self.last_applying_index
     }
 
     #[inline]
