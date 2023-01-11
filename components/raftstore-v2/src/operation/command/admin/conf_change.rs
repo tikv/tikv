@@ -21,7 +21,7 @@ use raftstore::{
     store::{
         metrics::{PEER_ADMIN_CMD_COUNTER_VEC, PEER_PROPOSE_LOG_SIZE_HISTOGRAM},
         util::{self, ChangePeerI, ConfChangeKind},
-        ProposalContext,
+        ProposalContext, ProposalContextBits,
     },
     Error, Result,
 };
@@ -115,8 +115,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
 
         let last_index = self.raft_group().raft.raft_log.last_index();
-        self.raft_group_mut()
-            .propose_conf_change(ProposalContext::SYNC_LOG.to_vec(), cc)?;
+        self.raft_group_mut().propose_conf_change(
+            ProposalContext::new(ProposalContextBits::SYNC_LOG).to_vec(),
+            cc,
+        )?;
         let proposal_index = self.raft_group().raft.raft_log.last_index();
         if proposal_index == last_index {
             // The message is dropped silently, this usually due to leader absence

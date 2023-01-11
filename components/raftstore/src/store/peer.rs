@@ -232,42 +232,152 @@ impl<C: WriteCallback> ProposalQueue<C> {
 bitflags! {
     // TODO: maybe declare it as protobuf struct is better.
     /// A bitmap contains some useful flags when dealing with `eraftpb::Entry`.
-    pub struct ProposalContext: u8 {
+    pub struct ProposalContextBits: u8 {
         const SYNC_LOG       = 0b0000_0001;
         const SPLIT          = 0b0000_0010;
         const PREPARE_MERGE  = 0b0000_0100;
         const COMMIT_MERGE   = 0b0000_1000;
-        const HIGH_PRIORITY  = 0b0001_0000;
-        const LOW_PRIORITY   = 0b0010_0000;
+        const EXTEND         = 0b1000_0000;
     }
 }
 
-impl ProposalContext {
+impl ProposalContextBits {
     /// Converts itself to a vector.
-    pub fn to_vec(self) -> Vec<u8> {
+    fn to_vec(self) -> Vec<u8> {
         if self.is_empty() {
             return vec![];
         }
         let ctx = self.bits();
         vec![ctx]
     }
+}
 
-    /// Initializes a `ProposalContext` from a byte slice.
-    pub fn from_bytes(ctx: &[u8]) -> ProposalContext {
-        if ctx.is_empty() {
-            ProposalContext::empty()
-        } else if ctx.len() == 1 {
-            ProposalContext::from_bits_truncate(ctx[0])
-        } else {
-            panic!("invalid ProposalContext {:?}", ctx);
+// Generally the length of most key is within 128. The length of value is
+// within 2GiB.
+// The algorithm can be checked in https://www.sqlite.org/src4/doc/trunk/www/varint.wiki.
+#[inline]
+fn encode_len(len: u32, buf: &mut Vec<u8>) {
+    match len {
+        0..=240 => buf.push(len as u8),
+        241..=2287 => {
+            buf.push((241 + (len - 240) / 256) as u8);
+            buf.push(((len - 240) % 256) as u8);
+        }
+        2288..=67823 => {
+            buf.push(249);
+            buf.push(((len - 2288) / 256) as u8);
+            buf.push(((len - 2288) % 256) as u8);
+        }
+        67824..=16777215 => {
+            buf.push(250);
+            let bytes = len.to_be_bytes();
+            buf.extend_from_slice(&bytes[1..]);
+        }
+        16777216..=u32::MAX => {
+            buf.push(251);
+            let bytes = len.to_be_bytes();
+            buf.extend_from_slice(&bytes);
         }
     }
 }
 
-// pub struct ProposalContext {
-//     bits: ProposalContextBits,
-//     // extended:
-// }
+#[inline]
+fn decode_len(buf: &[u8]) -> (u32, &[u8]) {
+    let (f, left) = buf.split_first().expect("decode len can't be 0");
+    match f {
+        0..=240 => (*f as u32, left),
+        241..=248 => {
+            let (s, left) = left.split_first().expect("decode len can't be 1");
+            (240 + ((*f as u32) - 241) * 256 + *s as u32, left)
+        }
+        249 => {
+            let (f, left) = left.split_at(2);
+            (2288 + (f[0] as u32) * 256 + f[1] as u32, left)
+        }
+        250 => {
+            let (f, left) = left.split_at(3);
+            (u32::from_be_bytes([0, f[0], f[1], f[2]]), left)
+        }
+        251 => {
+            let (f, left) = left.split_at(4);
+            (u32::from_be_bytes([f[0], f[1], f[2], f[3]]), left)
+        }
+        _ => panic!("invalid len byte: {}", f),
+    }
+}
+
+#[inline]
+fn encode_bytes(bytes: &[u8], buf: &mut Vec<u8>) {
+    encode_len(bytes.len() as u32, buf);
+    buf.extend_from_slice(bytes);
+}
+
+#[inline]
+fn decode_bytes(buf: &[u8]) -> (&[u8], &[u8]) {
+    let (len, left) = decode_len(buf);
+    left.split_at(len as usize)
+}
+
+pub struct ProposalContext {
+    bits: ProposalContextBits,
+    pub resource_group_name: String,
+}
+
+impl std::ops::Deref for ProposalContext {
+    type Target = ProposalContextBits;
+
+    fn deref(&self) -> &ProposalContextBits {
+        &self.bits
+    }
+}
+
+impl std::ops::DerefMut for ProposalContext {
+    fn deref_mut(&mut self) -> &mut ProposalContextBits {
+        &mut self.bits
+    }
+}
+
+impl ProposalContext {
+    pub fn new(bit: ProposalContextBits) -> ProposalContext {
+        ProposalContext {
+            bits: bit,
+            resource_group_name: "".to_string(),
+        }
+    }
+
+    pub fn empty() -> ProposalContext {
+        ProposalContext {
+            bits: ProposalContextBits::empty(),
+            resource_group_name: "".to_string(),
+        }
+    }
+
+    pub fn to_vec(mut self) -> Vec<u8> {
+        if self.resource_group_name.len() != 0 {
+            self.bits |= ProposalContextBits::EXTEND;
+        }
+        let mut b = self.bits.to_vec();
+        encode_bytes(self.resource_group_name.as_bytes(), &mut b);
+        b
+    }
+
+    pub fn from_bytes(ctx: &[u8]) -> ProposalContext {
+        if ctx.is_empty() {
+            return ProposalContext {
+                bits: ProposalContextBits::empty(),
+                resource_group_name: "".to_string(),
+            };
+        }
+        let bits = ProposalContextBits::from_bits_truncate(ctx[0]);
+        let (resource_group_name, _) = decode_bytes(&ctx[1..]);
+        ProposalContext {
+            bits,
+            resource_group_name: unsafe {
+                String::from_utf8_unchecked(resource_group_name.to_vec())
+            },
+        }
+    }
+}
 
 /// `ConsistencyState` is used for consistency check.
 pub struct ConsistencyState {
@@ -2966,7 +3076,7 @@ where
                     let ctx = ProposalContext::from_bytes(&entry.context);
                     self.is_leader()
                         && entry.term == self.term()
-                        && ctx.contains(ProposalContext::PREPARE_MERGE)
+                        && ctx.contains(ProposalContextBits::PREPARE_MERGE)
                 },
                 |_| {}
             );
@@ -4265,7 +4375,7 @@ where
         let mut ctx = ProposalContext::empty();
 
         if get_sync_log_from_request(req) {
-            ctx.insert(ProposalContext::SYNC_LOG);
+            ctx.insert(ProposalContextBits::SYNC_LOG);
         }
 
         if !req.has_admin_request() {
@@ -4273,19 +4383,22 @@ where
         }
 
         match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::Split | AdminCmdType::BatchSplit => ctx.insert(ProposalContext::SPLIT),
+            AdminCmdType::Split | AdminCmdType::BatchSplit => {
+                ctx.insert(ProposalContextBits::SPLIT)
+            }
             AdminCmdType::PrepareMerge => {
                 self.pre_propose_prepare_merge(poll_ctx, req)?;
-                ctx.insert(ProposalContext::PREPARE_MERGE);
+                ctx.insert(ProposalContextBits::PREPARE_MERGE);
             }
-            AdminCmdType::CommitMerge => ctx.insert(ProposalContext::COMMIT_MERGE),
+            AdminCmdType::CommitMerge => ctx.insert(ProposalContextBits::COMMIT_MERGE),
             _ => {}
         }
 
+        ctx.resource_group_name = req.get_header().get_resource_group_name().to_owned();
         // if req.get_header().get_priority() == CommandPri::High {
-        //     ctx.insert(ProposalContext::HIGH_PRIORITY);
+        //     ctx.insert(ProposalContextBits::HIGH_PRIORITY);
         // } else if req.get_header().get_priority() == CommandPri::Low {
-        //     ctx.insert(ProposalContext::LOW_PRIORITY);
+        //     ctx.insert(ProposalContextBits::LOW_PRIORITY);
         // }
 
         Ok(ctx)
@@ -4705,7 +4818,7 @@ where
 
         let propose_index = self.next_proposal_index();
         self.raft_group
-            .propose_conf_change(ProposalContext::SYNC_LOG.to_vec(), cc)?;
+            .propose_conf_change(ProposalContextBits::SYNC_LOG.to_vec(), cc)?;
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -5782,17 +5895,23 @@ mod tests {
     #[test]
     fn test_entry_context() {
         let tbl: Vec<&[ProposalContext]> = vec![
-            &[ProposalContext::SPLIT],
-            &[ProposalContext::SYNC_LOG],
-            &[ProposalContext::PREPARE_MERGE],
-            &[ProposalContext::COMMIT_MERGE],
-            &[ProposalContext::SPLIT, ProposalContext::SYNC_LOG],
-            &[ProposalContext::PREPARE_MERGE, ProposalContext::SYNC_LOG],
-            &[ProposalContext::COMMIT_MERGE, ProposalContext::SYNC_LOG],
+            &[ProposalContextBits::SPLIT],
+            &[ProposalContextBits::SYNC_LOG],
+            &[ProposalContextBits::PREPARE_MERGE],
+            &[ProposalContextBits::COMMIT_MERGE],
+            &[ProposalContextBits::SPLIT, ProposalContextBits::SYNC_LOG],
+            &[
+                ProposalContextBits::PREPARE_MERGE,
+                ProposalContextBits::SYNC_LOG,
+            ],
+            &[
+                ProposalContextBits::COMMIT_MERGE,
+                ProposalContextBits::SYNC_LOG,
+            ],
         ];
 
         for flags in tbl {
-            let mut ctx = ProposalContext::empty();
+            let mut ctx = ProposalContextBits::empty();
             for f in flags {
                 ctx.insert(*f);
             }

@@ -55,8 +55,8 @@ pub use self::{
     },
     peer::{
         can_amend_read, get_sync_log_from_request, propose_read_index, should_renew_lease, Peer,
-        PeerStat, ProposalContext, ProposalQueue, RequestInspector, RequestPolicy,
-        SnapshotRecoveryWaitApplySyncer,
+        PeerStat, ProposalContext, ProposalContextBits, ProposalQueue, RequestInspector,
+        RequestPolicy, SnapshotRecoveryWaitApplySyncer,
     },
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,

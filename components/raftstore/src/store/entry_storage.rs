@@ -31,7 +31,11 @@ use super::{
     metrics::*, peer_storage::storage_error, util, WriteTask, MEMTRACE_ENTRY_CACHE,
     RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
-use crate::{bytes_capacity, store::ReadTask, Result};
+use crate::{
+    bytes_capacity,
+    store::{ProposalContext, ReadTask},
+    Result,
+};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -1076,18 +1080,19 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         task.priority = {
             let mut pri = CommandPri::Low;
             for entry in &entries {
-                let header = util::get_entry_header(entry);
-                let group_name = header.get_resource_group_name().to_owned();
+                // let header = util::get_entry_header(entry);
+                let group_name =
+                    ProposalContext::from_bytes(entry.get_context()).resource_group_name;
                 *task.groups.entry(group_name).or_default() += entry.compute_size() as u64;
-                let ent_pri = header.get_priority();
-                if ent_pri == CommandPri::High {
-                    pri = CommandPri::High;
-                    break;
-                } else if ent_pri == CommandPri::Low {
-                    // do nothing
-                } else {
-                    pri = CommandPri::Normal;
-                }
+                // let ent_pri = header.get_priority();
+                // if ent_pri == CommandPri::High {
+                //     pri = CommandPri::High;
+                //     break;
+                // } else if ent_pri == CommandPri::Low {
+                //     // do nothing
+                // } else {
+                //     pri = CommandPri::Normal;
+                // }
             }
             pri
         };

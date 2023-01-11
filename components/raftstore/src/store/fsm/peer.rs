@@ -97,8 +97,8 @@ use crate::{
             GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
-        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
-        SignificantMsg, SnapKey, StoreMsg, WriteCallback,
+        ProposalContext, ProposalContextBits, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult,
+        ReadCallback, ReadTask, SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
 };
@@ -983,7 +983,7 @@ where
             Ok(entries) => {
                 for entry in entries {
                     let ctx = ProposalContext::from_bytes(&entry.context);
-                    if ctx.contains(ProposalContext::COMMIT_MERGE) {
+                    if ctx.contains(ProposalContextBits::COMMIT_MERGE) {
                         self_report.set_has_commit_merge(true);
                         break;
                     }
