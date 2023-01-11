@@ -80,7 +80,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
         mut buckets: Vec<raftstore::store::Bucket>,
         bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
     ) {
-        println!("on_refresh_region_buckets,111");
         // bucket version layout
         //   term       logical counter
         // |-----------|-----------|

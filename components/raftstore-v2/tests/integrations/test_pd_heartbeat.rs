@@ -110,6 +110,11 @@ fn test_report_buckets() {
         .unwrap();
     cluster.dispatch(region_id, vec![]);
     std::thread::sleep(std::time::Duration::from_secs(5));
+    cluster.routers[0]
+        .send(region_id, PeerMsg::Tick(PeerTick::ReportBuckets))
+        .unwrap();
+    cluster.dispatch(region_id, vec![]);
+    std::thread::sleep(std::time::Duration::from_secs(5));
     for _ in 0..5 {
         let resp = block_on(
             cluster

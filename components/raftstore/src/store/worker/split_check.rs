@@ -242,7 +242,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         router: S,
         coprocessor: CoprocessorHost<EK>,
     ) -> Runner<EK, S> {
-        println!(" with_registry new split checker");
         Runner {
             engine: Either::Right(registry),
             router,
@@ -362,7 +361,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) {
-        println!("check_split_and_bucket");
         let mut cached;
         let tablet = match &self.engine {
             Either::Left(e) => e,
@@ -402,12 +400,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         let mut host = self
             .coprocessor
             .new_split_checker_host(region, tablet, auto_split, policy);
-        println!(
-            "check_split_and_bucket,skip:{:?},auto_split:{},policy:{:?}",
-            host.skip(),
-            auto_split,
-            policy
-        );
         if host.skip() {
             debug!("skip split check";
                 "region_id" => region.get_id(),
@@ -417,7 +409,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             );
             return;
         }
-        println!("check_split_and_bucket,policy:{:?}", host.policy());
         let split_keys = match host.policy() {
             CheckPolicy::Scan => {
                 match self.scan_split_keys(

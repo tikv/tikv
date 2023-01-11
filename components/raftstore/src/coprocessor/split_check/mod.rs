@@ -120,7 +120,6 @@ impl<'a, E> Host<'a, E> {
 
     #[inline]
     pub fn add_checker(&mut self, checker: Box<dyn SplitChecker<E>>) {
-        println!("add checker");
         self.checkers.push(checker);
     }
 

@@ -88,14 +88,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn report_region_buckets_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
         let region_buckets = self.region_buckets_mut();
+        println!("buckers size:{}", region_buckets.meta.keys.len());
         let task = pd::Task::ReportBuckets(region_buckets.clone());
         // let logger = self.logger.clone();
-        if let Err(_e) = ctx.schedulers.pd.schedule(task) {
-            // error!(
-            //     logger,
-            //     "failed to report buckets to pd";
-            //     "err" => ?e,
-            // );
+        if let Err(e) = ctx.schedulers.pd.schedule(task) {
+            error!(
+                self.logger,
+                "failed to report buckets to pd";
+                "err" => ?e,
+            );
             return;
         }
         region_buckets.stats = new_bucket_stats(&region_buckets.meta);
