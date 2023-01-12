@@ -8,7 +8,7 @@ use std::{
 };
 
 use crossbeam::channel::{SendError, TrySendError};
-use resource_control::{ResourceController, ResourceType};
+use resource_control::{ResourceConsumeType, ResourceController};
 use tikv_util::mpsc;
 
 use crate::fsm::{Fsm, FsmScheduler, FsmState, ResourceMetered};
@@ -82,7 +82,10 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         let mut max_write_bytes = 0;
         if let Some(mut groups) = msg.get_resource_consumptions() {
             for (group_name, write_bytes) in groups.drain() {
-                resource_ctl.consume(&group_name, ResourceType::Bytes(write_bytes));
+                resource_ctl.consume(
+                    group_name.as_bytes(),
+                    ResourceConsumeType::IoBytes(write_bytes),
+                );
                 if write_bytes > max_write_bytes {
                     dominant_group = group_name;
                     max_write_bytes = write_bytes;

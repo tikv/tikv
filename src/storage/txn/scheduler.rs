@@ -913,7 +913,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         );
     }
 
-    fn on_release_locks(&self, group_name: &str, released_locks: ReleasedLocks) -> SVec<Box<LockWaitEntry>> {
+    fn on_release_locks(
+        &self,
+        group_name: &str,
+        released_locks: ReleasedLocks,
+    ) -> SVec<Box<LockWaitEntry>> {
         // This function is always called when holding the latch of the involved keys.
         // So if we found the lock waiting queues are empty, there's no chance
         // that other threads/commands adds new lock-wait entries to the keys

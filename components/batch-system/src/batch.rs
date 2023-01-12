@@ -78,7 +78,7 @@ macro_rules! impl_sched {
                 // TODO: pass different priority.
                 let pri = self
                     .resource_ctl
-                    .get_write_priority(&fsm.get_last_msg_group(), CommandPri::Normal);
+                    .get_priority(fsm.get_last_msg_group().as_bytes(), CommandPri::Normal);
                 match sender.send($ty(fsm), pri) {
                     Ok(()) => {}
                     // TODO: use debug instead.

@@ -102,7 +102,7 @@ impl SchedPool {
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
         let mut extras = Extras::single_level();
-        let priority = self.resource_ctl.get_read_priority(group_name, pri);
+        let priority = self.resource_ctl.get_priority(group_name, pri);
         extras.set_priority(priority);
         self.pool.spawn_with_extras(
             ControlledFuture::new(

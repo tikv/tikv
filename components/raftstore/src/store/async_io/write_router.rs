@@ -15,7 +15,7 @@ use std::{
 
 use crossbeam::channel::Sender;
 use engine_traits::{KvEngine, RaftEngine};
-use resource_control::{ResourceController, ResourceType};
+use resource_control::{ResourceConsumeType, ResourceController};
 use tikv_util::{info, mpsc::priority_queue, time::Instant};
 
 use crate::store::{
@@ -238,12 +238,12 @@ where
                 }
                 sender
                     .resource_ctl
-                    .consume(group_name, ResourceType::Bytes(*write_bytes));
+                    .consume(group_name, ResourceConsumeType::Bytes(*write_bytes));
             }
         }
         let mut pri = sender
             .resource_ctl
-            .get_write_priority(dominant_group, msg.priority());
+            .get_priority(dominant_group, msg.priority());
         if pri < self.last_pri {
             pri = self.last_pri + 1;
         }

@@ -1052,7 +1052,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 .poll_ctx
                 .write_senders
                 .resource_ctl
-                .get_write_priority("default", CommandPri::Normal);
+                .get_priority("default", CommandPri::Normal);
             if let Err(err) = self.poll_ctx.write_senders.pri_write_sender().try_send(
                 WriteMsg::LatencyInspect {
                     send_time: write_begin,
