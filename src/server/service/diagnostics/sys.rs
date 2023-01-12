@@ -3,10 +3,7 @@
 use std::{collections::HashMap, string::ToString};
 
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-use tikv_util::{
-    config::KIB,
-    sys::{cpu_time::LinuxStyleCpuTime, ioload, SysQuota, *},
-};
+use tikv_util::sys::{cpu_time::LinuxStyleCpuTime, ioload, SysQuota, *};
 use walkdir::WalkDir;
 
 use crate::server::service::diagnostics::SYS_INFO;
@@ -129,12 +126,12 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
 fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_memory();
-    let total_memory = system.total_memory() * KIB;
-    let used_memory = system.used_memory() * KIB;
-    let free_memory = system.free_memory() * KIB;
-    let total_swap = system.total_swap() * KIB;
-    let used_swap = system.used_swap() * KIB;
-    let free_swap = system.free_swap() * KIB;
+    let total_memory = system.total_memory();
+    let used_memory = system.used_memory();
+    let free_memory = system.free_memory();
+    let total_swap = system.total_swap();
+    let used_swap = system.used_swap();
+    let free_swap = system.free_swap();
     drop(system);
     let used_memory_pct = (used_memory as f64) / (total_memory as f64);
     let free_memory_pct = (free_memory as f64) / (total_memory as f64);
@@ -681,6 +678,50 @@ mod tests {
         // at least contains the unit test process
         let processes = collector.iter().find(|x| x.get_tp() == "process").unwrap();
         assert_ne!(processes.get_pairs().len(), 0);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_memory() {
+        let mut mem_total_kb: u64 = 0;
+        {
+            use std::io::BufRead;
+
+            let f = std::fs::File::open("/proc/meminfo").unwrap();
+            let reader = std::io::BufReader::new(f);
+            for line in reader.lines() {
+                let l = line.unwrap();
+                let mut parts = l.split_whitespace();
+                if parts.next().unwrap() != "MemTotal:" {
+                    continue;
+                }
+                mem_total_kb = parts.next().unwrap().parse().unwrap();
+                let unit = parts.next().unwrap();
+                assert_eq!(unit, "kB");
+            }
+        }
+        assert!(mem_total_kb > 0);
+
+        let mut collector = vec![];
+        hardware_info(&mut collector);
+
+        let mut memory_checked = false;
+
+        'outer: for item in &collector {
+            if item.get_tp() != "memory" {
+                continue;
+            }
+            for pair in item.get_pairs() {
+                if pair.get_key() != "capacity" {
+                    continue;
+                }
+                assert_eq!(pair.get_value(), (mem_total_kb * 1024).to_string());
+                memory_checked = true;
+                break 'outer;
+            }
+        }
+
+        assert!(memory_checked);
     }
 
     #[test]
