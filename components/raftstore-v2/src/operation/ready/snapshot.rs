@@ -38,6 +38,7 @@ use raftstore::{
     store::{
         metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
         TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        worker::metrics::SNAP_COUNTER,
     },
 };
 use slog::{error, info, warn};
@@ -252,6 +253,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 !s.scheduled || snapshot_index != RAFT_INIT_LOG_INDEX
             }) {
                 info!(self.logger, "apply tablet snapshot completely");
+                SNAP_COUNTER.apply.success.inc();
             }
             if let Some(init) = split {
                 info!(self.logger, "init split with snapshot finished");
