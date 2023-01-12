@@ -376,6 +376,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 scheduler.send(ApplyTask::ManualFlush);
             }
         }
+        let last_applying_index = self.compact_log_context().last_applying_index();
+        let committed_index = self.entry_storage().commit_index();
+        if last_applying_index < committed_index {
+            // We need to continue to apply after previous page is finished.
+            self.set_has_ready();
+        }
     }
 }
 
