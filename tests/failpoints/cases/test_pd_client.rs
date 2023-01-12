@@ -69,7 +69,7 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(get_gc_safe_point())),
         request!(client => block_on(get_store_and_stats(0))),
         request!(client => get_operator(0)),
-        request!(client => load_global_config(vec![])),
+        request!(client => load_global_config(String::default())),
     ];
 
     for (name, func) in test_funcs {
@@ -101,14 +101,7 @@ fn test_pd_client_deadlock() {
 fn test_load_global_config() {
     let (mut _server, mut client) = new_test_server_and_client(ReadableDuration::millis(100));
     let res = futures::executor::block_on(async move {
-        client
-            .load_global_config(
-                ["abc", "123", "xyz"]
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>(),
-            )
-            .await
+        client.load_global_config("global".to_string()).await
     });
     for (k, v) in res.unwrap() {
         assert_eq!(k, format!("/global/config/{}", v))
@@ -293,7 +286,9 @@ fn test_retry() {
     });
     test_retry_success(&mut client, |c| block_on(c.get_gc_safe_point()));
     test_retry_success(&mut client, |c| c.get_operator(0));
-    test_retry_success(&mut client, |c| block_on(c.load_global_config(vec![])));
+    test_retry_success(&mut client, |c| {
+        block_on(c.load_global_config(String::default()))
+    });
 
     fail::remove(pd_client_v2_timeout_fp);
     fail::remove(pd_client_v2_backoff_fp);
