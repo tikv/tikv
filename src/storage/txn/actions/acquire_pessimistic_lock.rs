@@ -147,6 +147,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             if let Some((write, commit_ts)) = write {
                 // Here `get_write_with_commit_ts` returns only the latest PUT if it exists and
                 // is not deleted. It's still ok to pass it into `check_data_constraint`.
+                // In case we are going to lock it with write conflict, we do not check it since
+                // the statement will then retry.
                 if locked_with_conflict_ts.is_none() {
                     check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
                 }
