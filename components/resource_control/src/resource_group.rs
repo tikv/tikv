@@ -29,18 +29,10 @@ pub enum ResourceConsumeType {
 }
 
 /// ResourceGroupManager manages the metadata of each resource group.
+#[derive(Default)]
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroup>,
     registry: Mutex<Vec<Arc<ResourceController>>>,
-}
-
-impl Default for ResourceGroupManager {
-    fn default() -> Self {
-        Self {
-            resource_groups: DashMap::new(),
-            registry: Mutex::new(vec![]),
-        }
-    }
 }
 
 impl ResourceGroupManager {
@@ -121,14 +113,14 @@ pub struct ResourceController {
     #[allow(dead_code)]
     name: String,
     // We handle the priority differently between read and write request:
-    // 1. the priority factor is calcualte based on read/write RU settings.
+    // 1. the priority factor is calculate based on read/write RU settings.
     // 2. for read request, we increase a constant virtual time delta at each `get_priority` call
     //    because the cost can't be calculated at start, so we only increase a constant delta and
     //    increase the real cost after task is executed; but don't increase it at write because
     //    the cost is known so we just pre-consume it.
     is_read: bool,
     // Track the maximum ru quota used to calculate the factor of each resource group.
-    // factor = max_ru_quota * 10.0 / group_ru_quota
+    // factor = max_ru_quota / group_ru_quota * 10.0
     max_ru_quota: Mutex<u64>,
     // record consumption of each resource group, name --> resource_group
     resource_consumptions: DashMap<Vec<u8>, GroupPriorityTracker>,
@@ -152,7 +144,10 @@ impl ResourceController {
 
     fn calculate_factor(max_quota: u64, quota: u64) -> u64 {
         if quota > 0 {
-            (max_quota as f64 * 10.0 / quota as f64).round() as u64
+            // we use max_quota / quota as the resource group factor, but because we need to
+            // cast the value to integer, so we times it by 10 to ensure the accuracy is
+            // enough.
+            (max_quota as f64 / quota as f64 * 10.0).round() as u64
         } else {
             1
         }
@@ -162,7 +157,7 @@ impl ResourceController {
         let mut max_ru_quota = self.max_ru_quota.lock().unwrap();
         if ru_quota > *max_ru_quota {
             *max_ru_quota = ru_quota;
-            // adjust all group weight because the currenet value is too small.
+            // adjust all group weight because the current value is too small.
             self.adjust_all_resource_group_factors(ru_quota);
         }
         let weight = Self::calculate_factor(*max_ru_quota, ru_quota);
