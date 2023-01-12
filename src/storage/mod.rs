@@ -597,7 +597,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
-        let group_name = ctx.get_resource_group_name().to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -758,8 +758,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let group_name = requests[0]
             .get_context()
             .get_resource_group_name()
+            .as_bytes()
             .to_owned();
-
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -940,7 +940,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
-        let group_name = ctx.get_resource_group_name().to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = keys
             .iter()
@@ -1122,7 +1122,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
-        let group_name = ctx.get_resource_group_name().to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1291,7 +1291,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<LockInfo>>> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
-        let group_name = ctx.get_resource_group_name().to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1599,6 +1599,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Option<Vec<u8>>>> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self
             .resource_tag_factory
@@ -1661,6 +1662,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -1679,6 +1681,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = gets[0].get_context().get_priority();
+        let group_name = gets[0]
+            .get_context()
+            .get_resource_group_name()
+            .as_bytes()
+            .to_owned();
         let priority_tag = get_priority_tag(priority);
         let api_version = self.api_version;
 
@@ -1792,6 +1799,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -1808,6 +1816,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = keys.iter().map(|k| (k.clone(), k.clone())).collect();
         let resource_tag = self
@@ -1888,6 +1897,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -2305,6 +2315,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
@@ -2413,6 +2424,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -2433,6 +2445,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = ranges
             .iter()
@@ -2569,6 +2582,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -2586,6 +2600,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Option<u64>>> {
         const CMD: CommandKind = CommandKind::raw_get_key_ttl;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self
             .resource_tag_factory
@@ -2648,6 +2663,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -2758,6 +2774,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<(u64, u64, u64)>> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = ranges
             .iter()
@@ -2832,6 +2849,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {

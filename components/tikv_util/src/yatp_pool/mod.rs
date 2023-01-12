@@ -10,7 +10,7 @@ pub use future_pool::{Full, FuturePool};
 use prometheus::{local::LocalHistogram, Histogram};
 use yatp::{
     pool::{CloneRunnerBuilder, Local, Runner},
-    queue::{multilevel, QueueType, TaskCell as _},
+    queue::{multilevel, priority, QueueType, TaskCell as _},
     task::future::{Runner as FutureRunner, TaskCell},
     ThreadPool,
 };
@@ -282,18 +282,18 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder)
     }
 
-    pub fn build_priority_pool(&mut self) -> ThreadPool<TaskCell> {
-        let (builder, runner) = self.create_builder();
-        builder.build_with_queue_and_runner(
-            yatp::queue::QueueType::Priority,
-            yatp::pool::CloneRunnerBuilder(runner),
-        )
-    }
-
-    pub fn build_priority_future_pool(&mut self) -> FuturePool {
-        let pool = self.build_priority_pool();
+    pub fn build_priority_pool(
+        &mut self,
+        priority_provider: Arc<dyn priority::TaskPriorityProvider>,
+    ) -> ThreadPool<TaskCell> {
+        let (builder, read_pool_runner) = self.create_builder();
         let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
-        FuturePool::from_pool(pool, name, self.core_thread_count, self.max_tasks)
+        let priority_builder = priority::Builder::new(
+            priority::Config::default().name(Some(name)),
+            priority_provider,
+        );
+        let runner_builder = priority_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
+        builder.build_with_queue_and_runner(QueueType::Priority(priority_builder), runner_builder)
     }
 
     fn create_builder(&mut self) -> (yatp::Builder, YatpPoolRunner<T>) {

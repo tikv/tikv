@@ -59,7 +59,7 @@ pub enum ReadPool {
         running_threads: IntGauge,
         max_tasks: usize,
         pool_size: usize,
-        enable_priority: Arc<AtomicBool>,
+        resource_ctl: Option<Arc<ResourceController>>,
     },
 }
 
@@ -83,7 +83,7 @@ impl ReadPool {
                 running_threads,
                 max_tasks,
                 pool_size,
-                enable_priority,
+                resource_ctl,
             } => ReadPoolHandle::Yatp {
                 remote: pool.remote().clone(),
                 remote_priority: priority_pool.remote().clone(),
@@ -92,7 +92,7 @@ impl ReadPool {
                 running_threads: running_threads.clone(),
                 max_tasks: *max_tasks,
                 pool_size: *pool_size,
-                enable_priority: enable_priority.clone(),
+                resource_ctl: resource_ctl.clone(),
             },
         }
     }
@@ -113,7 +113,7 @@ pub enum ReadPoolHandle {
         running_threads: IntGauge,
         max_tasks: usize,
         pool_size: usize,
-        enable_priority: Arc<AtomicBool>,
+        resource_ctl: Option<Arc<ResourceController>>,
     },
 }
 
@@ -123,7 +123,7 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-        group_name: String,
+        group_meta: Vec<u8>,
     ) -> Result<(), ReadPoolError>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -148,7 +148,7 @@ impl ReadPoolHandle {
                 resource_ctl,
                 running_tasks,
                 max_tasks,
-                enable_priority,
+                resource_ctl,
                 ..
             } => {
                 let running_tasks = running_tasks.clone();
@@ -167,32 +167,29 @@ impl ReadPoolHandle {
                     CommandPri::Low => Some(2),
                 };
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
-                if enable_priority.load(Ordering::Relaxed) {
-                    let priority_value = resource_ctl.get_read_priority(&group_name, priority);
-                    extras.set_priority(priority_value);
-                    let task_cell = TaskCell::new(
+                extras.set_metadata(group_meta.clone());
+                let task_cell = if let Some(resource_ctl) = resource_ctl {
+                    TaskCell::new(
                         TrackedFuture::new(ControlledFuture::new(
                             async move {
                                 f.await;
                                 running_tasks.dec();
                             },
                             resource_ctl.clone(),
-                            group_name,
-                            priority,
+                            group_meta,
                         )),
                         extras,
-                    );
-                    remote_priority.spawn(task_cell);
+                    )
                 } else {
-                    let task_cell = TaskCell::new(
+                    TaskCell::new(
                         TrackedFuture::new(async move {
                             f.await;
                             running_tasks.dec();
                         }),
                         extras,
-                    );
-                    remote.spawn(task_cell);
-                }
+                    )
+                };
+                remote.spawn(task_cell);
             }
         }
         Ok(())
@@ -203,6 +200,7 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
+        group_meta: Vec<u8>,
     ) -> impl Future<Output = Result<T, ReadPoolError>>
     where
         F: Future<Output = T> + Send + 'static,
@@ -230,7 +228,7 @@ impl ReadPoolHandle {
             },
             priority,
             task_id,
-            group_name,
+            group_meta,
         );
         async move {
             res?;
@@ -323,14 +321,12 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
     reporter: R,
     engine: E,
-    resource_ctl: Arc<ResourceController>,
-    enable_priority: bool,
+    resource_ctl: Option<Arc<ResourceController>>,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
-    let mut builder = YatpPoolBuilder::new(ReporterTicker { reporter });
     let raftkv = Arc::new(Mutex::new(engine));
-    let raftkv_priority = raftkv.clone();
-    let pool = builder
+    let mut builder = YatpPoolBuilder::new(ReporterTicker { reporter });
+    builder
         .name_prefix(&unified_read_pool_name)
         .stack_size(config.stack_size.0 as usize)
         .thread_count(
@@ -348,28 +344,12 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         })
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
-        })
-        .build_multi_level_pool();
-    let priority_pool = builder
-        .name_prefix(format!("{}-priority", unified_read_pool_name))
-        .stack_size(config.stack_size.0 as usize)
-        .thread_count(
-            config.min_thread_count,
-            config.max_thread_count,
-            std::cmp::max(
-                UNIFIED_READPOOL_MIN_CONCURRENCY,
-                SysQuota::cpu_cores_quota() as usize,
-            ),
-        )
-        .after_start(move || {
-            let engine = raftkv_priority.lock().unwrap().clone();
-            set_tls_engine(engine);
-            set_io_type(IoType::ForegroundRead);
-        })
-        .before_stop(|| unsafe {
-            destroy_tls_engine::<E>();
-        })
-        .build_priority_pool();
+        });
+    let pool = if let Some(ref r) = resource_ctl {
+        builder.build_priority_pool(r.clone())
+    } else {
+        builder.build_multi_level_pool()
+    };
     ReadPool::Yatp {
         pool,
         priority_pool,
@@ -382,7 +362,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
             .max_tasks_per_worker
             .saturating_mul(config.max_thread_count),
         pool_size: config.max_thread_count,
-        enable_priority: Arc::new(AtomicBool::new(enable_priority)),
+        resource_ctl,
     }
 }
 
@@ -700,7 +680,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine);
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -716,18 +696,18 @@ mod tests {
         let (task3, _tx3) = gen_task();
         let (task4, _tx4) = gen_task();
 
-        handle.spawn(task1, CommandPri::Normal, 1).unwrap();
-        handle.spawn(task2, CommandPri::Normal, 2).unwrap();
+        handle.spawn(task1, CommandPri::Normal, 1, vec![]).unwrap();
+        handle.spawn(task2, CommandPri::Normal, 2, vec![]).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task3, CommandPri::Normal, 3) {
+        match handle.spawn(task3, CommandPri::Normal, 3, vec![]) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
         tx1.send(()).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        handle.spawn(task4, CommandPri::Normal, 4).unwrap();
+        handle.spawn(task4, CommandPri::Normal, 4, vec![]).unwrap();
     }
 
     #[test]
@@ -741,7 +721,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine);
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -758,11 +738,11 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        handle.spawn(task1, CommandPri::Normal, 1).unwrap();
-        handle.spawn(task2, CommandPri::Normal, 2).unwrap();
+        handle.spawn(task1, CommandPri::Normal, 1, vec![]).unwrap();
+        handle.spawn(task2, CommandPri::Normal, 2, vec![]).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task3, CommandPri::Normal, 3) {
+        match handle.spawn(task3, CommandPri::Normal, 3, vec![]) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -770,10 +750,10 @@ mod tests {
         handle.scale_pool_size(3);
         assert_eq!(handle.get_normal_pool_size(), 3);
 
-        handle.spawn(task4, CommandPri::Normal, 4).unwrap();
+        handle.spawn(task4, CommandPri::Normal, 4, vec![]).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task5, CommandPri::Normal, 5) {
+        match handle.spawn(task5, CommandPri::Normal, 5, vec![]) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -790,7 +770,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine);
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -807,11 +787,11 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        handle.spawn(task1, CommandPri::Normal, 1).unwrap();
-        handle.spawn(task2, CommandPri::Normal, 2).unwrap();
+        handle.spawn(task1, CommandPri::Normal, 1, vec![]).unwrap();
+        handle.spawn(task2, CommandPri::Normal, 2, vec![]).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task3, CommandPri::Normal, 3) {
+        match handle.spawn(task3, CommandPri::Normal, 3, vec![]) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -823,10 +803,10 @@ mod tests {
         handle.scale_pool_size(1);
         assert_eq!(handle.get_normal_pool_size(), 1);
 
-        handle.spawn(task4, CommandPri::Normal, 4).unwrap();
+        handle.spawn(task4, CommandPri::Normal, 4, vec![]).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task5, CommandPri::Normal, 5) {
+        match handle.spawn(task5, CommandPri::Normal, 5, vec![]) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }

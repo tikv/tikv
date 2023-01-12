@@ -6,10 +6,11 @@ publish = false
 
 [dependencies]
 byteorder = "1.2"
-crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
+crossbeam-skiplist = "0.1"
 dashmap = "5.1"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.0"
+online_config = { workspace = true }
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
 serde = { version = "1.0", features = ["derive"] }
