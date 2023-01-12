@@ -158,14 +158,10 @@ fn init_regexp_data(expr: &mut Expr) -> Result<Option<BytesRegex>> {
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{
-        builder::FieldTypeBuilder, codec::batch::LazyBatchColumnVec, expr::EvalContext, Collation,
-        FieldTypeTp,
-    };
+    use tidb_query_datatype::{builder::FieldTypeBuilder, Collation, FieldTypeTp};
     use tipb::ScalarFuncSig;
-    use tipb_helper::ExprDefBuilder;
 
-    use crate::{test_util::RpnFnScalarEvaluator, RpnExpressionBuilder};
+    use crate::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_like() {
@@ -314,92 +310,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
-    fn test_regexp_utf8() {
-        let cases = vec![
-            ("a", r"^$", Some(0)),
-            ("a", r"a", Some(1)),
-            ("b", r"a", Some(0)),
-            ("aA", r"Aa", Some(0)),
-            ("aaa", r".", Some(1)),
-            ("ab", r"^.$", Some(0)),
-            ("b", r"..", Some(0)),
-            ("aab", r".ab", Some(1)),
-            ("abcd", r".*", Some(1)),
-            ("你", r"^.$", Some(1)),
-            ("你好", r"你好", Some(1)),
-            ("你好", r"^你好$", Some(1)),
-            ("你好", r"^您好$", Some(0)),
-        ];
-
-        for (target, pattern, expected) in cases {
-            let mut ctx = EvalContext::default();
-
-            let builder =
-                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpUtf8Sig, FieldTypeTp::LongLong);
-            let node = builder
-                .push_child(ExprDefBuilder::constant_bytes(target.as_bytes().to_vec()))
-                .push_child(ExprDefBuilder::constant_bytes(pattern.as_bytes().to_vec()))
-                .build();
-
-            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
-            let schema = &[];
-            let mut columns = LazyBatchColumnVec::empty();
-            let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1).unwrap();
-
-            assert!(val.is_vector());
-            let v = val.vector_value().unwrap().as_ref().to_int_vec();
-            assert_eq!(v.len(), 1);
-            assert_eq!(v[0], expected);
-        }
-    }
-
-    #[test]
-    fn test_regexp() {
-        let cases = vec![
-            ("a".as_bytes().to_vec(), r"^$", Some(0)),
-            ("a".as_bytes().to_vec(), r"a", Some(1)),
-            ("b".as_bytes().to_vec(), r"a", Some(0)),
-            ("aA".as_bytes().to_vec(), r"Aa", Some(0)),
-            ("aaa".as_bytes().to_vec(), r".", Some(1)),
-            ("ab".as_bytes().to_vec(), r"^.$", Some(0)),
-            ("b".as_bytes().to_vec(), r"..", Some(0)),
-            ("aab".as_bytes().to_vec(), r".ab", Some(1)),
-            ("abcd".as_bytes().to_vec(), r".*", Some(1)),
-            (vec![0x7f], r"^.$", Some(1)), // dot should match one byte which is less than 128
-            (vec![0xf0], r"^.$", Some(0)), // dot can't match one byte greater than 128
-            // dot should match "你" even if the char has 3 bytes.
-            ("你".as_bytes().to_vec(), r"^.$", Some(1)),
-            ("你好".as_bytes().to_vec(), r"你好", Some(1)),
-            ("你好".as_bytes().to_vec(), r"^你好$", Some(1)),
-            ("你好".as_bytes().to_vec(), r"^您好$", Some(0)),
-            (
-                vec![255, 255, 0xE4, 0xBD, 0xA0, 0xE5, 0xA5, 0xBD],
-                r"你好",
-                Some(1),
-            ),
-        ];
-
-        for (target, pattern, expected) in cases {
-            let mut ctx = EvalContext::default();
-
-            let builder =
-                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpSig, FieldTypeTp::LongLong);
-            let node = builder
-                .push_child(ExprDefBuilder::constant_bytes(target))
-                .push_child(ExprDefBuilder::constant_bytes(pattern.as_bytes().to_vec()))
-                .build();
-
-            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
-            let schema = &[];
-            let mut columns = LazyBatchColumnVec::empty();
-            let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1).unwrap();
-
-            assert!(val.is_vector());
-            let v = val.vector_value().unwrap().as_ref().to_int_vec();
-            assert_eq!(v.len(), 1);
-            assert_eq!(v[0], expected);
-=======
     fn test_like_wide_character() {
         let cases = vec![
             (
@@ -543,7 +453,6 @@ mod tests {
                 "target={}, pattern={}, escape={}",
                 target, pattern, escape
             );
->>>>>>> a80ab9880d (copr: fix _ pattern in like behavior for old collation (#13785))
         }
     }
 }

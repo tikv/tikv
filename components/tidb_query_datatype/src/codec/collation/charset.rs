@@ -54,7 +54,7 @@ impl Charset for CharsetUtf8mb4 {
     }
 
     fn charset() -> crate::Charset {
-        crate::Charset::Utf8Mb4
+        crate::Charset::UTF8Mb4
     }
 }
 
