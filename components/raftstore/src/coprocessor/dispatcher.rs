@@ -8,6 +8,7 @@ use kvproto::{
     metapb::{Region, RegionEpoch},
     pdpb::CheckPolicy,
     raft_cmdpb::{ComputeHashRequest, RaftCmdRequest},
+    raft_serverpb::RaftMessage,
 };
 use protobuf::Message;
 use raft::eraftpb;
@@ -778,6 +779,14 @@ impl<E: KvEngine> CoprocessorHost<E> {
             }
         }
         true
+    }
+
+    /// When a peer is created or replicated.
+    pub fn on_peer_created(&self, region_id: u64, peer_id: u64, event: PeerCreateEvent) {
+        for observer in &self.registry.region_change_observers {
+            let observer = observer.observer.inner();
+            observer.on_peer_created(region_id, peer_id, event)
+        }
     }
 
     pub fn on_flush_applied_cmd_batch(

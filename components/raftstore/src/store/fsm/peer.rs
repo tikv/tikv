@@ -67,7 +67,7 @@ use self::memtrace::*;
 #[cfg(any(test, feature = "testexport"))]
 use crate::store::PeerInternalStat;
 use crate::{
-    coprocessor::{RegionChangeEvent, RegionChangeReason},
+    coprocessor::{CoprocessorHost, PeerCreateEvent, RegionChangeEvent, RegionChangeReason},
     store::{
         cmd_resp::{bind_term, new_error},
         entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
@@ -247,6 +247,7 @@ where
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
+        coprocessor_host: &CoprocessorHost<EK>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match find_peer(region, store_id) {
             None => {
@@ -266,6 +267,11 @@ where
         );
         HIBERNATED_PEER_STATE_GAUGE.awaken.inc();
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
+        coprocessor_host.on_peer_created(
+            region.get_id(),
+            meta_peer.get_id(),
+            PeerCreateEvent::Create,
+        );
         Ok((
             tx,
             Box::new(PeerFsm {
@@ -307,6 +313,7 @@ where
         engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
+        coprocessor_host: &CoprocessorHost<EK>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         // We will remove tombstone key when apply snapshot
         info!(
@@ -320,6 +327,7 @@ where
 
         HIBERNATED_PEER_STATE_GAUGE.awaken.inc();
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
+        coprocessor_host.on_peer_created(region_id, peer.get_id(), PeerCreateEvent::Replicate);
         Ok((
             tx,
             Box::new(PeerFsm {
@@ -4084,6 +4092,7 @@ where
                 self.ctx.raftlog_fetch_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
+                &self.ctx.coprocessor_host,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {

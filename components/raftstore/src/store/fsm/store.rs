@@ -66,7 +66,7 @@ use time::{self, Timespec};
 
 use crate::{
     bytes_capacity,
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
+    coprocessor::{CoprocessorHost, PeerCreateEvent, RegionChangeEvent, RegionChangeReason},
     store::{
         async_io::{
             read::{ReadRunner, ReadTask},
@@ -1246,6 +1246,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
                 &region,
+                &self.coprocessor_host,
             )?;
             peer.peer.init_replication_mode(&mut replication_state);
             peer.schedule_applying_snapshot();
@@ -2255,6 +2256,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.engines.clone(),
             region_id,
             target.clone(),
+            &self.coprocessor_host,
         )?;
 
         // WARNING: The checking code must be above this line.
@@ -2910,6 +2912,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.raftlog_fetch_scheduler.clone(),
             self.ctx.engines.clone(),
             &region,
+            &self.coprocessor_host,
         ) {
             Ok((sender, peer)) => (sender, peer),
             Err(e) => {

@@ -1125,6 +1125,10 @@ impl Snapshot {
         file_system::metadata(&self.meta_file.path)
     }
 
+    pub fn meta_path(&self) -> &PathBuf {
+        &self.meta_file.path
+    }
+
     pub fn total_size(&self) -> u64 {
         self.cf_files
             .iter()
