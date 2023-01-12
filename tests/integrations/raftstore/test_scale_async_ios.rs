@@ -53,7 +53,6 @@ fn test_increase_async_ios() {
             cfg_controller.get_current().raft_store.store_io_pool_size,
             2
         );
-        std::thread::sleep(std::time::Duration::from_secs(1));
     }
     // Save current async-io tids after scaling up, and compared with the
     // orginial one before scaling up, the thread num should be added up to TWO.
@@ -90,7 +89,10 @@ fn test_decrease_async_ios() {
         };
 
         cfg_controller.update(change).unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        assert_eq!(
+            cfg_controller.get_current().raft_store.store_io_pool_size,
+            1
+        );
     }
 
     // Save current async-io tids after scaling down, and compared with the
@@ -101,6 +103,90 @@ fn test_decrease_async_ios() {
     for tid in cur_writers_tids {
         assert!(org_writers_tids.contains(&tid));
     }
+    // Request can be handled as usual
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+}
+
+#[test]
+fn test_resize_async_ios_failed_1() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.store_io_pool_size = 2;
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    // Save current async-io tids before shrinking
+    let org_writers_tids = get_async_writers_tids();
+    assert_eq!(2, org_writers_tids.len());
+    // Request can be handled as usual
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+
+    // Update config, expand from async-mode(async-ios == 2) to
+    // sync-mode(async-ios == 0).
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller().unwrap();
+
+        let change = {
+            let mut change = HashMap::new();
+            change.insert("raftstore.store-io-pool-size".to_owned(), "0".to_owned());
+            change
+        };
+
+        assert!(cfg_controller.update(change).is_err());
+        assert_eq!(
+            cfg_controller.get_current().raft_store.store_io_pool_size,
+            2
+        );
+    }
+    // Save current async-io tids after scaling up, and compared with the
+    // orginial one before scaling up, the thread num should be added up to TWO.
+    let cur_writers_tids = get_async_writers_tids();
+    assert_eq!(cur_writers_tids.len(), org_writers_tids.len());
+
+    // Request can be handled as usual
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+}
+
+#[test]
+fn test_resize_async_ios_failed_2() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.store_io_pool_size = 0;
+    cluster.pd_client.disable_default_operator();
+    let _ = cluster.run_conf_change();
+
+    // Save current async-io tids before shrinking
+    let org_writers_tids = get_async_writers_tids();
+    assert_eq!(0, org_writers_tids.len());
+    // Request can be handled as usual
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+
+    // Update config, expand from sync-mode(async-ios == 0) to
+    // async-mode(async-ios == 2).
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller().unwrap();
+
+        let change = {
+            let mut change = HashMap::new();
+            change.insert("raftstore.store-io-pool-size".to_owned(), "2".to_owned());
+            change
+        };
+
+        assert!(cfg_controller.update(change).is_err());
+        assert_eq!(
+            cfg_controller.get_current().raft_store.store_io_pool_size,
+            0
+        );
+    }
+    // Save current async-io tids after scaling up, and compared with the
+    // orginial one before scaling up, the thread num should be added up to TWO.
+    let cur_writers_tids = get_async_writers_tids();
+    assert_eq!(cur_writers_tids.len(), org_writers_tids.len());
+
     // Request can be handled as usual
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
