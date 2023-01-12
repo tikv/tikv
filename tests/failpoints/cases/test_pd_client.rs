@@ -286,7 +286,9 @@ fn test_retry() {
     });
     test_retry_success(&mut client, |c| block_on(c.get_gc_safe_point()));
     test_retry_success(&mut client, |c| c.get_operator(0));
-    test_retry_success(&mut client, |c| block_on(c.load_global_config(String::default())));
+    test_retry_success(&mut client, |c| {
+        block_on(c.load_global_config(String::default()))
+    });
 
     fail::remove(pd_client_v2_timeout_fp);
     fail::remove(pd_client_v2_backoff_fp);
