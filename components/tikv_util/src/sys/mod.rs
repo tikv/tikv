@@ -22,7 +22,7 @@ use mnt::get_mount;
 use sysinfo::RefreshKind;
 pub use sysinfo::{CpuExt, DiskExt, NetworkExt, ProcessExt, SystemExt};
 
-use crate::config::{ReadableSize, KIB};
+use crate::config::ReadableSize;
 
 pub const HIGH_PRI: i32 = -1;
 const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
@@ -93,7 +93,7 @@ impl SysQuota {
 
     fn sysinfo_memory_limit_in_bytes() -> u64 {
         let system = sysinfo::System::new_with_specifics(RefreshKind::new().with_memory());
-        system.total_memory() * KIB
+        system.total_memory()
     }
 }
 
