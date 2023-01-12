@@ -121,6 +121,8 @@ pub struct ResourceController {
     is_read: bool,
     // Track the maximum ru quota used to calculate the factor of each resource group.
     // factor = max_ru_quota / group_ru_quota * 10.0
+    // We use mutex here to ensure when we need to change this value and do adjust all resource
+    // groups' factors, it can't be changed concurrently.
     max_ru_quota: Mutex<u64>,
     // record consumption of each resource group, name --> resource_group
     resource_consumptions: DashMap<Vec<u8>, GroupPriorityTracker>,
