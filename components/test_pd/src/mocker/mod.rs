@@ -27,13 +27,13 @@ pub type Result<T> = result::Result<T, String>;
 pub trait PdMocker {
     fn load_global_config(
         &self,
-        req: &LoadGlobalConfigRequest,
+        _req: &LoadGlobalConfigRequest,
     ) -> Option<Result<LoadGlobalConfigResponse>> {
         let mut send = vec![];
-        for r in req.get_names() {
+        for r in 0..10 {
             let mut i = GlobalConfigItem::default();
-            i.set_name(format!("/global/config/{}", r.clone()));
-            i.set_value(r.clone());
+            i.set_name(format!("/global/config/{}", r));
+            i.set_value(r.to_string());
             send.push(i);
         }
         let mut res = LoadGlobalConfigResponse::default();
