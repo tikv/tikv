@@ -24,7 +24,7 @@ mod region_snapshot;
 mod replication_mode;
 pub mod snap;
 mod txn_ext;
-pub mod worker;
+mod worker;
 
 #[cfg(any(test, feature = "testexport"))]
 pub use self::msg::PeerInternalStat;

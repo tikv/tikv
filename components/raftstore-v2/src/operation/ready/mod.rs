@@ -31,7 +31,7 @@ use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
-        needs_evict_entry_cache, util, worker::metrics::SNAP_COUNTER, FetchedLogs, ReadProgress,
+        needs_evict_entry_cache, util, worker_metrics::SNAP_COUNTER, FetchedLogs, ReadProgress,
         Transport, WriteCallback, WriteTask,
     },
 };

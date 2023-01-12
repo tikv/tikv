@@ -36,9 +36,9 @@ use raft::{eraftpb::Snapshot, StateRole};
 use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{
-        metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
-        TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
-        worker::metrics::SNAP_COUNTER,
+        metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, worker_metrics::SNAP_COUNTER,
+        GenSnapRes, ReadTask, TabletSnapKey, TabletSnapManager, Transport, WriteTask,
+        RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
 };
 use slog::{error, info, warn};
