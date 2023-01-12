@@ -8,7 +8,6 @@ use kvproto::{
     metapb::{Region, RegionEpoch},
     pdpb::CheckPolicy,
     raft_cmdpb::{ComputeHashRequest, RaftCmdRequest},
-    raft_serverpb::RaftMessage,
 };
 use protobuf::Message;
 use raft::eraftpb;

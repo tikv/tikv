@@ -14,7 +14,7 @@ use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request},
-    raft_serverpb::{RaftApplyState, RaftMessage},
+    raft_serverpb::RaftApplyState,
 };
 use raft::{eraftpb, StateRole};
 
