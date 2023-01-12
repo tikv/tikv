@@ -18,7 +18,7 @@
 
 use std::{mem, time::Duration};
 
-use engine_traits::{KvEngine, RaftEngine, WriteBatch, WriteOptions};
+use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
@@ -32,8 +32,8 @@ use raftstore::{
             apply::{self, APPLY_WB_SHRINK_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP},
             Proposal,
         },
-        local_metrics::RaftMetrics,
-        metrics::APPLY_TASK_WAIT_TIME_HISTOGRAM,
+        local_metrics::{RaftMetrics, TimeTracker},
+        metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
         msg::ErrorCallback,
         util, Config, WriteCallback,
     },
@@ -221,12 +221,35 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         proposal.must_pass_epoch_check = self.applied_to_current_term();
         proposal.propose_time = Some(*ctx.current_time.get_or_insert_with(monotonic_raw_now));
+        self.report_batch_wait_duration(ctx, &proposal.cb);
         self.proposals_mut().push(proposal);
         self.set_has_ready();
     }
 
+    fn report_batch_wait_duration<T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        ch: &Vec<CmdResChannel>,
+    ) {
+        if !ctx.raft_metrics.waterfall_metrics || ch.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        for c in ch {
+            for tracker in c.write_trackers() {
+                tracker.observe(now, &ctx.raft_metrics.wf_batch_wait, |t| {
+                    &mut t.metrics.wf_batch_wait_nanos
+                });
+            }
+        }
+    }
+
     #[inline]
-    pub fn schedule_apply_committed_entries(&mut self, committed_entries: Vec<Entry>) {
+    pub fn schedule_apply_committed_entries<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        committed_entries: Vec<Entry>,
+    ) {
         if committed_entries.is_empty() {
             return;
         }
@@ -246,6 +269,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         } else {
             entry_and_proposals = committed_entries.into_iter().map(|e| (e, vec![])).collect();
         }
+        self.report_store_time_duration(ctx, &mut entry_and_proposals);
         // Unlike v1, v2 doesn't need to persist commit index and commit term. The
         // point of persist commit index/term of raft apply state is to recover commit
         // index when the writes to raft engine is lost but writes to kv engine is
@@ -263,6 +287,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.apply_scheduler()
             .unwrap()
             .send(ApplyTask::CommittedEntries(apply));
+    }
+
+    #[inline]
+    fn report_store_time_duration<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        entry_and_proposals: &mut [(Entry, Vec<CmdResChannel>)],
+    ) {
+        let now = std::time::Instant::now();
+        for (_, chs) in entry_and_proposals {
+            for tracker in chs.write_trackers_mut() {
+                tracker.observe(now, &ctx.raft_metrics.store_time, |t| {
+                    t.metrics.write_instant = Some(now);
+                    &mut t.metrics.store_time_nanos
+                });
+                if let TimeTracker::Instant(t) = tracker {
+                    *t = now;
+                }
+            }
+        }
     }
 
     pub fn on_apply_res<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, apply_res: ApplyRes) {
@@ -625,9 +669,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
         control.need_flush = false;
         let flush_state = self.flush_state().clone();
-        if let Some(wb) = &mut self.write_batch && !wb.is_empty() {
+        if let Some(wb) = &self.write_batch && !wb.is_empty() {
+            self.perf_context().start_observe();
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);
+            let wb = self.write_batch.as_mut().unwrap();
             if let Err(e) = wb.write_callback_opt(&write_opt, || {
                 flush_state.set_applied_index(index);
             }) {
@@ -640,11 +686,26 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             } else {
                 self.write_batch.take();
             }
+            let tokens: Vec<_> = self
+                .callbacks_mut()
+                .iter()
+                .flat_map(|(v, _)| {
+                    v.write_trackers()
+                        .flat_map(|t| t.as_tracker_token().cloned())
+                })
+                .collect();
+            self.perf_context().report_metrics(&tokens);
         }
         let callbacks = self.callbacks_mut();
+        let now = std::time::Instant::now();
+        let apply_time = APPLY_TIME_HISTOGRAM.local();
         for (ch, resp) in callbacks.drain(..) {
+            for tracker in ch.write_trackers() {
+                tracker.observe(now, &apply_time, |t| &mut t.metrics.apply_time_nanos);
+            }
             ch.set_result(resp);
         }
+        apply_time.flush();
         if callbacks.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP {
             callbacks.shrink_to(SHRINK_PENDING_CMD_QUEUE_CAP);
         }
