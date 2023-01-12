@@ -6,7 +6,6 @@ mod raft_client;
 pub mod config;
 pub mod debug;
 mod engine_factory;
-mod engine_factory_v2;
 pub mod errors;
 pub mod gc_worker;
 pub mod load_statistics;
@@ -14,12 +13,14 @@ pub mod lock_manager;
 pub mod node;
 mod proxy;
 pub mod raftkv;
+mod raftkv2;
 mod reset_to_version;
 pub mod resolve;
 pub mod server;
 pub mod service;
 pub mod snap;
 pub mod status_server;
+pub mod tablet_snap;
 pub mod transport;
 pub mod ttl;
 
@@ -35,6 +36,7 @@ pub use self::{
     proxy::{build_forward_option, get_target_address, Proxy},
     raft_client::{ConnectionBuilder, RaftClient},
     raftkv::RaftKv,
+    raftkv2::{NodeV2, RaftKv2},
     resolve::{PdStoreAddrResolver, StoreAddrResolver},
     server::{Server, GRPC_THREAD_PREFIX},
     transport::ServerTransport,

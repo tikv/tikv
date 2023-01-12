@@ -3,7 +3,7 @@
 use std::{error::Error as StdError, io::Error as IoError, net::AddrParseError, result};
 
 use engine_traits::Error as EngineTraitError;
-use futures::channel::oneshot::Canceled;
+use futures::channel::{mpsc::SendError, oneshot::Canceled};
 use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
 use openssl::error::ErrorStack as OpenSslError;
@@ -66,6 +66,9 @@ pub enum Error {
 
     #[error("{0:?}")]
     OpenSsl(#[from] OpenSslError),
+
+    #[error("{0:?}")]
+    StreamDisconnect(#[from] SendError),
 }
 
 pub type Result<T> = result::Result<T, Error>;

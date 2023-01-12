@@ -4,6 +4,7 @@ use std::{
     cmp::{self, Ordering as CmpOrdering, Reverse},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
+    fs,
     io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
     result, str,
@@ -56,6 +57,7 @@ pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
     (CfNames::write, CF_WRITE),
 ];
 pub const SNAPSHOT_VERSION: u64 = 2;
+pub const TABLET_SNAPSHOT_VERSION: u64 = 3;
 pub const IO_LIMITER_CHUNK_SIZE: usize = 4 * 1024;
 
 /// Name prefix for the self-generated snapshot file.
@@ -1926,25 +1928,19 @@ impl Display for TabletSnapKey {
 /// It's similar `SnapManager`, but simpler in tablet version.
 ///
 ///  TODO:
-///     - add Limiter to control send/recv speed
 ///     - clean up expired tablet checkpointer
 #[derive(Clone)]
 pub struct TabletSnapManager {
     // directory to store snapfile.
-    base: String,
+    base: PathBuf,
 }
 
 impl TabletSnapManager {
-    pub fn new<T: Into<String>>(path: T) -> Self {
-        Self { base: path.into() }
-    }
-
-    pub fn init(&self) -> io::Result<()> {
+    pub fn new<T: Into<PathBuf>>(path: T) -> io::Result<Self> {
         // Initialize the directory if it doesn't exist.
-        let path = Path::new(&self.base);
+        let path = path.into();
         if !path.exists() {
-            file_system::create_dir_all(path)?;
-            return Ok(());
+            file_system::create_dir_all(&path)?;
         }
         if !path.is_dir() {
             return Err(io::Error::new(
@@ -1952,12 +1948,70 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        Ok(())
+        Ok(Self { base: path })
     }
 
-    pub fn get_tablet_checkpointer_path(&self, key: &TabletSnapKey) -> PathBuf {
+    pub fn tablet_gen_path(&self, key: &TabletSnapKey) -> PathBuf {
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         PathBuf::from(&self.base).join(prefix)
+    }
+
+    pub fn final_recv_path(&self, key: &TabletSnapKey) -> PathBuf {
+        let prefix = format!("{}_{}", SNAP_REV_PREFIX, key);
+        PathBuf::from(&self.base).join(prefix)
+    }
+
+    pub fn tmp_recv_path(&self, key: &TabletSnapKey) -> PathBuf {
+        let prefix = format!("{}_{}{}", SNAP_REV_PREFIX, key, TMP_FILE_SUFFIX);
+        PathBuf::from(&self.base).join(prefix)
+    }
+
+    pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
+        let path = self.tablet_gen_path(key);
+        if path.exists() && let Err(e) = fs::remove_dir_all(path.as_path()) {
+            error!(
+                "delete snapshot failed";
+                "path" => %path.display(),
+                "err" => ?e,
+            );
+            false
+        } else {
+            true
+        }
+    }
+
+    pub fn total_snap_size(&self) -> Result<u64> {
+        let mut total_size = 0;
+        for entry in file_system::read_dir(&self.base)? {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
+
+            let path = entry.path();
+            // Generated snapshots are just checkpoints, only counts received snapshots.
+            if !path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map_or(true, |n| n.starts_with(SNAP_REV_PREFIX))
+            {
+                continue;
+            }
+            let entries = match file_system::read_dir(path) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
+            for e in entries {
+                match e.and_then(|e| e.metadata()) {
+                    Ok(m) => total_size += m.len(),
+                    Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                    Err(e) => return Err(Error::from(e)),
+                }
+            }
+        }
+        Ok(total_size)
     }
 }
 
@@ -1981,8 +2035,9 @@ pub mod tests {
         raft::RaftTestEngine,
     };
     use engine_traits::{
-        Engines, ExternalSstFileInfo, KvEngine, RaftEngine, Snapshot as EngineSnapshot, SstExt,
-        SstWriter, SstWriterBuilder, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+        Engines, ExternalSstFileInfo, KvEngine, RaftEngine, RaftLogBatch,
+        Snapshot as EngineSnapshot, SstExt, SstWriter, SstWriterBuilder, SyncMutable, ALL_CFS,
+        CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
     };
     use kvproto::{
         encryptionpb::EncryptionMethod,
@@ -2089,6 +2144,7 @@ pub mod tests {
         let kv: KvTestEngine = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
         let raft: RaftTestEngine =
             engine_test::raft::new_engine(p.join("raft").to_str().unwrap(), raft_db_opt)?;
+        let mut lb = raft.log_batch(regions.len() * 128);
         for &region_id in regions {
             // Put apply state into kv engine.
             let mut apply_state = RaftApplyState::default();
@@ -2098,7 +2154,7 @@ pub mod tests {
             apply_entry.set_term(0);
             apply_state.mut_truncated_state().set_index(10);
             kv.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
-            raft.append(region_id, vec![apply_entry])?;
+            lb.append(region_id, None, vec![apply_entry])?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
@@ -2106,6 +2162,7 @@ pub mod tests {
             region_state.set_region(region);
             kv.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
+        raft.consume(&mut lb, false).unwrap();
         Ok(Engines::new(kv, raft))
     }
 

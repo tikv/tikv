@@ -971,6 +971,16 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
     }
 
     #[inline]
+    pub fn set_truncated_index(&mut self, index: u64) {
+        self.apply_state.mut_truncated_state().set_index(index)
+    }
+
+    #[inline]
+    pub fn set_truncated_term(&mut self, term: u64) {
+        self.apply_state.mut_truncated_state().set_term(term)
+    }
+
+    #[inline]
     pub fn first_index(&self) -> u64 {
         first_index(&self.apply_state)
     }
@@ -1098,7 +1108,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         };
         task.entries = entries;
         // Delete any previously appended log entries which never committed.
-        task.cut_logs = Some((last_index + 1, prev_last_index + 1));
+        task.set_append(Some(prev_last_index + 1), entries);
 
         self.raft_state.set_last_index(last_index);
         self.last_term = last_term;
@@ -1247,6 +1257,10 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
             let idx = cache.cache[drain_to].index;
             let mem_size_change = cache.compact_to(idx + 1);
+            RAFT_ENTRIES_EVICT_BYTES.inc_by(mem_size_change);
+        } else if !half {
+            let cache = &mut self.cache;
+            let mem_size_change = cache.compact_to(u64::MAX);
             RAFT_ENTRIES_EVICT_BYTES.inc_by(mem_size_change);
         }
     }

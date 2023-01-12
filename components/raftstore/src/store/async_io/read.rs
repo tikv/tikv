@@ -18,6 +18,7 @@ use raft::{eraftpb::Snapshot, GetEntriesContext};
 use tikv_util::{error, info, time::Instant, worker::Runnable};
 
 use crate::store::{
+    snap::TABLET_SNAPSHOT_VERSION,
     util,
     worker::metrics::{SNAP_COUNTER, SNAP_HISTOGRAM},
     RaftlogFetchResult, TabletSnapKey, TabletSnapManager, MAX_INIT_ENTRY_COUNT,
@@ -78,12 +79,12 @@ pub struct FetchedLogs {
     pub logs: Box<RaftlogFetchResult>,
 }
 
-pub type GenSnapRes = Option<Box<Snapshot>>;
+pub type GenSnapRes = Option<Box<(Snapshot, u64)>>;
 
 /// A router for receiving fetched result.
 pub trait AsyncReadNotifier: Send {
     fn notify_logs_fetched(&self, region_id: u64, fetched: FetchedLogs);
-    fn notify_snapshot_generated(&self, region_id: u64, res: Option<Box<Snapshot>>);
+    fn notify_snapshot_generated(&self, region_id: u64, res: GenSnapRes);
 }
 
 pub struct ReadRunner<EK, ER, N>
@@ -119,7 +120,7 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
     }
 
     fn generate_snap(&self, snap_key: &TabletSnapKey, tablet: EK) -> crate::Result<()> {
-        let checkpointer_path = self.snap_mgr().get_tablet_checkpointer_path(snap_key);
+        let checkpointer_path = self.snap_mgr().tablet_gen_path(snap_key);
         if checkpointer_path.as_path().exists() {
             // Remove the old checkpoint directly.
             std::fs::remove_dir_all(checkpointer_path.as_path())?;
@@ -215,6 +216,7 @@ where
                 // Set snapshot data.
                 let mut snap_data = RaftSnapshotData::default();
                 snap_data.set_region(region_state.get_region().clone());
+                snap_data.set_version(TABLET_SNAPSHOT_VERSION);
                 snap_data.mut_meta().set_for_balance(for_balance);
                 snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
 
@@ -229,7 +231,7 @@ where
                     SNAP_HISTOGRAM
                         .generate
                         .observe(start.saturating_elapsed_secs());
-                    res = Some(Box::new(snapshot))
+                    res = Some(Box::new((snapshot, to_peer)))
                 }
 
                 self.notifier.notify_snapshot_generated(region_id, res);

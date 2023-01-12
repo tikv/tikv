@@ -30,7 +30,7 @@ tidb_query_common = { workspace = true }
 tidb_query_datatype = { workspace = true }
 tikv_util = { workspace = true }
 time = "0.1"
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { workspace = true }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
 

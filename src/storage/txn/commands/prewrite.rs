@@ -14,7 +14,10 @@ use kvproto::kvrpcpb::{
     PrewriteRequestPessimisticAction::{self, *},
 };
 use tikv_kv::SnapshotExt;
-use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
+use txn_types::{
+    insert_old_value_if_resolved, Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write,
+    WriteType,
+};
 
 use super::ReaderWithStats;
 use crate::storage::{
@@ -508,7 +511,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             need_old_value: extra_op == ExtraOp::ReadOldValue,
             is_retry_request: self.ctx.is_retry_request,
             assertion_level: self.assertion_level,
-            txn_source: self.ctx.get_txn_source() as u8,
+            txn_source: self.ctx.get_txn_source(),
         };
 
         let async_commit_pk = self
@@ -569,11 +572,13 @@ impl<K: PrewriteKind> Prewriter<K> {
                     if need_min_commit_ts && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
-                    if old_value.resolved() {
-                        let key = key.append_ts(txn.start_ts);
-                        self.old_values
-                            .insert(key, (old_value, Some(mutation_type)));
-                    }
+                    insert_old_value_if_resolved(
+                        &mut self.old_values,
+                        key,
+                        txn.start_ts,
+                        old_value,
+                        Some(mutation_type),
+                    );
                 }
                 Ok((..)) => {
                     // If it needs min_commit_ts but min_commit_ts is zero, the lock
@@ -667,12 +672,13 @@ impl<K: PrewriteKind> Prewriter<K> {
                 old_values: self.old_values,
                 // Set one_pc flag in TxnExtra to let CDC skip handling the resolver.
                 one_pc: self.try_one_pc,
-                for_flashback: false,
+                allowed_in_flashback: false,
             };
             // Here the lock guards are taken and will be released after the write finishes.
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
             // are dropped along with `txn` automatically.
             let lock_guards = txn.take_guards();
+            let new_acquired_locks = txn.take_new_locks();
             let mut to_be_write = WriteData::new(txn.into_modifies(), extra);
             to_be_write.set_disk_full_opt(self.ctx.get_disk_full_opt());
 
@@ -681,8 +687,9 @@ impl<K: PrewriteKind> Prewriter<K> {
                 to_be_write,
                 rows,
                 pr,
-                lock_info: None,
+                lock_info: vec![],
                 released_locks,
+                new_acquired_locks,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -700,8 +707,9 @@ impl<K: PrewriteKind> Prewriter<K> {
                 to_be_write: WriteData::default(),
                 rows,
                 pr,
-                lock_info: None,
+                lock_info: vec![],
                 released_locks: ReleasedLocks::new(),
+                new_acquired_locks: vec![],
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -865,8 +873,9 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
 
 /// Change all 1pc locks in txn to 2pc locks.
 pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
-    for (key, lock, _) in std::mem::take(&mut txn.locks_for_1pc) {
-        txn.put_lock(key, &lock);
+    for (key, lock, remove_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
+        let is_new_lock = !remove_pessimistic_lock;
+        txn.put_lock(key, &lock, is_new_lock);
     }
 }
 

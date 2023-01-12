@@ -24,5 +24,5 @@ tikv_util = { workspace = true }
 
 [dev-dependencies]
 engine_test = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 tempfile = "3.0"

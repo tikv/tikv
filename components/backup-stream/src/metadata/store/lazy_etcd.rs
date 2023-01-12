@@ -2,9 +2,13 @@
 
 use std::{sync::Arc, time::Duration};
 
-use etcd_client::{ConnectOptions, Error as EtcdError, TlsOptions};
+use etcd_client::{ConnectOptions, Error as EtcdError, OpenSslClientConfig};
 use futures::Future;
-use tikv_util::stream::RetryError;
+use openssl::x509::verify::X509VerifyFlags;
+use tikv_util::{
+    info,
+    stream::{RetryError, RetryExt},
+};
 use tokio::sync::OnceCell;
 
 use super::{etcd::EtcdSnapshot, EtcdStore, MetaStore};
@@ -15,8 +19,9 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Clone)]
 pub struct LazyEtcdClient(Arc<LazyEtcdClientInner>);
 
+#[derive(Debug)]
 pub struct ConnectionConfig {
-    pub tls: Option<TlsOptions>,
+    pub tls: Option<security::ClientSuite>,
     pub keep_alive_interval: Duration,
     pub keep_alive_timeout: Duration,
 }
@@ -26,12 +31,22 @@ impl ConnectionConfig {
     fn to_connection_options(&self) -> ConnectOptions {
         let mut opts = ConnectOptions::new();
         if let Some(tls) = &self.tls {
-            opts = opts.with_tls(tls.clone())
+            opts = opts.with_openssl_tls(
+                OpenSslClientConfig::default()
+                    .ca_cert_pem(&tls.ca)
+                    // Some of users may prefer using multi-level self-signed certs.
+                    // In this scenario, we must set this flag or openssl would probably complain it cannot found the root CA.
+                    // (Because the flags we provide allows users providing exactly one CA cert.)
+                    // We haven't make it configurable because it is enabled in gRPC by default too.
+                    // TODO: Perhaps implement grpc-io based etcd client, fully remove the difference between gRPC TLS and our custom TLS?
+                    .manually(|c| c.cert_store_mut().set_flags(X509VerifyFlags::PARTIAL_CHAIN))
+                    .client_cert_pem_and_key(&tls.client_cert, &tls.client_key.0),
+            )
         }
         opts = opts
             .with_keep_alive(self.keep_alive_interval, self.keep_alive_timeout)
-            .with_timeout(RPC_TIMEOUT)
-            .keep_alive_while_idle(false);
+            .with_keep_alive_while_idle(false)
+            .with_timeout(RPC_TIMEOUT);
 
         opts
     }
@@ -68,7 +83,9 @@ fn etcd_error_is_retryable(etcd_err: &EtcdError) -> bool {
         EtcdError::InvalidArgs(_)
         | EtcdError::InvalidUri(_)
         | EtcdError::Utf8Error(_)
-        | EtcdError::InvalidHeaderValue(_) => false,
+        | EtcdError::InvalidHeaderValue(_)
+        | EtcdError::EndpointError(_)
+        | EtcdError::OpenSsl(_) => false,
         EtcdError::TransportError(_)
         | EtcdError::IoError(_)
         | EtcdError::WatchError(_)
@@ -84,6 +101,7 @@ fn etcd_error_is_retryable(etcd_err: &EtcdError) -> bool {
     }
 }
 
+#[derive(Debug)]
 struct RetryableEtcdError(EtcdError);
 
 impl RetryError for RetryableEtcdError {
@@ -103,7 +121,11 @@ where
     F: Future<Output = std::result::Result<T, EtcdError>>,
 {
     use futures::TryFutureExt;
-    let r = tikv_util::stream::retry(move || action().err_into::<RetryableEtcdError>()).await;
+    let r = tikv_util::stream::retry_ext(
+        move || action().err_into::<RetryableEtcdError>(),
+        RetryExt::default().with_fail_hook(|err| info!("retry it"; "err" => ?err)),
+    )
+    .await;
     r.map_err(|err| err.0.into())
 }
 

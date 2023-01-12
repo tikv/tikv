@@ -36,6 +36,59 @@ use crate::{import::SstImporter, server::Config as ServerConfig};
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
 
+pub(crate) fn init_store(store: Option<metapb::Store>, cfg: &ServerConfig) -> metapb::Store {
+    let mut store = store.unwrap_or_default();
+    store.set_id(INVALID_ID);
+    if store.get_address().is_empty() {
+        if cfg.advertise_addr.is_empty() {
+            store.set_address(cfg.addr.clone());
+            if store.get_peer_address().is_empty() {
+                store.set_peer_address(cfg.addr.clone());
+            }
+        } else {
+            store.set_address(cfg.advertise_addr.clone());
+            if store.get_peer_address().is_empty() {
+                store.set_peer_address(cfg.advertise_addr.clone());
+            }
+        }
+    }
+    if store.get_status_address().is_empty() {
+        if cfg.advertise_status_addr.is_empty() {
+            store.set_status_address(cfg.status_addr.clone());
+        } else {
+            store.set_status_address(cfg.advertise_status_addr.clone())
+        }
+    }
+    if store.get_version().is_empty() {
+        store.set_version(env!("CARGO_PKG_VERSION").to_string());
+    }
+
+    if let Ok(path) = std::env::current_exe() {
+        if let Some(path) = path.parent() {
+            store.set_deploy_path(path.to_string_lossy().to_string());
+        }
+    };
+
+    store.set_start_timestamp(chrono::Local::now().timestamp());
+    if store.get_git_hash().is_empty() {
+        store.set_git_hash(
+            option_env!("TIKV_BUILD_GIT_HASH")
+                .unwrap_or("Unknown git hash")
+                .to_string(),
+        );
+    }
+
+    let mut labels = Vec::new();
+    for (k, v) in &cfg.labels {
+        let mut label = metapb::StoreLabel::default();
+        label.set_key(k.to_owned());
+        label.set_value(v.to_owned());
+        labels.push(label);
+    }
+    store.set_labels(labels.into());
+    store
+}
+
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
 pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
@@ -70,58 +123,7 @@ where
         health_service: Option<HealthService>,
         default_store: Option<metapb::Store>,
     ) -> Node<C, EK, ER> {
-        let mut store = match default_store {
-            None => metapb::Store::default(),
-            Some(s) => s,
-        };
-        store.set_id(INVALID_ID);
-        if store.get_address().is_empty() {
-            if cfg.advertise_addr.is_empty() {
-                store.set_address(cfg.addr.clone());
-                if store.get_peer_address().is_empty() {
-                    store.set_peer_address(cfg.addr.clone());
-                }
-            } else {
-                store.set_address(cfg.advertise_addr.clone());
-                if store.get_peer_address().is_empty() {
-                    store.set_peer_address(cfg.advertise_addr.clone());
-                }
-            }
-        }
-        if store.get_status_address().is_empty() {
-            if cfg.advertise_status_addr.is_empty() {
-                store.set_status_address(cfg.status_addr.clone());
-            } else {
-                store.set_status_address(cfg.advertise_status_addr.clone())
-            }
-        }
-        if store.get_version().is_empty() {
-            store.set_version(env!("CARGO_PKG_VERSION").to_string());
-        }
-
-        if let Ok(path) = std::env::current_exe() {
-            if let Some(path) = path.parent() {
-                store.set_deploy_path(path.to_string_lossy().to_string());
-            }
-        };
-
-        store.set_start_timestamp(chrono::Local::now().timestamp());
-        if store.get_git_hash().is_empty() {
-            store.set_git_hash(
-                option_env!("TIKV_BUILD_GIT_HASH")
-                    .unwrap_or("Unknown git hash")
-                    .to_string(),
-            );
-        }
-
-        let mut labels = Vec::new();
-        for (k, v) in &cfg.labels {
-            let mut label = metapb::StoreLabel::default();
-            label.set_key(k.to_owned());
-            label.set_value(v.to_owned());
-            labels.push(label);
-        }
-        store.set_labels(labels.into());
+        let store = init_store(default_store, cfg);
 
         Node {
             cluster_id: cfg.cluster_id,

@@ -1,57 +1,138 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::SystemTime;
+use std::{
+    collections::BTreeMap,
+    ops::Bound::{Excluded, Unbounded},
+    time::{Duration, SystemTime},
+};
 
 use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::{metapb::Region, raft_serverpb::RaftMessage};
-use raftstore::{
-    coprocessor::RegionChangeReason,
-    store::{Config, ReadDelegate, RegionReadProgressRegistry},
+use futures::{compat::Future01CompatExt, FutureExt};
+use keys::{data_end_key, data_key};
+use kvproto::metapb::Region;
+use raftstore::store::{fsm::store::StoreRegionMeta, Config, RegionReadProgressRegistry};
+use slog::{info, o, Logger};
+use tikv_util::{
+    future::poll_future_notify,
+    is_zero_duration,
+    log::SlogFormat,
+    mpsc::{self, LooseBoundedSender, Receiver},
+    slog_panic,
 };
-use slog::{o, Logger};
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 
 use crate::{
     batch::StoreContext,
-    raft::Peer,
+    operation::ReadDelegatePair,
     router::{StoreMsg, StoreTick},
-    tablet::CachedTablet,
 };
 
-pub struct StoreMeta<E>
-where
-    E: KvEngine,
-{
-    pub store_id: Option<u64>,
+pub struct StoreMeta<EK> {
+    pub store_id: u64,
     /// region_id -> reader
-    pub readers: HashMap<u64, ReadDelegate>,
-    /// region_id -> tablet cache
-    pub tablet_caches: HashMap<u64, CachedTablet<E>>,
+    pub readers: HashMap<u64, ReadDelegatePair<EK>>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
+    /// (region_end_key, epoch.version) -> region_id
+    ///
+    /// Unlinke v1, ranges in v2 may be overlapped. So we use version
+    /// to avoid end key conflict.
+    pub(crate) region_ranges: BTreeMap<(Vec<u8>, u64), u64>,
+    /// region_id -> (region, initialized)
+    pub(crate) regions: HashMap<u64, (Region, bool)>,
 }
 
-impl<E> StoreMeta<E>
-where
-    E: KvEngine,
-{
-    pub fn new() -> StoreMeta<E> {
-        StoreMeta {
-            store_id: None,
+impl<EK> StoreMeta<EK> {
+    pub fn new(store_id: u64) -> Self {
+        Self {
+            store_id,
             readers: HashMap::default(),
-            tablet_caches: HashMap::default(),
-            region_read_progress: RegionReadProgressRegistry::new(),
+            region_read_progress: RegionReadProgressRegistry::default(),
+            region_ranges: BTreeMap::default(),
+            regions: HashMap::default(),
+        }
+    }
+
+    pub fn set_region(&mut self, region: &Region, initialized: bool, logger: &Logger) {
+        let region_id = region.get_id();
+        let version = region.get_region_epoch().get_version();
+        let prev = self
+            .regions
+            .insert(region_id, (region.clone(), initialized));
+        // `prev` only makes sense when it's initialized.
+        if let Some((prev, prev_init)) = prev && prev_init {
+            assert!(initialized, "{} region corrupted", SlogFormat(logger));
+            if prev.get_region_epoch().get_version() != version {
+                let prev_id = self.region_ranges.remove(&(data_end_key(prev.get_end_key()), prev.get_region_epoch().get_version()));
+                assert_eq!(prev_id, Some(region_id), "{} region corrupted", SlogFormat(logger));
+            } else {
+                assert!(self.region_ranges.get(&(data_end_key(prev.get_end_key()), version)).is_some(), "{} region corrupted", SlogFormat(logger));
+                return;
+            }
+        }
+        if initialized {
+            assert!(
+                self.region_ranges
+                    .insert((data_end_key(region.get_end_key()), version), region_id)
+                    .is_none(),
+                "{} region corrupted",
+                SlogFormat(logger)
+            );
+        }
+    }
+
+    pub fn remove_region(&mut self, region_id: u64) {
+        let prev = self.regions.remove(&region_id);
+        if let Some((prev, initialized)) = prev {
+            if initialized {
+                let key = (
+                    data_end_key(prev.get_end_key()),
+                    prev.get_region_epoch().get_version(),
+                );
+                let prev_id = self.region_ranges.remove(&key);
+                assert_eq!(prev_id, Some(prev.get_id()));
+            }
         }
     }
 }
 
-impl<E: KvEngine> Default for StoreMeta<E> {
-    fn default() -> Self {
-        Self::new()
+impl<EK: Send> StoreRegionMeta for StoreMeta<EK> {
+    #[inline]
+    fn store_id(&self) -> u64 {
+        self.store_id
+    }
+
+    #[inline]
+    fn region_read_progress(&self) -> &RegionReadProgressRegistry {
+        &self.region_read_progress
+    }
+
+    #[inline]
+    fn search_region(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        mut visitor: impl FnMut(&kvproto::metapb::Region),
+    ) {
+        let start_key = data_key(start_key);
+        for (_, id) in self
+            .region_ranges
+            .range((Excluded((start_key, 0)), Unbounded::<(Vec<u8>, u64)>))
+        {
+            let (region, initialized) = &self.regions[id];
+            if !initialized {
+                continue;
+            }
+            if end_key.is_empty() || end_key > region.get_start_key() {
+                visitor(region);
+            } else {
+                break;
+            }
+        }
     }
 }
+
 pub struct Store {
     id: u64,
     // Unix time when it's started.
@@ -82,7 +163,7 @@ impl Store {
 }
 
 pub struct StoreFsm {
-    store: Store,
+    pub store: Store,
     receiver: Receiver<StoreMsg>,
 }
 
@@ -126,8 +207,8 @@ impl Fsm for StoreFsm {
 }
 
 pub struct StoreFsmDelegate<'a, EK: KvEngine, ER: RaftEngine, T> {
-    fsm: &'a mut StoreFsm,
-    store_ctx: &'a mut StoreContext<EK, ER, T>,
+    pub fsm: &'a mut StoreFsm,
+    pub store_ctx: &'a mut StoreContext<EK, ER, T>,
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
@@ -137,7 +218,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
 
     fn on_start(&mut self) {
         if self.fsm.store.start_time.is_some() {
-            panic!("{:?} unable to start again", self.fsm.store.logger.list(),);
+            slog_panic!(self.fsm.store.logger, "store is already started");
         }
 
         self.fsm.store.start_time = Some(
@@ -145,10 +226,33 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
         );
+
+        self.on_pd_store_heartbeat();
+    }
+
+    pub fn schedule_tick(&mut self, tick: StoreTick, timeout: Duration) {
+        if !is_zero_duration(&timeout) {
+            let mb = self.store_ctx.router.control_mailbox();
+            let logger = self.fsm.store.logger().clone();
+            let delay = self.store_ctx.timer.delay(timeout).compat().map(move |_| {
+                if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
+                    info!(
+                        logger,
+                        "failed to schedule store tick, are we shutting down?";
+                        "tick" => ?tick,
+                        "err" => ?e
+                    );
+                }
+            });
+            poll_future_notify(delay);
+        }
     }
 
     fn on_tick(&mut self, tick: StoreTick) {
-        unimplemented!()
+        match tick {
+            StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat(),
+            _ => unimplemented!(),
+        }
     }
 
     pub fn handle_msgs(&mut self, store_msg_buf: &mut Vec<StoreMsg>) {
@@ -158,6 +262,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => self.fsm.store.on_raft_message(self.store_ctx, msg),
                 StoreMsg::SplitInit(msg) => self.fsm.store.on_split_init(self.store_ctx, msg),
+                StoreMsg::StoreUnreachable { to_store_id } => self
+                    .fsm
+                    .store
+                    .on_store_unreachable(self.store_ctx, to_store_id),
             }
         }
     }

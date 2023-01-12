@@ -32,7 +32,7 @@ use tikv::{
         lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
     },
     storage::config::{
-        BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IoRateLimitConfig,
+        BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
     },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
@@ -290,7 +290,7 @@ fn test_serde_custom_tikv_config() {
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
-        enable_statistics: false,
+        enable_statistics: true,
         stats_dump_period: ReadableDuration::minutes(12),
         compaction_readahead_size: ReadableSize::kb(1),
         info_log_max_size: ReadableSize::kb(1),
@@ -309,8 +309,13 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
-        enable_multi_batch_write: true,
+        enable_multi_batch_write: Some(true),
+        paranoid_checks: None,
+        allow_concurrent_memtable_write: Some(false),
         enable_unordered_write: true,
+        write_buffer_limit: Some(ReadableSize::gb(1)),
+        write_buffer_stall_ratio: 0.0,
+        write_buffer_flush_oldest_first: false,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -355,7 +360,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
-            enable_compaction_guard: false,
+            enable_compaction_guard: Some(false),
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
             bottommost_level_compression: DBCompressionType::Disable,
@@ -364,6 +369,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -423,7 +429,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: false,
+            enable_compaction_guard: Some(false),
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
             bottommost_level_compression: DBCompressionType::Zstd,
@@ -432,6 +438,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -491,7 +498,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: true,
+            enable_compaction_guard: Some(true),
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
             bottommost_level_compression: DBCompressionType::Disable,
@@ -500,6 +507,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -559,7 +567,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: true,
+            enable_compaction_guard: Some(true),
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
             bottommost_level_compression: DBCompressionType::Disable,
@@ -568,6 +576,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         titan: titan_db_config.clone(),
     };
@@ -583,7 +592,7 @@ fn test_serde_custom_tikv_config() {
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
-        enable_statistics: false,
+        enable_statistics: true,
         stats_dump_period: ReadableDuration::minutes(12),
         compaction_readahead_size: ReadableSize::kb(1),
         info_log_max_size: ReadableSize::kb(1),
@@ -642,7 +651,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: true,
+            enable_compaction_guard: Some(true),
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
             bottommost_level_compression: DBCompressionType::Disable,
@@ -651,6 +660,7 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            max_compactions: 3,
         },
         titan: titan_db_config,
     };
@@ -666,6 +676,7 @@ fn test_serde_custom_tikv_config() {
     raft_engine_config.memory_limit = Some(RaftEngineReadableSize::gb(1));
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
+        engine: EngineType::RaftKv2,
         gc_ratio_threshold: 1.2,
         max_key_size: 4096,
         scheduler_concurrency: 123,
@@ -685,7 +696,7 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: ReadableSize(1),
         },
         block_cache: BlockCacheConfig {
-            shared: true,
+            shared: None,
             capacity: Some(ReadableSize::gb(40)),
             num_shard_bits: 10,
             strict_capacity_limit: true,
@@ -759,13 +770,19 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     value.backup_stream = BackupStreamConfig {
-        num_threads: 12,
-        ..Default::default()
+        max_flush_interval: ReadableDuration::secs(11),
+        num_threads: 7,
+        enable: true,
+        temp_path: "./stream".to_string(),
+        file_size_limit: ReadableSize::gb(5),
+        initial_scan_pending_memory_quota: ReadableSize::kb(2),
+        initial_scan_rate_limit: ReadableSize::mb(3),
     };
     value.import = ImportConfig {
         num_threads: 123,
         stream_channel_window: 123,
         import_mode_timeout: ReadableDuration::secs(1453),
+        memory_use_ratio: 0.3,
     };
     value.panic_when_unexpected_key_or_data = true;
     value.gc = GcConfig {
@@ -817,6 +834,7 @@ fn test_serde_custom_tikv_config() {
     }
 }
 
+#[track_caller]
 fn diff_config(lhs: &TikvConfig, rhs: &TikvConfig) {
     let lhs_str = format!("{:?}", lhs);
     let rhs_str = format!("{:?}", rhs);
@@ -886,7 +904,6 @@ fn test_do_not_use_unified_readpool_with_legacy_config() {
 fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
     let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
-    assert!(cfg.storage.block_cache.shared);
     assert!(cfg.storage.block_cache.capacity.is_none());
     cfg.compatible_adjust();
     assert!(cfg.storage.block_cache.capacity.is_some());

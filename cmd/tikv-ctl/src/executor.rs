@@ -1,8 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::ToOwned, cmp::Ordering, path::PathBuf, pin::Pin, str, string::ToString, sync::Arc,
-    time::Duration, u64,
+    borrow::ToOwned, cmp::Ordering, pin::Pin, str, string::ToString, sync::Arc, time::Duration, u64,
 };
 
 use encryption_export::data_key_manager_from_config;
@@ -23,12 +22,15 @@ use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_log_engine::RaftLogEngine;
-use raftstore::store::INIT_EPOCH_CONF_VER;
+use raftstore::store::{util::build_key_range, INIT_EPOCH_CONF_VER};
 use security::SecurityManager;
 use serde_json::json;
 use tikv::{
     config::{ConfigController, TikvConfig},
-    server::debug::{BottommostLevelCompaction, Debugger, RegionInfo},
+    server::{
+        debug::{BottommostLevelCompaction, Debugger, RegionInfo},
+        KvEngineFactoryBuilder,
+    },
 };
 use tikv_util::escape;
 
@@ -45,7 +47,6 @@ type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), Stri
 pub fn new_debug_executor(
     cfg: &TikvConfig,
     data_dir: Option<&str>,
-    skip_paranoid_checks: bool,
     host: Option<&str>,
     mgr: Arc<SecurityManager>,
 ) -> Box<dyn DebugExecutor> {
@@ -55,47 +56,37 @@ pub fn new_debug_executor(
 
     // TODO: perhaps we should allow user skip specifying data path.
     let data_dir = data_dir.unwrap();
-    let kv_path = cfg.infer_kv_engine_path(Some(data_dir)).unwrap();
 
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
 
     let cache = cfg.storage.block_cache.build_shared_cache();
-    let shared_block_cache = cache.is_some();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
 
-    let mut kv_db_opts = cfg.rocksdb.build_opt();
-    kv_db_opts.set_env(env.clone());
-    kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
-    let kv_cfs_opts = cfg
-        .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.api_version());
-    let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
-    let kv_path = kv_path.to_str().unwrap();
-    let mut kv_db = match new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {
+    let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache)
+        .lite(true)
+        .build();
+    let kv_db = match factory.create_shared_db(data_dir) {
         Ok(db) => db,
         Err(e) => handle_engine_error(e),
     };
-    kv_db.set_shared_block_cache(shared_block_cache);
 
     let cfg_controller = ConfigController::default();
     if !cfg.raft_engine.enable {
-        let mut raft_db_opts = cfg.raftdb.build_opt();
-        raft_db_opts.set_env(env);
-        let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
+        let raft_db_opts = cfg.raftdb.build_opt(env, None);
+        let raft_db_cf_opts = cfg.raftdb.build_cf_opts(factory.block_cache());
         let raft_path = cfg.infer_raft_db_path(Some(data_dir)).unwrap();
         if !db_exist(&raft_path) {
             error!("raft db not exists: {}", raft_path);
             tikv_util::logger::exit_process_gracefully(-1);
         }
-        let mut raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
+        let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
             Ok(db) => db,
             Err(e) => handle_engine_error(e),
         };
-        raft_db.set_shared_block_cache(shared_block_cache);
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {
@@ -151,16 +142,37 @@ pub trait DebugExecutor {
         println!("total region size: {}", convert_gbmb(total_size as u64));
     }
 
-    fn dump_region_info(&self, region_ids: Option<Vec<u64>>, skip_tombstone: bool) {
+    fn dump_region_info(
+        &self,
+        region_ids: Option<Vec<u64>>,
+        start_key: &[u8],
+        end_key: &[u8],
+        limit: usize,
+        skip_tombstone: bool,
+    ) {
         let region_ids = region_ids.unwrap_or_else(|| self.get_all_regions_in_store());
         let mut region_objects = serde_json::map::Map::new();
         for region_id in region_ids {
+            if limit > 0 && region_objects.len() >= limit {
+                break;
+            }
             let r = self.get_region_info(region_id);
             if skip_tombstone {
                 let region_state = r.region_local_state.as_ref();
                 if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
-                    return;
+                    continue;
                 }
+            }
+            let region = r
+                .region_local_state
+                .as_ref()
+                .map(|s| s.get_region().clone())
+                .unwrap();
+            if !check_intersect_of_range(
+                &build_key_range(region.get_start_key(), region.get_end_key(), false),
+                &build_key_range(start_key, end_key, false),
+            ) {
+                continue;
             }
             let region_object = json!({
                 "region_id": region_id,
@@ -362,7 +374,7 @@ pub trait DebugExecutor {
         to_config: &TikvConfig,
         mgr: Arc<SecurityManager>,
     ) {
-        let rhs_debug_executor = new_debug_executor(to_config, to_data_dir, false, to_host, mgr);
+        let rhs_debug_executor = new_debug_executor(to_config, to_data_dir, to_host, mgr);
 
         let r1 = self.get_region_info(region);
         let r2 = rhs_debug_executor.get_region_info(region);

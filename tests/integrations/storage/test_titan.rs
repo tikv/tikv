@@ -159,10 +159,15 @@ fn test_delete_files_in_range_for_titan() {
     cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize(0);
     cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
     cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
-    let kv_db_opts = cfg.rocksdb.build_opt();
-    let kv_cfs_opts = cfg
+    let kv_db_opts = cfg
         .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.api_version());
+        .build_opt(&cfg.rocksdb.build_resources(Default::default()));
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(
+        &cfg.rocksdb.build_cf_resources(cache),
+        None,
+        cfg.storage.api_version(),
+        cfg.storage.engine,
+    );
 
     let raft_path = path.path().join(Path::new("titan"));
     let engines = Engines::new(
@@ -211,7 +216,7 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
 
     // Flush and compact the kvs into L6.
-    engines.kv.flush_cfs(true).unwrap();
+    engines.kv.flush_cfs(&[], true).unwrap();
     engines.kv.compact_files_in_range(None, None, None).unwrap();
     let db = engines.kv.as_inner();
     let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
@@ -254,9 +259,9 @@ fn test_delete_files_in_range_for_titan() {
     // Used to trigger titan gc
     let engine = &engines.kv;
     engine.put(b"1", b"1").unwrap();
-    engine.flush_cfs(true).unwrap();
+    engine.flush_cfs(&[], true).unwrap();
     engine.put(b"2", b"2").unwrap();
-    engine.flush_cfs(true).unwrap();
+    engine.flush_cfs(&[], true).unwrap();
     engine
         .compact_files_in_range(Some(b"0"), Some(b"3"), Some(1))
         .unwrap();

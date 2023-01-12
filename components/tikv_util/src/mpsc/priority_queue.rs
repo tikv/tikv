@@ -9,6 +9,9 @@ use crossbeam::channel::{RecvError, SendError, TryRecvError, TrySendError};
 use crossbeam_skiplist::SkipMap;
 use parking_lot::{Condvar, Mutex};
 
+// Create a priority based channel. Sender can send message with priority of
+// u64, and receiver will receive messages in ascending order of priority. For
+// two messages of same priority, the receiving order follows FIFO.
 pub fn unbounded<T: Send>() -> (Sender<T>, Receiver<T>) {
     let queue = Arc::new(PriorityQueue::new());
     let sender = Sender {
@@ -54,7 +57,6 @@ struct PriorityQueue<T> {
     disconnected: Mutex<bool>,
     available: Condvar,
 
-    // cap: AtomicUsize,
     sequencer: AtomicU64,
 
     senders: AtomicUsize,
@@ -156,13 +158,11 @@ impl<T: Send + 'static> Receiver<T> {
             match self.try_recv() {
                 Ok(msg) => return Ok(msg),
                 Err(TryRecvError::Disconnected) => {
-                    println!("disconnected");
                     return Err(RecvError);
                 }
                 Err(TryRecvError::Empty) => {
                     let mut disconnected = self.inner.disconnected.lock();
                     if *disconnected {
-                        println!("disconnected1");
                         return Err(RecvError);
                     }
                     self.inner.available.wait(&mut disconnected);
@@ -204,9 +204,9 @@ mod tests {
     #[test]
     fn test_priority() {
         let (tx, rx) = super::unbounded::<u64>();
-        tx.try_send(1, CommandPri::Normal).unwrap();
-        tx.send(2, CommandPri::Low).unwrap();
-        tx.send(3, CommandPri::High).unwrap();
+        tx.try_send(1, 2).unwrap();
+        tx.send(2, 1).unwrap();
+        tx.send(3, 3).unwrap();
 
         assert_eq!(rx.try_recv(), Ok(2));
         assert_eq!(rx.recv(), Ok(1));
@@ -214,11 +214,8 @@ mod tests {
         assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
 
         drop(rx);
-        assert_eq!(tx.send(2, CommandPri::Low), Err(SendError(2)));
-        assert_eq!(
-            tx.try_send(2, CommandPri::Low),
-            Err(TrySendError::Disconnected(2))
-        );
+        assert_eq!(tx.send(2, 1), Err(SendError(2)));
+        assert_eq!(tx.try_send(2, 1), Err(TrySendError::Disconnected(2)));
 
         let (tx, rx) = super::unbounded::<u64>();
         drop(tx);
@@ -228,15 +225,15 @@ mod tests {
         let (tx, rx) = super::unbounded::<u64>();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(100));
-            tx.send(10, CommandPri::Low).unwrap();
+            tx.send(10, 1).unwrap();
         });
         assert_eq!(rx.recv(), Ok(10));
 
         let (tx, rx) = super::unbounded::<u64>();
         assert_eq!(tx.len(), 0);
         assert_eq!(rx.len(), 0);
-        tx.send(2, CommandPri::Low).unwrap();
-        tx.send(3, CommandPri::Normal).unwrap();
+        tx.send(2, 1).unwrap();
+        tx.send(3, 2).unwrap();
         assert_eq!(tx.len(), 2);
         assert_eq!(rx.len(), 2);
         drop(tx);
@@ -258,11 +255,7 @@ mod tests {
             let expected_count = expected_count.clone();
             let handle = thread::spawn(move || {
                 let mut rng = rand::thread_rng();
-                let pri = match rng.gen_range(0..=2) {
-                    0 => CommandPri::Low,
-                    1 => CommandPri::Normal,
-                    _ => CommandPri::High,
-                };
+                let pri = rng.gen_range(0..1000);
                 let mut cnt = 0;
                 for i in 0..1000 {
                     sender.send(i, pri).unwrap();
@@ -277,13 +270,8 @@ mod tests {
             let real_counter = real_counter.clone();
             let handle = thread::spawn(move || {
                 let mut cnt = 0;
-                loop {
-                    match recv.recv() {
-                        Ok(v) => {
-                            cnt += v;
-                        }
-                        Err(_) => break,
-                    };
+                while let Ok(v) = recv.recv() {
+                    cnt += v;
                 }
                 real_counter.fetch_add(cnt, Ordering::Relaxed);
             });

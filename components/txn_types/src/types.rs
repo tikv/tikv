@@ -512,6 +512,19 @@ impl OldValue {
 // MutationType is the type of mutation of the current write.
 pub type OldValues = HashMap<Key, (OldValue, Option<MutationType>)>;
 
+pub fn insert_old_value_if_resolved(
+    old_values: &mut OldValues,
+    key: Key,
+    start_ts: TimeStamp,
+    old_value: OldValue,
+    mutation_type: Option<MutationType>,
+) {
+    if old_value.resolved() {
+        let key = key.append_ts(start_ts);
+        old_values.insert(key, (old_value, mutation_type));
+    }
+}
+
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
 pub struct TxnExtra {
@@ -519,8 +532,8 @@ pub struct TxnExtra {
     // Marks that this transaction is a 1PC transaction. RaftKv should set this flag
     // in the raft command request.
     pub one_pc: bool,
-    // Marks that this transaction is a flashback transaction.
-    pub for_flashback: bool,
+    // Marks that this transaction is allowed in the flashback state.
+    pub allowed_in_flashback: bool,
 }
 
 impl TxnExtra {

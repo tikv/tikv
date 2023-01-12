@@ -51,7 +51,6 @@ make_auto_flush_static_metric! {
         raw_compare_and_swap,
         raw_checksum,
         unsafe_destroy_range,
-        physical_scan_lock,
         register_lock_observer,
         check_lock_observer,
         remove_lock_observer,
@@ -71,7 +70,6 @@ make_auto_flush_static_metric! {
         gc_keys,
         raw_gc_keys,
         unsafe_destroy_range,
-        physical_scan_lock,
         validate_config,
         orphan_versions,
     }
