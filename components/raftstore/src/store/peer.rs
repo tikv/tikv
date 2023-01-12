@@ -370,7 +370,11 @@ impl ProposalContext {
             };
         }
         let bits = ProposalContextBits::from_bits_truncate(ctx[0]);
-        let (resource_group_name, _) = decode_bytes(&ctx[1..]);
+        let resource_group_name = if bits.contains(ProposalContextBits::EXTEND) {
+            decode_bytes(&ctx[1..]).0
+        } else {
+            b""
+        };
         ProposalContext {
             bits,
             resource_group_name: unsafe {
@@ -5841,8 +5845,7 @@ mod memtrace {
 mod tests {
     use kvproto::raft_cmdpb;
     use protobuf::ProtobufEnum;
-    use rand::{thread_rng, Rng};
-    use rand::distributions::Alphanumeric;
+    use rand::{distributions::Alphanumeric, thread_rng, Rng};
 
     use super::*;
     use crate::store::{msg::ExtCallback, util::u64_to_timespec};
