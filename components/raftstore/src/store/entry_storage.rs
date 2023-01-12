@@ -28,7 +28,7 @@ use tikv_alloc::TraceEvent;
 use tikv_util::{box_err, debug, error, info, time::Instant, warn, worker::Scheduler};
 
 use super::{
-    metrics::*, peer_storage::storage_error, util, WriteTask, MEMTRACE_ENTRY_CACHE,
+    metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE,
     RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use crate::{

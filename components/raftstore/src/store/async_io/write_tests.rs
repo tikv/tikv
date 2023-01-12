@@ -250,7 +250,7 @@ impl TestWriters {
         &self,
         id: usize,
     ) -> priority_queue::Sender<WriteMsg<KvTestEngine, RaftTestEngine>> {
-        self.writers.senders().pri_write_sender.clone()
+        self.writers.senders().pri_write_sender.clone().unwrap()
     }
 }
 

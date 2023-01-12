@@ -314,8 +314,6 @@ impl<EK: KvEngine, ER: RaftEngine> Index<usize> for WriteSenders<EK, ER> {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
-
     use crossbeam::channel::{bounded, Receiver};
     use engine_test::kv::KvTestEngine;
     use tikv_util::config::ReadableDuration;
