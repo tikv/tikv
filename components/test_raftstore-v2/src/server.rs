@@ -541,6 +541,7 @@ impl Simulator for ServerCluster {
             // }
             (meta.rsmeter_cleanup)();
         }
+        self.storages.remove(&node_id);
     }
 
     fn snapshot(

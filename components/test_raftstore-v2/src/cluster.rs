@@ -1283,6 +1283,11 @@ impl<T: Simulator> Cluster<T> {
             self.stop_node(id);
         }
         self.leaders.clear();
+        for store_meta in self.store_metas.values() {
+            while Arc::strong_count(store_meta) != 1 {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         self.store_metas.clear();
         for sst_worker in self.sst_workers.drain(..) {
             sst_worker.stop_worker();

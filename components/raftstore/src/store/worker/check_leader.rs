@@ -24,6 +24,15 @@ where
     coprocessor: CoprocessorHost<E>,
 }
 
+impl<S, E: KvEngine> Drop for Runner<S, E> {
+    fn drop(&mut self) {
+        println!(
+            "Check leader runner dropped, store meta cur count {}",
+            Arc::strong_count(&self.store_meta)
+        );
+    }
+}
+
 pub enum Task {
     // Check if the provided `LeaderInfo`s are same as ours local `LeaderInfo`
     CheckLeader {

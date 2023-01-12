@@ -1,6 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, thread, time::Duration};
+use std::{
+    sync::{mpsc::channel, Arc},
+    thread,
+    time::Duration,
+};
 
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::{
@@ -8,6 +12,7 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, AdminRequest, BatchSplitRequest, SplitRequest},
 };
 use pd_client::PdClient;
+use raftstore::store::{Callback, WriteResponse};
 use test_raftstore::{must_get_equal, new_admin_request, new_get_cmd, new_peer, new_request};
 use test_raftstore_v2::{
     configure_for_lease_read, new_node_cluster, new_server_cluster, put_cf_till_size,
@@ -19,20 +24,6 @@ use txn_types::{Key, PessimisticLock};
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
-
-#[test]
-fn test_server_base_split_region_left_derive() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
-    test_base_split_region(&mut cluster, Cluster::must_split, false);
-}
-
-#[test]
-fn test_server_base_split_region_right_derive() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
-    test_base_split_region(&mut cluster, Cluster::must_split, true);
-}
 
 fn test_base_split_region<T, F>(cluster: &mut Cluster<T>, split: F, right_derive: bool)
 where
@@ -51,10 +42,6 @@ where
     ];
 
     for (split_key, left_key, right_key) in tbls {
-        println!(
-            "split key {:?}, left key {:?}, right key {:?}",
-            split_key, left_key, right_key
-        );
         cluster.must_put(left_key, b"v1");
         cluster.must_put(right_key, b"v3");
 
@@ -103,17 +90,64 @@ where
 }
 
 #[test]
-fn test_node_auto_split_region() {
+fn test_server_base_split_region_left_derive() {
     let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_auto_split_region(&mut cluster);
+    let mut cluster = new_server_cluster(0, count);
+    test_base_split_region(&mut cluster, Cluster::must_split, false);
 }
 
 #[test]
-fn test_server_auto_split_region() {
+fn test_server_base_split_region_right_derive() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_auto_split_region(&mut cluster);
+    test_base_split_region(&mut cluster, Cluster::must_split, true);
+}
+
+#[test]
+fn test_server_split_region_twice() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+
+    let (split_key, left_key, right_key) = (b"k22", b"k11", b"k33");
+    cluster.must_put(left_key, b"v1");
+    cluster.must_put(right_key, b"v3");
+
+    // Left and right key must be in same region before split.
+    let region = pd_client.get_region(left_key).unwrap();
+    let region2 = pd_client.get_region(right_key).unwrap();
+    assert_eq!(region.get_id(), region2.get_id());
+
+    let (tx, rx) = channel();
+    let key = split_key.to_vec();
+    let c = Box::new(move |write_resp: WriteResponse| {
+        let mut resp = write_resp.response;
+        let admin_resp = resp.mut_admin_response();
+        let split_resp = admin_resp.mut_splits();
+        let mut regions: Vec<_> = split_resp.take_regions().into();
+        let mut d = regions.drain(..);
+        let (left, right) = (d.next().unwrap(), d.next().unwrap());
+        assert_eq!(left.get_end_key(), key.as_slice());
+        assert_eq!(region2.get_start_key(), left.get_start_key());
+        assert_eq!(left.get_end_key(), right.get_start_key());
+        assert_eq!(region2.get_end_key(), right.get_end_key());
+        tx.send(right).unwrap();
+    });
+    cluster.split_region(&region, split_key, Callback::write(c));
+    let region3 = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    cluster.must_put(split_key, b"v2");
+
+    let (tx1, rx1) = channel();
+    let c = Box::new(move |write_resp: WriteResponse| {
+        assert!(write_resp.response.has_header());
+        assert!(write_resp.response.get_header().has_error());
+        assert!(!write_resp.response.has_admin_response());
+        tx1.send(()).unwrap();
+    });
+    cluster.split_region(&region3, split_key, Callback::write(c));
+    rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -195,6 +229,20 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
+fn test_node_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
+fn test_server_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
 fn test_node_quick_election_after_split() {
     let mut cluster = new_node_cluster(0, 3);
     test_quick_election_after_split(&mut cluster);
@@ -236,56 +284,6 @@ fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
         Duration::from_secs(5),
     );
     assert!(new_leader.is_some());
-}
-
-#[test]
-fn test_node_split_region() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_split_region(&mut cluster);
-}
-
-#[test]
-fn test_server_split_region() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
-    test_split_region(&mut cluster);
-}
-
-fn test_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
-    // length of each key+value
-    let item_len = 74;
-    // make bucket's size to item_len, which means one row one bucket
-    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(item_len) * 1024);
-    let mut range = 1..;
-    cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
-    let region = pd_client.get_region(b"").unwrap();
-    let mid_key = put_till_size(cluster, 11 * item_len, &mut range);
-    let max_key = put_till_size(cluster, 9 * item_len, &mut range);
-    let target = pd_client.get_region(&max_key).unwrap();
-    assert_eq!(region, target);
-    pd_client.must_split_region(target, pdpb::CheckPolicy::Scan, vec![]);
-
-    let left = pd_client.get_region(b"").unwrap();
-    let right = pd_client.get_region(&max_key).unwrap();
-    assert_eq!(region.get_start_key(), left.get_start_key());
-    assert_eq!(mid_key.as_slice(), right.get_start_key());
-    assert_eq!(right.get_start_key(), left.get_end_key());
-    assert_eq!(region.get_end_key(), right.get_end_key());
-
-    let region = pd_client.get_region(b"x").unwrap();
-    pd_client.must_split_region(
-        region,
-        pdpb::CheckPolicy::Usekey,
-        vec![b"x1".to_vec(), b"y2".to_vec()],
-    );
-    let x1 = pd_client.get_region(b"x1").unwrap();
-    assert_eq!(x1.get_start_key(), b"x1");
-    assert_eq!(x1.get_end_key(), b"y2");
-    let y2 = pd_client.get_region(b"y2").unwrap();
-    assert_eq!(y2.get_start_key(), b"y2");
-    assert_eq!(y2.get_end_key(), b"");
 }
 
 #[test]
