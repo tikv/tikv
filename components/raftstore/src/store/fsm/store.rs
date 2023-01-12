@@ -66,7 +66,7 @@ use time::{self, Timespec};
 
 use crate::{
     bytes_capacity,
-    coprocessor::{CoprocessorHost, PeerCreateEvent, RegionChangeEvent, RegionChangeReason},
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
         async_io::{
             read::{ReadRunner, ReadTask},
