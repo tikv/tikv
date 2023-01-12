@@ -318,6 +318,7 @@ fn decode_bytes(buf: &[u8]) -> (&[u8], &[u8]) {
     left.split_at(len as usize)
 }
 
+#[derive(Debug)]
 pub struct ProposalContext {
     bits: ProposalContextBits,
     pub resource_group_name: String,
@@ -5929,6 +5930,8 @@ mod memtrace {
 mod tests {
     use kvproto::raft_cmdpb;
     use protobuf::ProtobufEnum;
+    use rand::{thread_rng, Rng};
+    use rand::distributions::Alphanumeric;
 
     use super::*;
     use crate::store::{msg::ExtCallback, util::u64_to_timespec};
@@ -5985,7 +5988,7 @@ mod tests {
 
     #[test]
     fn test_entry_context() {
-        let tbl: Vec<&[ProposalContext]> = vec![
+        let tbl: Vec<&[ProposalContextBits]> = vec![
             &[ProposalContextBits::SPLIT],
             &[ProposalContextBits::SYNC_LOG],
             &[ProposalContextBits::PREPARE_MERGE],
@@ -6002,10 +6005,19 @@ mod tests {
         ];
 
         for flags in tbl {
-            let mut ctx = ProposalContextBits::empty();
+            let mut ctx = ProposalContext::empty();
             for f in flags {
                 ctx.insert(*f);
             }
+
+            let mut rng = thread_rng();
+            let len = rng.gen_range(0..30);
+            let rand_string: String = rng
+                .sample_iter(&Alphanumeric)
+                .take(len)
+                .map(char::from)
+                .collect();
+            ctx.resource_group_name = rand_string.clone();
 
             let ser = ctx.to_vec();
             let de = ProposalContext::from_bytes(&ser);
@@ -6013,6 +6025,7 @@ mod tests {
             for f in flags {
                 assert!(de.contains(*f), "{:?}", de);
             }
+            assert_eq!(de.resource_group_name, rand_string);
         }
     }
 
