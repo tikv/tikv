@@ -17,7 +17,7 @@ pub use self::{
 use super::{config::Config, error::Result, Bucket, KeyEntry, ObserverContext, SplitChecker};
 
 pub struct Host<'a, E> {
-    pub checkers: Vec<Box<dyn SplitChecker<E>>>,
+    checkers: Vec<Box<dyn SplitChecker<E>>>,
     auto_split: bool,
     cfg: &'a Config,
 }
@@ -90,11 +90,6 @@ impl<'a, E> Host<'a, E> {
     ) -> Result<Bucket> {
         let region_size = get_region_approximate_size(engine, region, 0)?;
         const MIN_BUCKET_COUNT_PER_REGION: u64 = 2;
-        println!(
-            "region size:{},min size:{}",
-            region_size,
-            self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION
-        );
         if region_size >= self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION {
             let mut bucket_checker = size::Checker::new(
                 self.cfg.region_bucket_size.0, // not used

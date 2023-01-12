@@ -684,11 +684,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
             engine,
             policy
         );
-        println!(
-            "new_split_checker_host,size:{},checkers:{}",
-            self.registry.split_check_observers.len(),
-            host.checkers.len()
-        );
         host
     }
 

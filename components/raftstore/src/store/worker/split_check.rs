@@ -273,11 +273,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 bucket_entry.size,
                 bucket_entry.keys.len()
             );
-            println!(
-                "bucket_entry size:{},keys count {}",
-                bucket_entry.size,
-                bucket_entry.keys.len()
-            );
             buckets.push(bucket_entry);
         }
         self.on_buckets_created(&mut buckets, region, &ranges);
@@ -331,7 +326,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                     }
                 })
                 .collect::<Vec<_>>();
-            println!("on buckets created,adjusted_keys:{}", adjusted_keys.len(),);
             bucket.keys = adjusted_keys;
         }
     }
@@ -685,7 +679,6 @@ where
                             None => return,
                         },
                     };
-                    println!("task ApproximateBuckets");
                     let mut host = self.coprocessor.new_split_checker_host(
                         &region,
                         tablet,

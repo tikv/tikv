@@ -285,7 +285,7 @@ impl ReportBucket {
         self.last_report_ts.clone()
     }
 
-    pub fn current_stat_mut(&mut self)->&mut BucketStat{
+    pub fn current_stat_mut(&mut self) -> &mut BucketStat {
         &mut self.current_stat
     }
 

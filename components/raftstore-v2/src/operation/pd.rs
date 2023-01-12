@@ -85,12 +85,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
-
     pub fn report_region_buckets_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
         let region_buckets = self.region_buckets_mut();
-        println!("buckers size:{}", region_buckets.meta.keys.len());
         let task = pd::Task::ReportBuckets(region_buckets.clone());
-        // let logger = self.logger.clone();
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
@@ -101,6 +98,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         region_buckets.stats = new_bucket_stats(&region_buckets.meta);
     }
+
+    #[inline]
     pub fn region_heartbeat_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
         let task = pd::Task::RegionHeartbeat(pd::RegionHeartbeatTask {
             term: self.term(),

@@ -178,7 +178,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return false;
         }
         let task =
-            SplitCheckTask::split_check(self.region().clone(), false, CheckPolicy::Scan, None);
+            SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan, None);
         if let Err(e) = ctx.schedulers.split_check.schedule(task) {
             info!(self.logger, "failed to schedule split check"; "err" => ?e);
         }

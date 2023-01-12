@@ -88,7 +88,7 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
         if let Err(e) = res {
             warn!(
                 self.logger(),
-                "failed to send ask split";
+                "failed to refresh region buckets";
                 "region_id" => region_id,
                 "err" => %e,
             );

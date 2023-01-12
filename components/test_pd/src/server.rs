@@ -325,7 +325,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn report_buckets(
         &mut self,
-        ctx: grpcio::RpcContext,
+        ctx: grpcio::RpcContext<'_>,
         stream: RequestStream<ReportBucketsRequest>,
         sink: ClientStreamingSink<ReportBucketsResponse>,
     ) {
