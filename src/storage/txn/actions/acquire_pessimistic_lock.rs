@@ -1276,7 +1276,7 @@ pub mod tests {
 
     #[test]
     fn test_repeated_request_check_should_not_exist() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         for &(return_values, check_existence) in
             &[(false, false), (false, true), (true, false), (true, true)]
@@ -1284,9 +1284,9 @@ pub mod tests {
             let key = &[b'k', (return_values as u8 * 2) + check_existence as u8] as &[u8];
 
             // An empty key.
-            must_succeed(&mut engine, key, key, 10, 10);
+            must_succeed(&engine, key, key, 10, 10);
             let res = must_succeed_impl(
-                &mut engine,
+                &engine,
                 key,
                 key,
                 10,
@@ -1298,13 +1298,13 @@ pub mod tests {
                 15,
             );
             assert!(res.is_none());
-            must_pessimistic_prewrite_lock(&mut engine, key, key, 10, 10, true);
-            must_commit(&mut engine, key, 10, 19);
+            must_pessimistic_prewrite_lock(&engine, key, key, 10, 10, true);
+            must_commit(&engine, key, 10, 19);
 
             // The key has one record: Lock(10, 19)
-            must_succeed(&mut engine, key, key, 20, 20);
+            must_succeed(&engine, key, key, 20, 20);
             let res = must_succeed_impl(
-                &mut engine,
+                &engine,
                 key,
                 key,
                 20,
@@ -1316,14 +1316,14 @@ pub mod tests {
                 25,
             );
             assert!(res.is_none());
-            must_pessimistic_prewrite_put(&mut engine, key, b"v1", key, 20, 20, true);
-            must_commit(&mut engine, key, 20, 29);
+            must_pessimistic_prewrite_put(&engine, key, b"v1", key, 20, 20, true);
+            must_commit(&engine, key, 20, 29);
 
             // The key has records:
             // Lock(10, 19), Put(20, 29)
-            must_succeed(&mut engine, key, key, 30, 30);
+            must_succeed(&engine, key, key, 30, 30);
             let error = must_err_impl(
-                &mut engine,
+                &engine,
                 key,
                 key,
                 30,
@@ -1337,13 +1337,13 @@ pub mod tests {
                 error,
                 MvccError(box ErrorInner::AlreadyExist { .. })
             ));
-            must_pessimistic_prewrite_lock(&mut engine, key, key, 30, 30, true);
-            must_commit(&mut engine, key, 30, 39);
+            must_pessimistic_prewrite_lock(&engine, key, key, 30, 30, true);
+            must_commit(&engine, key, 30, 39);
 
             // Lock(10, 19), Put(20, 29), Lock(30, 39)
-            must_succeed(&mut engine, key, key, 40, 40);
+            must_succeed(&engine, key, key, 40, 40);
             let error = must_err_impl(
-                &mut engine,
+                &engine,
                 key,
                 key,
                 40,
@@ -1357,13 +1357,13 @@ pub mod tests {
                 error,
                 MvccError(box ErrorInner::AlreadyExist { .. })
             ));
-            must_pessimistic_prewrite_delete(&mut engine, key, key, 40, 40, true);
-            must_commit(&mut engine, key, 40, 49);
+            must_pessimistic_prewrite_delete(&engine, key, key, 40, 40, true);
+            must_commit(&engine, key, 40, 49);
 
             // Lock(10, 19), Put(20, 29), Lock(30, 39), Delete(40, 49)
-            must_succeed(&mut engine, key, key, 50, 50);
+            must_succeed(&engine, key, key, 50, 50);
             let res = must_succeed_impl(
-                &mut engine,
+                &engine,
                 key,
                 key,
                 50,
@@ -1375,13 +1375,13 @@ pub mod tests {
                 55,
             );
             assert!(res.is_none());
-            must_pessimistic_prewrite_lock(&mut engine, key, key, 50, 50, true);
-            must_commit(&mut engine, key, 50, 59);
+            must_pessimistic_prewrite_lock(&engine, key, key, 50, 50, true);
+            must_commit(&engine, key, 50, 59);
 
             // Lock(10, 19), Put(20, 29), Lock(30, 39), Delete(40, 49), Lock(50, 59)
-            must_succeed(&mut engine, key, key, 60, 60);
+            must_succeed(&engine, key, key, 60, 60);
             let res = must_succeed_impl(
-                &mut engine,
+                &engine,
                 key,
                 key,
                 60,
@@ -1393,8 +1393,8 @@ pub mod tests {
                 65,
             );
             assert!(res.is_none());
-            must_pessimistic_prewrite_lock(&mut engine, key, key, 60, 60, true);
-            must_commit(&mut engine, key, 60, 69);
+            must_pessimistic_prewrite_lock(&engine, key, key, 60, 60, true);
+            must_commit(&engine, key, 60, 69);
         }
     }
 }
