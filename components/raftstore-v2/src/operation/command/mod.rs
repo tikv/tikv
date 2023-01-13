@@ -710,7 +710,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.res_reporter().report(apply_res);
 
         // Report result first and then invoking callbacks. This may delays callback a
-        // little bit, but can make sure all following messages must sees the side
+        // little bit, but can make sure all following messages must see the side
         // effect of admin commands.
         let callbacks = self.callbacks_mut();
         let now = std::time::Instant::now();
