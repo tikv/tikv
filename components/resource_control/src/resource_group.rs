@@ -295,51 +295,53 @@ impl GroupPriorityTracker {
 }
 
 #[cfg(test)]
+pub fn new_resource_group(
+    name: String,
+    is_ru_mode: bool,
+    read_tokens: u64,
+    write_tokens: u64,
+) -> ResourceGroup {
+    use kvproto::resource_manager::{GroupRequestUnitSettings, GroupResourceSettings};
+
+    let mut group = ResourceGroup::new();
+    group.set_name(name);
+    let mode = if is_ru_mode {
+        GroupMode::RuMode
+    } else {
+        GroupMode::RawMode
+    };
+    group.set_mode(mode);
+    if is_ru_mode {
+        let mut ru_setting = GroupRequestUnitSettings::new();
+        ru_setting
+            .mut_r_r_u()
+            .mut_settings()
+            .set_fill_rate(read_tokens);
+        ru_setting
+            .mut_w_r_u()
+            .mut_settings()
+            .set_fill_rate(write_tokens);
+        group.set_r_u_settings(ru_setting);
+    } else {
+        let mut resource_setting = GroupResourceSettings::new();
+        resource_setting
+            .mut_cpu()
+            .mut_settings()
+            .set_fill_rate(read_tokens);
+        resource_setting
+            .mut_io_write()
+            .mut_settings()
+            .set_fill_rate(write_tokens);
+        group.set_resource_settings(resource_setting);
+    }
+    group
+}
+
+#[cfg(test)]
 mod tests {
-    use kvproto::resource_manager::*;
     use yatp::queue::Extras;
 
     use super::*;
-
-    fn new_resource_group(
-        name: String,
-        is_ru_mode: bool,
-        read_tokens: u64,
-        write_tokens: u64,
-    ) -> ResourceGroup {
-        let mut group = ResourceGroup::new();
-        group.set_name(name);
-        let mode = if is_ru_mode {
-            GroupMode::RuMode
-        } else {
-            GroupMode::RawMode
-        };
-        group.set_mode(mode);
-        if is_ru_mode {
-            let mut ru_setting = GroupRequestUnitSettings::new();
-            ru_setting
-                .mut_r_r_u()
-                .mut_settings()
-                .set_fill_rate(read_tokens);
-            ru_setting
-                .mut_w_r_u()
-                .mut_settings()
-                .set_fill_rate(write_tokens);
-            group.set_r_u_settings(ru_setting);
-        } else {
-            let mut resource_setting = GroupResourceSettings::new();
-            resource_setting
-                .mut_cpu()
-                .mut_settings()
-                .set_fill_rate(read_tokens);
-            resource_setting
-                .mut_io_write()
-                .mut_settings()
-                .set_fill_rate(write_tokens);
-            group.set_resource_settings(resource_setting);
-        }
-        group
-    }
 
     #[test]
     fn test_resource_group() {

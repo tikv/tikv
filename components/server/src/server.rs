@@ -82,7 +82,9 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use resource_control::{ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL};
+use resource_control::{
+    ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
+};
 use security::SecurityManager;
 use snap_recovery::RecoveryService;
 use tikv::{
@@ -331,12 +333,18 @@ where
         let background_worker = WorkerBuilder::new("background")
             .thread_count(thread_count)
             .create();
-        // spawn a task to periodically update the minimal virtual time of all resource
-        // group.
         if config.resource_control.enabled {
-            let resource_mgr1 = resource_manager.clone();
+            let mut resource_mgr_service =
+                ResourceManagerService::new(resource_manager.clone(), pd_client.clone());
+            // spawn a task to periodically update the minimal virtual time of all resource
+            // groups.
+            let resource_mgr = resource_manager.clone();
             background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
-                resource_mgr1.advance_min_virtual_time();
+                resource_mgr.advance_min_virtual_time();
+            });
+            // spawn a task to watch all resource groups update.
+            background_worker.spawn_async_task(move || async move {
+                resource_mgr_service.watch_resource_groups().await;
             });
         }
 

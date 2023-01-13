@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
     fmt,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -22,7 +21,7 @@ use futures::{
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
     metapb,
-    pdpb::{self, Member},
+    pdpb::{self, GlobalConfigItem, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use security::SecurityManager;
@@ -286,7 +285,31 @@ impl fmt::Debug for RpcClient {
 const LEADER_CHANGE_RETRY: usize = 10;
 
 impl PdClient for RpcClient {
-    fn load_global_config(&self, config_path: String) -> PdFuture<HashMap<String, String>> {
+    fn store_global_config(&self, config_path: String, items: &[GlobalConfigItem]) -> PdFuture<()> {
+        use kvproto::pdpb::StoreGlobalConfigRequest;
+        let mut req = StoreGlobalConfigRequest::new();
+        req.set_config_path(config_path);
+        req.set_changes(items.into());
+        let executor = move |client: &Client, req| match client
+            .inner
+            .rl()
+            .client_stub
+            .store_global_config_async(&req)
+        {
+            Ok(grpc_response) => Box::pin(async move {
+                if let Err(err) = grpc_response.await {
+                    return Err(box_err!("{:?}", err));
+                }
+                Ok(())
+            }) as PdFuture<_>,
+            Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
+        };
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn load_global_config(&self, config_path: String) -> PdFuture<(Vec<GlobalConfigItem>, i64)> {
         use kvproto::pdpb::LoadGlobalConfigRequest;
         let mut req = LoadGlobalConfigRequest::new();
         req.set_config_path(config_path);
@@ -299,17 +322,10 @@ impl PdClient for RpcClient {
         {
             Ok(grpc_response) => Box::pin(async move {
                 match grpc_response.await {
-                    Ok(grpc_response) => {
-                        let mut res = HashMap::with_capacity(grpc_response.get_items().len());
-                        for c in grpc_response.get_items() {
-                            if c.has_error() {
-                                error!("failed to load global config with key {:?}", c.get_error());
-                            } else {
-                                res.insert(c.get_name().to_owned(), c.get_value().to_owned());
-                            }
-                        }
-                        Ok(res)
-                    }
+                    Ok(grpc_response) => Ok((
+                        Vec::from(grpc_response.get_items()),
+                        grpc_response.get_revision(),
+                    )),
                     Err(err) => Err(box_err!("{:?}", err)),
                 }
             }) as PdFuture<_>,
@@ -322,12 +338,42 @@ impl PdClient for RpcClient {
 
     fn watch_global_config(
         &self,
-    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
+        config_path: String,
+        revision: i64,
+    ) -> PdFuture<tikv_util::mpsc::Receiver<(Vec<GlobalConfigItem>, i64)>> {
         use kvproto::pdpb::WatchGlobalConfigRequest;
-        let req = WatchGlobalConfigRequest::default();
-        sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, _| {
-            client.watch_global_config(&req)
-        })
+        let mut req = WatchGlobalConfigRequest::default();
+        req.set_config_path(config_path);
+        req.set_revision(revision);
+        info!("[watch_global_config] watch revision is:{}", revision);
+        let executor = |client: &Client, req| match client
+            .inner
+            .rl()
+            .client_stub
+            .clone()
+            .watch_global_config(&req)
+        {
+            Ok(mut stream) => Box::pin(async move {
+                let (request_tx, request_rx) = tikv_util::mpsc::unbounded();
+                while let Some(grpc_response) = stream.next().await {
+                    match grpc_response {
+                        Ok(r) => {
+                            let mut items = Vec::default();
+                            items.extend(r.get_changes().iter().cloned());
+                            if let Err(err) = request_tx.send((items, r.get_revision())) {
+                                return Err(box_err!("{:?}", err));
+                            }
+                        }
+                        Err(err) => return Err(box_err!("{:?}", err)),
+                    }
+                }
+                Ok(request_rx)
+            }) as PdFuture<_>,
+            Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
+        };
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
     }
 
     fn get_cluster_id(&self) -> Result<u64> {
