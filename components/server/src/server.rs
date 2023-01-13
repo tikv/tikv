@@ -343,7 +343,7 @@ where
                 resource_mgr.advance_min_virtual_time();
             });
             // spawn a task to watch all resource groups update.
-            background_worker.spawn_async_task(move || async move {
+            background_worker.spawn_async_task(async move {
                 resource_mgr_service.watch_resource_groups().await;
             });
         }

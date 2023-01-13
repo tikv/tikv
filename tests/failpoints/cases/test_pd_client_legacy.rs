@@ -11,7 +11,7 @@ use kvproto::{metapb::*, pdpb::GlobalConfigItem};
 use pd_client::{PdClient, RegionInfo, RegionStat, RpcClient};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
-use tikv_util::config::ReadableDuration;
+use tikv_util::{config::ReadableDuration, worker::Builder};
 
 fn new_test_server_and_client(
     update_interval: ReadableDuration,
@@ -121,43 +121,46 @@ fn test_load_global_config() {
                     item.set_value(value.to_string());
                     item
                 })
-                .collect::<Vec<GlobalConfigItem>>()
-                .as_slice(),
+                .collect::<Vec<GlobalConfigItem>>(),
         ),
     ) {
         panic!("error occur {:?}", err);
     }
 
-    let (res, revision) =
+    let (res, _) =
         futures::executor::block_on(client.load_global_config(String::from("global"))).unwrap();
     assert!(
         res.iter()
             .zip(check_items)
             .all(|(item1, item2)| item1.name == item2.0 && item1.value == item2.1)
     );
-    println!("{}", revision);
 }
 
 #[test]
 fn test_watch_global_config_on_closed_server() {
+    use futures::StreamExt;
     let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
     let global_items = vec![("test1", "val1"), ("test2", "val2"), ("test3", "val3")];
 
     let items_clone = global_items.clone();
     let client = Arc::new(client);
     let cli_clone = client.clone();
-    let j = std::thread::spawn(move || {
-        match futures::executor::block_on(cli_clone.watch_global_config(String::from("global"), 0))
-        {
-            Ok(resp) => {
+    let background_worker = Builder::new("background").thread_count(1).create();
+    background_worker.spawn_async_task(async move {
+        match cli_clone.watch_global_config("global".into(), 0).await {
+            Ok(mut stream) => {
                 let mut i: usize = 0;
-                while let Ok((items, revision)) = resp.recv() {
-                    for item in items {
-                        assert_eq!(item.get_name(), items_clone[i].0);
-                        assert_eq!(item.get_value(), items_clone[i].1);
-                        i += 1;
+                while let Some(grpc_response) = stream.next().await {
+                    match grpc_response {
+                        Ok(r) => {
+                            for item in r.get_changes() {
+                                assert_eq!(item.get_name(), items_clone[i].0);
+                                assert_eq!(item.get_value(), items_clone[i].1);
+                                i += 1;
+                            }
+                        }
+                        Err(err) => panic!("failed to get stream, err: {:?}", err),
                     }
-                    println!("{}", revision);
                 }
             }
             Err(e) => {
@@ -171,7 +174,7 @@ fn test_watch_global_config_on_closed_server() {
 
     if let Err(err) = futures::executor::block_on(
         client.store_global_config(
-            String::from("global"),
+            "global".into(),
             global_items
                 .iter()
                 .map(|(name, value)| {
@@ -180,8 +183,7 @@ fn test_watch_global_config_on_closed_server() {
                     item.set_value(value.to_string());
                     item
                 })
-                .collect::<Vec<GlobalConfigItem>>()
-                .as_slice(),
+                .collect::<Vec<GlobalConfigItem>>(),
         ),
     ) {
         panic!("{:?}", err);
@@ -189,7 +191,6 @@ fn test_watch_global_config_on_closed_server() {
 
     thread::sleep(Duration::from_millis(100));
     server.stop();
-    j.join().unwrap();
 }
 
 // Updating pd leader may be slow, we need to make sure it does not block other

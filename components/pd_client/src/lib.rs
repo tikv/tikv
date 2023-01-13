@@ -17,9 +17,10 @@ pub mod errors;
 use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
+use grpcio::ClientSStreamReceiver;
 use kvproto::{
     metapb,
-    pdpb::{self, GlobalConfigItem},
+    pdpb::{self, GlobalConfigItem, WatchGlobalConfigResponse},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use pdpb::QueryStats;
@@ -217,7 +218,7 @@ pub trait PdClient: Send + Sync {
     fn store_global_config(
         &self,
         _config_path: String,
-        _items: &[GlobalConfigItem],
+        _items: Vec<GlobalConfigItem>,
     ) -> PdFuture<()> {
         unimplemented!();
     }
@@ -227,7 +228,7 @@ pub trait PdClient: Send + Sync {
         &self,
         _config_path: String,
         _revision: i64,
-    ) -> PdFuture<tikv_util::mpsc::Receiver<(Vec<GlobalConfigItem>, i64)>> {
+    ) -> PdFuture<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
         unimplemented!();
     }
 

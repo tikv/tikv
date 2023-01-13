@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use futures::StreamExt;
 use kvproto::{pdpb::ItemKind, resource_manager::ResourceGroup};
 use pd_client::{PdClient, Result, RpcClient};
 use tikv_util::{box_err, error};
@@ -53,24 +54,31 @@ impl ResourceManagerService {
             .watch_global_config(CONFIG_PATH.to_string(), self.revision)
             .await
         {
-            Ok(watcher) => loop {
-                if let Ok((items, revision)) = watcher.recv() {
-                    self.revision = revision;
-                    for item in items {
-                        if let Ok(group) =
-                            protobuf::parse_from_bytes::<ResourceGroup>(item.get_value().as_bytes())
-                        {
-                            match item.get_kind() {
-                                ItemKind::Put => self.manager.add_resource_group(group),
-                                ItemKind::Delete => self.manager.remove_resource_group(&group.name),
+            Ok(mut stream) => {
+                while let Some(grpc_response) = stream.next().await {
+                    match grpc_response {
+                        Ok(r) => {
+                            self.revision = r.get_revision();
+                            for item in r.get_changes() {
+                                if let Ok(group) = protobuf::parse_from_bytes::<ResourceGroup>(
+                                    item.get_value().as_bytes(),
+                                ) {
+                                    match item.get_kind() {
+                                        ItemKind::Put => self.manager.add_resource_group(group),
+                                        ItemKind::Delete => {
+                                            self.manager.remove_resource_group(item.get_name())
+                                        }
+                                    }
+                                }
                             }
                         }
+                        Err(err) => {
+                            error!("failed to get stream, err: {:?}", err);
+                            return;
+                        }
                     }
-                } else {
-                    error!("resource manager watcher failed to recv");
-                    return;
                 }
-            },
+            }
             Err(e) => error!("failed to watch resource groups, err: {:?}", e),
         }
     }
@@ -112,7 +120,7 @@ pub mod tests {
     use test_pd::{mocker::Service, util::*, Server as MockServer};
     use tikv_util::{config::ReadableDuration, worker::Builder};
 
-    use crate::resource_group::new_resource_group;
+    use crate::resource_group::tests::new_resource_group;
 
     fn new_test_server_and_client(
         update_interval: ReadableDuration,
@@ -133,7 +141,7 @@ pub mod tests {
 
         futures::executor::block_on(async move {
             pd_client
-                .store_global_config(CONFIG_PATH.to_string(), &[item])
+                .store_global_config(CONFIG_PATH.to_string(), vec![item])
                 .await
         })
         .unwrap();
@@ -146,7 +154,7 @@ pub mod tests {
 
         futures::executor::block_on(async move {
             pd_client
-                .store_global_config(CONFIG_PATH.to_string(), &[item])
+                .store_global_config(CONFIG_PATH.to_string(), vec![item])
                 .await
         })
         .unwrap();
@@ -187,13 +195,13 @@ pub mod tests {
 
         let background_worker = Builder::new("background").thread_count(1).create();
         let mut s_clone = s.clone();
-        background_worker.spawn_async_task(move || async move {
+        background_worker.spawn_async_task(async move {
             s_clone.watch_resource_groups().await;
         });
 
         let group1 = new_resource_group("TEST1".into(), true, 100, 100);
         add_resource_group(s.pd_client.clone(), group1);
-        let group2= new_resource_group("TEST2".into(), true, 100, 100);
+        let group2 = new_resource_group("TEST2".into(), true, 50, 50);
         add_resource_group(s.pd_client.clone(), group2);
         let (res, revision) = s.list_resource_groups().unwrap();
         s.revision = revision;
@@ -206,7 +214,10 @@ pub mod tests {
         assert_eq!(res.len(), 1);
         assert_eq!(revision, 3);
 
+        // Wait for watcher
         std::thread::sleep(Duration::from_millis(100));
+        let groups = s.manager.get_all_resource_groups();
+        assert_eq!(groups.len(), 1);
         server.stop();
     }
 }

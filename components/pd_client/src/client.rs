@@ -18,10 +18,10 @@ use futures::{
     sink::SinkExt,
     stream::StreamExt,
 };
-use grpcio::{EnvBuilder, Environment, WriteFlags};
+use grpcio::{ClientSStreamReceiver, EnvBuilder, Environment, WriteFlags};
 use kvproto::{
     metapb,
-    pdpb::{self, GlobalConfigItem, Member},
+    pdpb::{self, GlobalConfigItem, Member, WatchGlobalConfigResponse},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use security::SecurityManager;
@@ -285,7 +285,11 @@ impl fmt::Debug for RpcClient {
 const LEADER_CHANGE_RETRY: usize = 10;
 
 impl PdClient for RpcClient {
-    fn store_global_config(&self, config_path: String, items: &[GlobalConfigItem]) -> PdFuture<()> {
+    fn store_global_config(
+        &self,
+        config_path: String,
+        items: Vec<GlobalConfigItem>,
+    ) -> PdFuture<()> {
         use kvproto::pdpb::StoreGlobalConfigRequest;
         let mut req = StoreGlobalConfigRequest::new();
         req.set_config_path(config_path);
@@ -340,12 +344,12 @@ impl PdClient for RpcClient {
         &self,
         config_path: String,
         revision: i64,
-    ) -> PdFuture<tikv_util::mpsc::Receiver<(Vec<GlobalConfigItem>, i64)>> {
+    ) -> PdFuture<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
         use kvproto::pdpb::WatchGlobalConfigRequest;
         let mut req = WatchGlobalConfigRequest::default();
+        info!("[global_config] start watch global config"; "path" => &config_path, "revision" => revision);
         req.set_config_path(config_path);
         req.set_revision(revision);
-        info!("[watch_global_config] watch revision is:{}", revision);
         let executor = |client: &Client, req| match client
             .inner
             .rl()
@@ -353,22 +357,7 @@ impl PdClient for RpcClient {
             .clone()
             .watch_global_config(&req)
         {
-            Ok(mut stream) => Box::pin(async move {
-                let (request_tx, request_rx) = tikv_util::mpsc::unbounded();
-                while let Some(grpc_response) = stream.next().await {
-                    match grpc_response {
-                        Ok(r) => {
-                            let mut items = Vec::default();
-                            items.extend(r.get_changes().iter().cloned());
-                            if let Err(err) = request_tx.send((items, r.get_revision())) {
-                                return Err(box_err!("{:?}", err));
-                            }
-                        }
-                        Err(err) => return Err(box_err!("{:?}", err)),
-                    }
-                }
-                Ok(request_rx)
-            }) as PdFuture<_>,
+            Ok(stream) => Box::pin(async move { Ok(stream) }) as PdFuture<_>,
             Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
         };
         self.pd_client

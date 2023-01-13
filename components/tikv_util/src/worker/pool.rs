@@ -405,15 +405,11 @@ impl Worker {
         });
     }
 
-    pub fn spawn_async_task<F, Fut>(&self, func: F)
+    pub fn spawn_async_task<F>(&self, f: F)
     where
-        Fut: Future<Output = ()> + Send + 'static,
-        F: FnOnce() -> Fut + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
     {
-        self.remote.spawn(async move {
-            let fut = func();
-            fut.await;
-        });
+        self.remote.spawn(f);
     }
 
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
