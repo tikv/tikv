@@ -227,7 +227,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::CheckLeaderLease => unimplemented!(),
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => unimplemented!(),
-            PeerTick::CheckLongUncommitted => unimplemented!(),
+            PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted(),
         }
     }
 

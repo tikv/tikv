@@ -24,7 +24,7 @@ use pd_client::BucketMeta;
 use raft::SnapshotStatus;
 use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
-use tracker::{get_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
+use tracker::{get_tls_tracker_token, TrackerToken};
 
 use super::{local_metrics::TimeTracker, region_meta::RegionMeta, FetchedLogs, RegionSnapshot};
 use crate::store::{
@@ -137,16 +137,7 @@ where
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Self {
-        let tracker_token = get_tls_tracker_token();
-        let now = std::time::Instant::now();
-        let tracker = if tracker_token == INVALID_TRACKER_TOKEN {
-            TimeTracker::Instant(now)
-        } else {
-            GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
-                tracker.metrics.write_instant = Some(now);
-            });
-            TimeTracker::Tracker(tracker_token)
-        };
+        let tracker = TimeTracker::default();
 
         Callback::Write {
             cb,
@@ -217,7 +208,7 @@ pub trait ReadCallback: ErrorCallback {
     type Response;
 
     fn set_result(self, result: Self::Response);
-    fn read_tracker(&self) -> Option<&TrackerToken>;
+    fn read_tracker(&self) -> Option<TrackerToken>;
 }
 
 pub trait WriteCallback: ErrorCallback {
@@ -265,9 +256,9 @@ impl<S: Snapshot> ReadCallback for Callback<S> {
         self.invoke_read(result);
     }
 
-    fn read_tracker(&self) -> Option<&TrackerToken> {
+    fn read_tracker(&self) -> Option<TrackerToken> {
         let Callback::Read { tracker, .. } = self else { return None; };
-        Some(tracker)
+        Some(*tracker)
     }
 }
 

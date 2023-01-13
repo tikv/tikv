@@ -622,7 +622,7 @@ where
                         .propose_wait_time
                         .observe(propose_time.as_secs_f64());
                     cmd.callback.read_tracker().map(|tracker| {
-                        GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                             t.metrics.read_index_propose_wait_nanos =
                                 propose_time.as_nanos() as u64;
                         })

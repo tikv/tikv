@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    mem,
+    cmp, mem,
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
@@ -104,6 +104,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     leader_transferee: u64,
+
+    long_uncommitted_threshold: u64,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -180,6 +182,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             flush_state,
             split_flow_control: SplitFlowControl::default(),
             leader_transferee: raft::INVALID_ID,
+            long_uncommitted_threshold: cmp::max(
+                cfg.long_uncommitted_base_threshold.0.as_secs(),
+                1,
+            ),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -768,5 +774,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .lead_transferee
                 .unwrap_or(raft::INVALID_ID),
         )
+    }
+
+    #[inline]
+    pub fn long_uncommitted_threshold(&self) -> Duration {
+        Duration::from_secs(self.long_uncommitted_threshold)
+    }
+
+    #[inline]
+    pub fn set_long_uncommitted_threshold(&mut self, dur: Duration) {
+        self.long_uncommitted_threshold = cmp::max(dur.as_secs(), 1);
     }
 }
