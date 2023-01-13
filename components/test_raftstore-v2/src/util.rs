@@ -12,7 +12,7 @@ use server::server2::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_put_cf_cmd, Config};
-use tikv::server::{KvEngineFactoryBuilder, NodeV2};
+use tikv::server::KvEngineFactoryBuilder;
 use tikv_util::{config::ReadableDuration, worker::LazyWorker};
 
 use crate::{bootstrap_store, cluster::Cluster, Simulator};

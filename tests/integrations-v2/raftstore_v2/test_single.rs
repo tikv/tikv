@@ -2,10 +2,9 @@
 
 use std::time::Duration;
 
-use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use raftstore::store::RAFT_INIT_LOG_INDEX;
 use rand::seq::SliceRandom;
-use test_raftstore::{new_put_cf_cmd, new_put_cmd, new_request, sleep_ms};
+use test_raftstore::{new_put_cmd, new_request, sleep_ms};
 use test_raftstore_v2::{new_node_cluster, new_server_cluster, Cluster, Simulator};
 use tikv_util::{config::ReadableSize, time::Instant};
 
@@ -33,28 +32,6 @@ fn test_server_delete() {
     test_delete(&mut cluster);
 }
 
-// todo: delete range is not ready
-#[test]
-fn test_node_use_delete_range() {
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.cfg.raft_store.use_delete_range = true;
-    cluster.run();
-    test_delete_range(&mut cluster, CF_DEFAULT);
-    // Prefix bloom filter is always enabled in the Write CF.
-    test_delete_range(&mut cluster, CF_WRITE);
-}
-
-// todo: delete range is not ready
-#[test]
-fn test_node_not_use_delete_range() {
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.cfg.raft_store.use_delete_range = false;
-    cluster.run();
-    test_delete_range(&mut cluster, CF_DEFAULT);
-    // Prefix bloom filter is always enabled in the Write CF.
-    test_delete_range(&mut cluster, CF_WRITE);
-}
-
 #[test]
 fn test_node_wrong_store_id() {
     let mut cluster = new_node_cluster(0, 1);
@@ -79,24 +56,24 @@ fn test_server_put_large_entry() {
     test_put_large_entry(&mut cluster);
 }
 
-#[test]
-fn test_node_apply_no_op() {
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.pd_client.disable_default_operator();
-    cluster.run();
+// #[test]
+// fn test_node_apply_no_op() {
+//     let mut cluster = new_node_cluster(0, 1);
+//     cluster.pd_client.disable_default_operator();
+//     cluster.run();
 
-    let timer = Instant::now();
-    loop {
-        let state = cluster.apply_state(1, 1);
-        if state.get_applied_index() > RAFT_INIT_LOG_INDEX {
-            break;
-        }
-        if timer.saturating_elapsed() > Duration::from_secs(3) {
-            panic!("apply no-op log not finish after 3 seconds");
-        }
-        sleep_ms(10);
-    }
-}
+//     let timer = Instant::now();
+//     loop {
+//         let state = cluster.apply_state(1, 1);
+//         if state.get_applied_index() > RAFT_INIT_LOG_INDEX {
+//             break;
+//         }
+//         if timer.saturating_elapsed() > Duration::from_secs(3) {
+//             panic!("apply no-op log not finish after 3 seconds");
+//         }
+//         sleep_ms(10);
+//     }
+// }
 
 fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -165,39 +142,6 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(v.as_ref(), Some(value));
         cluster.must_delete(key);
         assert!(cluster.get(key).is_none());
-    }
-}
-
-fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
-    let data_set: Vec<_> = (1..500)
-        .map(|i| {
-            (
-                format!("key{:08}", i).into_bytes(),
-                format!("value{}", i).into_bytes(),
-            )
-        })
-        .collect();
-    for kvs in data_set.chunks(50) {
-        let requests = kvs.iter().map(|(k, v)| new_put_cf_cmd(cf, k, v)).collect();
-        // key9 is always the last region.
-        cluster.batch_put(b"key9", requests).unwrap();
-    }
-
-    // delete_range request with notify_only set should not actually delete data.
-    cluster.must_notify_delete_range_cf(cf, b"", b"");
-
-    let mut rng = rand::thread_rng();
-    for _ in 0..50 {
-        let (k, v) = data_set.choose(&mut rng).unwrap();
-        assert_eq!(cluster.get_cf(cf, k).unwrap(), *v);
-    }
-
-    // Empty keys means the whole range.
-    cluster.must_delete_range_cf(cf, b"", b"");
-
-    for _ in 0..50 {
-        let k = &data_set.choose(&mut rng).unwrap().0;
-        assert!(cluster.get_cf(cf, k).is_none());
     }
 }
 

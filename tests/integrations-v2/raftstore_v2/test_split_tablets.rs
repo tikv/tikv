@@ -8,7 +8,7 @@ use std::{
 
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::{
-    metapb, pdpb,
+    metapb,
     raft_cmdpb::{AdminCmdType, AdminRequest, BatchSplitRequest, SplitRequest},
 };
 use pd_client::PdClient;

@@ -6,7 +6,7 @@ use std::{
 };
 
 use engine_traits::{KvEngine, RaftEngine};
-use futures::{compat::Future01CompatExt, executor::block_on, future::Future, FutureExt};
+use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,

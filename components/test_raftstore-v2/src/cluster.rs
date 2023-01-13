@@ -2,7 +2,6 @@
 
 use std::{
     collections::hash_map::Entry as MapEntry,
-    path::Path,
     result,
     sync::{Arc, Mutex, RwLock},
     thread,
@@ -15,7 +14,7 @@ use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     Iterable, KvEngine, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch,
-    ReadOptions, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT,
+    ReadOptions, SyncMutable, TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
 use futures::{compat::Future01CompatExt, executor::block_on, select, FutureExt};
@@ -427,17 +426,7 @@ impl<T: Simulator> Cluster<T> {
 
         let mut regions = vec![];
         let reg = &self.tablet_registries[&node_id];
-        reg.for_each_opened_tablet(|region_id, cached_tablet| {
-            let tablet = cached_tablet.latest().unwrap();
-            println!(
-                "stop node, remove tablet, node_id {}, region_id {}, tablet {:?}",
-                node_id,
-                region_id,
-                tablet.path()
-            );
-
-            let count = Arc::strong_count(tablet.as_inner());
-            println!("count {}", count);
+        reg.for_each_opened_tablet(|region_id, _| {
             regions.push(region_id);
             true
         });
@@ -1049,8 +1038,11 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn apply_state(&self, _region_id: u64, _store_id: u64) -> RaftApplyState {
-        unimplemented!()
+    pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
+        self.get_engine(store_id)
+            .get_apply_state(region_id)
+            .unwrap()
+            .unwrap()
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
@@ -1284,7 +1276,9 @@ impl<T: Simulator> Cluster<T> {
         }
         self.leaders.clear();
         for store_meta in self.store_metas.values() {
+            println!("Strong count {}", Arc::strong_count(store_meta));
             while Arc::strong_count(store_meta) != 1 {
+                println!("Strong count {}", Arc::strong_count(store_meta));
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
@@ -1292,11 +1286,8 @@ impl<T: Simulator> Cluster<T> {
         for sst_worker in self.sst_workers.drain(..) {
             sst_worker.stop_worker();
         }
-        println!("all tablets are removed");
 
-        for dir in &self.paths {
-            println!("path {:?} exist {}", dir.path(), Path::exists(dir.path()));
-        }
+        println!("all nodes are shut down.");
         debug!("all nodes are shut down.");
     }
 }
@@ -1359,6 +1350,10 @@ impl WrapFactory {
         region_id: u64,
     ) -> engine_traits::Result<Option<RegionLocalState>> {
         self.raft_engine.get_region_state(region_id, u64::MAX)
+    }
+
+    pub fn get_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        self.raft_engine.get_apply_state(region_id, u64::MAX)
     }
 }
 

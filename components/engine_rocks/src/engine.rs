@@ -16,13 +16,6 @@ pub struct RocksEngine {
     support_multi_batch_write: bool,
 }
 
-impl Drop for RocksEngine {
-    fn drop(&mut self) {
-        let path = self.as_inner().path();
-        println!("{} ref dec, cur {}", path, Arc::strong_count(&self.db));
-    }
-}
-
 impl RocksEngine {
     pub(crate) fn new(db: DB) -> RocksEngine {
         RocksEngine::from_db(Arc::new(db))
