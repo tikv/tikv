@@ -1296,10 +1296,9 @@ pub mod tests {
                 return_values,
                 check_existence,
                 15,
-                false,
             );
             assert!(res.is_none());
-            must_pessimistic_prewrite_lock(&mut engine, key, key, 10, 10, DoPessimisticCheck);
+            must_pessimistic_prewrite_lock(&mut engine, key, key, 10, 10, true);
             must_commit(&mut engine, key, 10, 19);
 
             // The key has one record: Lock(10, 19)
@@ -1315,10 +1314,9 @@ pub mod tests {
                 return_values,
                 check_existence,
                 25,
-                false,
             );
             assert!(res.is_none());
-            must_pessimistic_prewrite_put(&mut engine, key, b"v1", key, 20, 20, DoPessimisticCheck);
+            must_pessimistic_prewrite_put(&mut engine, key, b"v1", key, 20, 20, true);
             must_commit(&mut engine, key, 20, 29);
 
             // The key has records:
@@ -1334,13 +1332,12 @@ pub mod tests {
                 return_values,
                 check_existence,
                 35,
-                false,
             );
             assert!(matches!(
                 error,
                 MvccError(box ErrorInner::AlreadyExist { .. })
             ));
-            must_pessimistic_prewrite_lock(&mut engine, key, key, 30, 30, DoPessimisticCheck);
+            must_pessimistic_prewrite_lock(&mut engine, key, key, 30, 30, true);
             must_commit(&mut engine, key, 30, 39);
 
             // Lock(10, 19), Put(20, 29), Lock(30, 39)
@@ -1355,13 +1352,12 @@ pub mod tests {
                 return_values,
                 check_existence,
                 45,
-                false,
             );
             assert!(matches!(
                 error,
                 MvccError(box ErrorInner::AlreadyExist { .. })
             ));
-            must_pessimistic_prewrite_delete(&mut engine, key, key, 40, 40, DoPessimisticCheck);
+            must_pessimistic_prewrite_delete(&mut engine, key, key, 40, 40, true);
             must_commit(&mut engine, key, 40, 49);
 
             // Lock(10, 19), Put(20, 29), Lock(30, 39), Delete(40, 49)
@@ -1377,10 +1373,9 @@ pub mod tests {
                 return_values,
                 check_existence,
                 55,
-                false,
             );
             assert!(res.is_none());
-            must_pessimistic_prewrite_lock(&mut engine, key, key, 50, 50, DoPessimisticCheck);
+            must_pessimistic_prewrite_lock(&mut engine, key, key, 50, 50, true);
             must_commit(&mut engine, key, 50, 59);
 
             // Lock(10, 19), Put(20, 29), Lock(30, 39), Delete(40, 49), Lock(50, 59)
@@ -1396,10 +1391,9 @@ pub mod tests {
                 return_values,
                 check_existence,
                 65,
-                false,
             );
             assert!(res.is_none());
-            must_pessimistic_prewrite_lock(&mut engine, key, key, 60, 60, DoPessimisticCheck);
+            must_pessimistic_prewrite_lock(&mut engine, key, key, 60, 60, true);
             must_commit(&mut engine, key, 60, 69);
         }
     }
