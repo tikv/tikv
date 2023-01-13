@@ -10,7 +10,6 @@ use file_system::IoRateLimiter;
 use rand::RngCore;
 use server::server2::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use test_pd_client::TestPdClient;
 use test_raftstore::{new_put_cf_cmd, Config};
 use tikv::server::KvEngineFactoryBuilder;
 use tikv_util::{config::ReadableDuration, worker::LazyWorker};
@@ -22,7 +21,6 @@ pub fn create_test_engine(
     id: Option<(u64, u64)>,
     limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
-    pd_client: &Arc<TestPdClient>,
 ) -> (
     TabletRegistry<RocksEngine>,
     RaftTestEngine,
@@ -58,17 +56,6 @@ pub fn create_test_engine(
 
     let builder =
         KvEngineFactoryBuilder::new(env, &cfg.tikv, cache).sst_recovery_sender(Some(scheduler));
-
-    // cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
-    // let mut node = NodeV2::new(&cfg.server, pd_client.clone(), None);
-    // node.try_bootstrap_store(&cfg.raft_store, &raft_engine)
-    //     .unwrap();
-    // assert_ne!(node.id(), 0);
-
-    // let router = node.router().clone();
-    // let builder =
-    // builder.state_storage(Arc::new(StateStorage::new(raft_engine.clone(),
-    // router)));
 
     let factory = Box::new(builder.build());
     let rocks_statistics = factory.rocks_statistics();

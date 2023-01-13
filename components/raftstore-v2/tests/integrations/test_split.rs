@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
 use raftstore::store::{INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX};
-use raftstore_v2::Config;
 use tikv_util::store::new_peer;
 use txn_types::{Key, TimeStamp};
 

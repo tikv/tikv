@@ -50,7 +50,7 @@ use test_raftstore::{
     new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
     RawEngine,
 };
-use tikv::server::{NodeV2, Result as ServerResult};
+use tikv::server::Result as ServerResult;
 use tikv_util::{
     box_err, box_try, debug, error, safe_panic, thread_group::GroupProperties, time::Instant,
     timer::GLOBAL_TIMER_HANDLE, warn, worker::LazyWorker, HandyRwLock,
@@ -329,7 +329,7 @@ impl<T: Simulator> Cluster<T> {
     // id indicates cluster id store_id
     fn create_engine(&mut self, id: Option<(u64, u64)>) {
         let (reg, raft_engine, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            create_test_engine(id, self.io_rate_limiter.clone(), &self.cfg, &self.pd_client);
+            create_test_engine(id, self.io_rate_limiter.clone(), &self.cfg);
         self.engines.push((reg, raft_engine));
         self.key_managers.push(key_manager);
         self.paths.push(dir);
@@ -947,7 +947,7 @@ impl<T: Simulator> Cluster<T> {
         for registry in self.tablet_registries.values() {
             registry.for_each_opened_tablet(|_id, cached_tablet| -> bool {
                 if let Some(db) = cached_tablet.latest() {
-                    db.flush_cf(cf, true).unwrap();
+                    db.flush_cf(cf, sync).unwrap();
                 }
                 true
             });

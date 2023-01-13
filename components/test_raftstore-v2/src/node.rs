@@ -131,8 +131,7 @@ pub struct NodeCluster {
     nodes: HashMap<u64, NodeV2<TestPdClient, RocksEngine, RaftTestEngine>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
-
-    snap_mgrs: HashMap<u64, TabletSnapManager>,
+    // snap_mgrs: HashMap<u64, TabletSnapManager>,
 }
 
 impl NodeCluster {
@@ -143,7 +142,7 @@ impl NodeCluster {
             nodes: HashMap::default(),
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
-            snap_mgrs: HashMap::default(),
+            // snap_mgrs: HashMap::default(),
         }
     }
 }

@@ -106,7 +106,7 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient<AddressMap, FakeExtension>,
+    // raft_client: RaftClient<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
     pub pending_services: HashMap<u64, PendingServices>,
@@ -138,7 +138,7 @@ impl ServerCluster {
             worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
-        let raft_client = RaftClient::new(conn_builder);
+        let _raft_client = RaftClient::new(conn_builder);
         ServerCluster {
             metas: HashMap::default(),
             addrs: map,
@@ -150,7 +150,7 @@ impl ServerCluster {
             snap_paths: HashMap::default(),
             pending_services: HashMap::default(),
             health_services: HashMap::default(),
-            raft_client,
+            // raft_client,
             concurrency_managers: HashMap::default(),
             env,
             txn_extra_schedulers: HashMap::default(),
@@ -273,7 +273,7 @@ impl ServerCluster {
         }
 
         // Start resource metering.
-        let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
+        let (res_tag_factory, _, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
         let check_leader_runner = CheckLeaderRunner::new(store_meta, coprocessor_host.clone());

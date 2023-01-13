@@ -2,11 +2,10 @@
 
 use std::time::Duration;
 
-use raftstore::store::RAFT_INIT_LOG_INDEX;
 use rand::seq::SliceRandom;
-use test_raftstore::{new_put_cmd, new_request, sleep_ms};
+use test_raftstore::{new_put_cmd, new_request};
 use test_raftstore_v2::{new_node_cluster, new_server_cluster, Cluster, Simulator};
-use tikv_util::{config::ReadableSize, time::Instant};
+use tikv_util::config::ReadableSize;
 
 #[test]
 fn test_node_put() {
