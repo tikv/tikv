@@ -75,7 +75,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let time = monotonic_raw_now();
         for (req, ch, _) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
-                GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
                         .to_std()
                         .unwrap()
