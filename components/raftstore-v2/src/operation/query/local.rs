@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::{
+    num::NonZeroU64,
     ops::Deref,
     sync::{atomic, Arc, Mutex},
 };
@@ -246,6 +247,8 @@ where
                 };
 
                 snap.txn_ext = Some(delegate.txn_ext.clone());
+                snap.term = NonZeroU64::new(delegate.term);
+                snap.txn_extra_op = delegate.txn_extra_op.load();
                 snap.bucket_meta = delegate.bucket_meta.clone();
 
                 delegate.cached_tablet.release();
