@@ -700,6 +700,18 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 .collect();
             self.perf_context().report_metrics(&tokens);
         }
+        let mut apply_res = ApplyRes::default();
+        apply_res.applied_index = index;
+        apply_res.applied_term = term;
+        apply_res.admin_result = self.take_admin_result().into_boxed_slice();
+        apply_res.modifications = *self.modifications_mut();
+        apply_res.metrics = mem::take(&mut self.metrics);
+        let written_bytes = apply_res.metrics.written_bytes;
+        self.res_reporter().report(apply_res);
+
+        // Report result first and then invoking callbacks. This may delays callback a
+        // little bit, but can make sure all following messages must sees the side
+        // effect of admin commands.
         let callbacks = self.callbacks_mut();
         let now = std::time::Instant::now();
         let apply_time = APPLY_TIME_HISTOGRAM.local();
@@ -713,14 +725,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         if callbacks.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP {
             callbacks.shrink_to(SHRINK_PENDING_CMD_QUEUE_CAP);
         }
-        let mut apply_res = ApplyRes::default();
-        apply_res.applied_index = index;
-        apply_res.applied_term = term;
-        apply_res.admin_result = self.take_admin_result().into_boxed_slice();
-        apply_res.modifications = *self.modifications_mut();
-        apply_res.metrics = mem::take(&mut self.metrics);
-        let written_bytes = apply_res.metrics.written_bytes;
-        self.res_reporter().report(apply_res);
         written_bytes
     }
 }
