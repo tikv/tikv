@@ -1371,11 +1371,9 @@ impl Peekable for WrapFactory {
     ) -> engine_traits::Result<Option<Self::DbVector>> {
         let region_id = self.region_id_of_key(key);
 
-        if let Ok(state) = self.get_region_state(region_id) {
-            if let Some(state) = state {
-                if state.state == PeerState::Tombstone {
-                    return Ok(None);
-                }
+        if let Ok(Some(state)) = self.get_region_state(region_id) {
+            if state.state == PeerState::Tombstone {
+                return Ok(None);
             }
         }
 
@@ -1393,11 +1391,9 @@ impl Peekable for WrapFactory {
     ) -> engine_traits::Result<Option<Self::DbVector>> {
         let region_id = self.region_id_of_key(key);
 
-        if let Ok(state) = self.get_region_state(region_id) {
-            if let Some(state) = state {
-                if state.state == PeerState::Tombstone {
-                    return Ok(None);
-                }
+        if let Ok(Some(state)) = self.get_region_state(region_id) {
+            if state.state == PeerState::Tombstone {
+                return Ok(None);
             }
         }
 
