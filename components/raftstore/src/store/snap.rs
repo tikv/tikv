@@ -1142,6 +1142,7 @@ impl Snapshot {
         self.cf_files.iter().map(|cf| cf.kv_count).sum()
     }
 
+    // Manually mark if the snapshot holds temp files.
     pub fn set_hold_tmp_files(&mut self, v: bool) {
         self.hold_tmp_files = v;
     }
