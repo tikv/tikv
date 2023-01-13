@@ -149,6 +149,11 @@ impl Etcd {
         Ok(ReceiverStream::new(rx))
     }
 
+    pub fn clear_subs(&mut self) {
+        self.subs.clear();
+        self.sub_id_alloc.set(0);
+    }
+
     /// A tool for dumpling the whole storage when test failed.
     /// Add this to test code temporarily for debugging.
     #[allow(dead_code)]

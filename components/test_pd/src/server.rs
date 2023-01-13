@@ -247,6 +247,15 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                 wc.set_changes(vec![change].into());
                 let _ = sink.send((wc, WriteFlags::default())).await;
                 let _ = sink.flush().await;
+                #[cfg(feature = "failpoints")]
+                {
+                    use futures::executor::block_on;
+                    let cli_clone = cli.clone();
+                    fail_point!("watch_global_config_return", |_| {
+                        block_on(async move { cli_clone.lock().await.clear_subs() });
+                        watcher.close();
+                    });
+                }
             }
         };
         ctx.spawn(future);

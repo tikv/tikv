@@ -4663,6 +4663,7 @@ dependencies = [
  "byteorder",
  "crossbeam-skiplist",
  "dashmap",
+ "fail",
  "futures 0.3.15",
  "kvproto",
  "lazy_static",

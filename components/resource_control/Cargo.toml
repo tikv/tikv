@@ -4,10 +4,14 @@ version = "0.0.1"
 edition = "2021"
 publish = false
 
+[features]
+failpoints = ["fail/failpoints"]
+
 [dependencies]
 byteorder = "1.2"
 crossbeam-skiplist = "0.1"
 dashmap = "5.1"
+fail = "0.5"
 futures = { version = "0.3" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.0"

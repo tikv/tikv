@@ -345,24 +345,14 @@ impl PdClient for RpcClient {
         &self,
         config_path: String,
         revision: i64,
-    ) -> PdFuture<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
+    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
         let mut req = pdpb::WatchGlobalConfigRequest::default();
         info!("[global_config] start watch global config"; "path" => &config_path, "revision" => revision);
         req.set_config_path(config_path);
         req.set_revision(revision);
-        let executor = |client: &Client, req| match client
-            .inner
-            .rl()
-            .client_stub
-            .clone()
-            .watch_global_config(&req)
-        {
-            Ok(stream) => Box::pin(async move { Ok(stream) }) as PdFuture<_>,
-            Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
-        };
-        self.pd_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
-            .execute()
+        sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, _| {
+            client.watch_global_config(&req)
+        })
     }
 
     fn get_cluster_id(&self) -> Result<u64> {

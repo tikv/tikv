@@ -229,7 +229,7 @@ pub trait PdClient: Send + Sync {
         &self,
         _config_path: String,
         _revision: i64,
-    ) -> PdFuture<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
+    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
         unimplemented!();
     }
 

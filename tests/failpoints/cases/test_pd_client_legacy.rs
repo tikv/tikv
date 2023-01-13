@@ -147,7 +147,7 @@ fn test_watch_global_config_on_closed_server() {
     use futures::StreamExt;
     let background_worker = Builder::new("background").thread_count(1).create();
     background_worker.spawn_async_task(async move {
-        match cli_clone.watch_global_config("global".into(), 0).await {
+        match cli_clone.watch_global_config("global".into(), 0) {
             Ok(mut stream) => {
                 let mut i: usize = 0;
                 while let Some(grpc_response) = stream.next().await {

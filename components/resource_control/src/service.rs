@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt;
 use kvproto::{pdpb::ItemKind, resource_manager::ResourceGroup};
@@ -43,43 +43,44 @@ impl ResourceManagerService {
                     self.manager.add_resource_group(group);
                 }
             }
-            Err(e) => {
-                error!("failed to list resource groups, err: {:?}", e);
-                return;
-            }
+            Err(e) => error!("failed to list resource groups, err: {:?}", e),
         }
         // Secondly, start watcher at loading revision.
-        match self
-            .pd_client
-            .watch_global_config(CONFIG_PATH.to_string(), self.revision)
-            .await
-        {
-            Ok(mut stream) => {
-                while let Some(grpc_response) = stream.next().await {
-                    match grpc_response {
-                        Ok(r) => {
-                            self.revision = r.get_revision();
-                            for item in r.get_changes() {
-                                if let Ok(group) = protobuf::parse_from_bytes::<ResourceGroup>(
-                                    item.get_value().as_bytes(),
-                                ) {
-                                    match item.get_kind() {
-                                        ItemKind::Put => self.manager.add_resource_group(group),
-                                        ItemKind::Delete => {
-                                            self.manager.remove_resource_group(item.get_name())
+        loop {
+            match self
+                .pd_client
+                .watch_global_config(CONFIG_PATH.to_string(), self.revision)
+            {
+                Ok(mut stream) => {
+                    while let Some(grpc_response) = stream.next().await {
+                        match grpc_response {
+                            Ok(r) => {
+                                self.revision = r.get_revision();
+                                for item in r.get_changes() {
+                                    if let Ok(group) = protobuf::parse_from_bytes::<ResourceGroup>(
+                                        item.get_value().as_bytes(),
+                                    ) {
+                                        match item.get_kind() {
+                                            ItemKind::Put => self.manager.add_resource_group(group),
+                                            ItemKind::Delete => {
+                                                self.manager.remove_resource_group(item.get_name())
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
-                        Err(err) => {
-                            error!("failed to get stream, err: {:?}", err);
-                            return;
+                            Err(err) => {
+                                error!("failed to get stream, err: {:?}", err);
+                                std::thread::sleep(Duration::from_secs(1));
+                            }
                         }
                     }
                 }
+                Err(e) => {
+                    error!("failed to watch resource groups, err: {:?}", e);
+                    std::thread::sleep(Duration::from_secs(1));
+                }
             }
-            Err(e) => error!("failed to watch resource groups, err: {:?}", e),
         }
     }
 
@@ -230,6 +231,36 @@ pub mod tests {
                 .get_fill_rate(),
             50
         );
+        server.stop();
+    }
+
+    #[test]
+    fn reboot_watch_server_test() {
+        let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
+        let resource_manager = ResourceGroupManager::default();
+
+        let s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
+        let background_worker = Builder::new("background").thread_count(1).create();
+        let mut s_clone = s.clone();
+        background_worker.spawn_async_task(async move {
+            s_clone.watch_resource_groups().await;
+        });
+        // Mock add
+        let group1 = new_resource_group("TEST1".into(), true, 100, 100);
+        add_resource_group(s.pd_client.clone(), group1);
+        // Mock reboot watch server
+        let watch_global_config_fp = "watch_global_config_return";
+        fail::cfg(watch_global_config_fp, "return").unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        fail::remove(watch_global_config_fp);
+        // Mock add after rebooting will success
+        let group1 = new_resource_group("TEST2".into(), true, 100, 100);
+        add_resource_group(s.pd_client.clone(), group1);
+        // Wait watcher update
+        std::thread::sleep(Duration::from_secs(1));
+        let groups = s.manager.get_all_resource_groups();
+        assert_eq!(groups.len(), 2);
+
         server.stop();
     }
 }
