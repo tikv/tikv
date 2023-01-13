@@ -948,6 +948,7 @@ mod tests {
         assert_eq!(read_progress.safe_ts(), 2);
         let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
         assert_eq!(*snap.get_region(), region1);
+        assert_eq!(snap.term, NonZeroU64::new(term6));
 
         drop(mix_tx);
         handler.join().unwrap();
