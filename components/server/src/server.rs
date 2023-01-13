@@ -1020,7 +1020,7 @@ where
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
             );
-            backup_stream_worker.start(backup_stream_endpoint);
+            backup_stream_worker.start_with_lifetime_hooks(backup_stream_endpoint);
             self.to_stop.push(backup_stream_worker);
             Some(backup_stream_scheduler)
         } else {
@@ -1980,8 +1980,10 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 
     fn about_to_stop(self: &mut Self) {
-        self.scheduler()
-            .about_to_stop(ABOUT_TO_SHUTDOWN_WAIT_TIME_FOR_EACH_SERVICE);
+        if self.need_execute_lifetime_hooks() {
+            self.scheduler()
+                .about_to_stop(ABOUT_TO_SHUTDOWN_WAIT_TIME_FOR_EACH_SERVICE);
+        }
     }
 }
 

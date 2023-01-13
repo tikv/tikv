@@ -72,19 +72,6 @@ pub trait Runnable: Send {
     }
     fn on_tick(&mut self) {}
 
-    /// The lifetime hook invoked while TiKV is about to stop.
-    /// Unlike [`shutdown`](Runnable::shutdown), this hook would be invoked
-    /// BEFORE some important services (e.g. gRPC service) shutting down.
-    ///
-    /// The the shutdown procedure won't start before all clones of the
-    /// [`PreventShutdown`] get dropped, or after a fixed long duration.
-    ///
-    /// FIXME: Because [`Worker`] forgets the scheduler after creating and
-    /// return it, this hook won't be executed once your service is started
-    /// by it for now. If you want to use this hook, use [`LazyWorker`] to
-    /// start your service instead.
-    fn on_about_to_shutdown(&mut self, _g: PreventShutdown) {}
-
     /// The lifetime hook invoked while shutting down.
     /// In the context this method invoked, almost all other service have
     /// shutdown, in this hook, only basic operations (i.e. operations doesn't
@@ -103,6 +90,21 @@ pub struct PreventShutdown {
 pub trait RunnableWithTimer: Runnable {
     fn on_timeout(&mut self);
     fn get_interval(&self) -> Duration;
+}
+
+pub trait RunnableWithLifeTimeHooks: Runnable {
+    /// The lifetime hook invoked while TiKV is about to stop.
+    /// Unlike [`shutdown`](Runnable::shutdown), this hook would be invoked
+    /// BEFORE some important services (e.g. gRPC service) shutting down.
+    ///
+    /// The the shutdown procedure won't start before all clones of the
+    /// [`PreventShutdown`] get dropped, or after a fixed long duration.
+    ///
+    /// FIXME: Because [`Worker`] forgets the scheduler after creating and
+    /// return it, this hook won't be executed once your service is started
+    /// by it for now. If you want to use this hook, use [`LazyWorker`] to
+    /// start your service instead.
+    fn on_about_to_shutdown(&mut self, _g: PreventShutdown) {}
 }
 
 struct RunnableWrapper<R: Runnable + 'static> {
@@ -219,6 +221,7 @@ pub struct LazyWorker<T: Display + Send + 'static> {
     worker: Worker,
     receiver: Option<UnboundedReceiver<Msg<T>>>,
     metrics_pending_task_count: IntGauge,
+    aware_lifetime_hooks: bool,
 }
 
 impl<T: Display + Send + 'static> LazyWorker<T> {
@@ -251,6 +254,26 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
             return true;
         }
         false
+    }
+
+    pub fn start_with_lifetime_hooks<R: RunnableWithLifeTimeHooks<Task = T> + 'static>(
+        &mut self,
+        runner: R,
+    ) -> bool {
+        if let Some(receiver) = self.receiver.take() {
+            self.worker.start_with_lifetime_hooks_impl(
+                runner,
+                receiver,
+                self.metrics_pending_task_count.clone(),
+            );
+            self.aware_lifetime_hooks = true;
+            return true;
+        }
+        false
+    }
+
+    pub fn need_execute_lifetime_hooks(&self) -> bool {
+        self.aware_lifetime_hooks
     }
 
     pub fn scheduler(&self) -> Scheduler<T> {
@@ -477,6 +500,7 @@ impl Worker {
                 metrics_pending_task_count.clone(),
             ),
             metrics_pending_task_count,
+            aware_lifetime_hooks: false,
         }
     }
 
@@ -514,10 +538,7 @@ impl Worker {
                         counter.fetch_sub(1, Ordering::SeqCst);
                         metrics_pending_task_count.dec();
                     }
-                    Msg::AboutToShutdown(p) => handle
-                        .inner
-                        // Note: can we omit this once the runner doesn't register the `about_to_shutdown` handle?
-                        .on_about_to_shutdown(p),
+                    Msg::AboutToShutdown(_) => {}
                     Msg::Timeout => (),
                 }
             }
@@ -550,9 +571,32 @@ impl Worker {
                         let timeout = handle.inner.get_interval();
                         Self::delay_notify(tx.clone(), timeout);
                     }
-                    Msg::AboutToShutdown(p) => {
-                        handle.inner.on_about_to_shutdown(p);
+                    Msg::AboutToShutdown(_) => (),
+                }
+            }
+        });
+    }
+
+    fn start_with_lifetime_hooks_impl<R>(
+        &self,
+        runner: R,
+        mut receiver: UnboundedReceiver<Msg<R::Task>>,
+        metrics_pending_task_count: IntGauge,
+    ) where
+        R: RunnableWithLifeTimeHooks + 'static,
+    {
+        let counter = self.counter.clone();
+        self.remote.spawn(async move {
+            let mut handle = RunnableWrapper { inner: runner };
+            while let Some(msg) = receiver.next().await {
+                match msg {
+                    Msg::Task(task) => {
+                        handle.inner.run(task);
+                        counter.fetch_sub(1, Ordering::SeqCst);
+                        metrics_pending_task_count.dec();
                     }
+                    Msg::Timeout => (),
+                    Msg::AboutToShutdown(p) => handle.inner.on_about_to_shutdown(p),
                 }
             }
         });
@@ -586,13 +630,15 @@ mod tests {
             tasks.push(step);
         }
 
+        fn shutdown(&mut self) {
+            self.count.fetch_add(1, atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl RunnableWithLifeTimeHooks for StepRunner {
         fn on_about_to_shutdown(&mut self, _g: PreventShutdown) {
             let mut tasks = self.tasks.lock().unwrap();
             tasks.push(TASK_ABOUT_TO_STOP)
-        }
-
-        fn shutdown(&mut self) {
-            self.count.fetch_add(1, atomic::Ordering::SeqCst);
         }
     }
 
@@ -648,7 +694,7 @@ mod tests {
         let scheduler = worker.scheduler();
         let count = Arc::new(AtomicU64::new(0));
         let tasks = Arc::new(Mutex::new(vec![]));
-        worker.start(StepRunner {
+        worker.start_with_lifetime_hooks(StepRunner {
             count: count.clone(),
             tasks: tasks.clone(),
             timeout_duration: Duration::ZERO,

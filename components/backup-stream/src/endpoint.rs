@@ -28,7 +28,7 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     warn,
-    worker::{PreventShutdown, Runnable, Scheduler},
+    worker::{PreventShutdown, Runnable, RunnableWithLifeTimeHooks, Scheduler},
     HandyRwLock,
 };
 use tokio::{
@@ -1276,12 +1276,21 @@ where
     fn run(&mut self, task: Task) {
         self.run_task(task)
     }
+}
 
+impl<S, R, E, RT, PDC> RunnableWithLifeTimeHooks for Endpoint<S, R, E, RT, PDC>
+where
+    S: MetaStore + 'static,
+    R: RegionInfoProvider + Clone + 'static,
+    E: KvEngine,
+    RT: RaftStoreRouter<E> + 'static,
+    PDC: PdClient + 'static,
+{
     fn on_about_to_shutdown(&mut self, p: PreventShutdown) {
         let start = Instant::now();
         let sched = self.scheduler.clone();
         let r = self.range_router.clone();
-        let flushing = async move {
+        let prepare_shutdown = async move {
             info!("preparing for shutting down.");
             let tasks: Vec<String> = r.select_task(TaskSelector::All.reference()).await;
             let items = tasks.into_iter().map(|task| {
@@ -1294,7 +1303,7 @@ where
             try_send!(sched, Task::ReadyToShutdown(p));
             info!("shutdown prepared, hinting the endpoint."; "take" => ?start.saturating_elapsed());
         };
-        self.pool.spawn(flushing);
+        self.pool.spawn(prepare_shutdown);
     }
 }
 

@@ -17,7 +17,7 @@ mod pool;
 
 pub use pool::{
     dummy_scheduler, Builder, LazyWorker, PreventShutdown, ReceiverWrapper, Runnable,
-    RunnableWithTimer, ScheduleError, Scheduler, Worker,
+    RunnableWithLifeTimeHooks, RunnableWithTimer, ScheduleError, Scheduler, Worker,
 };
 
 pub use self::future::{
