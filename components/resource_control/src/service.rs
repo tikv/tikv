@@ -191,9 +191,9 @@ pub mod tests {
             s_clone.watch_resource_groups().await;
         });
 
-        let group1 = new_resource_group("TEST1".into(), false, 100, 100);
+        let group1 = new_resource_group("TEST1".into(), true, 100, 100);
         add_resource_group(s.pd_client.clone(), group1);
-        let group2 = new_resource_group("TEST2".into(), true, 200, 200);
+        let group2= new_resource_group("TEST2".into(), true, 100, 100);
         add_resource_group(s.pd_client.clone(), group2);
         let (res, revision) = s.list_resource_groups().unwrap();
         s.revision = revision;
@@ -205,7 +205,6 @@ pub mod tests {
         s.revision = revision;
         assert_eq!(res.len(), 1);
         assert_eq!(revision, 3);
-
 
         std::thread::sleep(Duration::from_millis(100));
         server.stop();

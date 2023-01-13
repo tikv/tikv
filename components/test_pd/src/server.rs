@@ -226,7 +226,6 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                     req.revision,
                 )
                 .await;
-            println!("start watcher");
             let mut watcher = match watcher {
                 Ok(w) => w,
                 Err(e) => {
@@ -244,7 +243,6 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                 });
                 change.set_name(from_utf8(event.pair.key()).unwrap().to_string());
                 change.set_value(from_utf8(event.pair.value()).unwrap().to_string());
-                println!("[server watch] {:?}", change);
                 let mut wc = WatchGlobalConfigResponse::default();
                 wc.set_changes(vec![change].into());
                 let _ = sink.send((wc, WriteFlags::default())).await;
