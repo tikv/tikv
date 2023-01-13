@@ -97,10 +97,55 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
             .into());
         }
+<<<<<<< HEAD
         if need_load_value {
             val = reader.get(&key, for_update_ts)?;
         } else if need_check_existence {
             val = reader.get_write(&key, for_update_ts)?.map(|_| vec![]);
+=======
+
+        let locked_with_conflict_ts =
+            if allow_lock_with_conflict && for_update_ts < lock.for_update_ts {
+                // If the key is already locked by the same transaction with larger
+                // for_update_ts, and the current request has
+                // `allow_lock_with_conflict` set, we must consider
+                // these possibilities:
+                // * If a previous request successfully locked the key with conflict, but the
+                //   response is lost due to some errors such as RPC failures. In this case, we
+                //   return like the current request's result is locked_with_conflict, for
+                //   idempotency concern.
+                // * The key is locked by a newer request with larger for_update_ts, and the
+                //   current request is stale. We can't distinguish this case with the above
+                //   one, but we don't need to handle this case since no one would need the
+                //   current request's result anymore.
+
+                // Load value if locked_with_conflict, so that when the client (TiDB) need to
+                // read the value during statement retry, it will be possible to read the value
+                // from cache instead of RPC.
+                need_load_value = true;
+                for_update_ts = lock.for_update_ts;
+                Some(lock.for_update_ts)
+            } else {
+                None
+            };
+
+        if need_load_value || need_check_existence || should_not_exist {
+            let write = reader.get_write_with_commit_ts(&key, for_update_ts)?;
+            if let Some((write, commit_ts)) = write {
+                // Here `get_write_with_commit_ts` returns only the latest PUT if it exists and
+                // is not deleted. It's still ok to pass it into `check_data_constraint`.
+                // In case we are going to lock it with write conflict, we do not check it since
+                // the statement will then retry.
+                if locked_with_conflict_ts.is_none() {
+                    check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
+                }
+                if need_load_value {
+                    val = Some(reader.load_data(&key, write)?);
+                } else if need_check_existence {
+                    val = Some(vec![]);
+                }
+            }
+>>>>>>> 321aa833ca (txn: Do constraint check when handling repeated acqurie_pessimsitic_lock request (#14037))
         }
         // Pervious write is not loaded.
         let (prev_write_loaded, prev_write) = (false, None);
@@ -1265,4 +1310,352 @@ pub mod tests {
             }
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_calculate_last_change_ts() {
+        use engine_traits::CF_WRITE;
+        use pd_client::FeatureGate;
+
+        use crate::storage::txn::sched_pool::set_tls_feature_gate;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"k";
+
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.4.0").unwrap();
+        set_tls_feature_gate(feature_gate.clone());
+
+        // Latest version is a PUT, but last_change_ts is enabled with cluster version
+        // higher than 6.5.0.
+        let write = Write::new(WriteType::Put, 15.into(), Some(b"value".to_vec()));
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(20.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 10, 30);
+        let lock = must_pessimistic_locked(&mut engine, key, 10, 30);
+        assert_eq!(lock.last_change_ts, TimeStamp::zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 10, 30);
+        // Set cluster version to 6.5.0, last_change_ts should work now.
+        feature_gate.set_version("6.5.0").unwrap();
+        must_succeed(&mut engine, key, key, 10, 30);
+        let lock = must_pessimistic_locked(&mut engine, key, 10, 30);
+        assert_eq!(lock.last_change_ts, 20.into());
+        assert_eq!(lock.versions_to_last_change, 1);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 10, 30);
+
+        // Latest version is a DELETE
+        let write = Write::new(WriteType::Delete, 40.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(50.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 60, 70);
+        let lock = must_pessimistic_locked(&mut engine, key, 60, 70);
+        assert_eq!(lock.last_change_ts, 50.into());
+        assert_eq!(lock.versions_to_last_change, 1);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 60, 70);
+
+        // Latest version is a LOCK without last_change_ts
+        let write = Write::new(WriteType::Lock, 70.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(75.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 80, 80);
+        let lock = must_pessimistic_locked(&mut engine, key, 80, 80);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 80, 80);
+
+        // Latest version is a ROLLBACK without last_change_ts
+        let write = Write::new(WriteType::Lock, 90.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(90.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 95, 95);
+        let lock = must_pessimistic_locked(&mut engine, key, 95, 95);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 95, 95);
+
+        // Latest version is a LOCK with last_change_ts
+        let write = Write::new(WriteType::Lock, 100.into(), None).set_last_change(40.into(), 4);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(110.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 120, 130);
+        let lock = must_pessimistic_locked(&mut engine, key, 120, 130);
+        assert_eq!(lock.last_change_ts, 40.into());
+        assert_eq!(lock.versions_to_last_change, 5);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 120, 130);
+
+        // Latest version is a ROLLBACK with last_change_ts
+        let write = Write::new(WriteType::Rollback, 120.into(), None).set_last_change(40.into(), 5);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(120.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 140, 140);
+        let lock = must_pessimistic_locked(&mut engine, key, 140, 140);
+        assert_eq!(lock.last_change_ts, 40.into());
+        assert_eq!(lock.versions_to_last_change, 6);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 140, 140);
+
+        // Lock on a key with no write record
+        must_succeed(&mut engine, b"k2", b"k2", 150, 150);
+        let lock = must_pessimistic_locked(&mut engine, b"k2", 150, 150);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 1);
+    }
+
+    #[test]
+    fn test_lock_with_conflict() {
+        use pessimistic_rollback::tests::must_success as must_pessimistic_rollback;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&mut engine, b"k1", 10, 20);
+
+        // Normal cases.
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 30, false, false)
+            .assert_empty();
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 30);
+        must_unlocked(&mut engine, b"k1");
+
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 30, false, true)
+            .assert_existence(true);
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 30);
+        must_unlocked(&mut engine, b"k1");
+
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 30, true, false)
+            .assert_value(Some(b"v1"));
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 30);
+        must_unlocked(&mut engine, b"k1");
+
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 30, true, true)
+            .assert_value(Some(b"v1"));
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 30);
+        must_unlocked(&mut engine, b"k1");
+
+        // Conflicting cases.
+        for &(need_value, need_check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
+            must_succeed_allow_lock_with_conflict(
+                &mut engine,
+                b"k1",
+                b"k1",
+                10,
+                15,
+                need_value,
+                need_check_existence,
+            )
+            .assert_locked_with_conflict(Some(b"v1"), 20);
+            must_pessimistic_locked(&mut engine, b"k1", 10, 20);
+            must_pessimistic_rollback(&mut engine, b"k1", 10, 20);
+            must_unlocked(&mut engine, b"k1");
+        }
+
+        // Idempotency
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 50, false, false)
+            .assert_empty();
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 40, false, false)
+            .assert_locked_with_conflict(Some(b"v1"), 50);
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 15, false, false)
+            .assert_locked_with_conflict(Some(b"v1"), 50);
+        must_pessimistic_locked(&mut engine, b"k1", 10, 50);
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 50);
+        must_unlocked(&mut engine, b"k1");
+
+        // Lock waiting.
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 50, false, false)
+            .assert_empty();
+        let err = acquire_pessimistic_lock_allow_lock_with_conflict(
+            &mut engine,
+            b"k1",
+            b"k1",
+            11,
+            55,
+            false,
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, MvccError(box ErrorInner::KeyIsLocked(_))));
+        let err = acquire_pessimistic_lock_allow_lock_with_conflict(
+            &mut engine,
+            b"k1",
+            b"k1",
+            9,
+            9,
+            false,
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, MvccError(box ErrorInner::KeyIsLocked(_))));
+        must_pessimistic_locked(&mut engine, b"k1", 10, 50);
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 50);
+        must_unlocked(&mut engine, b"k1");
+    }
+
+    #[test]
+    fn test_repeated_request_check_should_not_exist() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        for &(return_values, check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
+            let key = &[b'k', (return_values as u8 * 2) + check_existence as u8] as &[u8];
+
+            // An empty key.
+            must_succeed(&mut engine, key, key, 10, 10);
+            let res = must_succeed_impl(
+                &mut engine,
+                key,
+                key,
+                10,
+                true,
+                1000,
+                10,
+                return_values,
+                check_existence,
+                15,
+                false,
+            );
+            assert!(res.is_none());
+            must_pessimistic_prewrite_lock(&mut engine, key, key, 10, 10, DoPessimisticCheck);
+            must_commit(&mut engine, key, 10, 19);
+
+            // The key has one record: Lock(10, 19)
+            must_succeed(&mut engine, key, key, 20, 20);
+            let res = must_succeed_impl(
+                &mut engine,
+                key,
+                key,
+                20,
+                true,
+                1000,
+                20,
+                return_values,
+                check_existence,
+                25,
+                false,
+            );
+            assert!(res.is_none());
+            must_pessimistic_prewrite_put(&mut engine, key, b"v1", key, 20, 20, DoPessimisticCheck);
+            must_commit(&mut engine, key, 20, 29);
+
+            // The key has records:
+            // Lock(10, 19), Put(20, 29)
+            must_succeed(&mut engine, key, key, 30, 30);
+            let error = must_err_impl(
+                &mut engine,
+                key,
+                key,
+                30,
+                true,
+                30,
+                return_values,
+                check_existence,
+                35,
+                false,
+            );
+            assert!(matches!(
+                error,
+                MvccError(box ErrorInner::AlreadyExist { .. })
+            ));
+            must_pessimistic_prewrite_lock(&mut engine, key, key, 30, 30, DoPessimisticCheck);
+            must_commit(&mut engine, key, 30, 39);
+
+            // Lock(10, 19), Put(20, 29), Lock(30, 39)
+            must_succeed(&mut engine, key, key, 40, 40);
+            let error = must_err_impl(
+                &mut engine,
+                key,
+                key,
+                40,
+                true,
+                40,
+                return_values,
+                check_existence,
+                45,
+                false,
+            );
+            assert!(matches!(
+                error,
+                MvccError(box ErrorInner::AlreadyExist { .. })
+            ));
+            must_pessimistic_prewrite_delete(&mut engine, key, key, 40, 40, DoPessimisticCheck);
+            must_commit(&mut engine, key, 40, 49);
+
+            // Lock(10, 19), Put(20, 29), Lock(30, 39), Delete(40, 49)
+            must_succeed(&mut engine, key, key, 50, 50);
+            let res = must_succeed_impl(
+                &mut engine,
+                key,
+                key,
+                50,
+                true,
+                1000,
+                50,
+                return_values,
+                check_existence,
+                55,
+                false,
+            );
+            assert!(res.is_none());
+            must_pessimistic_prewrite_lock(&mut engine, key, key, 50, 50, DoPessimisticCheck);
+            must_commit(&mut engine, key, 50, 59);
+
+            // Lock(10, 19), Put(20, 29), Lock(30, 39), Delete(40, 49), Lock(50, 59)
+            must_succeed(&mut engine, key, key, 60, 60);
+            let res = must_succeed_impl(
+                &mut engine,
+                key,
+                key,
+                60,
+                true,
+                1000,
+                60,
+                return_values,
+                check_existence,
+                65,
+                false,
+            );
+            assert!(res.is_none());
+            must_pessimistic_prewrite_lock(&mut engine, key, key, 60, 60, DoPessimisticCheck);
+            must_commit(&mut engine, key, 60, 69);
+        }
+    }
+>>>>>>> 321aa833ca (txn: Do constraint check when handling repeated acqurie_pessimsitic_lock request (#14037))
 }
