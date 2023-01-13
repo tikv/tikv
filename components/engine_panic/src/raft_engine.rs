@@ -67,6 +67,10 @@ impl RaftEngineReadOnly for PanicEngine {
         panic!()
     }
 
+    fn get_dirty_mark(&self, raft_group_id: u64, tablet_index: u64) -> Result<bool> {
+        panic!()
+    }
+
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
         panic!()
     }
@@ -229,6 +233,10 @@ impl RaftLogBatch for PanicWriteBatch {
         tablet_index: u64,
         apply_index: u64,
     ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_dirty_mark(&mut self, raft_group_id: u64, tablet_index: u64, dirty: bool) -> Result<()> {
         panic!()
     }
 

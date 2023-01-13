@@ -2,17 +2,19 @@
 
 use std::{mem, sync::Arc};
 
-use engine_traits::{FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_LEN};
+use engine_traits::{
+    FlushState, KvEngine, PerfContextKind, TabletRegistry, WriteBatch, DATA_CFS_LEN,
+};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::{
     fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
-    ReadTask,
+    Config, ReadTask,
 };
 use slog::Logger;
 use tikv_util::{log::SlogFormat, worker::Scheduler};
 
 use crate::{
-    operation::{AdminCmdResult, DataTrace},
+    operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
     router::CmdResChannel,
 };
 
@@ -20,6 +22,7 @@ use crate::{
 pub struct Apply<EK: KvEngine, R> {
     peer: metapb::Peer,
     tablet: EK,
+    perf_context: EK::PerfContext,
     pub write_batch: Option<EK::WriteBatch>,
     /// A buffer for encoding key.
     pub key_buffer: Vec<u8>,
@@ -27,6 +30,8 @@ pub struct Apply<EK: KvEngine, R> {
     tablet_registry: TabletRegistry<EK>,
 
     callbacks: Vec<(Vec<CmdResChannel>, RaftCmdResponse)>,
+
+    flow_control: ApplyFlowControl,
 
     /// A flag indicates whether the peer is destroyed by applying admin
     /// command.
@@ -58,6 +63,7 @@ pub struct Apply<EK: KvEngine, R> {
 impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn new(
+        cfg: &Config,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
@@ -74,11 +80,15 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         assert_ne!(applied_term, 0, "{}", SlogFormat(&logger));
         let applied_index = flush_state.applied_index();
         assert_ne!(applied_index, 0, "{}", SlogFormat(&logger));
+        let tablet = remote_tablet.latest().unwrap().clone();
+        let perf_context = EK::get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply);
         Apply {
             peer,
-            tablet: remote_tablet.latest().unwrap().clone(),
+            tablet,
+            perf_context,
             write_batch: None,
             callbacks: vec![],
+            flow_control: ApplyFlowControl::new(cfg),
             tombstone: false,
             applied_term,
             applied_index: flush_state.applied_index(),
@@ -158,8 +168,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn set_tablet(&mut self, tablet: EK) {
         assert!(
             self.write_batch.as_ref().map_or(true, |wb| wb.is_empty()),
-            "{:?}",
-            self.logger.list()
+            "{} setting tablet while still have dirty write batch",
+            SlogFormat(&self.logger)
         );
         self.write_batch.take();
         self.tablet = tablet;
@@ -168,6 +178,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn tablet(&self) -> &EK {
         &self.tablet
+    }
+
+    #[inline]
+    pub fn perf_context(&mut self) -> &mut EK::PerfContext {
+        &mut self.perf_context
     }
 
     #[inline]
@@ -221,5 +236,14 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn log_recovery(&self) -> &Option<Box<DataTrace>> {
         &self.log_recovery
+    }
+
+    #[inline]
+    pub fn apply_flow_control_mut(&mut self) -> &mut ApplyFlowControl {
+        &mut self.flow_control
+    }
+
+    pub fn apply_flow_control(&self) -> &ApplyFlowControl {
+        &self.flow_control
     }
 }

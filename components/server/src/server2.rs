@@ -62,6 +62,7 @@ use raftstore::{
     RegionInfoAccessor,
 };
 use raftstore_v2::{router::RaftRouter, StateStorage};
+use resource_control::{ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL};
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
@@ -221,6 +222,7 @@ struct TikvServer<ER: RaftEngine> {
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
+    resource_manager: Arc<ResourceGroupManager>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
 }
@@ -285,6 +287,15 @@ where
             config.quota.max_delay_duration,
             config.quota.enable_auto_tune,
         ));
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+        // spawn a task to periodically update the minimal virtual time of all resource
+        // group.
+        if config.resource_control.enabled {
+            let resource_mgr1 = resource_manager.clone();
+            background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
+                resource_mgr1.advance_min_virtual_time();
+            });
+        }
 
         let mut causal_ts_provider = None;
         if let ApiVersion::V2 = F::TAG {
@@ -333,6 +344,7 @@ where
             flow_info_receiver: None,
             sst_worker: None,
             quota_limiter,
+            resource_manager,
             causal_ts_provider,
             tablet_registry: None,
         }
@@ -622,10 +634,19 @@ where
         let pd_sender = raftstore_v2::FlowReporter::new(pd_worker.scheduler());
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
+            let priority_mgr = if self.config.resource_control.enabled {
+                Some(
+                    self.resource_manager
+                        .derive_controller("unified-read-pool".into(), true),
+                )
+            } else {
+                None
+            };
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
+                priority_mgr,
             ))
         } else {
             None
