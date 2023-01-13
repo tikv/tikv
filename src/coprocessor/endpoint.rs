@@ -470,6 +470,11 @@ impl<E: Engine> Endpoint<E> {
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
+        let group_name = req_ctx
+            .context
+            .get_resource_group_name()
+            .as_bytes()
+            .to_owned();
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -480,6 +485,7 @@ impl<E: Engine> Endpoint<E> {
                     .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
+                group_name,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded);
         async move { res.await? }
@@ -690,6 +696,11 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
+        let group_name = req_ctx
+            .context
+            .get_resource_group_name()
+            .as_bytes()
+            .to_owned();
         let key_ranges = req_ctx
             .ranges
             .iter()
@@ -712,6 +723,7 @@ impl<E: Engine> Endpoint<E> {
                     }),
                 priority,
                 task_id,
+                group_name,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx)

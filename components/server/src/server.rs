@@ -82,6 +82,7 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
+use resource_control::{ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL};
 use security::SecurityManager;
 use snap_recovery::RecoveryService;
 use tikv::{
@@ -244,6 +245,7 @@ struct TikvServer<ER: RaftEngine> {
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
+    resource_manager: Arc<ResourceGroupManager>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
@@ -320,6 +322,7 @@ where
         let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
+        let resource_manager = Arc::new(ResourceGroupManager::default());
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
@@ -328,6 +331,14 @@ where
         let background_worker = WorkerBuilder::new("background")
             .thread_count(thread_count)
             .create();
+        // spawn a task to periodically update the minimal virtual time of all resource
+        // group.
+        if config.resource_control.enabled {
+            let resource_mgr1 = resource_manager.clone();
+            background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
+                resource_mgr1.advance_min_virtual_time();
+            });
+        }
 
         let mut coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
@@ -398,6 +409,7 @@ where
             flow_info_receiver: None,
             sst_worker: None,
             quota_limiter,
+            resource_manager,
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
@@ -733,10 +745,19 @@ where
         }
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
+            let priority_mgr = if self.config.resource_control.enabled {
+                Some(
+                    self.resource_manager
+                        .derive_controller("unified-read-pool".into(), true),
+                )
+            } else {
+                None
+            };
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
+                priority_mgr,
             ))
         } else {
             None
