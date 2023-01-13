@@ -1555,7 +1555,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     ) -> bool {
         let txn_ext = match txn_ext {
             Some(txn_ext) => txn_ext,
-            None => return false,
+            None => {
+                info!("skip in memory lock because no txn ext"; "region_id" => context.get_region_id());
+                return false;
+            }
         };
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
         // When not writable, it only means we cannot write locks to the in-memory lock
@@ -1567,6 +1570,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             || pessimistic_locks.term != context.get_term()
             || pessimistic_locks.version != context.get_region_epoch().get_version()
         {
+            info!("skip in memory lock because locks fail"; "context" => ?context, "mode" => ?pessimistic_locks.status, "term" => pessimistic_locks.term, "version" => pessimistic_locks.version);
             return false;
         }
         match pessimistic_locks.insert(mem::take(&mut to_be_write.modifies)) {
