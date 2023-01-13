@@ -1140,6 +1140,14 @@ impl Snapshot {
         self.cf_files.iter().map(|cf| cf.kv_count).sum()
     }
 
+    pub fn set_hold_tmp_files(&mut self, v: bool) {
+        self.hold_tmp_files = v;
+    }
+
+    pub fn hold_tmp_files(&self) -> bool {
+        self.hold_tmp_files
+    }
+
     pub fn save(&mut self) -> io::Result<()> {
         debug!(
             "saving to snapshot file";
