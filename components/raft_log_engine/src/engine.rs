@@ -366,7 +366,7 @@ impl RaftLogEngine {
 impl PerfContextExt for RaftLogEngine {
     type PerfContext = RaftEnginePerfContext;
 
-    fn get_perf_context(&self, _level: PerfLevel, _kind: PerfContextKind) -> Self::PerfContext {
+    fn get_perf_context(_level: PerfLevel, _kind: PerfContextKind) -> Self::PerfContext {
         RaftEnginePerfContext
     }
 }

@@ -166,6 +166,7 @@ impl PoolInner {
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
         };
+
         if let Some(extras) = extras {
             self.pool.spawn(future::TaskCell::new(f, extras));
         } else {

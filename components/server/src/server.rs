@@ -324,8 +324,6 @@ where
         let store_path = Path::new(&config.storage.data_dir).to_owned();
         let resource_manager = Arc::new(ResourceGroupManager::default());
 
-        let resource_manager = Arc::new(ResourceGroupManager::new());
-
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 

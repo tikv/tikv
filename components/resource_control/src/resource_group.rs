@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 use kvproto::kvrpcpb::CommandPri;
+
 use dashmap::{mapref::one::Ref, DashMap};
 use kvproto::resource_manager::{GroupMode, ResourceGroup};
 use yatp::queue::priority::TaskPriorityProvider;
@@ -391,12 +392,12 @@ mod tests {
         resource_manager.add_resource_group(group2);
         assert_eq!(resource_manager.resource_groups.len(), 2);
 
-        let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
-        assert_eq!(resource_ctl.resource_consumptions.len(), 3);
+        let resouce_ctl = resource_manager.derive_controller("test_read".into(), true);
+        assert_eq!(resouce_ctl.resource_consumptions.len(), 3);
 
-        let group1 = resource_ctl.resource_group("test".as_bytes());
+        let group1 = resouce_ctl.resource_group("test".as_bytes());
         assert_eq!(group1.weight, 500);
-        let group2 = resource_ctl.resource_group("test2".as_bytes());
+        let group2 = resouce_ctl.resource_group("test2".as_bytes());
         assert_eq!(group2.weight, 250);
         assert_eq!(group1.current_vt(), 0);
 

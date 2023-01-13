@@ -206,20 +206,6 @@ impl ReadPoolHandle {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
-        self.spawn_handle_with_priority(f, priority, task_id, "default".into())
-    }
-
-    pub fn spawn_handle_with_priority<F, T>(
-        &self,
-        f: F,
-        priority: CommandPri,
-        task_id: u64,
-        group_name: String,
-    ) -> impl Future<Output = Result<T, ReadPoolError>>
-    where
-        F: Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-    {
         let (tx, rx) = oneshot::channel::<T>();
         let res = self.spawn(
             async move {
