@@ -12,7 +12,7 @@ use tikv_util::{
 };
 
 use crate::store::{
-    async_io::write::{StoreWriters, StoreWritersMeta},
+    async_io::write::{StoreWriters, StoreWritersContext},
     fsm::{
         apply::{ApplyFsm, ControlFsm},
         store::{RaftRouter, StoreFsm},
@@ -122,7 +122,7 @@ where
     T: Transport + 'static,
     N: PersistedNotifier,
 {
-    writer_meta: StoreWritersMeta<EK, ER, T, N>,
+    writer_meta: StoreWritersContext<EK, ER, T, N>,
     store_writers: StoreWriters<EK, ER>,
 }
 
@@ -134,7 +134,7 @@ where
     N: PersistedNotifier,
 {
     pub fn new(
-        writer_meta: StoreWritersMeta<EK, ER, T, N>,
+        writer_meta: StoreWritersContext<EK, ER, T, N>,
         store_writers: StoreWriters<EK, ER>,
     ) -> Self {
         WriterContoller {
@@ -208,7 +208,7 @@ where
     T: Transport + 'static,
 {
     pub fn new(
-        writer_meta: StoreWritersMeta<EK, ER, T, RaftRouter<EK, ER>>,
+        writer_meta: StoreWritersContext<EK, ER, T, RaftRouter<EK, ER>>,
         store_writers: StoreWriters<EK, ER>,
         apply_router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
         raft_router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
@@ -232,7 +232,7 @@ where
         match current_pool_size.cmp(&size) {
             std::cmp::Ordering::Greater => self.raft_pool.decrease_by(current_pool_size - size),
             std::cmp::Ordering::Less => self.raft_pool.increase_by(size - current_pool_size),
-            std::cmp::Ordering::Equal => (),
+            std::cmp::Ordering::Equal => return,
         }
         self.raft_pool.cleanup_poller_threads();
         info!(
@@ -249,7 +249,7 @@ where
             std::cmp::Ordering::Greater => self.apply_pool.decrease_by(current_pool_size - size),
             std::cmp::Ordering::Less => self.apply_pool.increase_by(size - current_pool_size),
             std::cmp::Ordering::Equal => return,
-        };
+        }
         self.apply_pool.cleanup_poller_threads();
         info!(
             "resize apply pool";

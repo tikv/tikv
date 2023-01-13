@@ -70,7 +70,7 @@ use crate::{
     store::{
         async_io::{
             read::{ReadRunner, ReadTask},
-            write::{StoreWriters, StoreWritersMeta, Worker as WriteWorker, WriteMsg},
+            write::{StoreWriters, StoreWritersContext, Worker as WriteWorker, WriteMsg},
             write_router::WriteSenders,
         },
         config::Config,
@@ -1725,7 +1725,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let refresh_config_runner = RefreshConfigRunner::new(
-            StoreWritersMeta {
+            StoreWritersContext {
                 store_id: store.get_id(),
                 notifier: self.router.clone(),
                 raft_engine: raft_builder.engines.raft.clone(),

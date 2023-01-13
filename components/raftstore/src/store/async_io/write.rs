@@ -845,7 +845,7 @@ where
 }
 
 #[derive(Clone)]
-pub struct StoreWritersMeta<EK, ER, T, N>
+pub struct StoreWritersContext<EK, ER, T, N>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -906,7 +906,7 @@ where
         let pool_size = cfg.value().store_io_pool_size;
         self.increase_by(
             pool_size,
-            StoreWritersMeta {
+            StoreWritersContext {
                 store_id,
                 notifier: notifier.clone(),
                 raft_engine,
@@ -935,7 +935,7 @@ where
     pub fn resize<T: Transport + 'static, N: PersistedNotifier>(
         &mut self,
         size: usize,
-        writer_meta: StoreWritersMeta<EK, ER, T, N>,
+        writer_meta: StoreWritersContext<EK, ER, T, N>,
     ) -> Result<()> {
         let current_size = self.writers.value().len();
         // TODO: if size was reset to `0`, that is, no async-io, we should find a
@@ -945,7 +945,7 @@ where
             std::cmp::Ordering::Greater => self.decrease_by(current_size - size)?,
             std::cmp::Ordering::Less => self.increase_by(size - current_size, writer_meta)?,
             std::cmp::Ordering::Equal => return Ok(()),
-        };
+        }
         info!(
             "resize store writers pool";
             "from" => current_size,
@@ -987,7 +987,7 @@ where
     fn increase_by<T: Transport + 'static, N: PersistedNotifier>(
         &mut self,
         size: usize,
-        writer_meta: StoreWritersMeta<EK, ER, T, N>,
+        writer_meta: StoreWritersContext<EK, ER, T, N>,
     ) -> Result<()> {
         let mut handlers = self.handlers.lock();
         let current_size = self.writers.value().len();
