@@ -138,13 +138,13 @@ fn test_load_global_config() {
 
 #[test]
 fn test_watch_global_config_on_closed_server() {
-    use futures::StreamExt;
     let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
     let global_items = vec![("test1", "val1"), ("test2", "val2"), ("test3", "val3")];
-
     let items_clone = global_items.clone();
+
     let client = Arc::new(client);
     let cli_clone = client.clone();
+    use futures::StreamExt;
     let background_worker = Builder::new("background").thread_count(1).create();
     background_worker.spawn_async_task(async move {
         match cli_clone.watch_global_config("global".into(), 0).await {

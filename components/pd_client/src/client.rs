@@ -18,10 +18,10 @@ use futures::{
     sink::SinkExt,
     stream::StreamExt,
 };
-use grpcio::{ClientSStreamReceiver, EnvBuilder, Environment, WriteFlags};
+use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
     metapb,
-    pdpb::{self, GlobalConfigItem, Member, WatchGlobalConfigResponse},
+    pdpb::{self, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use security::SecurityManager;
@@ -288,10 +288,9 @@ impl PdClient for RpcClient {
     fn store_global_config(
         &self,
         config_path: String,
-        items: Vec<GlobalConfigItem>,
+        items: Vec<pdpb::GlobalConfigItem>,
     ) -> PdFuture<()> {
-        use kvproto::pdpb::StoreGlobalConfigRequest;
-        let mut req = StoreGlobalConfigRequest::new();
+        let mut req = pdpb::StoreGlobalConfigRequest::new();
         req.set_config_path(config_path);
         req.set_changes(items.into());
         let executor = move |client: &Client, req| match client
@@ -313,9 +312,11 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn load_global_config(&self, config_path: String) -> PdFuture<(Vec<GlobalConfigItem>, i64)> {
-        use kvproto::pdpb::LoadGlobalConfigRequest;
-        let mut req = LoadGlobalConfigRequest::new();
+    fn load_global_config(
+        &self,
+        config_path: String,
+    ) -> PdFuture<(Vec<pdpb::GlobalConfigItem>, i64)> {
+        let mut req = pdpb::LoadGlobalConfigRequest::new();
         req.set_config_path(config_path);
         let executor = |client: &Client, req| match client
             .inner
@@ -344,9 +345,8 @@ impl PdClient for RpcClient {
         &self,
         config_path: String,
         revision: i64,
-    ) -> PdFuture<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
-        use kvproto::pdpb::WatchGlobalConfigRequest;
-        let mut req = WatchGlobalConfigRequest::default();
+    ) -> PdFuture<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
+        let mut req = pdpb::WatchGlobalConfigRequest::default();
         info!("[global_config] start watch global config"; "path" => &config_path, "revision" => revision);
         req.set_config_path(config_path);
         req.set_revision(revision);

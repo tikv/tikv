@@ -9,7 +9,7 @@ use tikv_util::{box_err, error};
 
 use crate::ResourceGroupManager;
 
-pub const CONFIG_PATH: &str = "resource_group";
+pub const CONFIG_PATH: &str = "resource_group/settings";
 
 #[derive(Clone)]
 pub struct ResourceManagerService {
@@ -191,33 +191,45 @@ pub mod tests {
         let (res, revision) = s.list_resource_groups().unwrap();
         assert_eq!(res.len(), 0);
         assert_eq!(revision, 0);
-        s.revision = revision;
 
         let background_worker = Builder::new("background").thread_count(1).create();
         let mut s_clone = s.clone();
         background_worker.spawn_async_task(async move {
             s_clone.watch_resource_groups().await;
         });
-
+        // Mock add
         let group1 = new_resource_group("TEST1".into(), true, 100, 100);
         add_resource_group(s.pd_client.clone(), group1);
+        let group2 = new_resource_group("TEST2".into(), true, 100, 100);
+        add_resource_group(s.pd_client.clone(), group2);
+        // Mock modify
         let group2 = new_resource_group("TEST2".into(), true, 50, 50);
         add_resource_group(s.pd_client.clone(), group2);
         let (res, revision) = s.list_resource_groups().unwrap();
         s.revision = revision;
         assert_eq!(res.len(), 2);
-        assert_eq!(revision, 2);
-
+        assert_eq!(revision, 3);
+        // Mock delete
         delete_resource_group(s.pd_client.clone(), "TEST1");
         let (res, revision) = s.list_resource_groups().unwrap();
         s.revision = revision;
         assert_eq!(res.len(), 1);
-        assert_eq!(revision, 3);
-
+        assert_eq!(revision, 4);
         // Wait for watcher
         std::thread::sleep(Duration::from_millis(100));
         let groups = s.manager.get_all_resource_groups();
         assert_eq!(groups.len(), 1);
+        assert!(s.manager.get_resource_group("TEST1").is_none());
+        let group = s.manager.get_resource_group("TEST2").unwrap();
+        assert_eq!(
+            group
+                .value()
+                .get_r_u_settings()
+                .get_r_r_u()
+                .get_settings()
+                .get_fill_rate(),
+            50
+        );
         server.stop();
     }
 }
