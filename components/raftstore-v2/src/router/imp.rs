@@ -101,8 +101,6 @@ where
     local_reader: LocalReader<EK, StoreRouter<EK, ER>>,
 }
 
-
-
 impl<EK, ER> Clone for RaftRouter<EK, ER>
 where
     EK: KvEngine,
