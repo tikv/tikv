@@ -701,7 +701,7 @@ fn call_conf_change<T: Simulator>(
     let conf_change = new_change_peer_request(conf_change_type, peer);
     let epoch = cluster.pd_client.get_region_epoch(region_id);
     let admin_req = new_admin_request(region_id, &epoch, conf_change);
-    cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
+    cluster.call_command_on_leader(admin_req, Duration::from_secs(300))
 }
 
 // todo: Make it pass

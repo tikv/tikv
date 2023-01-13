@@ -27,7 +27,7 @@ use kvproto::{
         AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RegionDetailResponse, Request,
         Response, StatusCmdType,
     },
-    raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent},
+    raft_serverpb::{PeerState, RaftApplyState, RegionLocalState, StoreIdent},
 };
 use pd_client::PdClient;
 use raftstore::{
@@ -1339,9 +1339,13 @@ impl WrapFactory {
         }
     }
 
+    fn region_id_of_key(&self, key: &[u8]) -> u64 {
+        self.pd_client.get_region(key).unwrap().get_id()
+    }
+
     fn get_tablet(&self, key: &[u8]) -> Option<RocksEngine> {
         // todo: unwrap
-        let region_id = self.pd_client.get_region(key).unwrap().get_id();
+        let region_id = self.region_id_of_key(key);
         self.tablet_registry.get(region_id)?.latest().cloned()
     }
 
@@ -1365,6 +1369,16 @@ impl Peekable for WrapFactory {
         opts: &ReadOptions,
         key: &[u8],
     ) -> engine_traits::Result<Option<Self::DbVector>> {
+        let region_id = self.region_id_of_key(key);
+
+        if let Ok(state) = self.get_region_state(region_id) {
+            if let Some(state) = state {
+                if state.state == PeerState::Tombstone {
+                    return Ok(None);
+                }
+            }
+        }
+
         match self.get_tablet(key) {
             Some(tablet) => tablet.get_value_opt(opts, key),
             _ => Ok(None),
@@ -1377,6 +1391,16 @@ impl Peekable for WrapFactory {
         cf: &str,
         key: &[u8],
     ) -> engine_traits::Result<Option<Self::DbVector>> {
+        let region_id = self.region_id_of_key(key);
+
+        if let Ok(state) = self.get_region_state(region_id) {
+            if let Some(state) = state {
+                if state.state == PeerState::Tombstone {
+                    return Ok(None);
+                }
+            }
+        }
+
         match self.get_tablet(key) {
             Some(tablet) => tablet.get_value_cf_opt(opts, cf, key),
             _ => Ok(None),

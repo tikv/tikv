@@ -55,7 +55,6 @@ use crate::{Cluster, Config, RawEngine, ServerCluster, Simulator};
 pub fn must_get(engine: &impl RawEngine, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
         let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
-        println!("res {:?}", res);
         if let (Some(value), Some(res)) = (value, res.as_ref()) {
             assert_eq!(value, &res[..]);
             return;
