@@ -2490,7 +2490,10 @@ where
             return Ok(());
         }
 
-        if MessageType::MsgAppend == msg_type && self.fsm.peer.wait_data {
+        if MessageType::MsgAppend == msg_type
+            && self.fsm.peer.wait_data
+            && self.fsm.peer.should_reject_msgappend
+        {
             debug!("skip {:?} because of non-witness waiting data", msg_type;
                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
             );
@@ -5574,19 +5577,23 @@ where
         if !self.fsm.peer.wait_data || self.fsm.peer.is_leader() {
             return;
         }
-        assert!(self.fsm.peer.request_index != 0);
-        if let Err(e) = self
-            .fsm
-            .peer
-            .raft_group
-            .request_snapshot(self.fsm.peer.request_index)
-        {
-            error!(
-                "failed to request snapshot";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
+        self.fsm.peer.request_index = self.fsm.peer.get_store().last_index();
+        let term = self.fsm.peer.get_index_term(self.fsm.peer.request_index);
+        if term == self.fsm.peer.term() {
+            self.fsm.peer.should_reject_msgappend = true;
+            if let Err(e) = self
+                .fsm
+                .peer
+                .raft_group
+                .request_snapshot(self.fsm.peer.request_index)
+            {
+                error!(
+                    "failed to request snapshot";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "err" => %e,
+                );
+            }
         }
         // Requesting a snapshot may fail, so register a periodic event as a defense
         // until succeeded.
@@ -6465,7 +6472,8 @@ where
                         .peer
                         .update_read_progress(self.ctx, ReadProgress::WaitData(true));
                     self.fsm.peer.wait_data = true;
-                    self.fsm.peer.request_index = self.fsm.peer.raft_group.store().commit_index();
+                    self.fsm.peer.request_index =
+                        self.fsm.peer.raft_group.raft.raft_log.last_index();
                     self.on_request_snapshot_tick();
                 }
                 self.fsm.peer.peer.is_witness = is_witness;

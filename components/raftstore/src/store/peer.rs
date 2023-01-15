@@ -899,6 +899,12 @@ where
     /// the request index for retrying.
     pub request_index: u64,
 
+    /// When the witness becomes non-witness, it need to actively request a
+    /// snapshot from the leader, In order to avoid log lag, we need to reject
+    /// the leader's `MsgAppend` request unless the `term` of the `last index`
+    /// is less than the peer's current `term`.
+    pub should_reject_msgappend: bool,
+
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
     /// out of accordance with Raft election rule, and forbids any
@@ -1098,7 +1104,7 @@ where
 
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
-        let commit_index = raft_group.store().commit_index();
+        let last_index = raft_group.store().last_index();
         // In order to avoid excessive log accumulation due to the loss of pending
         // compaction cmds after the witness is restarted, it will actively pull
         // voter_request_index once at start.
@@ -1126,7 +1132,8 @@ where
             leader_unreachable: false,
             pending_remove: false,
             wait_data,
-            request_index: commit_index,
+            request_index: last_index,
+            should_reject_msgappend: false,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
