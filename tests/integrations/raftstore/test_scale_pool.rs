@@ -203,6 +203,8 @@ fn test_increase_async_ios() {
             cfg_controller.get_current().raft_store.store_io_pool_size,
             2
         );
+        // Wait for the completion of increasing async-ios
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
     // Save current async-io tids after scaling up, and compared with the
     // orginial one before scaling up, the thread num should be added up to TWO.
@@ -243,6 +245,8 @@ fn test_decrease_async_ios() {
             cfg_controller.get_current().raft_store.store_io_pool_size,
             1
         );
+        // Wait for the completion of decreasing async-ios
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
     // Save current async-io tids after scaling down, and compared with the
