@@ -1664,6 +1664,7 @@ where
                 self.exec_flashback(ctx, request)
             }
             AdminCmdType::BatchSwitchWitness => Err(box_err!("unsupported admin command type")),
+            AdminCmdType::UpdateGcPeer => Err(box_err!("v2 only command and it's safe to skip")),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);

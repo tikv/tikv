@@ -74,6 +74,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub schedulers: Schedulers<EK, ER>,
     /// store meta
     pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    pub shutdown: Arc<AtomicBool>,
     pub engine: ER,
     pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
@@ -107,6 +108,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
             self.cfg.report_region_buckets_tick_interval.0;
         self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
+        self.tick_batch[PeerTick::GcPeer as usize].wait_duration = Duration::from_secs(60);
     }
 }
 
@@ -272,6 +274,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     apply_pool: FuturePool,
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    shutdown: Arc<AtomicBool>,
     snap_mgr: TabletSnapManager,
 }
 
@@ -286,6 +289,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         schedulers: Schedulers<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        shutdown: Arc<AtomicBool>,
         snap_mgr: TabletSnapManager,
         coprocessor_host: CoprocessorHost<EK>,
     ) -> Self {
@@ -311,6 +315,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             schedulers,
             store_meta,
             snap_mgr,
+            shutdown,
             coprocessor_host,
         }
     }
@@ -417,6 +422,7 @@ where
             timer: SteadyTimer::default(),
             schedulers: self.schedulers.clone(),
             store_meta: self.store_meta.clone(),
+            shutdown: self.shutdown.clone(),
             engine: self.engine.clone(),
             tablet_registry: self.tablet_registry.clone(),
             apply_pool: self.apply_pool.clone(),
@@ -604,6 +610,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             schedulers.clone(),
             self.logger.clone(),
             store_meta.clone(),
+            self.shutdown.clone(),
             snap_mgr,
             coprocessor_host,
         );

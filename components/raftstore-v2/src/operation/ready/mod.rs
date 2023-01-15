@@ -25,7 +25,10 @@ use std::{cmp, time::Instant};
 
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
-use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
+use kvproto::{
+    raft_cmdpb::AdminCmdType,
+    raft_serverpb::{ExtraMessageType, RaftMessage},
+};
 use protobuf::Message as _;
 use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
 use raftstore::{
@@ -155,7 +158,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn on_raft_message<T>(
+    pub fn on_raft_message<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         mut msg: Box<RaftMessage>,
@@ -174,16 +177,34 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.serving() {
             return;
         }
+        if util::is_vote_msg(msg.get_message()) && self.maybe_gc_sender(&msg) {
+            return;
+        }
         if msg.get_to_peer().get_store_id() != self.peer().get_store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
             return;
         }
-        if !msg.has_region_epoch() {
-            ctx.raft_metrics.message_dropped.mismatch_region_epoch.inc();
+        if msg.get_is_tombstone() {
+            self.on_tombstone_message(&mut msg);
             return;
         }
-        if msg.get_is_tombstone() {
-            self.mark_for_destroy(None);
+        if msg.has_extra_msg() && msg.get_to_peer().get_id() == self.peer_id() {
+            // GcRequest/GcResponse may be sent from/to different regions, skip further
+            // checks.
+            match msg.get_extra_msg().get_type() {
+                ExtraMessageType::MsgGcPeerResponse => {
+                    self.on_gc_peer_response(&msg);
+                    return;
+                }
+                ExtraMessageType::MsgGcPeerRequest => {
+                    self.on_gc_peer_request(ctx, &msg);
+                    return;
+                }
+                _ => (),
+            }
+        }
+        if !msg.has_region_epoch() {
+            ctx.raft_metrics.message_dropped.mismatch_region_epoch.inc();
             return;
         }
         if msg.has_merge_target() {
@@ -207,8 +228,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         if msg.has_extra_msg() {
-            unimplemented!();
-            // return;
+            match msg.get_extra_msg().get_type() {
+                ExtraMessageType::MsgGcPeerResponse => self.on_gc_peer_response(&msg),
+                _ => unimplemented!(),
+            }
+            return;
         }
 
         // TODO: drop all msg append when the peer is uninitialized and has conflict
@@ -452,6 +476,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx.has_ready = true;
 
         if !has_extra_write
+            && !self.has_pending_messages()
             && !self.raft_group().has_ready()
             && (self.serving() || self.postponed_destroy())
         {
@@ -494,6 +519,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.send_raft_message_on_leader(ctx, msg);
                 }
             }
+            if self.has_pending_messages() {
+                for msg in self.take_pending_messages() {
+                    self.send_raft_message_on_leader(ctx, msg);
+                }
+            }
         }
 
         self.apply_reads(ctx, &ready);
@@ -526,6 +556,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .into_iter()
                 .flat_map(|m| self.build_raft_message(m))
                 .collect();
+        }
+        if self.has_pending_messages() {
+            if write_task.messages.is_empty() {
+                write_task.messages = self.take_pending_messages();
+            } else {
+                write_task.messages.extend(self.take_pending_messages());
+            }
         }
         if !self.serving() {
             self.start_destroy(ctx, &mut write_task);
@@ -742,6 +779,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.add_pending_tick(PeerTick::CompactLog);
                     self.add_pending_tick(PeerTick::SplitRegionCheck);
                     self.add_pending_tick(PeerTick::CheckLongUncommitted);
+                    self.maybe_schedule_gc_peer_tick();
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
