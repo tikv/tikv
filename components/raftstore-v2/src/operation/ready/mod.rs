@@ -21,7 +21,7 @@ mod apply_trace;
 mod async_writer;
 mod snapshot;
 
-use std::{cmp, time::Instant};
+use std::{borrow::Cow, cmp, time::Instant};
 
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
@@ -566,8 +566,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if !self.serving() {
             self.start_destroy(ctx, &mut write_task);
+            let region = if self.storage().is_initialized() {
+                Cow::Borrowed(self.region())
+            } else {
+                // Hack: In v1, it expects epoch empty to work correct.
+                // TODO: maybe we need to check uninitialized correctly in coprocessor.
+                let mut region = self.region().clone();
+                region.take_peers();
+                region.take_region_epoch();
+                Cow::Owned(region)
+            };
             ctx.coprocessor_host.on_region_changed(
-                self.region(),
+                &region,
                 RegionChangeEvent::Destroy,
                 self.raft_group().raft.state,
             );
