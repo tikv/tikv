@@ -15,6 +15,14 @@ impl Checkpointable for RocksEngine {
             Err(e) => Err(r2e(e)),
         }
     }
+
+    fn merge(&self, dbs: &[&Self]) -> Result<()> {
+        let mopts = rocksdb::MergeInstanceOptions::default();
+        let inner: Vec<_> = dbs.iter().map(|e| e.as_inner().as_ref()).collect();
+        self.as_inner()
+            .merge_instances(&mopts, inner.as_slice())
+            .map_err(r2e)
+    }
 }
 
 pub struct RocksEngineCheckpointer(rocksdb::Checkpointer);

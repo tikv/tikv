@@ -8,8 +8,8 @@ mod rollback_merge;
 mod split;
 mod transfer_leader;
 
-pub use commit_merge::CatchUpLogs;
 use commit_merge::CommitMergeResult;
+pub use commit_merge::{CatchUpLogs, MergeContext};
 pub use compact_log::CompactLogContext;
 use compact_log::CompactLogResult;
 use conf_change::ConfChangeResult;
@@ -120,6 +120,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdType::CompactLog => self.propose_compact_log(ctx, req),
                 AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
+                AdminCmdType::CommitMerge => self.propose_commit_merge(ctx, req),
                 _ => unimplemented!(),
             }
         };

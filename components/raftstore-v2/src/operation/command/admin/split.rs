@@ -216,6 +216,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn force_split_check<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        let control = self.split_flow_control_mut();
+        control.size_diff_hint = ctx.cfg.region_split_check_diff().0 as i64;
+    }
+
     pub fn on_request_split<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,

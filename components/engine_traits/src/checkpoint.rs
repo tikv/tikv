@@ -8,6 +8,8 @@ pub trait Checkpointable {
     type Checkpointer: Checkpointer;
 
     fn new_checkpointer(&self) -> Result<Self::Checkpointer>;
+
+    fn merge(&self, dbs: &[&Self]) -> Result<()>;
 }
 
 pub trait Checkpointer {

@@ -6,7 +6,7 @@
 //!
 //! A `RollbackMerge` command is proposed only when peers that have such
 //! intention have reached a quorum. The intention is recorded by leader in
-//! `Peer::want_to_rollback_merge_peers`.
+//! `MergeContext::rollback_peers`.
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use error_code::ErrorCodeExt;
@@ -46,7 +46,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         if self.is_leader() {
             let peer_id = self.peer_id();
-            self.want_to_rollback_merge_peer_mut().insert(peer_id);
+            self.merge_context_mut().rollback_peers.insert(peer_id);
             if self.quorum_want_to_rollback_merge() {
                 info!(
                     self.logger,
@@ -54,7 +54,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "err" => %e,
                     "error_code" => %e.error_code(),
                 );
-                let state = self.pending_merge_state.as_ref().unwrap();
+                let state = self.merge_context().pending.as_ref().unwrap();
                 let mut request = new_admin_request(self.region_id(), self.peer().clone());
                 request
                     .mut_header()
@@ -80,8 +80,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let mut msg = self.prepare_raft_message();
                 let mut extra_msg = ExtraMessage::default();
                 extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
-                extra_msg
-                    .set_premerge_commit(self.pending_merge_state.as_ref().unwrap().get_commit());
+                extra_msg.set_premerge_commit(
+                    self.merge_context().pending.as_ref().unwrap().get_commit(),
+                );
                 msg.set_extra_msg(extra_msg);
                 let to_peer = self
                     .region()
@@ -156,7 +157,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         res: RollbackMergeResult,
     ) {
         assert!(res.commit != 0);
-        let pending_commit = self.pending_merge_state.as_ref().unwrap().get_commit();
+        let pending_commit = self.merge_context().pending.as_ref().unwrap().get_commit();
         if pending_commit != res.commit {
             slog_panic!(
                 self.logger,
@@ -191,12 +192,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// rollbacks the merge.
     pub fn rollback_merge<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         // Clear merge releted data
-        self.pending_merge_state = None;
-        self.want_to_rollback_merge_peer_mut().clear();
+        self.merge_context_mut().pending = None;
+        self.merge_context_mut().rollback_peers.clear();
 
-        // TODO(tabokie):
         // Resume updating `safe_ts`
-        // self.read_progress.resume();
+        self.read_progress_mut().resume();
 
         if self.is_leader() {
             {

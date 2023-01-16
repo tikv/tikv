@@ -8,8 +8,8 @@ mod ready;
 
 pub use command::{
     AdminCmdResult, ApplyFlowControl, CatchUpLogs, CommittedEntries, CompactLogContext,
-    ProposalControl, RequestSplit, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
-    SimpleWriteReqEncoder, SplitFlowControl, SPLIT_PREFIX,
+    MergeContext, ProposalControl, RequestSplit, SimpleWriteBinary, SimpleWriteEncoder,
+    SimpleWriteReqDecoder, SimpleWriteReqEncoder, SplitFlowControl, SPLIT_PREFIX,
 };
 pub use life::DestroyProgress;
 pub use ready::{

@@ -16,7 +16,7 @@
 //! Raft proposal. To guarantee the consistency of lock serialization, we might
 //! need to wait for some in-flight logs to be applied. During the wait, all
 //! incoming write proposals will be rejected. Read the comments of
-//! `Peer::prepare_merge_fence` for more details.
+//! `MergeContext::prepare_fence` for more details.
 //!
 //! ## Apply (`Apply::apply_prepare_merge`)
 //!
@@ -66,6 +66,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) -> Result<u64> {
+        if self.storage().has_dirty_data() {
+            return Err(box_err!(
+                "{:?} source peer has dirty data, try again later",
+                self.logger.list()
+            ));
+        }
         self.validate_prepare_merge_command(
             store_ctx,
             req.get_admin_request().get_prepare_merge(),
@@ -147,10 +153,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) -> Result<RaftCmdRequest> {
         let applied_index = self.entry_storage().applied_index();
         // Check existing fence.
-        let has_prepare_merge_fence = self.has_prepare_merge_fence();
+        let has_prepare_merge_fence = self.merge_context().prepare_fence.is_some();
         if has_prepare_merge_fence {
-            if let Err(fence) =
-                self.release_or_refresh_prepare_merge_fence(applied_index, Some(&req))
+            if let Err(fence) = self
+                .merge_context_mut()
+                .release_or_refresh_prepare_merge_fence(applied_index, Some(&req))
             {
                 info!(
                     self.logger,
@@ -240,7 +247,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 !pessimistic_locks.is_empty()
             };
             if has_locks && applied_index < last_index {
-                self.install_prepare_merge_fence(last_index, &req);
+                self.merge_context_mut()
+                    .install_prepare_merge_fence(last_index, &req);
                 info!(
                     self.logger,
                     "start rejecting new proposals before prepare merge";
@@ -249,7 +257,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return Err(Error::PendingPrepareMerge);
             }
         }
-        debug_assert!(!self.has_prepare_merge_fence());
+        debug_assert!(self.merge_context().prepare_fence.is_none());
 
         self.propose_locks_before_prepare_merge(store_ctx, entry_size_limit - entry_size)?;
 
@@ -327,7 +335,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         applied_index: u64,
     ) {
-        if let Ok(Some(cmd)) = self.release_or_refresh_prepare_merge_fence(applied_index, None) {
+        if let Ok(Some(cmd)) = self
+            .merge_context_mut()
+            .release_or_refresh_prepare_merge_fence(applied_index, None)
+        {
             if let Err(e) = self.propose(store_ctx, cmd) {
                 error!(
                     self.logger,
@@ -402,7 +413,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
         }
 
-        self.set_pending_merge_state(Some(res.state));
+        self.merge_context_mut().pending = Some(res.state);
 
         self.update_merge_progress_on_apply_res_prepare_merge(store_ctx);
     }

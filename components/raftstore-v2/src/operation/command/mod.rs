@@ -57,7 +57,7 @@ mod control;
 mod write;
 
 pub use admin::{
-    temp_split_path, AdminCmdResult, CatchUpLogs, CompactLogContext, RequestSplit,
+    temp_split_path, AdminCmdResult, CatchUpLogs, CompactLogContext, MergeContext, RequestSplit,
     SplitFlowControl, SplitInit, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
@@ -160,9 +160,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             return Err(e);
         }
-        if self.has_pending_merge_state() && admin_type != Some(AdminCmdType::RollbackMerge)
-            || self.has_prepare_merge_fence() && admin_type != Some(AdminCmdType::PrepareMerge)
-        {
+        if self.merge_context().should_block_write(admin_type) {
             return Err(Error::ProposalInMergingMode(self.region_id()));
         }
         Ok(())

@@ -15,11 +15,9 @@ use kvproto::{
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{self, PeerRole},
     pdpb,
-    raft_cmdpb::RaftCmdRequest,
-    raft_serverpb::{MergeState, RegionLocalState},
+    raft_serverpb::RegionLocalState,
 };
 use pd_client::BucketStat;
-use protobuf::Message;
 use raft::{ProgressState, RawNode, StateRole, INVALID_INDEX};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
@@ -38,7 +36,7 @@ use crate::{
     batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, CatchUpLogs, CompactLogContext, DestroyProgress, ProposalControl,
+        AsyncWriter, CompactLogContext, DestroyProgress, MergeContext, ProposalControl,
         SimpleWriteReqEncoder, SplitFlowControl,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
@@ -64,6 +62,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// For raft log compaction.
     compact_log_context: CompactLogContext,
+
+    merge_context: MergeContext,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -93,23 +93,6 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-
-    /// When a fence <idx, cmd> is present, we (1) delay the PrepareMerge
-    /// command `cmd` until all writes before `idx` are applied (2) reject all
-    /// in-coming write proposals.
-    /// Before proposing `PrepareMerge`, we first serialize and propose the lock
-    /// table. Locks marked as deleted (but not removed yet) will be
-    /// serialized as normal locks.
-    /// Thanks to the fence, we can ensure at the time of lock transfer, locks
-    /// are either removed (when applying logs) or won't be removed before
-    /// merge (the proposals to remove them are rejected).
-    prepare_merge_fence: Option<(u64, Vec<u8>)>,
-    /// When it is set, all write proposals except for `RollbackMerge` will be
-    /// rejected.
-    pub pending_merge_state: Option<MergeState>,
-    /// Source region is catching up logs for merge.
-    pub catch_up_logs: Option<CatchUpLogs>,
-    pub want_to_rollback_merge_peers: HashSet<u64>,
 
     pending_ticks: Vec<PeerTick>,
 
@@ -198,10 +181,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             last_region_buckets: None,
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            prepare_merge_fence: None,
-            pending_merge_state: None,
-            catch_up_logs: None,
-            want_to_rollback_merge_peers: HashSet::default(),
+            merge_context: MergeContext::default(),
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
             split_trace: vec![],
@@ -580,47 +560,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn has_prepare_merge_fence(&self) -> bool {
-        self.prepare_merge_fence.is_some()
-    }
-
-    #[inline]
-    pub fn install_prepare_merge_fence(&mut self, index: u64, req: &RaftCmdRequest) {
-        self.prepare_merge_fence = Some((index, req.write_to_bytes().unwrap()));
-    }
-
-    /// On success, returns the pending command as bytes (if there's one). On
-    /// failure, returns the offending fence index.
-    #[inline]
-    pub fn release_or_refresh_prepare_merge_fence(
-        &mut self,
-        applied: u64,
-        req: Option<&RaftCmdRequest>,
-    ) -> std::result::Result<Option<Vec<u8>>, u64> {
-        if let Some((idx, cmd)) = self.prepare_merge_fence.as_mut() {
-            if *idx >= applied {
-                Ok(self.prepare_merge_fence.take().map(|f| f.1))
-            } else {
-                if let Some(req) = req {
-                    *cmd = req.write_to_bytes().unwrap();
-                }
-                Err(*idx)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    #[inline]
-    pub fn has_pending_merge_state(&self) -> bool {
-        self.pending_merge_state.is_some()
-    }
-
-    #[inline]
-    pub fn set_pending_merge_state(&mut self, s: Option<MergeState>) {
-        self.pending_merge_state = s;
-    }
-
     pub fn serving(&self) -> bool {
         matches!(self.destroy_progress, DestroyProgress::None)
     }
@@ -832,6 +771,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn merge_context(&self) -> &MergeContext {
+        &self.merge_context
+    }
+
+    #[inline]
+    pub fn merge_context_mut(&mut self) -> &mut MergeContext {
+        &mut self.merge_context
+    }
+
+    #[inline]
     pub fn refresh_leader_transferee(&mut self) -> u64 {
         mem::replace(
             &mut self.leader_transferee,
@@ -884,16 +833,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn want_to_rollback_merge_peer_mut(&mut self) -> &mut HashSet<u64> {
-        &mut self.want_to_rollback_merge_peers
-    }
-
-    #[inline]
     pub fn quorum_want_to_rollback_merge(&self) -> bool {
         self.raft_group
             .raft
             .prs()
-            .has_quorum(&self.want_to_rollback_merge_peers)
+            .has_quorum(&self.merge_context.rollback_peers)
     }
 
     #[inline]
