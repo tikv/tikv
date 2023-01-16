@@ -236,14 +236,15 @@ where
                     dominant_group = group_name;
                     max_write_bytes = *write_bytes;
                 }
-                sender
-                    .resource_ctl
-                    .consume(group_name, ResourceConsumeType::Bytes(*write_bytes));
+                sender.resource_ctl.consume(
+                    group_name.as_bytes(),
+                    ResourceConsumeType::IoBytes(*write_bytes),
+                );
             }
         }
         let mut pri = sender
             .resource_ctl
-            .get_priority(dominant_group, msg.priority());
+            .get_priority(dominant_group.as_bytes(), msg.priority());
         if pri < self.last_pri {
             pri = self.last_pri + 1;
         }

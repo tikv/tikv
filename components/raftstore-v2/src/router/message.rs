@@ -3,13 +3,11 @@
 // #[PerformanceCriticalPath]
 
 use batch_system::ResourceMetered;
-use engine_traits::Snapshot;
 use kvproto::{
     metapb,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use tikv_util::time::Instant;
 
@@ -266,17 +264,3 @@ pub enum StoreMsg {
 }
 
 impl ResourceMetered for StoreMsg {}
-
-impl fmt::Debug for StoreMsg {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            StoreMsg::SplitInit(_) => write!(fmt, "Split initialization"),
-            StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
-            StoreMsg::Start => write!(fmt, "Start store"),
-            StoreMsg::StoreUnreachable { to_store_id } => {
-                write!(fmt, "StoreUnreachable to {}", to_store_id)
-            }
-        }
-    }
-}

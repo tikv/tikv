@@ -722,12 +722,13 @@ pub fn create_system<N: Fsm, C: Fsm>(
     cfg: &Config,
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
-    resource_ctl: Arc<ResourceController>,
+    resource_ctl: Option<Arc<ResourceController>>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
     let state_cnt = Arc::new(AtomicUsize::new(0));
     let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
     let (tx, rx) = priority_queue::unbounded();
     let (tx2, rx2) = priority_queue::unbounded();
+    let resource_ctl = resource_ctl.unwrap();
     let normal_scheduler = NormalScheduler {
         sender: tx.clone(),
         low_sender: tx2.clone(),

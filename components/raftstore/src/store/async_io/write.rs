@@ -879,14 +879,14 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    resource_ctl: Arc<ResourceController>,
+    resource_ctl: Option<Arc<ResourceController>>,
     pri_writer: Option<priority_queue::Sender<WriteMsg<EK, ER>>>,
     writers: Vec<Sender<WriteMsg<EK, ER>>>,
     handlers: Vec<JoinHandle<()>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> StoreWriters<EK, ER> {
-    pub fn new(resource_ctl: Arc<ResourceController>) -> Self {
+    pub fn new(resource_ctl: Option<Arc<ResourceController>>) -> Self {
         Self {
             resource_ctl,
             pri_writer: None,
@@ -903,7 +903,7 @@ where
 {
     pub fn senders(&self) -> WriteSenders<EK, ER> {
         WriteSenders::new(
-            self.resource_ctl.clone(),
+            self.resource_ctl.clone().unwrap(),
             self.writers.clone(),
             self.pri_writer.clone(),
         )

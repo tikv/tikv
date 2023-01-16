@@ -198,42 +198,42 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         }
     }
 
-    pub fn config(&mut self, config: Config) -> &mut Self {
+    pub fn config(self, config: Config) -> Self {
         // TODO: maybe we should use (1, num_cpu) for min and max thread count.
         self.thread_count(config.workers, config.workers, config.workers)
             .stack_size(config.stack_size)
             .max_tasks(config.workers.saturating_mul(config.max_tasks_per_worker))
     }
 
-    pub fn stack_size(&mut self, val: usize) -> &mut Self {
+    pub fn stack_size(mut self, val: usize) -> Self {
         self.stack_size = val;
         self
     }
 
-    pub fn name_prefix(&mut self, val: impl Into<String>) -> &mut Self {
+    pub fn name_prefix(mut self, val: impl Into<String>) -> Self {
         let name = val.into();
         self.name_prefix = Some(name);
         self
     }
 
     pub fn thread_count(
-        &mut self,
+        mut self,
         min_thread_count: usize,
         core_thread_count: usize,
         max_thread_count: usize,
-    ) -> &mut Self {
+    ) -> Self {
         self.min_thread_count = min_thread_count;
         self.core_thread_count = core_thread_count;
         self.max_thread_count = max_thread_count;
         self
     }
 
-    pub fn max_tasks(&mut self, tasks: usize) -> &mut Self {
+    pub fn max_tasks(mut self, tasks: usize) -> Self {
         self.max_tasks = tasks;
         self
     }
 
-    pub fn before_stop<F>(&mut self, f: F) -> &mut Self
+    pub fn before_stop<F>(mut self, f: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
     {
@@ -241,7 +241,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn after_start<F>(&mut self, f: F) -> &mut Self
+    pub fn after_start<F>(mut self, f: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
     {
@@ -249,7 +249,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn before_pause<F>(&mut self, f: F) -> &mut Self
+    pub fn before_pause<F>(mut self, f: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
     {

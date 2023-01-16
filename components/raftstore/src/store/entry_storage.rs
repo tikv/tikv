@@ -1106,7 +1106,6 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             }
             pri
         };
-        task.entries = entries;
         // Delete any previously appended log entries which never committed.
         task.set_append(Some(prev_last_index + 1), entries);
 

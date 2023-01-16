@@ -57,7 +57,7 @@ impl<R: FlowStatsReporter> PoolTicker for SchedTicker<R> {
 #[derive(Clone)]
 pub struct SchedPool {
     pub pool: FuturePool,
-    resource_ctl: Arc<ResourceController>,
+    resource_ctl: Option<Arc<ResourceController>>,
 }
 
 impl SchedPool {
@@ -67,7 +67,7 @@ impl SchedPool {
         reporter: R,
         feature_gate: FeatureGate,
         name_prefix: &str,
-        resource_ctl: Arc<ResourceController>,
+        resource_ctl: Option<Arc<ResourceController>>,
     ) -> Self {
         let engine = Arc::new(Mutex::new(engine));
         // for low cpu quota env, set the max-thread-count as 4 to allow potential cases
@@ -76,7 +76,7 @@ impl SchedPool {
             pool_size,
             std::cmp::max(4, SysQuota::cpu_cores_quota() as usize),
         );
-        let pool = YatpPoolBuilder::new(SchedTicker {reporter:reporter.clone()})
+        let mut builder = YatpPoolBuilder::new(SchedTicker {reporter:reporter.clone()})
             .thread_count(1, pool_size, max_pool_size)
             .name_prefix(name_prefix)
             // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
@@ -90,28 +90,37 @@ impl SchedPool {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
                 destroy_tls_engine::<E>();
                 tls_flush(&reporter);
-            })
-            .build_priority_future_pool();
+            });
+        let pool = if let Some(ref r) = resource_ctl {
+            builder.build_priority_pool(r.clone())
+        } else {
+            builder.build_single_level_pool()
+        };
+        let pool = FuturePool::from_pool(pool, name_prefix, pool_size, std::usize::MAX);
         SchedPool { pool, resource_ctl }
     }
 
     pub fn spawn(
         &self,
         group_name: &str,
-        pri: CommandPri,
+        priority: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
-        let mut extras = Extras::single_level();
-        let priority = self.resource_ctl.get_priority(group_name, pri);
-        extras.set_priority(priority);
+        let fixed_level = match priority {
+            CommandPri::High => Some(0),
+            CommandPri::Normal => None,
+            CommandPri::Low => Some(2),
+        };
+        let task_id = rand::random::<u64>();
+        let mut extras = Extras::new_multilevel(task_id, fixed_level);
+        extras.set_metadata(group_name.as_bytes().to_owned());
         self.pool.spawn_with_extras(
             ControlledFuture::new(
                 async move {
                     f.await;
                 },
-                self.resource_ctl.clone(),
-                group_name.to_owned(),
-                pri,
+                self.resource_ctl.clone().unwrap(),
+                group_name.as_bytes().to_owned(),
             ),
             extras,
         )

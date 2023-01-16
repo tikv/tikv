@@ -7,10 +7,12 @@ use std::{
     },
     time::Duration,
 };
-use kvproto::kvrpcpb::CommandPri;
 
 use dashmap::{mapref::one::Ref, DashMap};
-use kvproto::resource_manager::{GroupMode, ResourceGroup};
+use kvproto::{
+    kvrpcpb::CommandPri,
+    resource_manager::{GroupMode, ResourceGroup},
+};
 use yatp::queue::priority::TaskPriorityProvider;
 
 // a read task cost at least 50us.
@@ -34,9 +36,17 @@ pub enum ResourceConsumeType {
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroup>,
     registry: Mutex<Vec<Arc<ResourceController>>>,
+    enable: bool,
 }
 
 impl ResourceGroupManager {
+    pub fn new(enable: bool) -> Self {
+        ResourceGroupManager {
+            enable,
+            ..Default::default()
+        }
+    }
+
     fn get_ru_setting(rg: &ResourceGroup, is_read: bool) -> u64 {
         match (rg.get_mode(), is_read) {
             (GroupMode::RuMode, true) => rg
@@ -91,7 +101,14 @@ impl ResourceGroupManager {
         self.resource_groups.iter().map(|g| g.clone()).collect()
     }
 
-    pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
+    pub fn derive_controller(
+        &self,
+        name: String,
+        is_read: bool,
+    ) -> Option<Arc<ResourceController>> {
+        if !self.enable {
+            return None;
+        }
         let controller = Arc::new(ResourceController::new(name, is_read));
         self.registry.lock().unwrap().push(controller.clone());
         for g in &self.resource_groups {
@@ -99,7 +116,7 @@ impl ResourceGroupManager {
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota);
         }
 
-        controller
+        Some(controller)
     }
 
     pub fn advance_min_virtual_time(&self) {
@@ -353,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_resource_group() {
-        let resource_manager = ResourceGroupManager::default();
+        let resource_manager = ResourceGroupManager::new();
 
         let group1 = new_resource_group("TEST".into(), true, 100, 100);
         resource_manager.add_resource_group(group1);
@@ -460,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_adjust_resource_group_weight() {
-        let resource_manager = ResourceGroupManager::default();
+        let resource_manager = ResourceGroupManager::new();
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
 

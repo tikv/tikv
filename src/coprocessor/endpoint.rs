@@ -461,7 +461,6 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
-        let group_name = req_ctx.context.get_resource_group_name().to_owned();
         let task_id = req_ctx.build_task_id();
         let key_ranges = req_ctx
             .ranges
@@ -481,7 +480,7 @@ impl<E: Engine> Endpoint<E> {
 
         let res = self
             .read_pool
-            .spawn_handle_with_priority(
+            .spawn_handle(
                 Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
                     .in_resource_metering_tag(resource_tag),
                 priority,

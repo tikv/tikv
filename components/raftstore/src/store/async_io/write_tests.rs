@@ -230,7 +230,7 @@ impl TestWriters {
         let trans = TestTransport { tx: msg_tx };
         let (notify_tx, notify_rx) = unbounded();
         let notifier = TestNotifier { tx: notify_tx };
-        let mut writers = StoreWriters::new(Arc::new(ResourceController::test()));
+        let mut writers = StoreWriters::new(Arc::new(ResourceController::new("test".to_owned(), false)));
         writers
             .spawn(
                 1,

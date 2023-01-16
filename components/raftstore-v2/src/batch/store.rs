@@ -466,17 +466,12 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
-    fn new(
-        background: Worker,
-        pd: LazyWorker<pd::Task>,
-        purge: Option<Worker>,
-        resource_ctl: Arc<ResourceController>,
-    ) -> Self {
+    fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
             tablet_gc: Worker::new("tablet-gc-worker"),
-            async_write: StoreWriters::new(resource_ctl),
+            async_write: StoreWriters::new(None),
             purge,
             background,
         }
@@ -514,7 +509,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router: &StoreRouter<EK, ER>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
         snap_mgr: TabletSnapManager,
-        resource_ctl: Arc<ResourceController>,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
@@ -555,7 +549,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             None
         };
 
-        let mut workers = Workers::new(background, pd_worker, purge_worker, resource_ctl);
+        let mut workers = Workers::new(background, pd_worker, purge_worker);
         workers
             .async_write
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
@@ -740,7 +734,7 @@ pub fn create_store_batch_system<EK, ER>(
     cfg: &Config,
     store_id: u64,
     logger: Logger,
-    resource_ctl: Arc<ResourceController>,
+    resource_ctl: Option<Arc<ResourceController>>,
 ) -> (StoreRouter<EK, ER>, StoreSystem<EK, ER>)
 where
     EK: KvEngine,

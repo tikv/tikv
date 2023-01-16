@@ -2,11 +2,7 @@
 
 use std::{
     future::Future,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc::SyncSender,
-        Arc, Mutex,
-    },
+    sync::{mpsc::SyncSender, Arc, Mutex},
     time::Duration,
 };
 
@@ -53,8 +49,6 @@ pub enum ReadPool {
     },
     Yatp {
         pool: yatp::ThreadPool<TaskCell>,
-        priority_pool: yatp::ThreadPool<TaskCell>,
-        resource_ctl: Arc<ResourceController>,
         running_tasks: IntGauge,
         running_threads: IntGauge,
         max_tasks: usize,
@@ -77,8 +71,6 @@ impl ReadPool {
             },
             ReadPool::Yatp {
                 pool,
-                priority_pool,
-                resource_ctl,
                 running_tasks,
                 running_threads,
                 max_tasks,
@@ -86,8 +78,6 @@ impl ReadPool {
                 resource_ctl,
             } => ReadPoolHandle::Yatp {
                 remote: pool.remote().clone(),
-                remote_priority: priority_pool.remote().clone(),
-                resource_ctl: resource_ctl.clone(),
                 running_tasks: running_tasks.clone(),
                 running_threads: running_threads.clone(),
                 max_tasks: *max_tasks,
@@ -107,8 +97,6 @@ pub enum ReadPoolHandle {
     },
     Yatp {
         remote: Remote<TaskCell>,
-        remote_priority: Remote<TaskCell>,
-        resource_ctl: Arc<ResourceController>,
         running_tasks: IntGauge,
         running_threads: IntGauge,
         max_tasks: usize,
@@ -144,8 +132,6 @@ impl ReadPoolHandle {
             }
             ReadPoolHandle::Yatp {
                 remote,
-                remote_priority,
-                resource_ctl,
                 running_tasks,
                 max_tasks,
                 resource_ctl,
@@ -251,14 +237,12 @@ impl ReadPoolHandle {
             }
             ReadPoolHandle::Yatp {
                 remote,
-                remote_priority,
                 running_threads,
                 max_tasks,
                 pool_size,
                 ..
             } => {
                 remote.scale_workers(max_thread_count);
-                remote_priority.scale_workers(max_thread_count);
                 *max_tasks = max_tasks
                     .saturating_div(*pool_size)
                     .saturating_mul(max_thread_count);
@@ -311,8 +295,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
     let raftkv = Arc::new(Mutex::new(engine));
-    let mut builder = YatpPoolBuilder::new(ReporterTicker { reporter });
-    builder
+    let mut builder = YatpPoolBuilder::new(ReporterTicker { reporter })
         .name_prefix(&unified_read_pool_name)
         .stack_size(config.stack_size.0 as usize)
         .thread_count(
@@ -338,8 +321,6 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     };
     ReadPool::Yatp {
         pool,
-        priority_pool,
-        resource_ctl,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
             .with_label_values(&[&unified_read_pool_name]),
         running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
@@ -441,14 +422,6 @@ impl Runnable for ReadPoolConfigRunner {
                     self.cur_thread_count = self.core_thread_count;
                 }
             }
-            Task::EnablePriority(e) => match &self.handle {
-                ReadPoolHandle::Yatp {
-                    enable_priority, ..
-                } => {
-                    enable_priority.store(e, Ordering::Relaxed);
-                }
-                _ => {}
-            },
         }
     }
 }
@@ -533,7 +506,6 @@ impl ReadPoolConfigRunner {
 enum Task {
     PoolSize(usize),
     AutoAdjust(bool),
-    EnablePriority(bool),
 }
 
 impl std::fmt::Display for Task {
@@ -541,7 +513,6 @@ impl std::fmt::Display for Task {
         match self {
             Task::PoolSize(s) => write!(f, "PoolSize({})", *s),
             Task::AutoAdjust(s) => write!(f, "AutoAdjust({})", *s),
-            Task::EnablePriority(s) => write!(f, "EnablePriority({})", *s),
         }
     }
 }
@@ -593,9 +564,6 @@ impl ConfigManager for ReadPoolConfigManager {
             }
             if let Some(ConfigValue::Bool(b)) = unified.get("auto_adjust_pool_size") {
                 self.scheduler.schedule(Task::AutoAdjust(*b))?;
-            }
-            if let Some(ConfigValue::Bool(b)) = unified.get("enable_priority") {
-                self.scheduler.schedule(Task::EnablePriority(*b))?;
             }
         }
         info!(

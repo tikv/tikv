@@ -12,6 +12,7 @@ use raftstore::{
     store::{GlobalReplicationState, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX},
 };
 use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
+use resource_control::ResourceController;
 use slog::{info, o, Logger};
 use tikv_util::{
     config::VersionTrack,
@@ -70,7 +71,7 @@ where
         self.store.set_id(store_id);
 
         let (router, system) =
-            raftstore_v2::create_store_batch_system(cfg, store_id, self.logger.clone());
+            raftstore_v2::create_store_batch_system(cfg, store_id, self.logger.clone(), None);
         self.system = Some((router, system));
         Ok(())
     }

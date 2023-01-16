@@ -81,6 +81,7 @@ pub trait Simulator {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        resource_manager: &Arc<ResourceGroupManager>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -209,7 +210,7 @@ impl<T: Simulator> Cluster<T> {
             pd_client,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
-            resource_manager: Arc::new(ResourceGroupManager::new()),
+            resource_manager: Arc::new(ResourceGroupManager::new(true)),
             kv_statistics: vec![],
             raft_statistics: vec![],
         }
@@ -298,6 +299,7 @@ impl<T: Simulator> Cluster<T> {
                 key_mgr.clone(),
                 router,
                 system,
+                &self.resource_manager,
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
@@ -370,9 +372,16 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
-        self.sim
-            .wl()
-            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system)?;
+        self.sim.wl().run_node(
+            node_id,
+            cfg,
+            engines,
+            store_meta,
+            key_mgr,
+            router,
+            system,
+            &self.resource_manager,
+        )?;
         debug!("node {} started", node_id);
         Ok(())
     }

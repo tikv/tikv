@@ -271,7 +271,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
-        resource_ctl: Arc<ResourceController>,
+        resource_ctl: Option<Arc<ResourceController>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -609,7 +609,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
 
-        let res = self.read_pool.spawn_handle_with_priority(
+        let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now();
                 tls_collect_query(
@@ -775,7 +775,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Unset the TLS tracker because the future below does not belong to any
         // specific request
         clear_tls_tracker_token();
-        let res = self.read_pool.spawn_handle_with_priority(
+        let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -953,7 +953,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let api_version = self.api_version;
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
-        let res = self.read_pool.spawn_handle_with_priority(
+        let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now();
                 let mut key_ranges = vec![];
@@ -1137,7 +1137,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
-        let res = self.read_pool.spawn_handle_with_priority(
+        let res = self.read_pool.spawn_handle(
             async move {
                 {
                     let end_key = match &end_key {
@@ -1310,7 +1310,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
 
-        let res = self.read_pool.spawn_handle_with_priority(
+        let res = self.read_pool.spawn_handle(
             async move {
                 if let Some(start_key) = &start_key {
                     let end_key = match &end_key {
@@ -3208,7 +3208,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             ts_provider,
-            Arc::new(ResourceController::test()),
+            Some(Arc::new(ResourceController::new("test".to_owned(), false))),
         )
     }
 
@@ -3239,7 +3239,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             None,
-            Arc::new(ResourceController::test()),
+            Some(Arc::new(ResourceController::new("test".to_owned(), false))),
         )
     }
 }

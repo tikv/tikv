@@ -4728,7 +4728,7 @@ impl<EK: KvEngine> ApplyBatchSystem<EK> {
 
 pub fn create_apply_batch_system<EK: KvEngine>(
     cfg: &Config,
-    resource_ctl: Arc<ResourceController>,
+    resource_ctl: Option<Arc<ResourceController>>,
 ) -> (ApplyRouter<EK>, ApplyBatchSystem<EK>) {
     let (control_tx, control_fsm) = ControlFsm::new();
     let (router, system) = batch_system::create_system(
@@ -6829,7 +6829,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) =
-            create_apply_batch_system(&cfg.value(), Arc::new(ResourceController::test()));
+            create_apply_batch_system(&cfg.value(), Arc::new(ResourceController::new("test".to_owned(), false)));
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -7056,7 +7056,7 @@ mod tests {
         let sender = Box::new(TestNotifier { tx });
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) =
-            create_apply_batch_system(&cfg.value(), Arc::new(ResourceController::test()));
+            create_apply_batch_system(&cfg.value(), Arc::new(ResourceController::new("test".to_owned(), false)));
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "flashback_need_to_be_applied".to_owned(),

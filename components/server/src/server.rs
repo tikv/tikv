@@ -322,7 +322,7 @@ where
         let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
-        let resource_manager = Arc::new(ResourceGroupManager::default());
+        let resource_manager = Arc::new(ResourceGroupManager::new(config.resource_control.enabled));
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
@@ -745,19 +745,14 @@ where
         }
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
-            let priority_mgr = if self.config.resource_control.enabled {
-                Some(
-                    self.resource_manager
-                        .derive_controller("unified-read-pool".into(), true),
-                )
-            } else {
-                None
-            };
+            let resource_ctl = self
+                .resource_manager
+                .derive_controller("unified-read-pool".into(), true);
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                priority_mgr,
+                resource_ctl,
             ))
         } else {
             None
@@ -832,7 +827,7 @@ where
             self.pd_client.feature_gate().clone(),
             self.causal_ts_provider.clone(),
             self.resource_manager
-                .derive_controller("scheduler-worker-pool".to_owned()),
+                .derive_controller("scheduler-worker-pool".to_owned(), true),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -1672,7 +1667,6 @@ where
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
                 self.cfg_controller.take().unwrap(),
-                self.resource_manager.clone(),
                 Arc::new(self.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.store_path.clone(),

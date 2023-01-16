@@ -51,9 +51,7 @@ use resource_control::ResourceController;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
-use tikv_util::{
-    deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
-};
+use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
 use txn_types::TimeStamp;
 
@@ -432,7 +430,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
-        resource_ctl: Arc<ResourceController>,
+        resource_ctl: Option<Arc<ResourceController>>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -655,7 +653,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     // pub for test
-    pub fn get_sched_pool(&self, priority: CommandPri) -> &SchedPool {
+    pub fn get_sched_pool(&self) -> &SchedPool {
         &self.inner.worker_pool
     }
 
@@ -958,7 +956,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         });
 
         if !legacy_wake_up_list.is_empty() || !delay_wake_up_futures.is_empty() {
-            self.wake_up_legacy_pessimistic_locks(legacy_wake_up_list, delay_wake_up_futures);
+            self.wake_up_legacy_pessimistic_locks(
+                group_name,
+                legacy_wake_up_list,
+                delay_wake_up_futures,
+            );
         }
 
         resumable_wake_up_list
@@ -977,7 +979,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 .update_lock_wait(new_acquired_locks);
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
-            self.get_sched_pool(CommandPri::High)
+            self.get_sched_pool()
                 .pool
                 .spawn(async move {
                     lock_wait_queues.update_lock_wait(new_acquired_locks);
@@ -1335,7 +1337,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         to_be_write.deadline = Some(deadline);
 
         let sched = scheduler.clone();
-        let sched_pool = scheduler.get_sched_pool().clone();
 
         let mut subscribed = WriteEvent::BASIC_EVENT;
         match response_policy {
