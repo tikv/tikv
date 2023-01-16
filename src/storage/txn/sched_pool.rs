@@ -56,11 +56,12 @@ impl<R: FlowStatsReporter> PoolTicker for SchedTicker<R> {
 
 #[derive(Clone)]
 pub enum SchedPool {
-    // separate pool for high priority commands
+    // separated thread pools for different priority commands
     Vanilla {
         high_worker_pool: FuturePool,
         worker_pool: FuturePool,
     },
+    // one priority based thread pool to handle all commands
     Priority {
         worker_pool: FuturePool,
         resource_ctl: Arc<ResourceController>,
