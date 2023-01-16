@@ -814,8 +814,9 @@ impl Snapshot {
         }
     }
 
-    // Only called in `do_build`.
-    fn save_meta_file(&mut self) -> RaftStoreResult<()> {
+    // Save `SnapshotMeta` to file.
+    // Used in `do_build` and by external crates.
+    pub fn save_meta_file(&mut self) -> RaftStoreResult<()> {
         let v = box_try!(self.meta_file.meta.as_ref().unwrap().write_to_bytes());
         if let Some(mut f) = self.meta_file.file.take() {
             // `meta_file` could be None for this case: in `init_for_building` the snapshot
@@ -1127,6 +1128,10 @@ impl Snapshot {
         file_system::metadata(&self.meta_file.path)
     }
 
+    pub fn mut_meta_file(&mut self) -> &mut MetaFile {
+        &mut self.meta_file
+    }
+
     pub fn meta_path(&self) -> &PathBuf {
         &self.meta_file.path
     }
@@ -1140,15 +1145,6 @@ impl Snapshot {
 
     pub fn total_count(&self) -> u64 {
         self.cf_files.iter().map(|cf| cf.kv_count).sum()
-    }
-
-    // Manually mark if the snapshot holds temp files.
-    pub fn set_hold_tmp_files(&mut self, v: bool) {
-        self.hold_tmp_files = v;
-    }
-
-    pub fn hold_tmp_files(&self) -> bool {
-        self.hold_tmp_files
     }
 
     pub fn save(&mut self) -> io::Result<()> {
