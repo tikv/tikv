@@ -55,9 +55,16 @@ impl<R: FlowStatsReporter> PoolTicker for SchedTicker<R> {
 }
 
 #[derive(Clone)]
-pub struct SchedPool {
-    pub pool: FuturePool,
-    resource_ctl: Option<Arc<ResourceController>>,
+pub enum SchedPool {
+    // separate pool for high priority commands
+    Vanilla {
+        high_worker_pool: FuturePool,
+        worker_pool: FuturePool,
+    },
+    Priority {
+        worker_pool: FuturePool,
+        resource_ctl: Arc<ResourceController>,
+    },
 }
 
 impl SchedPool {
@@ -66,38 +73,47 @@ impl SchedPool {
         pool_size: usize,
         reporter: R,
         feature_gate: FeatureGate,
-        name_prefix: &str,
         resource_ctl: Option<Arc<ResourceController>>,
     ) -> Self {
-        let engine = Arc::new(Mutex::new(engine));
-        // for low cpu quota env, set the max-thread-count as 4 to allow potential cases
-        // that we need more thread than cpu num.
-        let max_pool_size = std::cmp::max(
-            pool_size,
-            std::cmp::max(4, SysQuota::cpu_cores_quota() as usize),
-        );
-        let mut builder = YatpPoolBuilder::new(SchedTicker {reporter:reporter.clone()})
-            .thread_count(1, pool_size, max_pool_size)
-            .name_prefix(name_prefix)
-            // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
-            // the tls_engine invariants.
-            .after_start(move || {
-                set_tls_engine(engine.lock().unwrap().clone());
-                set_io_type(IoType::ForegroundWrite);
-                TLS_FEATURE_GATE.with(|c| *c.borrow_mut() = feature_gate.clone());
-            })
-            .before_stop(move || unsafe {
-                // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
-                destroy_tls_engine::<E>();
-                tls_flush(&reporter);
-            });
-        let pool = if let Some(ref r) = resource_ctl {
-            builder.build_priority_pool(r.clone())
-        } else {
-            builder.build_single_level_pool()
+        let builder = |pool_size: usize, name_prefix: &str| {
+            let engine = Arc::new(Mutex::new(engine.clone()));
+            let feature_gate = feature_gate.clone();
+            let reporter = reporter.clone();
+            // for low cpu quota env, set the max-thread-count as 4 to allow potential cases
+            // that we need more thread than cpu num.
+            let max_pool_size = std::cmp::max(
+                pool_size,
+                std::cmp::max(4, SysQuota::cpu_cores_quota() as usize),
+            );
+            YatpPoolBuilder::new(SchedTicker {reporter:reporter.clone()})
+                .thread_count(1, pool_size, max_pool_size)
+                .name_prefix(name_prefix)
+                // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
+                // the tls_engine invariants.
+                .after_start(move || {
+                    set_tls_engine(engine.lock().unwrap().clone());
+                    set_io_type(IoType::ForegroundWrite);
+                    TLS_FEATURE_GATE.with(|c| *c.borrow_mut() = feature_gate.clone());
+                })
+                .before_stop(move || unsafe {
+                    // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
+                    destroy_tls_engine::<E>();
+                    tls_flush(&reporter);
+                })
         };
-        let pool = FuturePool::from_pool(pool, name_prefix, pool_size, std::usize::MAX);
-        SchedPool { pool, resource_ctl }
+        if let Some(ref r) = resource_ctl {
+            SchedPool::Priority {
+                worker_pool: builder(pool_size, "sched-worker-pool")
+                    .build_priority_future_pool(r.clone()),
+                resource_ctl: r.clone(),
+            }
+        } else {
+            SchedPool::Vanilla {
+                worker_pool: builder(pool_size, "sched-worker-pool").build_future_pool(),
+                high_worker_pool: builder(std::cmp::max(1, pool_size / 2), "sched-high-pri-pool")
+                    .build_future_pool(),
+            }
+        }
     }
 
     pub fn spawn(
@@ -106,24 +122,73 @@ impl SchedPool {
         priority: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
-        let fixed_level = match priority {
-            CommandPri::High => Some(0),
-            CommandPri::Normal => None,
-            CommandPri::Low => Some(2),
-        };
-        let task_id = rand::random::<u64>();
-        let mut extras = Extras::new_multilevel(task_id, fixed_level);
-        extras.set_metadata(group_name.as_bytes().to_owned());
-        self.pool.spawn_with_extras(
-            ControlledFuture::new(
-                async move {
-                    f.await;
-                },
-                self.resource_ctl.clone().unwrap(),
-                group_name.as_bytes().to_owned(),
-            ),
-            extras,
-        )
+        match self {
+            SchedPool::Vanilla {
+                high_worker_pool,
+                worker_pool,
+            } => {
+                if priority == CommandPri::High {
+                    high_worker_pool.spawn(f)
+                } else {
+                    worker_pool.spawn(f)
+                }
+            }
+            SchedPool::Priority {
+                worker_pool,
+                resource_ctl,
+            } => {
+                let fixed_level = match priority {
+                    CommandPri::High => Some(0),
+                    CommandPri::Normal => None,
+                    CommandPri::Low => Some(2),
+                };
+                // TODO: maybe use a better way to generate task_id
+                let task_id = rand::random::<u64>();
+                let mut extras = Extras::new_multilevel(task_id, fixed_level);
+                extras.set_metadata(group_name.as_bytes().to_owned());
+                worker_pool.spawn_with_extras(
+                    ControlledFuture::new(
+                        async move {
+                            f.await;
+                        },
+                        resource_ctl.clone(),
+                        group_name.as_bytes().to_owned(),
+                    ),
+                    extras,
+                )
+            }
+        }
+    }
+
+    pub fn scale_pool_size(&self, pool_size: usize) {
+        match self {
+            SchedPool::Vanilla {
+                high_worker_pool,
+                worker_pool,
+            } => {
+                high_worker_pool.scale_pool_size(std::cmp::max(1, pool_size / 2));
+                worker_pool.scale_pool_size(pool_size);
+            }
+            SchedPool::Priority { worker_pool, .. } => {
+                worker_pool.scale_pool_size(pool_size);
+            }
+        }
+    }
+
+    pub fn get_pool_size(&self, priority: CommandPri) -> usize {
+        match self {
+            SchedPool::Vanilla {
+                high_worker_pool,
+                worker_pool,
+            } => {
+                if priority == CommandPri::High {
+                    high_worker_pool.get_pool_size()
+                } else {
+                    worker_pool.get_pool_size()
+                }
+            }
+            SchedPool::Priority { worker_pool, .. } => worker_pool.get_pool_size(),
+        }
     }
 }
 

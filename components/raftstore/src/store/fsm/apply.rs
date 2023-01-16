@@ -6828,8 +6828,10 @@ mod tests {
             .register_cmd_observer(1, BoxCmdObserver::new(obs));
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) =
-            create_apply_batch_system(&cfg.value(), Arc::new(ResourceController::new("test".to_owned(), false)));
+        let (router, mut system) = create_apply_batch_system(
+            &cfg.value(),
+            Arc::new(ResourceController::new("test".to_owned(), false)),
+        );
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -7055,8 +7057,10 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) =
-            create_apply_batch_system(&cfg.value(), Arc::new(ResourceController::new("test".to_owned(), false)));
+        let (router, mut system) = create_apply_batch_system(
+            &cfg.value(),
+            Arc::new(ResourceController::new("test".to_owned(), false)),
+        );
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "flashback_need_to_be_applied".to_owned(),

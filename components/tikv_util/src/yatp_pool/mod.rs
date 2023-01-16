@@ -263,6 +263,15 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         FuturePool::from_pool(pool, name, self.core_thread_count, self.max_tasks)
     }
 
+    pub fn build_priority_future_pool(
+        &mut self,
+        priority_provider: Arc<dyn priority::TaskPriorityProvider>,
+    ) -> FuturePool {
+        let pool = self.build_priority_pool(priority_provider);
+        let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
+        FuturePool::from_pool(pool, name, self.core_thread_count, self.max_tasks)
+    }
+
     pub fn build_single_level_pool(&mut self) -> ThreadPool<TaskCell> {
         let (builder, runner) = self.create_builder();
         builder.build_with_queue_and_runner(

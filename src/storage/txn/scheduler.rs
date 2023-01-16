@@ -250,8 +250,8 @@ struct TxnSchedulerInner<L: LockManager> {
 
     sched_pending_write_threshold: usize,
 
-    // worker pool
-    worker_pool: SchedPool,
+    // all tasks are executed in this pool
+    sched_worker_pool: SchedPool,
 
     // used to control write flow
     running_write_bytes: CachePadded<AtomicUsize>,
@@ -401,7 +401,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
     }
 
     fn scale_pool_size(&self, pool_size: usize) {
-        self.worker_pool.pool.scale_pool_size(pool_size);
+        self.sched_worker_pool.scale_pool_size(pool_size);
     }
 }
 
@@ -446,12 +446,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             latches: Latches::new(config.scheduler_concurrency),
             running_write_bytes: AtomicUsize::new(0).into(),
             sched_pending_write_threshold: config.scheduler_pending_write_threshold.0 as usize,
-            worker_pool: SchedPool::new(
+            sched_worker_pool: SchedPool::new(
                 engine.clone(),
                 config.scheduler_worker_pool_size,
                 reporter.clone(),
                 feature_gate.clone(),
-                "sched-worker-pool",
                 resource_ctl,
             ),
             control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
@@ -654,7 +653,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     // pub for test
     pub fn get_sched_pool(&self) -> &SchedPool {
-        &self.inner.worker_pool
+        &self.inner.sched_worker_pool
     }
 
     /// Executes the task in the sched pool.
@@ -779,6 +778,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         async_apply_prewrite: bool,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
         tag: CommandKind,
+        group_name: &str,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
         if pipelined {
@@ -826,7 +826,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        self.on_acquired_locks_finished(new_acquired_locks);
+        self.on_acquired_locks_finished(group_name, new_acquired_locks);
 
         if do_wake_up {
             let woken_up_resumable_lock_requests = tctx.woken_up_resumable_lock_requests;
@@ -966,7 +966,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         resumable_wake_up_list
     }
 
-    fn on_acquired_locks_finished(&self, new_acquired_locks: Vec<kvrpcpb::LockInfo>) {
+    fn on_acquired_locks_finished(
+        &self,
+        group_name: &str,
+        new_acquired_locks: Vec<kvrpcpb::LockInfo>,
+    ) {
         if new_acquired_locks.is_empty() || self.inner.lock_wait_queues.is_empty() {
             return;
         }
@@ -980,8 +984,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
             self.get_sched_pool()
-                .pool
-                .spawn(async move {
+                .spawn(group_name, CommandPri::High, async move {
                     lock_wait_queues.update_lock_wait(new_acquired_locks);
                 })
                 .unwrap();
@@ -1137,7 +1140,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
-        let priority = task.cmd.priority();
         let group_name = task.cmd.group_name();
         let tracker = task.tracker;
         let scheduler = self.clone();
@@ -1295,6 +1297,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 new_acquired_locks,
                 tag,
+                &group_name,
             );
             return;
         }
@@ -1325,6 +1328,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 new_acquired_locks,
                 tag,
+                &group_name,
             );
             return;
         }
@@ -1511,6 +1515,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         is_async_apply_prewrite,
                         new_acquired_locks,
                         tag,
+                        &group_name,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                         .get(tag)
@@ -1843,6 +1848,7 @@ mod tests {
                 ResourceTagFactory::new_for_test(),
                 Arc::new(QuotaLimiter::default()),
                 latest_feature_gate(),
+                Some(Arc::new(ResourceController::new("test".to_owned(), true))),
             ),
             engine,
         )
@@ -1967,31 +1973,7 @@ mod tests {
 
     #[test]
     fn test_acquire_latch_deadline() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let config = Config {
-            scheduler_concurrency: 1024,
-            scheduler_worker_pool_size: 1,
-            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
-            enable_async_apply_prewrite: false,
-            ..Default::default()
-        };
-        let scheduler = TxnScheduler::new(
-            engine,
-            MockLockManager::new(),
-            ConcurrencyManager::new(1.into()),
-            &config,
-            DynamicConfigs {
-                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
-                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
-                wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
-            },
-            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
-            None,
-            DummyReporter,
-            ResourceTagFactory::new_for_test(),
-            Arc::new(QuotaLimiter::default()),
-            latest_feature_gate(),
-        );
+        let (scheduler, engine) = new_test_scheduler();
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
         let cid = scheduler.inner.gen_id();
@@ -2073,38 +2055,13 @@ mod tests {
 
     #[test]
     fn test_pool_available_deadline() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let config = Config {
-            scheduler_concurrency: 1024,
-            scheduler_worker_pool_size: 1,
-            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
-            enable_async_apply_prewrite: false,
-            ..Default::default()
-        };
-        let scheduler = TxnScheduler::new(
-            engine,
-            MockLockManager::new(),
-            ConcurrencyManager::new(1.into()),
-            &config,
-            DynamicConfigs {
-                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
-                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
-                wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
-            },
-            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
-            None,
-            DummyReporter,
-            ResourceTagFactory::new_for_test(),
-            Arc::new(QuotaLimiter::default()),
-            latest_feature_gate(),
-        );
+        let (scheduler, engine) = new_test_scheduler();
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
         // cannot run within 500ms.
         scheduler
-            .get_sched_pool(CommandPri::Normal)
-            .pool
-            .spawn(async { thread::sleep(Duration::from_millis(500)) })
+            .get_sched_pool()
+            .spawn("", CommandPri::Normal, async { thread::sleep(Duration::from_millis(500)) })
             .unwrap();
 
         let mut req = BatchRollbackRequest::default();
@@ -2133,31 +2090,7 @@ mod tests {
 
     #[test]
     fn test_flow_control_trottle_deadline() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let config = Config {
-            scheduler_concurrency: 1024,
-            scheduler_worker_pool_size: 1,
-            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
-            enable_async_apply_prewrite: false,
-            ..Default::default()
-        };
-        let scheduler = TxnScheduler::new(
-            engine,
-            MockLockManager::new(),
-            ConcurrencyManager::new(1.into()),
-            &config,
-            DynamicConfigs {
-                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
-                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
-                wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
-            },
-            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
-            None,
-            DummyReporter,
-            ResourceTagFactory::new_for_test(),
-            Arc::new(QuotaLimiter::default()),
-            latest_feature_gate(),
-        );
+        let (scheduler, engine) = new_test_scheduler();
 
         let mut req = CheckTxnStatusRequest::default();
         req.mut_context().max_execution_duration_ms = 100;
@@ -2201,31 +2134,7 @@ mod tests {
 
     #[test]
     fn test_accumulate_many_expired_commands() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let config = Config {
-            scheduler_concurrency: 1024,
-            scheduler_worker_pool_size: 1,
-            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
-            enable_async_apply_prewrite: false,
-            ..Default::default()
-        };
-        let scheduler = TxnScheduler::new(
-            engine,
-            MockLockManager::new(),
-            ConcurrencyManager::new(1.into()),
-            &config,
-            DynamicConfigs {
-                pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
-                in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
-                wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
-            },
-            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
-            None,
-            DummyReporter,
-            ResourceTagFactory::new_for_test(),
-            Arc::new(QuotaLimiter::default()),
-            latest_feature_gate(),
-        );
+        let (scheduler, engine) = new_test_scheduler();
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
         let cid = scheduler.inner.gen_id();
@@ -2288,6 +2197,7 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             feature_gate.clone(),
+            Some(Arc::new(ResourceController::new("test".to_owned(), true))),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);

@@ -1932,7 +1932,6 @@ pub struct UnifiedReadPoolConfig {
     pub max_tasks_per_worker: usize,
     pub auto_adjust_pool_size: bool,
     // FIXME: Add more configs when they are effective in yatp
-    pub enable_priority: bool,
 }
 
 impl UnifiedReadPoolConfig {
@@ -1988,7 +1987,6 @@ impl Default for UnifiedReadPoolConfig {
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             auto_adjust_pool_size: false,
-            enable_priority: true,
         }
     }
 }
@@ -4928,13 +4926,11 @@ mod tests {
 
         let check_scale_pool_size = |size: usize, ok: bool| {
             let origin_pool_size = scheduler
-                .get_sched_pool(CommandPri::Normal)
-                .pool
-                .get_pool_size();
+                .get_sched_pool()
+                .get_pool_size(CommandPri::Normal);
             let origin_pool_size_high = scheduler
-                .get_sched_pool(CommandPri::High)
-                .pool
-                .get_pool_size();
+                .get_sched_pool()
+                .get_pool_size(CommandPri::High);
             let res = cfg_controller
                 .update_config("storage.scheduler-worker-pool-size", &format!("{}", size));
             let (expected_size, expected_size_high) = if ok {
@@ -4946,16 +4942,14 @@ mod tests {
             };
             assert_eq!(
                 scheduler
-                    .get_sched_pool(CommandPri::Normal)
-                    .pool
-                    .get_pool_size(),
+                    .get_sched_pool()
+                    .get_pool_size(CommandPri::Normal),
                 expected_size
             );
             assert_eq!(
                 scheduler
-                    .get_sched_pool(CommandPri::High)
-                    .pool
-                    .get_pool_size(),
+                    .get_sched_pool()
+                    .get_pool_size(CommandPri::High),
                 expected_size_high
             );
         };
