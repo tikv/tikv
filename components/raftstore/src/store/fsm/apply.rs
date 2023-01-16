@@ -2967,6 +2967,8 @@ where
         ))
     }
 
+    // When the first return value returns true, it means that we have updated
+    // `RaftApplyState`, and the caller needs to do persistence.
     fn try_compact_log(
         &mut self,
         voter_replicated_index: u64,
