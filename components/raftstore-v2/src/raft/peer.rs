@@ -1,18 +1,16 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    mem,
-    sync::{atomic::Ordering, Arc},
+    cmp, mem,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use collections::{HashMap, HashSet};
-use crossbeam::atomic::AtomicCell;
 use engine_traits::{
     CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
 };
 use kvproto::{
-    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{self, PeerRole},
     pdpb,
     raft_serverpb::RegionLocalState,
@@ -24,8 +22,8 @@ use raftstore::{
     store::{
         fsm::ApplyMetrics,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-        ReadProgress, TabletSnapManager, TxnExt, WriteTask,
+        Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
+        TabletSnapManager, WriteTask,
     },
 };
 use slog::{warn, Logger};
@@ -33,11 +31,10 @@ use tikv_util::{box_err, slog_panic};
 
 use super::storage::Storage;
 use crate::{
-    batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
         AsyncWriter, CompactLogContext, DestroyProgress, MergeContext, ProposalControl,
-        SimpleWriteReqEncoder, SplitFlowControl,
+        SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -91,8 +88,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     last_region_buckets: Option<BucketStat>,
 
     /// Transaction extensions related to this peer.
-    txn_ext: Arc<TxnExt>,
-    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    txn_context: TxnContext,
 
     pending_ticks: Vec<PeerTick>,
 
@@ -112,6 +108,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     leader_transferee: u64,
+
+    long_uncommitted_threshold: u64,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -156,6 +154,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
             compact_log_context: CompactLogContext::new(applied_index),
+            merge_context: MergeContext::default(),
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
@@ -179,9 +178,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ),
             region_buckets: None,
             last_region_buckets: None,
-            txn_ext: Arc::default(),
-            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            merge_context: MergeContext::default(),
+            txn_context: TxnContext::default(),
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
             split_trace: vec![],
@@ -189,6 +186,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             flush_state,
             split_flow_control: SplitFlowControl::default(),
             leader_transferee: raft::INVALID_ID,
+            long_uncommitted_threshold: cmp::max(
+                cfg.long_uncommitted_base_threshold.0.as_secs(),
+                1,
+            ),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -264,11 +265,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.read_progress
             .update_leader_info(self.leader_id(), self.term(), self.region());
 
-        {
-            let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-            pessimistic_locks.term = self.term();
-            pessimistic_locks.version = self.region().get_region_epoch().get_version();
-        }
+        self.txn_context
+            .on_region_changed(self.term(), self.region());
 
         if self.serving() {
             host.on_region_changed(
@@ -637,21 +635,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         mem::take(&mut self.pending_ticks)
     }
 
-    pub fn activate_in_memory_pessimistic_locks(&mut self) {
-        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-        pessimistic_locks.status = LocksStatus::Normal;
-        pessimistic_locks.term = self.term();
-        pessimistic_locks.version = self.region().get_region_epoch().get_version();
-    }
-
-    pub fn clear_in_memory_pessimistic_locks(&mut self) {
-        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-        pessimistic_locks.status = LocksStatus::NotLeader;
-        pessimistic_locks.clear();
-        pessimistic_locks.term = self.term();
-        pessimistic_locks.version = self.region().get_region_epoch().get_version();
-    }
-
     #[inline]
     pub fn post_split(&mut self) {
         self.reset_region_buckets();
@@ -676,8 +659,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn txn_ext(&self) -> &Arc<TxnExt> {
-        &self.txn_ext
+    pub fn txn_context(&self) -> &TxnContext {
+        &self.txn_context
+    }
+
+    #[inline]
+    pub fn txn_context_mut(&mut self) -> &mut TxnContext {
+        &mut self.txn_context
     }
 
     pub fn generate_read_delegate(&self) -> ReadDelegate {
@@ -688,8 +676,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.term(),
             self.region().clone(),
             self.storage().entry_storage().applied_term(),
-            self.txn_extra_op.clone(),
-            self.txn_ext.clone(),
+            self.txn_context.extra_op().clone(),
+            self.txn_context.ext().clone(),
             self.read_progress().clone(),
             self.region_buckets.as_ref().map(|b| b.meta.clone()),
         )
@@ -718,19 +706,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.region().get_peers().iter().any(|p| {
             p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
         })
-    }
-
-    // TODO: find a better place to put all txn related stuff.
-    pub fn require_updating_max_ts<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        let epoch = self.region().get_region_epoch();
-        let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
-        let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
-        let initial_status = (term_low_bits << 32) | (version_lot_bits << 1);
-        self.txn_ext
-            .max_ts_sync_status
-            .store(initial_status, Ordering::SeqCst);
-
-        self.update_max_timestamp_pd(ctx, initial_status);
     }
 
     #[inline]
@@ -789,6 +764,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .lead_transferee
                 .unwrap_or(raft::INVALID_ID),
         )
+    }
+
+    #[inline]
+    pub fn long_uncommitted_threshold(&self) -> Duration {
+        Duration::from_secs(self.long_uncommitted_threshold)
+    }
+
+    #[inline]
+    pub fn set_long_uncommitted_threshold(&mut self, dur: Duration) {
+        self.long_uncommitted_threshold = cmp::max(dur.as_secs(), 1);
     }
 
     /// Returns (minimal matched, minimal committed)

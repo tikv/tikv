@@ -200,7 +200,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         if self.is_leader() {
             {
-                let mut pessimistic_locks = self.txn_ext().pessimistic_locks.write();
+                let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
                 if pessimistic_locks.status == LocksStatus::MergingRegion {
                     pessimistic_locks.status = LocksStatus::Normal;
                 }

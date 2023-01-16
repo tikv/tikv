@@ -88,7 +88,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(res)
     }
 
-    /// Mirrors v1::check_merge_proposal.
+    /// Match v1::check_merge_proposal.
     /// - Target region epoch as requested is identical with the local version.
     /// - Target region is a sibling to the source region.
     /// - Peers of both source and target region are aligned, i.e. located on
@@ -108,7 +108,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let region = self.region();
         let target_region = req.get_target();
-
         {
             let store_meta = store_ctx.store_meta.lock().unwrap();
             match store_meta.readers.get(&target_region.get_id()) {
@@ -146,6 +145,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(())
     }
 
+    // Match v1::pre_propose_prepare_merge.
     fn pre_propose_prepare_merge<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -171,7 +171,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let last_index = self.raft_group().raft.raft_log.last_index();
         let (min_matched, min_committed) = self.get_min_progress()?;
-        // TODO: also check snapshot (`min_matched < self.last_sent_snapshot_idx`).
+        // TODO(tabokie): also check snapshot (`min_matched < self.last_sent_snapshot_idx`).
         if min_matched == 0
             || min_committed == 0
             || last_index - min_matched > store_ctx.cfg.merge_max_log_gap
@@ -234,7 +234,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // If we haven't already released a fence, maybe install a new fence.
         if !has_prepare_merge_fence {
             let has_locks = {
-                let pessimistic_locks = self.txn_ext().pessimistic_locks.read();
+                let pessimistic_locks = self.txn_context().ext().pessimistic_locks.read();
                 if pessimistic_locks.status != LocksStatus::Normal {
                     // If `status` is not `Normal`, it means the in-memory pessimistic locks are
                     // being transferred, probably triggered by transferring leader. In this case,
@@ -272,7 +272,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         size_limit: usize,
     ) -> Result<()> {
-        let pessimistic_locks = self.txn_ext().pessimistic_locks.upgradable_read();
+        let pessimistic_locks = self.txn_context().ext().pessimistic_locks.upgradable_read();
         if pessimistic_locks.is_empty() {
             let mut pessimistic_locks = RwLockUpgradableReadGuard::upgrade(pessimistic_locks);
             pessimistic_locks.status = LocksStatus::MergingRegion;

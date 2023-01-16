@@ -73,7 +73,7 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(get_store_stats_async(0))),
         request!(client => get_operator(0)),
         request!(client => block_on(get_tso())),
-        request!(client => load_global_config(vec![])),
+        request!(client => load_global_config(String::default())),
     ];
 
     for (name, func) in test_funcs {
@@ -108,16 +108,10 @@ fn test_pd_client_deadlock() {
 #[test]
 fn test_load_global_config() {
     let (mut _server, client) = new_test_server_and_client(ReadableDuration::millis(100));
-    let res = futures::executor::block_on(async move {
-        client
-            .load_global_config(
-                ["abc", "123", "xyz"]
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>(),
-            )
-            .await
-    });
+    let res =
+        futures::executor::block_on(
+            async move { client.load_global_config("global".into()).await },
+        );
     for (k, v) in res.unwrap() {
         assert_eq!(k, format!("/global/config/{}", v))
     }

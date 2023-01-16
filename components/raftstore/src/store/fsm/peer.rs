@@ -524,13 +524,14 @@ where
                 }))
             };
 
-            let tokens: SmallVec<[TimeTracker; 4]> = cbs
+            let trackers: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
-                .filter_map(|cb| cb.write_trackers().map(|t| t[0]))
+                .flat_map(|cb| cb.write_trackers())
+                .cloned()
                 .collect();
 
-            let mut cb = Callback::write_ext(
-                Box::new(move |resp| {
+            let cb = Callback::Write {
+                cb: Box::new(move |resp| {
                     for cb in cbs {
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
@@ -539,12 +540,8 @@ where
                 }),
                 proposed_cb,
                 committed_cb,
-            );
-
-            if let Some(trackers) = cb.write_trackers_mut() {
-                *trackers = tokens;
-            }
-
+                trackers,
+            };
             return Some((req, cb));
         }
         None
@@ -625,7 +622,7 @@ where
                         .propose_wait_time
                         .observe(propose_time.as_secs_f64());
                     cmd.callback.read_tracker().map(|tracker| {
-                        GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                             t.metrics.read_index_propose_wait_nanos =
                                 propose_time.as_nanos() as u64;
                         })
@@ -5245,7 +5242,7 @@ where
 
         if self.ctx.raft_metrics.waterfall_metrics {
             let now = Instant::now();
-            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers() {
                 tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
                     &mut t.metrics.wf_batch_wait_nanos
                 });

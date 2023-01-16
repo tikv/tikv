@@ -55,6 +55,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, RegionInfoAccessor},
     store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
 };
+use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use serde::{
@@ -3039,6 +3040,9 @@ pub struct TikvConfig {
 
     #[online_config(skip)]
     pub causal_ts: CausalTsConfig,
+
+    #[online_config(submodule)]
+    pub resource_control: ResourceControlConfig,
 }
 
 impl Default for TikvConfig {
@@ -3081,6 +3085,7 @@ impl Default for TikvConfig {
             resource_metering: ResourceMeteringConfig::default(),
             backup_stream: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
+            resource_control: ResourceControlConfig::default(),
         }
     }
 }

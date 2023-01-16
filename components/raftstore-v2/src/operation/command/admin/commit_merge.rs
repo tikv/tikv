@@ -405,6 +405,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.logger.list()
             ));
         }
+        // Match v1::check_merge_proposal.
+        let source_region = req.get_admin_request().get_commit_merge().get_source();
+        let region = self.region();
+        if !util::is_sibling_regions(source_region, region) {
+            return Err(box_err!(
+                "{:?} and {:?} should be sibling",
+                source_region,
+                region
+            ));
+        }
+        if !region_on_same_stores(source_region, region) {
+            return Err(box_err!(
+                "peers not matched: {:?} {:?}",
+                source_region,
+                region
+            ));
+        }
         let mut proposal_ctx = ProposalContext::empty();
         proposal_ctx.insert(ProposalContext::COMMIT_MERGE);
         let data = req.write_to_bytes().unwrap();
@@ -413,7 +430,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
-    // Mirrors v1::exec_commit_merge.
+    // Match v1::exec_commit_merge.
     pub async fn apply_commit_merge(
         &mut self,
         req: &AdminRequest,
@@ -761,7 +778,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
         // a region merge.
-        self.require_updating_max_ts(store_ctx);
+        self.txn_context().require_updating_max_ts(store_ctx);
 
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after
