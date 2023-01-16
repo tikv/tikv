@@ -20,7 +20,7 @@ use kvproto::{
 };
 use pd_client::BucketStat;
 use protobuf::Message;
-use raft::{RawNode, StateRole};
+use raft::{ProgressState, RawNode, StateRole, INVALID_INDEX};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
@@ -30,15 +30,16 @@ use raftstore::{
         ReadProgress, TabletSnapManager, TxnExt, WriteTask,
     },
 };
-use slog::Logger;
+use slog::{warn, Logger};
+use tikv_util::{box_err, slog_panic};
 
 use super::storage::Storage;
 use crate::{
     batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, CompactLogContext, DestroyProgress, ProposalControl, SimpleWriteReqEncoder,
-        SplitFlowControl,
+        AsyncWriter, CatchUpLogs, CompactLogContext, DestroyProgress, ProposalControl,
+        SimpleWriteReqEncoder, SplitFlowControl,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -103,7 +104,12 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// are either removed (when applying logs) or won't be removed before
     /// merge (the proposals to remove them are rejected).
     prepare_merge_fence: Option<(u64, Vec<u8>)>,
-    pending_merge_state: Option<MergeState>,
+    /// When it is set, all write proposals except for `RollbackMerge` will be
+    /// rejected.
+    pub pending_merge_state: Option<MergeState>,
+    /// Source region is catching up logs for merge.
+    pub catch_up_logs: Option<CatchUpLogs>,
+    pub want_to_rollback_merge_peers: HashSet<u64>,
 
     pending_ticks: Vec<PeerTick>,
 
@@ -194,6 +200,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             prepare_merge_fence: None,
             pending_merge_state: None,
+            catch_up_logs: None,
+            want_to_rollback_merge_peers: HashSet::default(),
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
             split_trace: vec![],
@@ -832,5 +840,67 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .lead_transferee
                 .unwrap_or(raft::INVALID_ID),
         )
+    }
+
+    /// Returns (minimal matched, minimal committed)
+    pub fn get_min_progress(&self) -> Result<(u64, u64)> {
+        let (mut min_m, mut min_c) = (None, None);
+        if let Some(progress) = self.raft_group().status().progress {
+            for (id, pr) in progress.iter() {
+                // Reject merge if there is any pending request snapshot,
+                // because a target region may merge a source region which is in
+                // an invalid state.
+                if pr.state == ProgressState::Snapshot
+                    || pr.pending_request_snapshot != INVALID_INDEX
+                {
+                    return Err(box_err!(
+                        "there is a pending snapshot peer {} [{:?}], skip merge",
+                        id,
+                        pr
+                    ));
+                }
+                if min_m.unwrap_or(u64::MAX) > pr.matched {
+                    min_m = Some(pr.matched);
+                }
+                if min_c.unwrap_or(u64::MAX) > pr.committed_index {
+                    min_c = Some(pr.committed_index);
+                }
+            }
+        }
+        let (mut min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
+        if min_m < min_c {
+            warn!(
+                self.logger,
+                "min_matched < min_committed, raft progress is inaccurate";
+                "min_matched" => min_m,
+                "min_committed" => min_c,
+            );
+            // Reset `min_matched` to `min_committed`, since the raft log at `min_committed`
+            // is known to be committed in all peers, all of the peers should also have
+            // replicated it
+            min_m = min_c;
+        }
+        Ok((min_m, min_c))
+    }
+
+    #[inline]
+    pub fn want_to_rollback_merge_peer_mut(&mut self) -> &mut HashSet<u64> {
+        &mut self.want_to_rollback_merge_peers
+    }
+
+    #[inline]
+    pub fn quorum_want_to_rollback_merge(&self) -> bool {
+        self.raft_group
+            .raft
+            .prs()
+            .has_quorum(&self.want_to_rollback_merge_peers)
+    }
+
+    #[inline]
+    pub fn get_index_term(&self, idx: u64) -> u64 {
+        match self.raft_group.raft.raft_log.term(idx) {
+            Ok(t) => t,
+            Err(e) => slog_panic!(self.logger, "failed to load term"; "index" => idx, "err" => ?e),
+        }
     }
 }

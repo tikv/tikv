@@ -57,6 +57,7 @@ use crate::{
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// A logger without any KV. It's clean for creating new PeerFSM.
     pub logger: Logger,
+    pub store_id: u64,
     pub coprocessor_host: CoprocessorHost<EK>,
     /// The transport for sending messages to peers on other stores.
     pub trans: T,
@@ -396,6 +397,7 @@ where
         let cfg = self.cfg.value().clone();
         let mut poll_ctx = StoreContext {
             logger: self.logger.clone(),
+            store_id: self.store_id,
             trans: self.trans.clone(),
             current_time: None,
             has_ready: false,

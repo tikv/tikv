@@ -28,13 +28,18 @@ use crate::{
 ///
 /// Using a trait to make signiture simpler.
 pub trait ApplyResReporter {
-    fn report(&self, apply_res: ApplyRes);
+    #[inline]
+    fn report(&self, apply_res: ApplyRes) {
+        self.send(PeerMsg::ApplyRes(apply_res));
+    }
+
+    fn send(&self, msg: PeerMsg);
 }
 
 impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for Mailbox<F, S> {
-    fn report(&self, apply_res: ApplyRes) {
+    fn send(&self, msg: PeerMsg) {
         // TODO: check shutdown.
-        let _ = self.force_send(PeerMsg::ApplyRes(apply_res));
+        let _ = self.force_send(msg);
     }
 }
 
@@ -120,6 +125,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
                     ApplyTask::UnsafeWrite(raw_write) => self.apply.apply_unsafe_write(raw_write),
                     ApplyTask::ManualFlush => self.apply.on_manual_flush().await,
+                    ApplyTask::LogsUpToDate(r) => self.apply.on_logs_up_to_date(r),
                 }
 
                 self.apply.maybe_flush().await;

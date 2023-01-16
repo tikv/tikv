@@ -149,7 +149,7 @@ pub fn temp_split_path<EK>(registry: &TabletRegistry<EK>, region_id: u64) -> Pat
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
     pub fn on_split_region_check(&mut self) {
         if !self.fsm.peer_mut().on_split_region_check(self.store_ctx) {
-            self.schedule_tick(PeerTick::SplitRegionCheck)
+            self.schedule_tick(PeerTick::SplitRegionCheck);
         }
     }
 }
@@ -293,16 +293,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
-        let region = self.region_state().get_region();
+        let region = self.region();
         let region_id = region.get_id();
-        validate_batch_split(req, self.region_state().get_region())?;
+        validate_batch_split(req, self.region())?;
 
         let mut boundaries: Vec<&[u8]> = Vec::default();
-        boundaries.push(self.region_state().get_region().get_start_key());
+        boundaries.push(self.region().get_start_key());
         for req in req.get_splits().get_requests() {
             boundaries.push(req.get_split_key());
         }
-        boundaries.push(self.region_state().get_region().get_end_key());
+        boundaries.push(self.region().get_end_key());
 
         info!(
             self.logger,
@@ -757,6 +757,8 @@ mod test {
         fn report(&self, apply_res: ApplyRes) {
             let _ = self.sender.send(apply_res);
         }
+
+        fn send(&self, _msg: PeerMsg) {}
     }
 
     fn new_split_req(key: &[u8], id: u64, children: Vec<u64>) -> SplitRequest {

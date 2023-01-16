@@ -342,7 +342,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        fsm::ApplyResReporter, operation::write_initial_states, raft::Apply, router::ApplyRes,
+        fsm::ApplyResReporter, operation::write_initial_states, raft::Apply, router::PeerMsg,
     };
 
     #[derive(Clone)]
@@ -368,7 +368,7 @@ mod tests {
     }
 
     impl ApplyResReporter for TestRouter {
-        fn report(&self, _res: ApplyRes) {}
+        fn send(&self, _msg: PeerMsg) {}
     }
 
     fn new_region() -> Region {

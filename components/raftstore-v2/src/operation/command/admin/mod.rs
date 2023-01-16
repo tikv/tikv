@@ -8,6 +8,8 @@ mod rollback_merge;
 mod split;
 mod transfer_leader;
 
+pub use commit_merge::CatchUpLogs;
+use commit_merge::CommitMergeResult;
 pub use compact_log::CompactLogContext;
 use compact_log::CompactLogResult;
 use conf_change::ConfChangeResult;
@@ -16,6 +18,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use prepare_merge::PrepareMergeResult;
 use protobuf::Message;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
+use rollback_merge::RollbackMergeResult;
 use slog::info;
 use split::SplitResult;
 pub use split::{temp_split_path, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
@@ -32,6 +35,8 @@ pub enum AdminCmdResult {
     TransferLeader(u64),
     CompactLog(CompactLogResult),
     PrepareMerge(PrepareMergeResult),
+    CommitMerge(CommitMergeResult),
+    RollbackMerge(RollbackMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {

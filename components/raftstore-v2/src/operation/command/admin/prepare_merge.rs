@@ -14,17 +14,18 @@
 //!
 //! Then, transfer all in-memory pessimistic locks to the target region as a
 //! Raft proposal. To guarantee the consistency of lock serialization, we might
-//! need to wait for some in-flight logs to be applied. Read the comments of
-//! `Peer::pending_merge_fence` for more details.
+//! need to wait for some in-flight logs to be applied. During the wait, all
+//! incoming write proposals will be rejected. Read the comments of
+//! `Peer::prepare_merge_fence` for more details.
 //!
 //! ## Apply (`Apply::apply_prepare_merge`)
 //!
 //! Increase region epoch and write the merge state.
 //!
-//! ## On Apply Result (`Peer::on_ready_prepare_merge`)
+//! ## On Apply Result (`Peer::on_apply_res_prepare_merge`)
 //!
-//! Initiate catch up logs. And start the tick (`Peer::on_merge_check_tick`) to
-//! periodically check the eligibility of merge.
+//! Start the tick (`Peer::on_merge_check_tick`) to periodically check the
+//! eligibility of merge.
 
 use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
 use kvproto::{
@@ -37,13 +38,13 @@ use kvproto::{
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use protobuf::Message;
-use raft::{eraftpb::EntryType, GetEntriesContext, ProgressState, INVALID_INDEX, NO_LIMIT};
+use raft::{eraftpb::EntryType, GetEntriesContext, NO_LIMIT};
 use raftstore::{
     coprocessor::RegionChangeReason,
-    store::{metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext},
+    store::{metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext, Transport},
     Error, Result,
 };
-use slog::{debug, error, info, warn};
+use slog::{debug, error, info};
 use tikv_util::{box_err, store::region_on_same_stores};
 
 use crate::{
@@ -319,47 +320,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(())
     }
 
-    /// Returns (minimal matched, minimal committed)
-    fn get_min_progress(&self) -> Result<(u64, u64)> {
-        let (mut min_m, mut min_c) = (None, None);
-        if let Some(progress) = self.raft_group().status().progress {
-            for (id, pr) in progress.iter() {
-                // Reject merge if there is any pending request snapshot,
-                // because a target region may merge a source region which is in
-                // an invalid state.
-                if pr.state == ProgressState::Snapshot
-                    || pr.pending_request_snapshot != INVALID_INDEX
-                {
-                    return Err(box_err!(
-                        "there is a pending snapshot peer {} [{:?}], skip merge",
-                        id,
-                        pr
-                    ));
-                }
-                if min_m.unwrap_or(u64::MAX) > pr.matched {
-                    min_m = Some(pr.matched);
-                }
-                if min_c.unwrap_or(u64::MAX) > pr.committed_index {
-                    min_c = Some(pr.committed_index);
-                }
-            }
-        }
-        let (mut min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
-        if min_m < min_c {
-            warn!(
-                self.logger,
-                "min_matched < min_committed, raft progress is inaccurate";
-                "min_matched" => min_m,
-                "min_committed" => min_c,
-            );
-            // Reset `min_matched` to `min_committed`, since the raft log at `min_committed`
-            // is known to be committed in all peers, all of the peers should also have
-            // replicated it
-            min_m = min_c;
-        }
-        Ok((min_m, min_c))
-    }
-
     /// Called after some new entries have been applied and the fence can
     /// probably be lifted.
     pub fn retry_pending_prepare_merge<T>(
@@ -377,30 +337,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
     }
-
-    pub fn on_ready_prepare_merge<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        res: PrepareMergeResult,
-    ) {
-        {
-            let mut meta = store_ctx.store_meta.lock().unwrap();
-            meta.set_region(&res.region, true, &self.logger);
-            let (reader, _) = meta.readers.get_mut(&res.region.get_id()).unwrap();
-            self.set_region(
-                &store_ctx.coprocessor_host,
-                reader,
-                res.region.clone(),
-                RegionChangeReason::PrepareMerge,
-                res.state.get_commit(),
-            );
-        }
-
-        self.set_pending_merge_state(Some(res.state));
-
-        self.update_merge_progress_on_ready_prepare_merge();
-        self.on_merge_check_tick();
-    }
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
@@ -414,7 +350,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let prepare_merge = req.get_prepare_merge();
         let index = prepare_merge.get_min_index();
         // Note: the check against first_index is removed in v2.
-        let mut region = self.region_state().get_region().clone();
+        let mut region = self.region().clone();
         let region_version = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_version);
         // In theory conf version should not be increased when executing prepare_merge.
@@ -444,5 +380,30 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 state: merging_state,
             }),
         ))
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn on_apply_res_prepare_merge<T: Transport>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        res: PrepareMergeResult,
+    ) {
+        {
+            let mut meta = store_ctx.store_meta.lock().unwrap();
+            meta.set_region(&res.region, true, &self.logger);
+            let (reader, _) = meta.readers.get_mut(&res.region.get_id()).unwrap();
+            self.set_region(
+                &store_ctx.coprocessor_host,
+                reader,
+                res.region.clone(),
+                RegionChangeReason::PrepareMerge,
+                res.state.get_commit(),
+            );
+        }
+
+        self.set_pending_merge_state(Some(res.state));
+
+        self.update_merge_progress_on_apply_res_prepare_merge(store_ctx);
     }
 }

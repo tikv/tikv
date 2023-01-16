@@ -7,7 +7,7 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
+use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes, MergeResultKind};
 use tikv_util::time::Instant;
 
 use super::{
@@ -16,7 +16,7 @@ use super::{
     },
     ApplyRes,
 };
-use crate::operation::{RequestSplit, SimpleWriteBinary, SplitInit};
+use crate::operation::{CatchUpLogs, RequestSplit, SimpleWriteBinary, SplitInit};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -191,6 +191,13 @@ pub enum PeerMsg {
     ForceCompactLog,
     TabletTrimmed {
         tablet_index: u64,
+    },
+    CatchUpLogs(CatchUpLogs),
+    // From target to source.
+    MergeResult {
+        target_region_id: u64,
+        target: metapb::Peer,
+        result: MergeResultKind,
     },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]

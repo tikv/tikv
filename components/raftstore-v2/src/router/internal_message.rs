@@ -2,7 +2,7 @@
 
 use raftstore::store::fsm::ApplyMetrics;
 
-use crate::operation::{AdminCmdResult, CommittedEntries, DataTrace, GenSnapTask};
+use crate::operation::{AdminCmdResult, CatchUpLogs, CommittedEntries, DataTrace, GenSnapTask};
 
 #[derive(Debug)]
 pub enum ApplyTask {
@@ -11,6 +11,7 @@ pub enum ApplyTask {
     /// Writes that doesn't care consistency.
     UnsafeWrite(Box<[u8]>),
     ManualFlush,
+    LogsUpToDate(CatchUpLogs),
 }
 
 #[derive(Debug, Default)]
