@@ -287,7 +287,7 @@ where
             config.quota.max_delay_duration,
             config.quota.enable_auto_tune,
         ));
-        let resource_manager = Arc::new(ResourceGroupManager::default());
+        let resource_manager = Arc::new(ResourceGroupManager::new(config.resource_control.enabled));
         // spawn a task to periodically update the minimal virtual time of all resource
         // group.
         if config.resource_control.enabled {
@@ -634,19 +634,14 @@ where
         let pd_sender = raftstore_v2::FlowReporter::new(pd_worker.scheduler());
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
-            let priority_mgr = if self.config.resource_control.enabled {
-                Some(
-                    self.resource_manager
-                        .derive_controller("unified-read-pool".into(), true),
-                )
-            } else {
-                None
-            };
+            let resource_ctl = self
+                .resource_manager
+                .derive_controller("unified-read-pool".into(), true);
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                priority_mgr,
+                resource_ctl,
             ))
         } else {
             None
@@ -719,6 +714,8 @@ where
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
             self.causal_ts_provider.clone(),
+            self.resource_manager
+                .derive_controller("scheduler-worker-pool".to_owned(), true),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(

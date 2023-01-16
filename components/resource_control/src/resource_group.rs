@@ -9,7 +9,10 @@ use std::{
 };
 
 use dashmap::{mapref::one::Ref, DashMap};
-use kvproto::resource_manager::{GroupMode, ResourceGroup};
+use kvproto::{
+    kvrpcpb::CommandPri,
+    resource_manager::{GroupMode, ResourceGroup},
+};
 use yatp::queue::priority::TaskPriorityProvider;
 
 // a read task cost at least 50us.
@@ -33,9 +36,17 @@ pub enum ResourceConsumeType {
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroup>,
     registry: Mutex<Vec<Arc<ResourceController>>>,
+    enable: bool,
 }
 
 impl ResourceGroupManager {
+    pub fn new(enable: bool) -> Self {
+        ResourceGroupManager {
+            enable,
+            ..Default::default()
+        }
+    }
+
     fn get_ru_setting(rg: &ResourceGroup, is_read: bool) -> u64 {
         match (rg.get_mode(), is_read) {
             (GroupMode::RuMode, true) => rg
@@ -90,7 +101,14 @@ impl ResourceGroupManager {
         self.resource_groups.iter().map(|g| g.clone()).collect()
     }
 
-    pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
+    pub fn derive_controller(
+        &self,
+        name: String,
+        is_read: bool,
+    ) -> Option<Arc<ResourceController>> {
+        if !self.enable {
+            return None;
+        }
         let controller = Arc::new(ResourceController::new(name, is_read));
         self.registry.lock().unwrap().push(controller.clone());
         for g in &self.resource_groups {
@@ -98,7 +116,7 @@ impl ResourceGroupManager {
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota);
         }
 
-        controller
+        Some(controller)
     }
 
     pub fn advance_min_virtual_time(&self) {
@@ -243,6 +261,15 @@ impl ResourceController {
         // need totally accurate here.
         self.last_min_vt.store(max_vt, Ordering::Relaxed);
     }
+
+    pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
+        let level = match pri {
+            CommandPri::Low => 0,
+            CommandPri::Normal => 1,
+            CommandPri::High => 2,
+        };
+        self.resource_group(name).get_priority(level)
+    }
 }
 
 impl TaskPriorityProvider for ResourceController {
@@ -343,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_resource_group() {
-        let resource_manager = ResourceGroupManager::default();
+        let resource_manager = ResourceGroupManager::new();
 
         let group1 = new_resource_group("TEST".into(), true, 100, 100);
         resource_manager.add_resource_group(group1);
@@ -393,29 +420,29 @@ mod tests {
 
         let mut extras1 = Extras::single_level();
         extras1.set_metadata("test".as_bytes().to_owned());
-        assert_eq!(resouce_ctl.priority_of(&extras1), 25_000);
+        assert_eq!(resource_ctl.priority_of(&extras1), 25_000);
         assert_eq!(group1.current_vt(), 25_000);
 
         let mut extras2 = Extras::single_level();
         extras2.set_metadata("test2".as_bytes().to_owned());
-        assert_eq!(resouce_ctl.priority_of(&extras2), 12_500);
+        assert_eq!(resource_ctl.priority_of(&extras2), 12_500);
         assert_eq!(group2.current_vt(), 12_500);
 
         let mut extras3 = Extras::single_level();
         extras3.set_metadata("unknown_group".as_bytes().to_owned());
-        assert_eq!(resouce_ctl.priority_of(&extras3), 50);
+        assert_eq!(resource_ctl.priority_of(&extras3), 50);
         assert_eq!(
-            resouce_ctl
+            resource_ctl
                 .resource_group("default".as_bytes())
                 .current_vt(),
             50
         );
 
-        resouce_ctl.consume(
+        resource_ctl.consume(
             "test".as_bytes(),
             ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
         );
-        resouce_ctl.consume(
+        resource_ctl.consume(
             "test2".as_bytes(),
             ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
         );
@@ -429,7 +456,7 @@ mod tests {
         assert_eq!(group1_vt, 5_025_000);
         assert!(group2.current_vt() >= group1.current_vt() * 3 / 4);
         assert!(
-            resouce_ctl
+            resource_ctl
                 .resource_group("default".as_bytes())
                 .current_vt()
                 >= group1.current_vt() / 2
@@ -442,15 +469,15 @@ mod tests {
         let new_group = new_resource_group("new_group".into(), true, 500, 500);
         resource_manager.add_resource_group(new_group);
 
-        assert_eq!(resouce_ctl.resource_consumptions.len(), 4);
-        let group3 = resouce_ctl.resource_group("new_group".as_bytes());
+        assert_eq!(resource_ctl.resource_consumptions.len(), 4);
+        let group3 = resource_ctl.resource_group("new_group".as_bytes());
         assert_eq!(group3.weight, 200);
         assert!(group3.current_vt() >= group1_vt / 2);
     }
 
     #[test]
     fn test_adjust_resource_group_weight() {
-        let resource_manager = ResourceGroupManager::default();
+        let resource_manager = ResourceGroupManager::new();
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
 
