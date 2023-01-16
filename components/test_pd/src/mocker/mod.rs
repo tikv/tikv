@@ -67,11 +67,11 @@ pub trait PdMocker {
             let cli = etcd_client.clone();
             block_on(async move {
                 match item.get_kind() {
-                    ItemKind::Put => {
+                    EventType::Put => {
                         let kv = KeyValue(MetaKey(item.get_name().into()), item.get_value().into());
                         cli.lock().await.set(kv).await
                     }
-                    ItemKind::Delete => {
+                    EventType::Delete => {
                         let key = Keys::Key(MetaKey(item.get_name().into()));
                         cli.lock().await.delete(key).await
                     }

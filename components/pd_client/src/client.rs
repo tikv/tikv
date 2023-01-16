@@ -290,6 +290,10 @@ impl PdClient for RpcClient {
         config_path: String,
         items: Vec<pdpb::GlobalConfigItem>,
     ) -> PdFuture<()> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["store_global_config"])
+            .start_coarse_timer();
+
         let mut req = pdpb::StoreGlobalConfigRequest::new();
         req.set_config_path(config_path);
         req.set_changes(items.into());
@@ -316,6 +320,10 @@ impl PdClient for RpcClient {
         &self,
         config_path: String,
     ) -> PdFuture<(Vec<pdpb::GlobalConfigItem>, i64)> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["load_global_config"])
+            .start_coarse_timer();
+
         let mut req = pdpb::LoadGlobalConfigRequest::new();
         req.set_config_path(config_path);
         let executor = |client: &Client, req| match client
@@ -346,6 +354,10 @@ impl PdClient for RpcClient {
         config_path: String,
         revision: i64,
     ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["watch_global_config"])
+            .start_coarse_timer();
+
         let mut req = pdpb::WatchGlobalConfigRequest::default();
         info!("[global_config] start watch global config"; "path" => &config_path, "revision" => revision);
         req.set_config_path(config_path);

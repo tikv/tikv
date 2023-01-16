@@ -238,8 +238,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                 info!("watch event from etcd"; "event" => ?event);
                 let mut change = GlobalConfigItem::new();
                 change.set_kind(match event.kind {
-                    KvEventType::Put => ItemKind::Put,
-                    KvEventType::Delete => ItemKind::Delete,
+                    KvEventType::Put => EventType::Put,
+                    KvEventType::Delete => EventType::Delete,
                 });
                 change.set_name(from_utf8(event.pair.key()).unwrap().to_string());
                 change.set_value(from_utf8(event.pair.value()).unwrap().to_string());

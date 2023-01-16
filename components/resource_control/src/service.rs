@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt;
-use kvproto::{pdpb::ItemKind, resource_manager::ResourceGroup};
+use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
 use pd_client::{PdClient, Result, RpcClient};
 use tikv_util::{box_err, error};
 
@@ -13,10 +13,10 @@ pub const CONFIG_PATH: &str = "resource_group/settings";
 
 #[derive(Clone)]
 pub struct ResourceManagerService {
-    pub manager: Arc<ResourceGroupManager>,
+    manager: Arc<ResourceGroupManager>,
     pd_client: Arc<RpcClient>,
     // record watch revision
-    pub revision: i64,
+    revision: i64,
 }
 
 impl ResourceManagerService {
@@ -61,8 +61,10 @@ impl ResourceManagerService {
                                         item.get_value().as_bytes(),
                                     ) {
                                         match item.get_kind() {
-                                            ItemKind::Put => self.manager.add_resource_group(group),
-                                            ItemKind::Delete => {
+                                            EventType::Put => {
+                                                self.manager.add_resource_group(group)
+                                            }
+                                            EventType::Delete => {
                                                 self.manager.remove_resource_group(item.get_name())
                                             }
                                         }
@@ -71,14 +73,14 @@ impl ResourceManagerService {
                             }
                             Err(err) => {
                                 error!("failed to get stream, err: {:?}", err);
-                                std::thread::sleep(Duration::from_secs(1));
+                                tokio::time::sleep(Duration::from_secs(1)).await;
                             }
                         }
                     }
                 }
                 Err(e) => {
                     error!("failed to watch resource groups, err: {:?}", e);
-                    std::thread::sleep(Duration::from_secs(1));
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
         }
@@ -93,13 +95,6 @@ impl ResourceManagerService {
             Ok((items, revision)) => {
                 let mut groups = Vec::default();
                 for item in items {
-                    if item.has_error() {
-                        error!(
-                            "failed to load global config with key {:?}",
-                            item.get_error()
-                        );
-                        continue;
-                    }
                     if let Ok(group) = protobuf::parse_from_bytes(item.get_value().as_bytes()) {
                         groups.push(group);
                     }
@@ -134,7 +129,7 @@ pub mod tests {
 
     fn add_resource_group(pd_client: Arc<RpcClient>, group: ResourceGroup) {
         let mut item = GlobalConfigItem::default();
-        item.set_kind(ItemKind::Put);
+        item.set_kind(EventType::Put);
         item.set_name(group.get_name().to_string());
         let mut buf = Vec::new();
         group.write_to_vec(&mut buf).unwrap();
@@ -150,7 +145,7 @@ pub mod tests {
 
     fn delete_resource_group(pd_client: Arc<RpcClient>, name: &str) {
         let mut item = GlobalConfigItem::default();
-        item.set_kind(ItemKind::Delete);
+        item.set_kind(EventType::Delete);
         item.set_name(name.to_string());
 
         futures::executor::block_on(async move {
