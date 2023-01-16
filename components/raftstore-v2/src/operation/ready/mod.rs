@@ -728,12 +728,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // latency.
                     self.raft_group_mut().skip_bcast_commit(false);
 
-                    // Init the in-memory pessimistic lock table when the peer becomes leader.
-                    self.activate_in_memory_pessimistic_locks();
-
-                    // A more recent read may happen on the old leader. So max ts should
-                    // be updated after a peer becomes leader.
-                    self.require_updating_max_ts(ctx);
+                    self.txn_context().on_became_leader(
+                        ctx,
+                        self.term(),
+                        self.region(),
+                        &self.logger,
+                    );
 
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
@@ -746,7 +746,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
                     self.storage_mut().cancel_generating_snap(None);
-                    self.clear_in_memory_pessimistic_locks();
+                    self.txn_context()
+                        .on_became_follower(self.term(), self.region());
                 }
                 _ => {}
             }
