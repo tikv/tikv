@@ -1230,6 +1230,10 @@ impl DbConfig {
                 self.write_buffer_limit.get_or_insert(ReadableSize(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                 ));
+                self.defaultcf.disable_write_stall = true;
+                self.writecf.disable_write_stall = true;
+                self.lockcf.disable_write_stall = true;
+                self.raftcf.disable_write_stall = true;
             }
         }
     }
@@ -3242,7 +3246,7 @@ impl TikvConfig {
         self.quota.validate()?;
         self.causal_ts.validate()?;
 
-        if self.storage.flow_control.enable || self.storage.engine == EngineType::RaftKv2 {
+        if self.storage.flow_control.enable {
             self.rocksdb.defaultcf.disable_write_stall = true;
             self.rocksdb.writecf.disable_write_stall = true;
             self.rocksdb.lockcf.disable_write_stall = true;
