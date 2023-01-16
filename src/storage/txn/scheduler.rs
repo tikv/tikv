@@ -447,9 +447,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             running_write_bytes: AtomicUsize::new(0).into(),
             sched_pending_write_threshold: config.scheduler_pending_write_threshold.0 as usize,
             sched_worker_pool: SchedPool::new(
-                engine.clone(),
+                engine,
                 config.scheduler_worker_pool_size,
-                reporter.clone(),
+                reporter,
                 feature_gate.clone(),
                 resource_ctl,
             ),
@@ -1002,7 +1002,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let self1 = self.clone();
         let group_name1 = group_name.to_owned();
         self.get_sched_pool()
-            .spawn(&group_name, CommandPri::High, async move {
+            .spawn(group_name, CommandPri::High, async move {
                 for (lock_info, released_lock) in legacy_wake_up_list {
                     let cb = lock_info.key_cb.unwrap().into_inner();
                     let e = StorageError::from(Error::from(MvccError::from(
@@ -1973,7 +1973,7 @@ mod tests {
 
     #[test]
     fn test_acquire_latch_deadline() {
-        let (scheduler, engine) = new_test_scheduler();
+        let (scheduler, _) = new_test_scheduler();
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
         let cid = scheduler.inner.gen_id();
@@ -2055,7 +2055,7 @@ mod tests {
 
     #[test]
     fn test_pool_available_deadline() {
-        let (scheduler, engine) = new_test_scheduler();
+        let (scheduler, _) = new_test_scheduler();
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
         // cannot run within 500ms.
@@ -2092,7 +2092,7 @@ mod tests {
 
     #[test]
     fn test_flow_control_trottle_deadline() {
-        let (scheduler, engine) = new_test_scheduler();
+        let (scheduler, _) = new_test_scheduler();
 
         let mut req = CheckTxnStatusRequest::default();
         req.mut_context().max_execution_duration_ms = 100;
@@ -2136,7 +2136,7 @@ mod tests {
 
     #[test]
     fn test_accumulate_many_expired_commands() {
-        let (scheduler, engine) = new_test_scheduler();
+        let (scheduler, _) = new_test_scheduler();
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
         let cid = scheduler.inner.gen_id();
