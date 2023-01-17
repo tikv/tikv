@@ -70,7 +70,7 @@ use uuid::Uuid;
 
 use super::{
     cmd_resp,
-    local_metrics::{RaftMetrics, TimeTracker},
+    local_metrics::RaftMetrics,
     metrics::*,
     peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
@@ -141,16 +141,16 @@ impl<C: WriteCallback> ProposalQueue<C> {
 
     /// Find the trackers of given index.
     /// Caller should check if term is matched before using trackers.
-    fn find_trackers(&self, index: u64) -> Option<(u64, &SmallVec<[TimeTracker; 4]>)> {
+    pub fn find_trackers(&self, index: u64) -> Option<(u64, C::TimeTrackerListRef<'_>)> {
         self.queue
             .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
             .ok()
-            .and_then(|i| {
-                self.queue[i]
-                    .cb
-                    .write_trackers()
-                    .map(|ts| (self.queue[i].term, ts))
-            })
+            .map(|i| (self.queue[i].term, self.queue[i].cb.write_trackers()))
+    }
+
+    #[inline]
+    pub fn queue_mut(&mut self) -> &mut VecDeque<Proposal<C>> {
+        &mut self.queue
     }
 
     pub fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
@@ -200,7 +200,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
     }
 
     #[inline]
-    fn oldest(&self) -> Option<&Proposal<C>> {
+    pub fn oldest(&self) -> Option<&Proposal<C>> {
         self.queue.front()
     }
 
@@ -1203,6 +1203,9 @@ where
             peer.raft_group.campaign()?;
         }
 
+        let persisted_index = peer.raft_group.raft.raft_log.persisted;
+        peer.mut_store().update_cache_persisted(persisted_index);
+
         Ok(peer)
     }
 
@@ -1847,7 +1850,7 @@ where
                 {
                     let proposal = &self.proposals.queue[idx];
                     if term == proposal.term {
-                        for tracker in proposal.cb.write_trackers().iter().flat_map(|v| v.iter()) {
+                        for tracker in proposal.cb.write_trackers() {
                             tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
                                 &mut t.metrics.wf_send_proposal_nanos
                             });
@@ -2806,8 +2809,8 @@ where
             for entry in ready.entries() {
                 if let Some((term, times)) = self.proposals.find_trackers(entry.get_index()) {
                     if entry.term == term {
-                        trackers.extend_from_slice(times);
                         for tracker in times {
+                            trackers.push(*tracker);
                             tracker.observe(now, &ctx.raft_metrics.wf_send_to_queue, |t| {
                                 &mut t.metrics.wf_send_to_queue_nanos
                             });
@@ -3330,7 +3333,7 @@ where
         let time = monotonic_raw_now();
         for (req, cb, mut read_index) in read.take_cmds().drain(..) {
             cb.read_tracker().map(|tracker| {
-                GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos =
                         (time - read.propose_time).to_std().unwrap().as_nanos() as u64;
                 })
@@ -3735,6 +3738,7 @@ where
                     cb,
                     propose_time: None,
                     must_pass_epoch_check: has_applied_to_current_term,
+                    sent: false,
                 };
                 if let Some(cmd_type) = req_admin_cmd_type {
                     self.cmd_epoch_checker
@@ -4066,6 +4070,7 @@ where
                     cb: Callback::None,
                     propose_time: Some(now),
                     must_pass_epoch_check: false,
+                    sent: false,
                 };
                 self.post_propose(poll_ctx, p);
             }
@@ -5988,6 +5993,7 @@ mod tests {
                 cb: Callback::write(Box::new(|_| {})),
                 propose_time: Some(u64_to_timespec(index)),
                 must_pass_epoch_check: false,
+                sent: false,
             });
         };
         for index in 1..=100 {
@@ -6061,6 +6067,7 @@ mod tests {
                 is_conf_change: false,
                 propose_time: None,
                 must_pass_epoch_check: false,
+                sent: false,
             });
         }
         for (index, term) in entries {

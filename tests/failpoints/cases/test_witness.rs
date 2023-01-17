@@ -71,6 +71,10 @@ fn test_witness_raftlog_gc_pull_voter_replicated_index() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
+    cluster
+        .cfg
+        .raft_store
+        .request_voter_replicated_index_interval = ReadableDuration::millis(100);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -152,6 +156,10 @@ fn test_witness_raftlog_gc_after_reboot() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
+    cluster
+        .cfg
+        .raft_store
+        .request_voter_replicated_index_interval = ReadableDuration::millis(100);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);

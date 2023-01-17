@@ -527,13 +527,14 @@ where
                 }))
             };
 
-            let tokens: SmallVec<[TimeTracker; 4]> = cbs
+            let trackers: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
-                .filter_map(|cb| cb.write_trackers().map(|t| t[0]))
+                .flat_map(|cb| cb.write_trackers())
+                .cloned()
                 .collect();
 
-            let mut cb = Callback::write_ext(
-                Box::new(move |resp| {
+            let cb = Callback::Write {
+                cb: Box::new(move |resp| {
                     for cb in cbs {
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
@@ -542,12 +543,8 @@ where
                 }),
                 proposed_cb,
                 committed_cb,
-            );
-
-            if let Some(trackers) = cb.write_trackers_mut() {
-                *trackers = tokens;
-            }
-
+                trackers,
+            };
             return Some((req, cb));
         }
         None
@@ -628,7 +625,7 @@ where
                         .propose_wait_time
                         .observe(propose_time.as_secs_f64());
                     cmd.callback.read_tracker().map(|tracker| {
-                        GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                             t.metrics.read_index_propose_wait_nanos =
                                 propose_time.as_nanos() as u64;
                         })
@@ -2317,21 +2314,6 @@ where
                         .get_mut(&region_id)
                         .unwrap();
                     *is_ready = true;
-                }
-            }
-            ApplyTaskRes::Compact {
-                state,
-                first_index,
-                has_pending,
-            } => {
-                self.fsm.peer.has_pending_compact_cmd = has_pending;
-                // When the witness restarts, the pending compact cmds will be lost. We will try
-                // to use `voter_replicated_index` as the `compact index` to avoid log
-                // accumulation, but if `voter_replicated_index` is less than `first_index`,
-                // then gc is not needed. In this case, the `first_index` we pass back will be
-                // 0, and `has_pending` set to false.
-                if first_index != 0 {
-                    self.on_ready_compact_log(first_index, state);
                 }
             }
         }
@@ -4953,8 +4935,13 @@ where
         while let Some(result) = exec_results.pop_front() {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
-                ExecResult::CompactLog { first_index, state } => {
-                    self.on_ready_compact_log(first_index, state)
+                ExecResult::CompactLog {
+                    state,
+                    first_index,
+                    has_pending,
+                } => {
+                    self.fsm.peer.has_pending_compact_cmd = has_pending;
+                    self.on_ready_compact_log(first_index, state);
                 }
                 ExecResult::SplitRegion {
                     derived,
@@ -4992,9 +4979,11 @@ where
                 ExecResult::BatchSwitchWitness(switches) => {
                     self.on_ready_batch_switch_witness(switches)
                 }
-                ExecResult::PendingCompactCmd => {
-                    self.fsm.peer.has_pending_compact_cmd = true;
-                    self.register_pull_voter_replicated_index_tick();
+                ExecResult::HasPendingCompactCmd(has_pending) => {
+                    self.fsm.peer.has_pending_compact_cmd = has_pending;
+                    if has_pending {
+                        self.register_pull_voter_replicated_index_tick();
+                    }
                 }
             }
         }
@@ -5286,7 +5275,7 @@ where
 
         if self.ctx.raft_metrics.waterfall_metrics {
             let now = Instant::now();
-            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers() {
                 tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
                     &mut t.metrics.wf_batch_wait_nanos
                 });
@@ -5604,9 +5593,8 @@ where
         if !self.fsm.peer.is_witness() || !self.fsm.peer.has_pending_compact_cmd {
             return;
         }
-        // TODO: make it configurable
         if self.fsm.peer.last_compacted_time.elapsed()
-            > self.ctx.cfg.raft_log_gc_tick_interval.0 * 2
+            > self.ctx.cfg.request_voter_replicated_index_interval.0
         {
             let mut msg = ExtraMessage::default();
             msg.set_type(ExtraMessageType::MsgVoterReplicatedIndexRequest);
