@@ -301,6 +301,11 @@ pub enum ExecResult<S> {
     SetFlashbackState {
         region: Region,
     },
+    // The raftstore thread will use it to update the internal state of `PeerFsm`. If it is
+    // `true`, when the raftstore detects that the raft log has not been gc for a long time,
+    // the raftstore thread will actively pull the `voter_replicated_index` from the leader
+    // and try to compact pending gc. If false, raftstore does not do any additional
+    // processing.
     HasPendingCompactCmd(bool),
 }
 
@@ -2967,7 +2972,7 @@ where
         ))
     }
 
-    // When the first return value returns true, it means that we have updated
+    // When the first return value is true, it means that we have updated
     // `RaftApplyState`, and the caller needs to do persistence.
     fn try_compact_log(
         &mut self,
