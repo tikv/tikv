@@ -214,7 +214,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let idx = match res {
             Ok(i) => i,
             Err(e) => {
-                // TODO(tabokie): `post_propose_fail`.
                 ch.report_error(cmd_resp::err_resp(e, self.term()));
                 return;
             }
@@ -311,7 +310,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn on_apply_res<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>, apply_res: ApplyRes) {
+    pub fn on_apply_res<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        apply_res: ApplyRes,
+    ) {
         if !self.serving() {
             return;
         }

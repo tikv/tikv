@@ -81,11 +81,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut proposal_ctx = ProposalContext::empty();
         proposal_ctx.insert(ProposalContext::PREPARE_MERGE);
         let data = req.write_to_bytes().unwrap();
-        let res = self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())?;
-
-        // TODO: broadcast to followers when disk full.
-
-        Ok(res)
+        let r = self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec());
+        if r.is_err() {
+            self.restore_merging_region_locks_status();
+        }
+        r
     }
 
     /// Match v1::check_merge_proposal.
@@ -171,11 +171,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let last_index = self.raft_group().raft.raft_log.last_index();
         let (min_matched, min_committed) = self.get_min_progress()?;
-        // TODO(tabokie): also check snapshot (`min_matched < self.last_sent_snapshot_idx`).
         if min_matched == 0
             || min_committed == 0
             || last_index - min_matched > store_ctx.cfg.merge_max_log_gap
             || last_index - min_committed > store_ctx.cfg.merge_max_log_gap * 2
+            || min_matched < self.last_sent_snapshot_index()
         {
             return Err(box_err!(
                 "log gap too large, skip merge: matched: {}, committed: {}, last index: {}",
@@ -324,8 +324,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "propose {} pessimistic locks before prepare merge",
             cmd.get_requests().len();
         );
-        self.propose(store_ctx, cmd.write_to_bytes().unwrap())?;
+        let r = self.propose(store_ctx, cmd.write_to_bytes().unwrap());
+        if r.is_err() {
+            self.restore_merging_region_locks_status();
+            r?;
+        }
         Ok(())
+    }
+
+    // Match v1::post_propose_fail.
+    #[inline]
+    fn restore_merging_region_locks_status(&mut self) {
+        // If we just failed to propose PrepareMerge, the pessimistic locks status
+        // may become MergingRegion incorrectly. So, we have to revert it here.
+        // But we have to rule out the case when the region has successfully
+        // proposed PrepareMerge or has been in merging, which is decided by
+        // the boolean expression below.
+        // last_committed_prepare_merge_idx?
+        if !self.proposal_control().is_merging() {
+            let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
+            if pessimistic_locks.status == LocksStatus::MergingRegion {
+                pessimistic_locks.status = LocksStatus::Normal;
+            }
+        }
     }
 
     /// Called after some new entries have been applied and the fence can
@@ -413,6 +434,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
         }
 
+        self.proposal_control_mut()
+            .enter_prepare_merge(res.state.get_commit());
         self.merge_context_mut().pending = Some(res.state);
 
         self.update_merge_progress_on_apply_res_prepare_merge(store_ctx);

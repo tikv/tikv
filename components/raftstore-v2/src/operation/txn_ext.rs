@@ -88,8 +88,7 @@ impl TxnContext {
         &self.extra_op
     }
 
-    // TODO: find a better place to put all txn related stuff.
-    pub fn require_updating_max_ts<EK, ER, T>(
+    fn require_updating_max_ts<EK, ER, T>(
         &self,
         ctx: &StoreContext<EK, ER, T>,
         term: u64,

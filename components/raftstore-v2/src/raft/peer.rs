@@ -61,6 +61,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     compact_log_context: CompactLogContext,
 
     merge_context: MergeContext,
+    last_sent_snapshot_index: u64,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -155,6 +156,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_heartbeats: HashMap::default(),
             compact_log_context: CompactLogContext::new(applied_index),
             merge_context: MergeContext::default(),
+            last_sent_snapshot_index: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
@@ -831,5 +833,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Ok(t) => t,
             Err(e) => slog_panic!(self.logger, "failed to load term"; "index" => idx, "err" => ?e),
         }
+    }
+
+    #[inline]
+    pub fn update_last_sent_snapshot_index(&mut self, i: u64) {
+        if i > self.last_sent_snapshot_index {
+            self.last_sent_snapshot_index = i;
+        }
+    }
+
+    #[inline]
+    pub fn last_sent_snapshot_index(&self) -> u64 {
+        self.last_sent_snapshot_index
     }
 }

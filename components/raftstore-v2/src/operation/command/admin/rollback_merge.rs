@@ -38,7 +38,7 @@ pub struct RollbackMergeResult {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    // Mirrors v1::on_check_merge.
+    // Match v1::on_check_merge.
     pub fn handle_commit_merge_failure<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -106,7 +106,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
-    // Mirrors v1::exec_rollback_merge.
+    // Match v1::exec_rollback_merge.
     pub fn apply_rollback_merge(
         &mut self,
         req: &AdminRequest,
@@ -150,7 +150,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    // Mirrors v1::on_ready_rollback_merge.
+    // Match v1::on_ready_rollback_merge.
     pub fn on_apply_res_rollback_merge<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -192,7 +192,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// rollbacks the merge.
     pub fn rollback_merge<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         // Clear merge releted data
-        self.merge_context_mut().pending = None;
+        let state = self.merge_context_mut().pending.take();
+        self.proposal_control_mut()
+            .leave_prepare_merge(state.unwrap().get_commit());
         self.merge_context_mut().rollback_peers.clear();
 
         // Resume updating `safe_ts`

@@ -71,7 +71,10 @@ use raftstore::{
     Error, Result,
 };
 use slog::{debug, error, info};
-use tikv_util::{box_err, slog_panic, store::find_peer};
+use tikv_util::{
+    box_err, slog_panic,
+    store::{find_peer, region_on_same_stores},
+};
 
 use crate::{
     batch::StoreContext,
@@ -83,6 +86,8 @@ use crate::{
 
 #[derive(Default)]
 pub struct MergeContext {
+    /// All of the following fields are used at source region.
+
     /// When a fence <idx, cmd> is present, we (1) delay the PrepareMerge
     /// command `cmd` until all writes before `idx` are applied (2) reject all
     /// in-coming write proposals.
@@ -93,13 +98,41 @@ pub struct MergeContext {
     /// are either removed (when applying logs) or won't be removed before
     /// merge (the proposals to remove them are rejected).
     pub prepare_fence: Option<(u64, Vec<u8>)>,
+    /// Whether a `PrepareMerge` command has been applied.
     /// When it is set, all write proposals except for `RollbackMerge` will be
     /// rejected.
     pub pending: Option<MergeState>,
-    /// Source region is catching up logs for merge.
+    /// Current source region is catching up logs for merge.
     catch_up_logs: Option<CatchUpLogs>,
     /// Peers that want to rollback merge.
     pub rollback_peers: HashSet<u64>,
+}
+
+#[derive(Debug)]
+pub struct CommitMergeResult {
+    index: u64,
+    region: Region,
+    source: Region,
+    tablet: Box<dyn Any + Send + Sync>,
+}
+
+struct SourceReady {
+    tablet: Box<dyn Any + Send + Sync>,
+}
+
+pub struct CatchUpLogs {
+    target_region_id: u64,
+    merge: CommitMergeRequest,
+    tx: oneshot::Sender<SourceReady>,
+}
+
+impl Debug for CatchUpLogs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CatchUpLogs")
+            .field("target_region_id", &self.target_region_id)
+            .field("merge", &self.merge)
+            .finish()
+    }
 }
 
 impl MergeContext {
@@ -137,35 +170,8 @@ impl MergeContext {
     }
 }
 
-#[derive(Debug)]
-pub struct CommitMergeResult {
-    index: u64,
-    region: Region,
-    source: Region,
-    tablet: Box<dyn Any + Send + Sync>,
-}
-
-struct SourceReady {
-    tablet: Box<dyn Any + Send + Sync>,
-}
-
-pub struct CatchUpLogs {
-    target_region_id: u64,
-    merge: CommitMergeRequest,
-    tx: oneshot::Sender<SourceReady>,
-}
-
-impl Debug for CatchUpLogs {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CatchUpLogs")
-            .field("target_region_id", &self.target_region_id)
-            .field("merge", &self.merge)
-            .finish()
-    }
-}
-
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    // Mirrors v1::on_check_merge. Called on source peer.
+    // Match v1::on_check_merge. Called on source peer.
     pub fn on_check_merge<T: Transport>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         if !self.serving() || self.merge_context().pending.is_none() {
             return;
@@ -176,7 +182,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    // Mirrors v1::schedule_merge.
+    // Match v1::schedule_merge.
     fn schedule_commit_merge_proposal<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -238,7 +244,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .map_err(|_| Error::RegionNotFound(target_id))
     }
 
-    // Mirrors v1::validate_merge_peer.
+    // Match v1::validate_merge_peer.
     fn validate_merge_peer<T>(
         &self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -560,7 +566,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.on_check_merge(store_ctx);
     }
 
-    // Mirrors v1::on_catch_up_logs_for_merge. Called on source peer.
+    // Match v1::on_catch_up_logs_for_merge. Called on source peer.
     pub fn on_catch_up_logs<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -699,7 +705,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
-    // Mirrors v1::logs_up_to_date_for_merge. Called on source peer.
+    // Match v1::logs_up_to_date_for_merge. Called on source peer.
     pub fn on_logs_up_to_date(&mut self, catch_up_logs: CatchUpLogs) {
         info!(self.logger, "source logs are all applied now");
         let _ = self.flush();
@@ -723,7 +729,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    // Mirrors v1::on_ready_commit_merge.
+    // Match v1::on_ready_commit_merge.
     pub fn on_apply_res_commit_merge<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -778,7 +784,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
         // a region merge.
-        self.txn_context().require_updating_max_ts(store_ctx);
+        // TODO(tabokie): v1 doesn't reset locks status?
+        self.txn_context()
+            .on_became_leader(store_ctx, self.term(), self.region(), &self.logger);
 
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after
@@ -825,8 +833,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.set_has_extra_write();
     }
 
-    // Mirrors v1::on_merge_result.
-    // Called on source peer.
+    // Match v1::on_merge_result. Called on source peer.
     pub fn on_merge_result(
         &mut self,
         target_region_id: u64,
@@ -882,7 +889,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 );
             }
             MergeResultKind::Stale => {
-                // Mirrors v1::on_stale_merge.
+                // Match v1::on_stale_merge.
                 info!(
                     self.logger,
                     "successful merge can't be continued, try to gc stale peer";
