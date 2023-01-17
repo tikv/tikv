@@ -31,8 +31,8 @@ use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
-        needs_evict_entry_cache, util, FetchedLogs, ReadProgress, Transport, WriteCallback,
-        WriteTask,
+        needs_evict_entry_cache, util, worker_metrics::SNAP_COUNTER, FetchedLogs, ReadProgress,
+        Transport, WriteCallback, WriteTask,
     },
 };
 use slog::{debug, error, info, trace, warn};
@@ -877,6 +877,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 ctx.snap_mgr.clone(),
                 ctx.tablet_registry.clone(),
             ) {
+                SNAP_COUNTER.apply.fail.inc();
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)
             }
         }
