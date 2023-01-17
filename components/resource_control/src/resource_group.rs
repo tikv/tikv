@@ -33,17 +33,9 @@ pub enum ResourceConsumeType {
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroup>,
     registry: Mutex<Vec<Arc<ResourceController>>>,
-    enable: bool,
 }
 
 impl ResourceGroupManager {
-    pub fn new(enable: bool) -> Self {
-        ResourceGroupManager {
-            enable,
-            ..Default::default()
-        }
-    }
-
     fn get_ru_setting(rg: &ResourceGroup, is_read: bool) -> u64 {
         match (rg.get_mode(), is_read) {
             (GroupMode::RuMode, true) => rg
@@ -98,14 +90,7 @@ impl ResourceGroupManager {
         self.resource_groups.iter().map(|g| g.clone()).collect()
     }
 
-    pub fn derive_controller(
-        &self,
-        name: String,
-        is_read: bool,
-    ) -> Option<Arc<ResourceController>> {
-        if !self.enable {
-            return None;
-        }
+    pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
         let controller = Arc::new(ResourceController::new(name, is_read));
         self.registry.lock().unwrap().push(controller.clone());
         for g in &self.resource_groups {
@@ -113,7 +98,7 @@ impl ResourceGroupManager {
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota);
         }
 
-        Some(controller)
+        controller
     }
 
     pub fn advance_min_virtual_time(&self) {
@@ -358,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_resource_group() {
-        let resource_manager = ResourceGroupManager::new(true);
+        let resource_manager = ResourceGroupManager::default();
 
         let group1 = new_resource_group("TEST".into(), true, 100, 100);
         resource_manager.add_resource_group(group1);
@@ -397,9 +382,7 @@ mod tests {
         resource_manager.add_resource_group(group2);
         assert_eq!(resource_manager.resource_groups.len(), 2);
 
-        let resource_ctl = resource_manager
-            .derive_controller("test_read".into(), true)
-            .unwrap();
+        let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         assert_eq!(resource_ctl.resource_consumptions.len(), 3);
 
         let group1 = resource_ctl.resource_group("test".as_bytes());
@@ -467,13 +450,9 @@ mod tests {
 
     #[test]
     fn test_adjust_resource_group_weight() {
-        let resource_manager = ResourceGroupManager::new(true);
-        let resource_ctl = resource_manager
-            .derive_controller("test_read".into(), true)
-            .unwrap();
-        let resource_ctl_write = resource_manager
-            .derive_controller("test_write".into(), false)
-            .unwrap();
+        let resource_manager = ResourceGroupManager::default();
+        let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
+        let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
 
         let group1 = new_resource_group("test1".into(), true, 5000, 1000);
         resource_manager.add_resource_group(group1);

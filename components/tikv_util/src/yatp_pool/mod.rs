@@ -258,7 +258,10 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     }
 
     pub fn build_future_pool(self) -> FuturePool {
-        let name = self.name_prefix.clone().unwrap_or("yatp_pool".to_string());
+        let name = self
+            .name_prefix
+            .clone()
+            .unwrap_or_else(|| "yatp_pool".to_string());
         let size = self.core_thread_count;
         let task = self.max_tasks;
         let pool = self.build_single_level_pool();
@@ -269,7 +272,10 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self,
         priority_provider: Arc<dyn priority::TaskPriorityProvider>,
     ) -> FuturePool {
-        let name = self.name_prefix.clone().unwrap_or("yatp_pool".to_string());
+        let name = self
+            .name_prefix
+            .clone()
+            .unwrap_or_else(|| "yatp_pool".to_string());
         let size = self.core_thread_count;
         let task = self.max_tasks;
         let pool = self.build_priority_pool(priority_provider);
@@ -285,7 +291,10 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     }
 
     pub fn build_multi_level_pool(self) -> ThreadPool<TaskCell> {
-        let name = self.name_prefix.clone().unwrap_or("yatp_pool".to_string());
+        let name = self
+            .name_prefix
+            .clone()
+            .unwrap_or_else(|| "yatp_pool".to_string());
         let (builder, read_pool_runner) = self.create_builder();
         let multilevel_builder =
             multilevel::Builder::new(multilevel::Config::default().name(Some(name)));
@@ -299,7 +308,10 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self,
         priority_provider: Arc<dyn priority::TaskPriorityProvider>,
     ) -> ThreadPool<TaskCell> {
-        let name = self.name_prefix.clone().unwrap_or("yatp_pool".to_string());
+        let name = self
+            .name_prefix
+            .clone()
+            .unwrap_or_else(|| "yatp_pool".to_string());
         let (builder, read_pool_runner) = self.create_builder();
         let priority_builder = priority::Builder::new(
             priority::Config::default().name(Some(name)),
@@ -310,7 +322,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     }
 
     fn create_builder(mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
-        let name = self.name_prefix.unwrap_or("yatp_pool".to_string());
+        let name = self.name_prefix.unwrap_or_else(|| "yatp_pool".to_string());
         let mut builder = yatp::Builder::new(thd_name!(name));
         builder
             .stack_size(self.stack_size)
