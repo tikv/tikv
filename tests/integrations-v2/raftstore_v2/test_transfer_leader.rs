@@ -281,6 +281,8 @@ fn test_sync_max_ts_after_leader_transfer_impl<F: KvFormat>() {
     };
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
+    // Give some time for leader to commit the first entry
+    thread::sleep(Duration::from_millis(100));
     wait_for_synced(&mut cluster);
     let max_ts = cm.max_ts();
 
