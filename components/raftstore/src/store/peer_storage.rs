@@ -449,6 +449,11 @@ where
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// available snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
+        fail_point!("ignore generate snapshot", self.peer_id == 1, |_| {
+            Err(raft::Error::Store(
+                raft::StorageError::SnapshotTemporarilyUnavailable,
+            ))
+        });
         if self.peer.as_ref().unwrap().is_witness {
             // witness could be the leader for a while, do not generate snapshot now
             return Err(raft::Error::Store(

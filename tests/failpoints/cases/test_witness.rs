@@ -257,7 +257,7 @@ fn test_request_snapshot_after_reboot() {
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    let peer_on_store1 = find_peer(&region, nodes[1]).unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
     // nonwitness -> witness
     let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
@@ -295,6 +295,57 @@ fn test_request_snapshot_after_reboot() {
     assert_eq!(cluster.pd_client.get_pending_peers().len(), 0);
 }
 
+// Test the case request snapshot and apply successfully after term change.
+#[test]
+fn test_request_snapshot_after_term_change() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.raft_store.check_request_snapshot_interval = ReadableDuration::millis(20);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+    // nonwitness -> witness
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
+
+    cluster.must_put(b"k1", b"v1");
+
+    std::thread::sleep(Duration::from_millis(100));
+    must_get_none(&cluster.get_engine(3), b"k1");
+
+    // witness -> nonwitness
+    let fp1 = "ignore generate snapshot";
+    fail::cfg(fp1, "return").unwrap();
+    cluster
+        .pd_client
+        .switch_witnesses(region.get_id(), vec![peer_on_store3.get_id()], vec![false]);
+    std::thread::sleep(Duration::from_millis(500));
+    // as we ignore generate snapshot, so snapshot should still not applied yet
+    assert_eq!(cluster.pd_client.get_pending_peers().len(), 1);
+    must_get_none(&cluster.get_engine(3), b"k1");
+
+    let peer_on_store2 = find_peer(&region, nodes[1]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store2.clone());
+    // After leader changes, the `term` and `last term` no longer match, so
+    // continue to receive `MsgAppend` until the two get equal, then retry to
+    // request snapshot and complete the application.
+    std::thread::sleep(Duration::from_millis(500));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    assert_eq!(cluster.pd_client.get_pending_peers().len(), 0);
+    fail::remove(fp1);
+}
+
 fn test_non_witness_availability(fp: &str) {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
@@ -307,7 +358,7 @@ fn test_non_witness_availability(fp: &str) {
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    let peer_on_store1 = find_peer(&region, nodes[1]).unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
 
     // non-witness -> witness

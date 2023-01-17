@@ -2731,7 +2731,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.13.0",
  "raft-proto",
 ]
 
@@ -4121,6 +4121,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf-build"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fb3c02f54ecaf12572c1a60dbdb36b1f8f713a16105881143f2be84cca5bbe3"
+dependencies = [
+ "bitflags",
+ "protobuf",
+ "protobuf-codegen",
+ "regex",
+]
+
+[[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
 source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
@@ -4160,7 +4172,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#532ab1d7109bd17ef2cf7d3500d3cbc95ab9b566"
+source = "git+https://github.com/tikv/raft-rs?branch=master#f73766712a538c2f6eb135b455297ad6c03fc58d"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4219,11 +4231,11 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#532ab1d7109bd17ef2cf7d3500d3cbc95ab9b566"
+source = "git+https://github.com/tikv/raft-rs?branch=master#f73766712a538c2f6eb135b455297ad6c03fc58d"
 dependencies = [
  "bytes",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.14.0",
 ]
 
 [[package]]
@@ -6598,7 +6610,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.13.0",
 ]
 
 [[package]]

@@ -5566,16 +5566,11 @@ where
         if !self.fsm.peer.wait_data || self.fsm.peer.is_leader() {
             return;
         }
-        self.fsm.peer.request_index = self.fsm.peer.get_store().last_index();
-        let term = self.fsm.peer.get_index_term(self.fsm.peer.request_index);
-        if term == self.fsm.peer.term() {
+        self.fsm.peer.request_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
+        let last_term = self.fsm.peer.get_index_term(self.fsm.peer.request_index);
+        if last_term == self.fsm.peer.term() {
             self.fsm.peer.should_reject_msgappend = true;
-            if let Err(e) = self
-                .fsm
-                .peer
-                .raft_group
-                .request_snapshot(self.fsm.peer.request_index)
-            {
+            if let Err(e) = self.fsm.peer.raft_group.request_snapshot() {
                 error!(
                     "failed to request snapshot";
                     "region_id" => self.fsm.region_id(),
@@ -5583,6 +5578,11 @@ where
                     "err" => %e,
                 );
             }
+        } else {
+            // If a leader change occurs after switch to non-witness, it should be
+            // continue processing `MsgAppend` until `last_term == term`, then retry
+            // to request snapshot.
+            self.fsm.peer.should_reject_msgappend = false;
         }
         // Requesting a snapshot may fail, so register a periodic event as a defense
         // until succeeded.
@@ -6460,8 +6460,6 @@ where
                         .peer
                         .update_read_progress(self.ctx, ReadProgress::WaitData(true));
                     self.fsm.peer.wait_data = true;
-                    self.fsm.peer.request_index =
-                        self.fsm.peer.raft_group.raft.raft_log.last_index();
                     self.on_request_snapshot_tick();
                 }
                 self.fsm.peer.peer.is_witness = is_witness;
