@@ -218,18 +218,18 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         let cli = self.etcd_client.clone();
         let future = async move {
-            let watcher = cli
+            let mut watcher = match cli
                 .lock()
                 .await
                 .watch(
                     Keys::Range(MetaKey(b"".to_vec()), MetaKey(b"\xff".to_vec())),
                     req.revision,
                 )
-                .await;
-            let mut watcher = match watcher {
+                .await
+            {
                 Ok(w) => w,
-                Err(e) => {
-                    error!("failed to reply: {:?}", e);
+                Err(err) => {
+                    error!("failed to watch: {:?}", err);
                     return;
                 }
             };

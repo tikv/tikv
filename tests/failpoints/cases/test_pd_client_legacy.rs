@@ -127,13 +127,14 @@ fn test_load_global_config() {
         panic!("error occur {:?}", err);
     }
 
-    let (res, _) =
+    let (res, revision) =
         futures::executor::block_on(client.load_global_config(String::from("global"))).unwrap();
     assert!(
         res.iter()
             .zip(check_items)
             .all(|(item1, item2)| item1.name == item2.0 && item1.value == item2.1)
     );
+    assert_eq!(revision, 3);
 }
 
 #[test]
@@ -163,10 +164,10 @@ fn test_watch_global_config_on_closed_server() {
                     }
                 }
             }
-            Err(e) => {
-                if !e.to_string().contains("UNAVAILABLE") {
+            Err(err) => {
+                if !err.to_string().contains("UNAVAILABLE") {
                     // Not 14-UNAVAILABLE
-                    panic!("other error occur {:?}", e)
+                    panic!("other error occur {:?}", err)
                 }
             }
         }
@@ -186,7 +187,7 @@ fn test_watch_global_config_on_closed_server() {
                 .collect::<Vec<GlobalConfigItem>>(),
         ),
     ) {
-        panic!("{:?}", err);
+        panic!("error occur {:?}", err);
     }
 
     thread::sleep(Duration::from_millis(100));

@@ -62,7 +62,9 @@ use raftstore::{
     RegionInfoAccessor,
 };
 use raftstore_v2::{router::RaftRouter, StateStorage};
-use resource_control::{ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL};
+use resource_control::{
+    ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
+};
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
@@ -288,12 +290,18 @@ where
             config.quota.enable_auto_tune,
         ));
         let resource_manager = Arc::new(ResourceGroupManager::default());
-        // spawn a task to periodically update the minimal virtual time of all resource
-        // group.
         if config.resource_control.enabled {
-            let resource_mgr1 = resource_manager.clone();
+            let mut resource_mgr_service =
+                ResourceManagerService::new(resource_manager.clone(), pd_client.clone());
+            let resource_mgr = resource_manager.clone();
+            // spawn a task to periodically update the minimal virtual time of all resource
+            // group.
             background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
-                resource_mgr1.advance_min_virtual_time();
+                resource_mgr.advance_min_virtual_time();
+            });
+            // spawn a task to watch all resource groups update.
+            background_worker.spawn_async_task(async move {
+                resource_mgr_service.watch_resource_groups().await;
             });
         }
 

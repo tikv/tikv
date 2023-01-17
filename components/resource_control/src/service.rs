@@ -20,7 +20,7 @@ pub struct ResourceManagerService {
 }
 
 impl ResourceManagerService {
-    /// Constructs a new `Service` with `ResourceGroupManager` and a `Rpclient`
+    /// Constructs a new `Service` with `ResourceGroupManager` and a `RpcClient`
     pub fn new(
         manager: Arc<ResourceGroupManager>,
         pd_client: Arc<RpcClient>,
@@ -43,7 +43,7 @@ impl ResourceManagerService {
                     self.manager.add_resource_group(group);
                 }
             }
-            Err(e) => error!("failed to list resource groups, err: {:?}", e),
+            Err(err) => error!("failed to list resource groups, err: {:?}", err),
         }
         // Secondly, start watcher at loading revision.
         loop {
@@ -78,8 +78,8 @@ impl ResourceManagerService {
                         }
                     }
                 }
-                Err(e) => {
-                    error!("failed to watch resource groups, err: {:?}", e);
+                Err(err) => {
+                    error!("failed to watch resource groups, err: {:?}", err);
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
@@ -101,7 +101,7 @@ impl ResourceManagerService {
                 }
                 Ok((groups, revision))
             }
-            Err(e) => return Err(box_err!("failed to load global config, err: {:?}", e)),
+            Err(err) => return Err(box_err!("failed to load global config, err: {:?}", err)),
         }
     }
 }
@@ -168,7 +168,6 @@ pub mod tests {
         let (res, revision) = s.list_resource_groups().unwrap();
         assert_eq!(res.len(), 1);
         assert_eq!(revision, 1);
-        s.revision = revision;
 
         delete_resource_group(s.pd_client.clone(), "TEST");
         let (res, revision) = s.list_resource_groups().unwrap();
@@ -202,13 +201,11 @@ pub mod tests {
         let group2 = new_resource_group("TEST2".into(), true, 50, 50);
         add_resource_group(s.pd_client.clone(), group2);
         let (res, revision) = s.list_resource_groups().unwrap();
-        s.revision = revision;
         assert_eq!(res.len(), 2);
         assert_eq!(revision, 3);
         // Mock delete
         delete_resource_group(s.pd_client.clone(), "TEST1");
         let (res, revision) = s.list_resource_groups().unwrap();
-        s.revision = revision;
         assert_eq!(res.len(), 1);
         assert_eq!(revision, 4);
         // Wait for watcher
