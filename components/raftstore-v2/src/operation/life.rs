@@ -286,6 +286,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let entry_storage = self.storage().entry_storage();
         // TODO: check actual split index instead of commit index.
         entry_storage.applied_index() != entry_storage.commit_index()
+            // Wait for critical commands like split.
+            || self.has_pending_tombstone_tablets()
     }
 
     /// Start the destroy progress. It will write `Tombstone` state

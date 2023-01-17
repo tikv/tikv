@@ -2,7 +2,9 @@
 
 use std::{mem, sync::Arc};
 
-use engine_traits::{FlushState, KvEngine, TabletRegistry, WriteBatch, DATA_CFS_LEN};
+use engine_traits::{
+    FlushState, KvEngine, PerfContextKind, TabletRegistry, WriteBatch, DATA_CFS_LEN,
+};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::{
     fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
@@ -20,6 +22,7 @@ use crate::{
 pub struct Apply<EK: KvEngine, R> {
     peer: metapb::Peer,
     tablet: EK,
+    perf_context: EK::PerfContext,
     pub write_batch: Option<EK::WriteBatch>,
     /// A buffer for encoding key.
     pub key_buffer: Vec<u8>,
@@ -77,9 +80,12 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         assert_ne!(applied_term, 0, "{}", SlogFormat(&logger));
         let applied_index = flush_state.applied_index();
         assert_ne!(applied_index, 0, "{}", SlogFormat(&logger));
+        let tablet = remote_tablet.latest().unwrap().clone();
+        let perf_context = EK::get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply);
         Apply {
             peer,
-            tablet: remote_tablet.latest().unwrap().clone(),
+            tablet,
+            perf_context,
             write_batch: None,
             callbacks: vec![],
             flow_control: ApplyFlowControl::new(cfg),
@@ -172,6 +178,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn tablet(&self) -> &EK {
         &self.tablet
+    }
+
+    #[inline]
+    pub fn perf_context(&mut self) -> &mut EK::PerfContext {
+        &mut self.perf_context
     }
 
     #[inline]

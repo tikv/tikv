@@ -55,6 +55,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, RegionInfoAccessor},
     store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
 };
+use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use serde::{
@@ -115,7 +116,8 @@ fn bloom_filter_ratio(et: EngineType) -> f64 {
         EngineType::RaftKv => 0.1,
         // In v2, every peer has its own tablet. The data scale is about tens of
         // GiBs. We only need a small portion for those key.
-        EngineType::RaftKv2 => 0.005,
+        // TODO: disable it for now until find out the proper ratio
+        EngineType::RaftKv2 => 0.0,
     }
 }
 
@@ -1228,6 +1230,10 @@ impl DbConfig {
                 self.write_buffer_limit.get_or_insert(ReadableSize(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                 ));
+                self.defaultcf.disable_write_stall = true;
+                self.writecf.disable_write_stall = true;
+                self.lockcf.disable_write_stall = true;
+                self.raftcf.disable_write_stall = true;
             }
         }
     }
@@ -3039,6 +3045,9 @@ pub struct TikvConfig {
 
     #[online_config(skip)]
     pub causal_ts: CausalTsConfig,
+
+    #[online_config(submodule)]
+    pub resource_control: ResourceControlConfig,
 }
 
 impl Default for TikvConfig {
@@ -3081,6 +3090,7 @@ impl Default for TikvConfig {
             resource_metering: ResourceMeteringConfig::default(),
             backup_stream: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
+            resource_control: ResourceControlConfig::default(),
         }
     }
 }

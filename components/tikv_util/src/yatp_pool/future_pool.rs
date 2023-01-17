@@ -15,7 +15,7 @@ use fail::fail_point;
 use futures::channel::oneshot::{self, Canceled};
 use prometheus::{IntCounter, IntGauge};
 use tracker::TrackedFuture;
-use yatp::task::future;
+use yatp::{queue::Extras, task::future};
 
 pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
@@ -82,7 +82,14 @@ impl FuturePool {
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn(TrackedFuture::new(future))
+        self.inner.spawn(TrackedFuture::new(future), None)
+    }
+
+    pub fn spawn_with_extras<F>(&self, future: F, extras: Extras) -> Result<(), Full>
+    where
+        F: Future + Send + 'static,
+    {
+        self.inner.spawn(TrackedFuture::new(future), Some(extras))
     }
 
     /// Spawns a future in the pool and returns a handle to the result of the
@@ -143,7 +150,7 @@ impl PoolInner {
         }
     }
 
-    fn spawn<F>(&self, future: F) -> Result<(), Full>
+    fn spawn<F>(&self, future: F, extras: Option<Extras>) -> Result<(), Full>
     where
         F: Future + Send + 'static,
     {
@@ -154,11 +161,17 @@ impl PoolInner {
 
         metrics_running_task_count.inc();
 
-        self.pool.spawn(async move {
+        let f = async move {
             let _ = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
-        });
+        };
+
+        if let Some(extras) = extras {
+            self.pool.spawn(future::TaskCell::new(f, extras));
+        } else {
+            self.pool.spawn(f);
+        }
         Ok(())
     }
 

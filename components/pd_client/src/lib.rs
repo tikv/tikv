@@ -209,7 +209,7 @@ pub const INVALID_ID: u64 = 0;
 /// all the time.
 pub trait PdClient: Send + Sync {
     /// Load a list of GlobalConfig
-    fn load_global_config(&self, _list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+    fn load_global_config(&self, _config_path: String) -> PdFuture<HashMap<String, String>> {
         unimplemented!();
     }
 

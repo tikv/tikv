@@ -83,7 +83,7 @@ use crate::{
         cmd_resp,
         entry_storage::{self, CachedEntries},
         fsm::RaftPollerBuilder,
-        local_metrics::{RaftMetrics, TimeTracker},
+        local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
         msg::{Callback, ErrorCallback, PeerMsg, ReadResponse, SignificantMsg},
@@ -258,6 +258,7 @@ pub enum ExecResult<S> {
     CompactLog {
         state: RaftTruncatedState,
         first_index: u64,
+        has_pending: bool,
     },
     SplitRegion {
         regions: Vec<Region>,
@@ -300,7 +301,12 @@ pub enum ExecResult<S> {
     SetFlashbackState {
         region: Region,
     },
-    PendingCompactCmd,
+    // The raftstore thread will use it to update the internal state of `PeerFsm`. If it is
+    // `true`, when the raftstore detects that the raft log has not been gc for a long time,
+    // the raftstore thread will actively pull the `voter_replicated_index` from the leader
+    // and try to compact pending gc. If false, raftstore does not do any additional
+    // processing.
+    HasPendingCompactCmd(bool),
 }
 
 /// The possible returned value when applying logs.
@@ -475,7 +481,7 @@ where
             host,
             importer,
             region_scheduler,
-            engine: engine.clone(),
+            engine,
             router,
             notifier,
             kv_wb,
@@ -488,7 +494,7 @@ where
             committed_count: 0,
             sync_log_hint: false,
             use_delete_range: cfg.use_delete_range,
-            perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
+            perf_context: EK::get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
             yield_msg_size: cfg.apply_yield_write_size.0,
             delete_ssts: vec![],
@@ -582,8 +588,7 @@ where
                 .cb_batch
                 .iter()
                 .flat_map(|(cb, _)| cb.write_trackers())
-                .flat_map(|trackers| trackers.iter().map(|t| t.as_tracker_token()))
-                .flatten()
+                .flat_map(|trackers| trackers.as_tracker_token())
                 .collect();
             self.perf_context.report_metrics(&trackers);
             self.sync_log_hint = false;
@@ -620,7 +625,7 @@ where
         // Invoke callbacks
         let now = std::time::Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers() {
                 tracker.observe(now, &self.apply_time, |t| &mut t.metrics.apply_time_nanos);
             }
             cb.invoke_with_response(resp);
@@ -1509,7 +1514,7 @@ where
                 | ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. }
                 | ExecResult::TransferLeader { .. }
-                | ExecResult::PendingCompactCmd => {}
+                | ExecResult::HasPendingCompactCmd(..) => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -2967,11 +2972,13 @@ where
         ))
     }
 
+    // When the first return value is true, it means that we have updated
+    // `RaftApplyState`, and the caller needs to do persistence.
     fn try_compact_log(
         &mut self,
         voter_replicated_index: u64,
         voter_replicated_term: u64,
-    ) -> Result<Option<TaskRes<EK::Snapshot>>> {
+    ) -> Result<(bool, Option<ExecResult<EK::Snapshot>>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
         let first_index = entry_storage::first_index(&self.apply_state);
 
@@ -2982,7 +2989,7 @@ where
                 "peer_id" => self.id(),
                 "voter_replicated_index" => voter_replicated_index,
             );
-            return Ok(None);
+            return Ok((false, None));
         }
 
         // When the witness restarted, the pending compact cmd has been lost, so use
@@ -2996,11 +3003,7 @@ where
                     "compact_index" => voter_replicated_index,
                     "first_index" => first_index,
                 );
-                return Ok(Some(TaskRes::Compact {
-                    state: self.apply_state.get_truncated_state().clone(),
-                    first_index: 0,
-                    has_pending: false,
-                }));
+                return Ok((false, Some(ExecResult::HasPendingCompactCmd(false))));
             }
             // compact failure is safe to be omitted, no need to assert.
             compact_raft_log(
@@ -3010,11 +3013,7 @@ where
                 voter_replicated_term,
             )?;
             PEER_ADMIN_CMD_COUNTER.compact.success.inc();
-            return Ok(Some(TaskRes::Compact {
-                state: self.apply_state.get_truncated_state().clone(),
-                first_index,
-                has_pending: false,
-            }));
+            return Ok((true, Some(ExecResult::HasPendingCompactCmd(false))));
         }
 
         match self.pending_cmds.pop_compact(voter_replicated_index) {
@@ -3022,11 +3021,14 @@ where
                 // compact failure is safe to be omitted, no need to assert.
                 compact_raft_log(&self.tag, &mut self.apply_state, cmd.index, cmd.term)?;
                 PEER_ADMIN_CMD_COUNTER.compact.success.inc();
-                Ok(Some(TaskRes::Compact {
-                    state: self.apply_state.get_truncated_state().clone(),
-                    first_index,
-                    has_pending: self.pending_cmds.has_compact(),
-                }))
+                Ok((
+                    true,
+                    Some(ExecResult::CompactLog {
+                        state: self.apply_state.get_truncated_state().clone(),
+                        first_index,
+                        has_pending: self.pending_cmds.has_compact(),
+                    }),
+                ))
             }
             None => {
                 info!(
@@ -3035,7 +3037,7 @@ where
                     "peer_id" => self.id(),
                     "voter_replicated_index" => voter_replicated_index,
                 );
-                Ok(None)
+                Ok((false, None))
             }
         }
     }
@@ -3110,7 +3112,10 @@ where
                             "peer_id" => self.id(),
                             "command" => ?req.get_compact_log()
                         );
-                        return Ok((resp, ApplyResult::Res(ExecResult::PendingCompactCmd)));
+                        return Ok((
+                            resp,
+                            ApplyResult::Res(ExecResult::HasPendingCompactCmd(true)),
+                        ));
                     }
                 }
             } else {
@@ -3134,6 +3139,7 @@ where
             ApplyResult::Res(ExecResult::CompactLog {
                 state: self.apply_state.get_truncated_state().clone(),
                 first_index,
+                has_pending: self.pending_cmds.has_compact(),
             }),
         ))
     }
@@ -3333,16 +3339,12 @@ impl<C: WriteCallback> Apply<C> {
     pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
         let now = std::time::Instant::now();
         for cb in &mut self.cbs {
-            if let Some(trackers) = cb.cb.write_trackers_mut() {
-                for tracker in trackers {
-                    tracker.observe(now, &metrics.store_time, |t| {
-                        t.metrics.write_instant = Some(now);
-                        &mut t.metrics.store_time_nanos
-                    });
-                    if let TimeTracker::Instant(t) = tracker {
-                        *t = now;
-                    }
-                }
+            for tracker in cb.cb.write_trackers_mut() {
+                tracker.observe(now, &metrics.store_time, |t| {
+                    t.metrics.write_instant = Some(now);
+                    &mut t.metrics.store_time_nanos
+                });
+                tracker.reset(now);
             }
         }
     }
@@ -3410,6 +3412,7 @@ pub struct Proposal<C> {
     /// lease.
     pub propose_time: Option<Timespec>,
     pub must_pass_epoch_check: bool,
+    pub sent: bool,
 }
 
 impl<C> Proposal<C> {
@@ -3421,6 +3424,7 @@ impl<C> Proposal<C> {
             propose_time: None,
             must_pass_epoch_check: false,
             is_conf_change: false,
+            sent: false,
         }
     }
 }
@@ -3695,11 +3699,6 @@ where
         peer_id: u64,
         // Whether destroy request is from its target region's snapshot
         merge_from_snapshot: bool,
-    },
-    Compact {
-        state: RaftTruncatedState,
-        first_index: u64,
-        has_pending: bool,
     },
 }
 
@@ -4112,18 +4111,29 @@ where
         voter_replicated_index: u64,
         voter_replicated_term: u64,
     ) {
+        if self.delegate.pending_remove || self.delegate.stopped {
+            return;
+        }
+
         let res = self
             .delegate
             .try_compact_log(voter_replicated_index, voter_replicated_term);
         match res {
-            Ok(res) => {
+            Ok((should_write, res)) => {
                 if let Some(res) = res {
+                    if ctx.timer.is_none() {
+                        ctx.timer = Some(Instant::now_coarse());
+                    }
                     ctx.prepare_for(&mut self.delegate);
-                    self.delegate.write_apply_state(ctx.kv_wb_mut());
-                    ctx.commit_opt(&mut self.delegate, true);
-                    ctx.finish_for(&mut self.delegate, VecDeque::new());
-                    ctx.notifier
-                        .notify_one(self.delegate.region_id(), PeerMsg::ApplyRes { res });
+                    let mut result = VecDeque::new();
+                    // If modified `truncated_state` in `try_compact_log`, the apply state should be
+                    // persisted.
+                    if should_write {
+                        self.delegate.write_apply_state(ctx.kv_wb_mut());
+                        ctx.commit_opt(&mut self.delegate, true);
+                    }
+                    result.push_back(res);
+                    ctx.finish_for(&mut self.delegate, result);
                 }
             }
             Err(e) => error!(?e;
@@ -4170,7 +4180,7 @@ where
                         .cbs
                         .iter()
                         .flat_map(|p| p.cb.write_trackers())
-                        .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
+                        .flat_map(|ts| ts.as_tracker_token())
                     {
                         GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                             t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
@@ -5082,6 +5092,7 @@ mod tests {
             cb,
             propose_time: None,
             must_pass_epoch_check: false,
+            sent: true,
         }
     }
 

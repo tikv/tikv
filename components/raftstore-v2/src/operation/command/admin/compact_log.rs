@@ -73,6 +73,11 @@ impl CompactLogContext {
     pub fn set_last_applying_index(&mut self, index: u64) {
         self.last_applying_index = index;
     }
+
+    #[inline]
+    pub fn last_applying_index(&self) -> u64 {
+        self.last_applying_index
+    }
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
@@ -303,15 +308,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn has_pending_tombstone_tablets(&self) -> bool {
+        !self
+            .compact_log_context()
+            .tombstone_tablets_wait_index
+            .is_empty()
+    }
+
     #[inline]
     pub fn record_tombstone_tablet_for_destroy<T>(
         &mut self,
         ctx: &StoreContext<EK, ER, T>,
         task: &mut WriteTask<EK, ER>,
     ) {
-        let compact_log_context = self.compact_log_context_mut();
         assert!(
-            compact_log_context.tombstone_tablets_wait_index.is_empty(),
+            !self.has_pending_tombstone_tablets(),
             "{} all tombstone should be cleared before being destroyed.",
             SlogFormat(&self.logger)
         );
