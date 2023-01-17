@@ -4,12 +4,10 @@ use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt;
 use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
-use pd_client::{PdClient, Result, RpcClient};
+use pd_client::{PdClient, Result, RpcClient, RESOURCE_CONTROL_CONFIG_PATH};
 use tikv_util::{box_err, error};
 
 use crate::ResourceGroupManager;
-
-pub const CONFIG_PATH: &str = "resource_group/settings";
 
 #[derive(Clone)]
 pub struct ResourceManagerService {
@@ -49,7 +47,7 @@ impl ResourceManagerService {
         loop {
             match self
                 .pd_client
-                .watch_global_config(CONFIG_PATH.to_string(), self.revision)
+                .watch_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), self.revision)
             {
                 Ok(mut stream) => {
                     while let Some(grpc_response) = stream.next().await {
@@ -89,7 +87,7 @@ impl ResourceManagerService {
     fn list_resource_groups(&mut self) -> Result<(Vec<ResourceGroup>, i64)> {
         match futures::executor::block_on(async move {
             self.pd_client
-                .load_global_config(CONFIG_PATH.to_string())
+                .load_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string())
                 .await
         }) {
             Ok((items, revision)) => {
@@ -137,7 +135,7 @@ pub mod tests {
 
         futures::executor::block_on(async move {
             pd_client
-                .store_global_config(CONFIG_PATH.to_string(), vec![item])
+                .store_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), vec![item])
                 .await
         })
         .unwrap();
@@ -150,7 +148,7 @@ pub mod tests {
 
         futures::executor::block_on(async move {
             pd_client
-                .store_global_config(CONFIG_PATH.to_string(), vec![item])
+                .store_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), vec![item])
                 .await
         })
         .unwrap();
