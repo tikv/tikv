@@ -163,7 +163,7 @@ mod tests {
         let err: Vec<&[u8]> = vec![b"t123_111", b"s\x00\x00", b"r\x00\x00"];
 
         for key in err {
-            assert!(ApiV2::parse_keyspace(key).is_err());
+            ApiV2::parse_keyspace(key).unwrap_err();
         }
     }
 }
