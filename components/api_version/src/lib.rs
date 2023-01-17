@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(min_specialization)]
+#![feature(associated_type_defaults)]
 
 mod api_v1;
 mod api_v1ttl;

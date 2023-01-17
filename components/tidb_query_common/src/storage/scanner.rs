@@ -2,7 +2,7 @@
 
 use std::{marker::PhantomData, time::Duration};
 
-use api_version::{keyspace::KeyspaceKv, KvFormat};
+use api_version::KvFormat;
 use tikv_util::time::Instant;
 use yatp::task::future::reschedule;
 
@@ -108,7 +108,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
     /// Fetches next row.
     // Note: This is not implemented over `Iterator` since it can fail.
     // TODO: Change to use reference to avoid allocation and copy.
-    pub async fn next(&mut self) -> Result<Option<KeyspaceKv<F>>, StorageError> {
+    pub async fn next(&mut self) -> Result<Option<F::KvPair>, StorageError> {
         self.next_opt(true).await
     }
 
@@ -118,7 +118,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
     pub async fn next_opt(
         &mut self,
         update_scanned_range: bool,
-    ) -> Result<Option<KeyspaceKv<F>>, StorageError> {
+    ) -> Result<Option<F::KvPair>, StorageError> {
         loop {
             let mut force_check = true;
             let range = self.ranges_iter.next();
@@ -160,8 +160,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                     *r += 1;
                 }
                 self.rescheduler.check_reschedule(force_check).await;
-                let kv = KeyspaceKv::from_kv_pair(row)
-                    .map_err(|e| StorageError(anyhow::Error::from(e)))?;
+                let kv = F::make_kv_pair(row).map_err(|e| StorageError(anyhow::Error::from(e)))?;
                 return Ok(Some(kv));
             } else {
                 // No more row in the range.
@@ -293,7 +292,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
 
 #[cfg(test)]
 mod tests {
-    use api_version::ApiV1;
+    use api_version::{keyspace::KvPair, ApiV1};
     use futures::executor::block_on;
 
     use super::*;

@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::KvFormat;
+use api_version::{keyspace::KvPair, KvFormat};
 use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
