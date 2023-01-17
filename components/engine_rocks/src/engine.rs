@@ -16,12 +16,6 @@ pub struct RocksEngine {
     support_multi_batch_write: bool,
 }
 
-impl Drop for RocksEngine {
-    fn drop(&mut self) {
-        println!("Drop rocksdb");
-    }
-}
-
 impl RocksEngine {
     pub(crate) fn new(db: DB) -> RocksEngine {
         RocksEngine::from_db(Arc::new(db))

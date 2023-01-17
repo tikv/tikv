@@ -1276,9 +1276,7 @@ impl<T: Simulator> Cluster<T> {
         }
         self.leaders.clear();
         for store_meta in self.store_metas.values() {
-            println!("Strong count {}", Arc::strong_count(store_meta));
             while Arc::strong_count(store_meta) != 1 {
-                println!("Strong count {}", Arc::strong_count(store_meta));
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
@@ -1287,7 +1285,6 @@ impl<T: Simulator> Cluster<T> {
             sst_worker.stop_worker();
         }
 
-        println!("all nodes are shut down.");
         debug!("all nodes are shut down.");
     }
 }

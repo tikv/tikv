@@ -278,7 +278,6 @@ impl<EK> TabletRegistry<EK> {
 
     pub fn remove(&self, id: u64) {
         self.tablets.tablets.lock().unwrap().remove(&id);
-        println!("tablet with id {} removed", id);
     }
 
     /// Load the tablet and set it as the latest.

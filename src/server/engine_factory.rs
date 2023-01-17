@@ -187,12 +187,6 @@ impl KvEngineFactory {
 
 impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<RocksEngine> {
-        println!(
-            "open tablet, path {:?}, id {}, suffix {:?}",
-            path.display(),
-            ctx.id,
-            ctx.suffix
-        );
         let mut db_opts = self.db_opts();
         let cf_opts = self.cf_opts(EngineType::RaftKv2);
         if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
@@ -220,12 +214,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
 
     fn destroy_tablet(&self, ctx: TabletContext, path: &Path) -> Result<()> {
         info!("destroy tablet"; "path" => %path.display(), "id" => ctx.id, "suffix" => ?ctx.suffix);
-        println!(
-            "destroy tablet, path {:?}, id {}, suffix {:?}",
-            path.display(),
-            ctx.id,
-            ctx.suffix
-        );
         // Create kv engine.
         let _db_opts = self.db_opts();
         let _cf_opts = self.cf_opts(EngineType::RaftKv2);

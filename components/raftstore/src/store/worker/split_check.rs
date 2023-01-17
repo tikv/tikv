@@ -482,7 +482,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         };
 
         if !split_keys.is_empty() {
-            println!("Auto split, split keys {:?}", split_keys);
             let region_epoch = region.get_region_epoch().clone();
             self.router
                 .ask_split(region_id, region_epoch, split_keys, "split checker".into());

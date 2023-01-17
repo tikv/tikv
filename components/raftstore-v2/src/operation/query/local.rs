@@ -166,13 +166,7 @@ where
     ) -> ReadResult<(CachedReadDelegate<E>, ReadRequestPolicy)> {
         let mut delegate = match self.local_reader.validate_request(req) {
             Ok(Some(delegate)) => delegate,
-            Ok(None) => {
-                println!(
-                    "Delegate for {} is not found",
-                    req.get_header().get_region_id()
-                );
-                return ReadResult::Redirect;
-            }
+            Ok(None) => return ReadResult::Redirect,
             Err(e) => return ReadResult::Err(e),
         };
 
@@ -193,10 +187,7 @@ where
             // It can not handle other policies.
             // TODO: we should only abort when lease expires. For other cases we should retry
             // infinitely.
-            Ok(ReadRequestPolicy::ReadIndex) => {
-                println!("ReadIndex, region_id {}", req.get_header().get_region_id());
-                ReadResult::Redirect
-            }
+            Ok(ReadRequestPolicy::ReadIndex) => ReadResult::Redirect,
             Err(e) => ReadResult::Err(e),
         }
     }
@@ -219,10 +210,6 @@ where
                         let snapshot_ts = monotonic_raw_now();
 
                         if !delegate.is_in_leader_lease(snapshot_ts) {
-                            println!(
-                                "nto in leader lease, region id {:?}",
-                                req.get_header().get_region_id()
-                            );
                             return ReadResult::Redirect;
                         }
 
@@ -380,7 +367,6 @@ where
         region_id: u64,
         req: &RaftCmdRequest,
     ) -> impl Future<Output = std::result::Result<Option<QueryResult>, RaftCmdResponse>> {
-        println!("try to renew lease region_id {}", region_id);
         let mut req = req.clone();
         // Remote lease is updated step by step. It's possible local reader expires
         // while the raftstore doesn't. So we need to trigger an update

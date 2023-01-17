@@ -81,14 +81,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
         let l = peer_msg_buf.len();
         for i in l..batch_size {
             match self.receiver.try_recv() {
-                Ok(msg) => {
-                    if let PeerMsg::RaftQuery(ref query) = msg {
-                        if query.request.get_header().read_quorum {
-                            println!("msg {:?}", msg);
-                        }
-                    }
-                    peer_msg_buf.push(msg)
-                }
+                Ok(msg) => peer_msg_buf.push(msg),
                 Err(e) => {
                     if let TryRecvError::Disconnected = e {
                         self.is_stopped = true;
@@ -237,11 +230,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg>) {
         for msg in peer_msgs_buf.drain(..) {
-            if let PeerMsg::RaftQuery(ref query) = msg {
-                if query.request.get_header().read_quorum {
-                    println!("on_msgs {:?}", msg);
-                }
-            }
             match msg {
                 PeerMsg::RaftMessage(msg) => {
                     self.fsm.peer.on_raft_message(self.store_ctx, msg);

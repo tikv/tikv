@@ -82,7 +82,6 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotRouter<EK> for RaftRouter<EK, ER> {
             futures::select! {
                 res = self.snapshot(req).fuse() => res,
                 e = timeout_f.fuse() => {
-                    println!("times up");
                     Err(cmd_resp::new_error(Error::Timeout(format!("request timeout for {:?}: {:?}", timeout,e))))
                 },
             }

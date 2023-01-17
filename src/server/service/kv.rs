@@ -90,8 +90,6 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
     fn drop(&mut self) {
-        // 显式的关掉 Check Leader Scheduler 的 Runner，Check Leader Runner
-        // 中有 store meta，这样可以释放掉
         self.check_leader_scheduler.stop();
     }
 }
