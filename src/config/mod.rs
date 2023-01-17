@@ -4930,14 +4930,8 @@ mod tests {
         let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
 
         let check_scale_pool_size = |size: usize, ok: bool| {
-            let origin_pool_size = scheduler
-                .get_sched_pool(CommandPri::Normal)
-                .pool
-                .get_pool_size();
-            let origin_pool_size_high = scheduler
-                .get_sched_pool(CommandPri::High)
-                .pool
-                .get_pool_size();
+            let origin_pool_size = scheduler.get_sched_pool().get_pool_size(CommandPri::Normal);
+            let origin_pool_size_high = scheduler.get_sched_pool().get_pool_size(CommandPri::High);
             let res = cfg_controller
                 .update_config("storage.scheduler-worker-pool-size", &format!("{}", size));
             let (expected_size, expected_size_high) = if ok {
@@ -4948,17 +4942,11 @@ mod tests {
                 (origin_pool_size, origin_pool_size_high)
             };
             assert_eq!(
-                scheduler
-                    .get_sched_pool(CommandPri::Normal)
-                    .pool
-                    .get_pool_size(),
+                scheduler.get_sched_pool().get_pool_size(CommandPri::Normal),
                 expected_size
             );
             assert_eq!(
-                scheduler
-                    .get_sched_pool(CommandPri::High)
-                    .pool
-                    .get_pool_size(),
+                scheduler.get_sched_pool().get_pool_size(CommandPri::High),
                 expected_size_high
             );
         };
