@@ -60,14 +60,9 @@ impl Keyspace for ApiV2 {
         let (k, v) = p;
         let (keyspace, _) = Self::parse_keyspace(&k)?;
         Ok(KeyspaceKv {
-            keyspace,
             k,
             v,
-            offset: if keyspace.is_some() {
-                KEYSPACE_PREFIX_LEN
-            } else {
-                0
-            },
+            keyspace: keyspace.unwrap(),
         })
     }
 
@@ -85,15 +80,14 @@ impl Keyspace for ApiV2 {
 }
 
 pub struct KeyspaceKv {
-    keyspace: Option<KeyspaceId>,
     k: Vec<u8>,
     v: Vec<u8>,
-    offset: usize,
+    keyspace: KeyspaceId,
 }
 
 impl KvPair for KeyspaceKv {
     fn key(&self) -> &[u8] {
-        &self.k[self.offset..]
+        &self.k[KEYSPACE_PREFIX_LEN..]
     }
 
     fn value(&self) -> &[u8] {
@@ -102,7 +96,7 @@ impl KvPair for KeyspaceKv {
 }
 
 impl KeyspaceKv {
-    pub fn keyspace(&self) -> Option<KeyspaceId> {
+    pub fn keyspace(&self) -> KeyspaceId {
         self.keyspace
     }
 }
