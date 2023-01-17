@@ -16,9 +16,6 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext, EvalWarnings},
     EvalType, FieldTypeAccessor,
 };
-// TODO: This value is chosen based on MonetDB/X100's research without our own
-// benchmarks.
-pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 use tikv_util::{
     deadline::Deadline,
     metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
@@ -38,6 +35,10 @@ use super::{
 // is not tuned carefully. We need to benchmark to find a best value. Also we
 // may consider accepting this value from TiDB side.
 const BATCH_INITIAL_SIZE: usize = 32;
+
+// TODO: This value is chosen based on MonetDB/X100's research without our own
+// benchmarks.
+pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
