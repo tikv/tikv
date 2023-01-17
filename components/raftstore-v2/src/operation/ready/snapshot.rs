@@ -36,8 +36,9 @@ use raft::{eraftpb::Snapshot, StateRole};
 use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{
-        metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
-        TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, worker_metrics::SNAP_COUNTER,
+        GenSnapRes, ReadTask, TabletSnapKey, TabletSnapManager, Transport, WriteTask,
+        RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
 };
 use slog::{error, info, warn};
@@ -252,6 +253,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 !s.scheduled || snapshot_index != RAFT_INIT_LOG_INDEX
             }) {
                 info!(self.logger, "apply tablet snapshot completely");
+                SNAP_COUNTER.apply.success.inc();
             }
             if let Some(init) = split {
                 info!(self.logger, "init split with snapshot finished");
