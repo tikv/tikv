@@ -50,20 +50,22 @@ impl ResourceManagerService {
                         match grpc_response {
                             Ok(r) => {
                                 self.revision = r.get_revision();
-                                for item in r.get_changes() {
-                                    if let Ok(group) = protobuf::parse_from_bytes::<ResourceGroup>(
-                                        item.get_value().as_bytes(),
-                                    ) {
-                                        match item.get_kind() {
-                                            EventType::Put => {
-                                                self.manager.add_resource_group(group)
-                                            }
-                                            EventType::Delete => {
-                                                self.manager.remove_resource_group(item.get_name())
+                                r.get_changes().into_iter().for_each(|item| {
+                                    match item.get_kind() {
+                                        EventType::Put => {
+                                            if let Ok(group) =
+                                                protobuf::parse_from_bytes::<ResourceGroup>(
+                                                    item.get_value().as_bytes(),
+                                                )
+                                            {
+                                                self.manager.add_resource_group(group);
                                             }
                                         }
+                                        EventType::Delete => {
+                                            self.manager.remove_resource_group(item.get_name());
+                                        }
                                     }
-                                }
+                                });
                             }
                             Err(err) => {
                                 error!("failed to get stream"; "err" => ?err);
@@ -74,8 +76,7 @@ impl ResourceManagerService {
                 }
                 Err(PdError::DataCompacted(msg)) => {
                     error!("required revision has been compacted"; "err" => ?msg);
-                    // If the etcd revision is compacted, we need to reload all resouce groups
-                    // firstly
+                    // If the etcd revision is compacted, we need to reload all resouce groups.
                     let (groups, revision) = self.list_resource_groups().await;
                     self.revision = revision;
                     groups
@@ -98,12 +99,10 @@ impl ResourceManagerService {
                 .await
             {
                 Ok((items, revision)) => {
-                    let mut groups = Vec::default();
-                    items.iter().for_each(|item| {
-                        if let Ok(group) = protobuf::parse_from_bytes(item.get_value().as_bytes()) {
-                            groups.push(group);
-                        }
-                    });
+                    let groups = items
+                        .into_iter()
+                        .filter_map(|g| protobuf::parse_from_bytes(g.get_value().as_bytes()).ok())
+                        .collect();
                     return (groups, revision);
                 }
                 Err(err) => {
