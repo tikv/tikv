@@ -447,9 +447,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             running_write_bytes: AtomicUsize::new(0).into(),
             sched_pending_write_threshold: config.scheduler_pending_write_threshold.0 as usize,
             sched_worker_pool: SchedPool::new(
-                engine.clone(),
+                engine,
                 config.scheduler_worker_pool_size,
-                reporter.clone(),
+                reporter,
                 feature_gate.clone(),
                 resource_ctl,
             ),
@@ -1973,7 +1973,7 @@ mod tests {
 
     #[test]
     fn test_acquire_latch_deadline() {
-        let (scheduler, engine) = new_test_scheduler();
+        let (scheduler, _) = new_test_scheduler();
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
         let cid = scheduler.inner.gen_id();
@@ -2055,13 +2055,15 @@ mod tests {
 
     #[test]
     fn test_pool_available_deadline() {
-        let (scheduler, engine) = new_test_scheduler();
+        let (scheduler, _) = new_test_scheduler();
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
         // cannot run within 500ms.
         scheduler
             .get_sched_pool()
-            .spawn("", CommandPri::Normal, async { thread::sleep(Duration::from_millis(500)) })
+            .spawn("", CommandPri::Normal, async {
+                thread::sleep(Duration::from_millis(500))
+            })
             .unwrap();
 
         let mut req = BatchRollbackRequest::default();
@@ -2090,7 +2092,7 @@ mod tests {
 
     #[test]
     fn test_flow_control_trottle_deadline() {
-        let (scheduler, engine) = new_test_scheduler();
+        let (scheduler, _) = new_test_scheduler();
 
         let mut req = CheckTxnStatusRequest::default();
         req.mut_context().max_execution_duration_ms = 100;
@@ -2134,7 +2136,7 @@ mod tests {
 
     #[test]
     fn test_accumulate_many_expired_commands() {
-        let (scheduler, engine) = new_test_scheduler();
+        let (scheduler, _) = new_test_scheduler();
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
         let cid = scheduler.inner.gen_id();

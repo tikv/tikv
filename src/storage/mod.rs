@@ -1525,7 +1525,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         self.sched
             .get_sched_pool()
-            .spawn(&group_name, pri, future)
+            .spawn(group_name, pri, future)
             .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 
@@ -3208,7 +3208,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             ts_provider,
-            Some(Arc::new(ResourceController::new("test".to_owned(), false))),
+            None,
         )
     }
 

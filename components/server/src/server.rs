@@ -245,7 +245,7 @@ struct TikvServer<ER: RaftEngine> {
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
-    resource_manager: Arc<ResourceGroupManager>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
@@ -322,23 +322,27 @@ where
         let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
-        let resource_manager = Arc::new(ResourceGroupManager::new(config.resource_control.enabled));
-
-        // Initialize raftstore channels.
-        let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 
         let thread_count = config.server.background_thread_count;
         let background_worker = WorkerBuilder::new("background")
             .thread_count(thread_count)
             .create();
-        // spawn a task to periodically update the minimal virtual time of all resource
-        // group.
-        if config.resource_control.enabled {
-            let resource_mgr1 = resource_manager.clone();
+
+        let resource_manager = if config.resource_control.enabled {
+            let mgr = Arc::new(ResourceGroupManager::default());
+            let mgr1 = mgr.clone();
+            // spawn a task to periodically update the minimal virtual time of all resource
+            // group.
             background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
-                resource_mgr1.advance_min_virtual_time();
+                mgr1.advance_min_virtual_time();
             });
-        }
+            Some(mgr)
+        } else {
+            None
+        };
+
+        // Initialize raftstore channels.
+        let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 
         let mut coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
@@ -747,7 +751,8 @@ where
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             let resource_ctl = self
                 .resource_manager
-                .derive_controller("unified-read-pool".into(), true);
+                .as_ref()
+                .map(|m| m.derive_controller("unified-read-pool".into(), true));
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
@@ -827,7 +832,8 @@ where
             self.pd_client.feature_gate().clone(),
             self.causal_ts_provider.clone(),
             self.resource_manager
-                .derive_controller("scheduler-worker-pool".to_owned(), true),
+                .as_ref()
+                .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(

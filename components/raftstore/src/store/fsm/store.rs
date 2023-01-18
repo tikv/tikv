@@ -1797,18 +1797,22 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
 pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
     cfg: &Config,
-    resource_manager: &Arc<ResourceGroupManager>,
+    resource_manager: &Option<Arc<ResourceGroupManager>>,
 ) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(
         cfg,
-        resource_manager.derive_controller("apply".to_owned(), false),
+        resource_manager
+            .as_ref()
+            .map(|m| m.derive_controller("apply".to_owned(), false)),
     );
     let (router, system) = batch_system::create_system(
         &cfg.store_batch_system,
         store_tx,
         store_fsm,
-        resource_manager.derive_controller("store".to_owned(), false),
+        resource_manager
+            .as_ref()
+            .map(|m| m.derive_controller("store".to_owned(), false)),
     );
     let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
@@ -1818,7 +1822,9 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         apply_system,
         router: raft_router.clone(),
         store_writers: StoreWriters::new(
-            resource_manager.derive_controller("store-writer".to_owned(), false),
+            resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("store-writer".to_owned(), false)),
         ),
     };
     (raft_router, system)

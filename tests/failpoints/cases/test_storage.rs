@@ -311,7 +311,10 @@ fn test_scale_scheduler_pool() {
         cfg_controller
             .update_config("storage.scheduler-worker-pool-size", &format!("{}", size))
             .unwrap();
-        assert_eq!(scheduler.get_sched_pool().pool.get_pool_size(), size);
+        assert_eq!(
+            scheduler.get_sched_pool().get_pool_size(CommandPri::Normal),
+            size
+        );
     };
 
     scale_pool(1);
