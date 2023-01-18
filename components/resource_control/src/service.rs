@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt;
 use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
-use pd_client::{PdClient, Result, RpcClient, RESOURCE_CONTROL_CONFIG_PATH};
+use pd_client::{Error as PdError, PdClient, Result, RpcClient, RESOURCE_CONTROL_CONFIG_PATH};
 use tikv_util::{box_err, error};
 
 use crate::ResourceGroupManager;
@@ -34,7 +34,7 @@ impl ResourceManagerService {
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
         // Firstly, load all resource groups as of now.
-        match self.list_resource_groups() {
+        match self.list_resource_groups().await {
             Ok((groups, revision)) => {
                 self.revision = revision;
                 for group in groups {
@@ -76,6 +76,21 @@ impl ResourceManagerService {
                         }
                     }
                 }
+                Err(PdError::DataCompacted(msg)) => {
+                    error!("required revision has been compacted, err: {:?}", msg);
+                    match self.list_resource_groups().await {
+                        Ok((groups, revision)) => {
+                            self.revision = revision;
+                            for group in groups {
+                                self.manager.add_resource_group(group);
+                            }
+                        }
+                        Err(err) => error!(
+                            "failed to list resource groups in re-list groups, err: {:?}",
+                            err
+                        ),
+                    }
+                }
                 Err(err) => {
                     error!("failed to watch resource groups, err: {:?}", err);
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -84,12 +99,12 @@ impl ResourceManagerService {
         }
     }
 
-    fn list_resource_groups(&mut self) -> Result<(Vec<ResourceGroup>, i64)> {
-        match futures::executor::block_on(async move {
-            self.pd_client
-                .load_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string())
-                .await
-        }) {
+    async fn list_resource_groups(&mut self) -> Result<(Vec<ResourceGroup>, i64)> {
+        match self
+            .pd_client
+            .load_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string())
+            .await
+        {
             Ok((items, revision)) => {
                 let mut groups = Vec::default();
                 for item in items {
@@ -108,6 +123,7 @@ impl ResourceManagerService {
 pub mod tests {
     use std::time::Duration;
 
+    use futures::executor::block_on;
     use kvproto::pdpb::GlobalConfigItem;
     use pd_client::RpcClient;
     use protobuf::Message;
@@ -163,12 +179,12 @@ pub mod tests {
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
         let group = new_resource_group("TEST".into(), true, 100, 100);
         add_resource_group(s.pd_client.clone(), group);
-        let (res, revision) = s.list_resource_groups().unwrap();
+        let (res, revision) = block_on(s.list_resource_groups()).unwrap();
         assert_eq!(res.len(), 1);
         assert_eq!(revision, 1);
 
         delete_resource_group(s.pd_client.clone(), "TEST");
-        let (res, revision) = s.list_resource_groups().unwrap();
+        let (res, revision) = block_on(s.list_resource_groups()).unwrap();
         assert_eq!(res.len(), 0);
         assert_eq!(revision, 2);
 
@@ -181,7 +197,7 @@ pub mod tests {
         let resource_manager = ResourceGroupManager::default();
 
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
-        let (res, revision) = s.list_resource_groups().unwrap();
+        let (res, revision) = block_on(s.list_resource_groups()).unwrap();
         assert_eq!(res.len(), 0);
         assert_eq!(revision, 0);
 
@@ -198,12 +214,12 @@ pub mod tests {
         // Mock modify
         let group2 = new_resource_group("TEST2".into(), true, 50, 50);
         add_resource_group(s.pd_client.clone(), group2);
-        let (res, revision) = s.list_resource_groups().unwrap();
+        let (res, revision) = block_on(s.list_resource_groups()).unwrap();
         assert_eq!(res.len(), 2);
         assert_eq!(revision, 3);
         // Mock delete
         delete_resource_group(s.pd_client.clone(), "TEST1");
-        let (res, revision) = s.list_resource_groups().unwrap();
+        let (res, revision) = block_on(s.list_resource_groups()).unwrap();
         assert_eq!(res.len(), 1);
         assert_eq!(revision, 4);
         // Wait for watcher

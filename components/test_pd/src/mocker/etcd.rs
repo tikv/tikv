@@ -37,24 +37,26 @@ impl Etcd {
 
     pub fn get_key(&self, keys: Keys) -> (Vec<KeyValue>, i64) {
         let (start_key, end_key) = keys.into_bound();
-        let mvccs = self
+        let kvs = self
             .items
             .range((
                 Bound::Included(&Key(start_key, 0)),
                 Bound::Excluded(&Key(end_key, self.revision)),
             ))
-            .collect::<Vec<_>>();
-        let kvs = mvccs
+            .collect::<Vec<_>>()
             .as_slice()
-            .group_by(|k1, k2| k1.0.0 == k2.0.0)
-            .filter_map(|k| {
-                let (k, v) = k.last()?;
+            .group_by(|item1, item2| item1.0.0 == item2.0.0)
+            .filter_map(|group| {
+                let (k, v) = group.last()?;
                 match v {
                     Value::Val(val) => Some(KeyValue(MetaKey(k.0.clone()), val.clone())),
                     Value::Del => None,
                 }
             })
-            .collect::<Vec<_>>();
+            .fold(Vec::new(), |mut items, item| {
+                items.push(item);
+                items
+            });
 
         (kvs, self.get_revision())
     }
@@ -120,7 +122,10 @@ impl Etcd {
         // Sending events from [start_rev, now) to the client.
         let mut pending = self
             .items
-            .iter()
+            .range((
+                Bound::Included(Key(start_key.clone(), 0)),
+                Bound::Excluded(Key(end_key.clone(), self.revision)),
+            ))
             .filter(|(k, _)| k.1 >= start_rev)
             .collect::<Vec<_>>();
         pending.sort_by_key(|(k, _)| k.1);
