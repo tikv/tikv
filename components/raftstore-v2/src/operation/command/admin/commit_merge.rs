@@ -58,7 +58,7 @@ use futures::channel::oneshot;
 use kvproto::{
     metapb::{self, Region},
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CommitMergeRequest, RaftCmdRequest},
-    raft_serverpb::{MergeState, PeerState},
+    raft_serverpb::{MergeState, PeerState, RegionLocalState},
 };
 use protobuf::Message;
 use raft::{GetEntriesContext, Storage, INVALID_ID, NO_LIMIT};
@@ -66,11 +66,11 @@ use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
         fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, util, MergeResultKind,
-        ProposalContext, Transport,
+        ProposalContext, Transport, WriteTask,
     },
     Error, Result,
 };
-use slog::{debug, error, info};
+use slog::{debug, error, info, Logger};
 use tikv_util::{
     box_err, slog_panic,
     store::{find_peer, region_on_same_stores},
@@ -106,17 +106,22 @@ pub struct MergeContext {
     catch_up_logs: Option<CatchUpLogs>,
     /// Peers that want to rollback merge.
     pub rollback_peers: HashSet<u64>,
+
+    /// Used at target region.
+    pending_merge_result: Option<(u64, PeerMsg)>,
 }
 
 #[derive(Debug)]
 pub struct CommitMergeResult {
-    index: u64,
+    pub index: u64,
     region: Region,
+    source_index: u64,
     source: Region,
     tablet: Box<dyn Any + Send + Sync>,
 }
 
 struct SourceReady {
+    index: u64,
     tablet: Box<dyn Any + Send + Sync>,
 }
 
@@ -136,6 +141,16 @@ impl Debug for CatchUpLogs {
 }
 
 impl MergeContext {
+    #[inline]
+    pub fn from_region_state(logger: &Logger, state: &RegionLocalState) -> Self {
+        let mut ctx = Self::default();
+        if state.get_state() == PeerState::Merging {
+            info!(logger, "region is merging"; "region_state" => ?state);
+            ctx.pending = Some(state.get_merge_state().clone());
+        }
+        ctx
+    }
+
     #[inline]
     pub fn should_block_write(&self, admin_type: Option<AdminCmdType>) -> bool {
         self.pending.is_some() && admin_type != Some(AdminCmdType::RollbackMerge)
@@ -322,6 +337,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .unwrap()
             .get_id();
 
+        // TODO: not use u64::MAX?
         if let Some(target_state) = store_ctx
             .engine
             .get_region_state(target_region_id, u64::MAX)?
@@ -455,11 +471,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             merge: merge.clone(),
             tx,
         }));
-        let r = rx.await;
-        if r.is_err() {
+        let source_ready = rx.await.unwrap_or_else(|_| {
             // TODO: handle this gracefully.
             slog_panic!(self.logger, "source peer is missing");
-        }
+        });
 
         info!(
             self.logger,
@@ -483,7 +498,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
 
-        let source_tablet: EK = match r.unwrap().tablet.downcast() {
+        let source_tablet: EK = match source_ready.tablet.downcast() {
             Ok(t) => *t,
             Err(t) => unreachable!("tablet type should be the same: {:?}", t),
         };
@@ -514,6 +529,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.region_state_mut().set_state(PeerState::Normal);
         self.region_state_mut()
             .set_merge_state(MergeState::default());
+        self.region_state_mut().set_tablet_index(index);
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
 
@@ -522,6 +538,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             AdminCmdResult::CommitMerge(CommitMergeResult {
                 index,
                 region,
+                source_index: source_ready.index,
                 source: source_region.to_owned(),
                 tablet: Box::new(tablet),
             }),
@@ -698,6 +715,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         if catch_up_logs
             .tx
             .send(SourceReady {
+                index: self.apply_progress().0,
                 tablet: Box::new(self.tablet().clone()),
             })
             .is_err()
@@ -787,31 +805,56 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
 
-        if let Err(e) = store_ctx.router.force_send(
+        let region_id = self.region_id();
+        let region_state = self.storage().region_state().clone();
+        self.state_changes_mut()
+            .put_region_state(region_id, res.index, &region_state)
+            .unwrap();
+        let mut source_region_state = RegionLocalState::default();
+        // TODO: maybe all information needs to be filled?
+        let mut merging_state = MergeState::default();
+        merging_state.set_target(self.region().clone());
+        source_region_state.set_merge_state(merging_state);
+        source_region_state.set_region(res.source.clone());
+        source_region_state.set_state(PeerState::Tombstone);
+        self.state_changes_mut()
+            .put_region_state(res.source.get_id(), res.source_index, &source_region_state)
+            .unwrap();
+        self.storage_mut()
+            .apply_trace_mut()
+            .on_admin_flush(res.index);
+        self.set_has_extra_write();
+        // after persisted, destroy source.
+        self.merge_context_mut().pending_merge_result = Some((
             res.source.get_id(),
             PeerMsg::MergeResult {
                 target_region_id: self.region_id(),
                 target: self.peer().clone(),
                 result: MergeResultKind::FromTargetLog,
             },
-        ) {
-            slog_panic!(
-                self.logger,
-                "failed to send merge result(FromTargetLog)";
-                "to_source" => res.source.get_id(),
-                "err" => ?e,
-            );
-        }
+        ));
+    }
 
-        let region_id = self.region_id();
-        let region_state = self.storage().region_state().clone();
-        self.state_changes_mut()
-            .put_region_state(region_id, res.index, &region_state)
-            .unwrap();
-        self.state_changes_mut()
-            .put_dirty_mark(region_id, res.index, true)
-            .unwrap();
-        self.set_has_extra_write();
+    #[inline]
+    pub fn maybe_consume_pending_merge_result<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        task: &mut WriteTask<EK, ER>,
+    ) {
+        if let Some((id, msg)) = self.merge_context_mut().pending_merge_result.take() {
+            let logger = self.logger.clone();
+            let mailbox = store_ctx.router.mailbox(id).unwrap();
+            task.persisted_cbs.push(Box::new(move || {
+                if let Err(e) = mailbox.force_send(msg) {
+                    slog_panic!(
+                        logger,
+                        "failed to send merge result(FromTargetLog)";
+                        "to_source" => id,
+                        "err" => ?e,
+                    );
+                }
+            }));
+        }
     }
 
     // Match v1::on_merge_result. Called on source peer.

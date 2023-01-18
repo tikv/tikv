@@ -517,6 +517,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
+        self.maybe_consume_pending_merge_result(ctx, &mut write_task);
         self.report_send_to_queue_duration(ctx, &mut write_task, ready.entries());
         let prev_persisted = self.storage().apply_trace().persisted_apply_index();
         self.merge_state_changes_to(&mut write_task);

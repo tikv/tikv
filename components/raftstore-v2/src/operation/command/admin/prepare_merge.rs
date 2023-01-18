@@ -443,7 +443,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .put_region_state(region_id, res.state.get_commit(), &res.region_state)
             .unwrap();
         self.set_has_extra_write();
-        self.set_has_ready();
 
         self.proposal_control_mut()
             .enter_prepare_merge(res.state.get_commit());

@@ -130,7 +130,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let raft_cfg = cfg.new_raft_config(peer_id, applied_index);
 
         let region_id = storage.region().get_id();
-        let tablet_index = storage.region_state().get_tablet_index();
+        let region_state = storage.region_state().clone();
+        let tablet_index = region_state.get_tablet_index();
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
@@ -155,7 +156,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
             compact_log_context: CompactLogContext::new(applied_index),
-            merge_context: MergeContext::default(),
+            merge_context: MergeContext::from_region_state(&logger, &region_state),
             last_sent_snapshot_index: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),

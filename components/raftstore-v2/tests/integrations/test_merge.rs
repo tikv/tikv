@@ -70,10 +70,7 @@ fn test_merge() {
     let (region_3, region_4, peer_4) = do_split(router, region_3, &peer_3, 3);
     let (region_4, region_5, peer_5) = do_split(router, region_4, &peer_4, 4);
     let (region_5, region_6, peer_6) = do_split(router, region_5, &peer_5, 5);
-    // Split should survive restart.
     drop(raft_engine);
-    cluster.restart(0);
-    let router = &mut cluster.routers[0];
     // The last region version is smaller.
     for (i, v) in [1, 2, 3, 4, 5, 5].iter().enumerate() {
         let rid = region_1.get_id() + i as u64;
@@ -88,18 +85,24 @@ fn test_merge() {
     }
 
     let region_2 = merge_region(router, region_1.clone(), peer_1, region_2);
-    let snapshot = router.stale_snapshot(region_2.get_id());
-    let key = format!("k{}1", region_1.get_id());
-    assert!(snapshot.get_value(key.as_bytes()).unwrap().is_some());
-
+    {
+        let snapshot = router.stale_snapshot(region_2.get_id());
+        let key = format!("k{}1", region_1.get_id());
+        assert!(snapshot.get_value(key.as_bytes()).unwrap().is_some());
+    }
     let region_5 = merge_region(router, region_6.clone(), peer_6, region_5);
-    let snapshot = router.stale_snapshot(region_5.get_id());
-    let key = format!("k{}5", region_6.get_id());
-    assert!(snapshot.get_value(key.as_bytes()).unwrap().is_some());
-
+    {
+        let snapshot = router.stale_snapshot(region_5.get_id());
+        let key = format!("k{}5", region_6.get_id());
+        assert!(snapshot.get_value(key.as_bytes()).unwrap().is_some());
+    }
     let region_3 = merge_region(router, region_2, peer_2, region_3);
     let region_4 = merge_region(router, region_3, peer_3, region_4);
     let region_5 = merge_region(router, region_4, peer_4, region_5);
+
+    println!("reboot");
+    cluster.restart(0);
+    let router = &mut cluster.routers[0];
     let snapshot = router.stale_snapshot(region_5.get_id());
     for (i, v) in [1, 2, 3, 4, 5, 5].iter().enumerate() {
         let rid = region_1.get_id() + i as u64;
