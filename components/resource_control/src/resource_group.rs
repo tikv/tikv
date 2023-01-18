@@ -51,12 +51,12 @@ impl ResourceGroupManager {
             // TODO: currently we only consider the cpu usage in the read path, we may also take
             // io read bytes into account later.
             (GroupMode::RawMode, true) => rg
-                .get_resource_settings()
+                .get_raw_resource_settings()
                 .get_cpu()
                 .get_settings()
                 .get_fill_rate(),
             (GroupMode::RawMode, false) => rg
-                .get_resource_settings()
+                .get_raw_resource_settings()
                 .get_io_write()
                 .get_settings()
                 .get_fill_rate(),
