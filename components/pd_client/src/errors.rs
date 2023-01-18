@@ -35,12 +35,14 @@ pub type Result<T> = result::Result<T, Error>;
 impl Error {
     pub fn retryable(&self) -> bool {
         match self {
-            Error::Grpc(_) | Error::ClusterNotBootstrapped(_) | Error::StreamDisconnect(_) => true,
+            Error::Grpc(_)
+            | Error::ClusterNotBootstrapped(_)
+            | Error::StreamDisconnect(_)
+            | Error::DataCompacted(_) => true,
             Error::Other(_)
             | Error::RegionNotFound(_)
             | Error::StoreTombstone(_)
             | Error::GlobalConfigNotFound(_)
-            | Error::DataCompacted(_)
             | Error::ClusterBootstrapped(_)
             | Error::Incompatible => false,
         }
