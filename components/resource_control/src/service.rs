@@ -37,8 +37,8 @@ impl ResourceManagerService {
         let (groups, revision) = self.list_resource_groups().await;
         self.revision = revision;
         groups
-            .iter()
-            .for_each(|rg| self.manager.add_resource_group(rg.to_owned()));
+            .into_iter()
+            .for_each(|rg| self.manager.add_resource_group(rg));
         // Secondly, start watcher at loading revision.
         loop {
             match self
@@ -79,8 +79,8 @@ impl ResourceManagerService {
                     let (groups, revision) = self.list_resource_groups().await;
                     self.revision = revision;
                     groups
-                        .iter()
-                        .for_each(|rg| self.manager.add_resource_group(rg.to_owned()));
+                        .into_iter()
+                        .for_each(|rg| self.manager.add_resource_group(rg));
                 }
                 Err(err) => {
                     error!("failed to watch resource groups"; "err" => ?err);
