@@ -5,6 +5,7 @@ mod life;
 mod pd;
 mod query;
 mod ready;
+mod txn_ext;
 
 pub use command::{
     AdminCmdResult, ApplyFlowControl, CommittedEntries, CompactLogContext, ProposalControl,
@@ -20,4 +21,5 @@ pub use ready::{
 pub(crate) use self::{
     command::SplitInit,
     query::{LocalReader, ReadDelegatePair, SharedReadTablet},
+    txn_ext::TxnContext,
 };

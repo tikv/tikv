@@ -7,6 +7,7 @@ use std::{
 use ::tracker::{
     set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
 };
+use api_version::{dispatch_api_version, KvFormat};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -148,6 +149,21 @@ impl<E: Engine> Endpoint<E> {
     /// It also checks if there are locks in memory blocking this read request.
     fn parse_request_and_check_memory_locks(
         &self,
+        req: coppb::Request,
+        peer: Option<String>,
+        is_streaming: bool,
+    ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
+        dispatch_api_version!(req.get_context().get_api_version(), {
+            self.parse_request_and_check_memory_locks_impl::<API>(req, peer, is_streaming)
+        })
+    }
+
+    /// Parse the raw `Request` to create `RequestHandlerBuilder` and
+    /// `ReqContext`. Returns `Err` if fails.
+    ///
+    /// It also checks if there are locks in memory blocking this read request.
+    fn parse_request_and_check_memory_locks_impl<F: KvFormat>(
+        &self,
         mut req: coppb::Request,
         peer: Option<String>,
         is_streaming: bool,
@@ -232,7 +248,7 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
-                    dag::DagHandlerBuilder::new(
+                    dag::DagHandlerBuilder::<_, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
                         store,
@@ -281,7 +297,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
-                    statistics::analyze::AnalyzeContext::new(
+                    statistics::analyze::AnalyzeContext::<_, F>::new(
                         analyze,
                         req_ctx.ranges.clone(),
                         start_ts,

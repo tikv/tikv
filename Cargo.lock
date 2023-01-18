@@ -84,6 +84,7 @@ dependencies = [
  "codec",
  "engine_traits",
  "kvproto",
+ "log_wrappers",
  "match-template",
  "panic_hook",
  "thiserror",
@@ -5883,6 +5884,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "server",
@@ -5996,6 +5998,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "rand_xorshift",
+ "resource_control",
  "resource_metering",
  "security",
  "serde_json",
@@ -6103,6 +6106,7 @@ name = "tidb_query_common"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "api_version",
  "async-trait",
  "byteorder",
  "derive_more",
@@ -6124,6 +6128,7 @@ dependencies = [
 name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "base64",
  "bitfield",
  "bitflags",
@@ -6164,6 +6169,7 @@ name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "api_version",
  "async-trait",
  "codec",
  "collections",
