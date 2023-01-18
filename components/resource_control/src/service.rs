@@ -36,11 +36,11 @@ impl ResourceManagerService {
         // Firstly, load all resource groups as of now.
         let (groups, revision) = self.list_resource_groups().await;
         self.revision = revision;
-        for group in groups {
-            self.manager.add_resource_group(group);
-        }
+        groups
+            .iter()
+            .for_each(|rg| self.manager.add_resource_group(rg.to_owned()));
+        // Secondly, start watcher at loading revision.
         loop {
-            // Secondly, start watcher at loading revision.
             match self
                 .pd_client
                 .watch_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), self.revision)
@@ -74,12 +74,13 @@ impl ResourceManagerService {
                 }
                 Err(PdError::DataCompacted(msg)) => {
                     error!("required revision has been compacted"; "err" => ?msg);
-                    // If the etcd revision is compacted, we need to reload all resouce groups firstly
+                    // If the etcd revision is compacted, we need to reload all resouce groups
+                    // firstly
                     let (groups, revision) = self.list_resource_groups().await;
                     self.revision = revision;
-                    for group in groups {
-                        self.manager.add_resource_group(group);
-                    }
+                    groups
+                        .iter()
+                        .for_each(|rg| self.manager.add_resource_group(rg.to_owned()));
                 }
                 Err(err) => {
                     error!("failed to watch resource groups"; "err" => ?err);
@@ -98,11 +99,11 @@ impl ResourceManagerService {
             {
                 Ok((items, revision)) => {
                     let mut groups = Vec::default();
-                    for item in items {
+                    items.iter().for_each(|item| {
                         if let Ok(group) = protobuf::parse_from_bytes(item.get_value().as_bytes()) {
                             groups.push(group);
                         }
-                    }
+                    });
                     return (groups, revision);
                 }
                 Err(err) => {
