@@ -33,21 +33,17 @@ impl ResourceManagerService {
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
-        loop {
-            // Firstly, load all resource groups as of now.
-            match self.list_resource_groups().await {
-                Ok((groups, revision)) => {
-                    self.revision = revision;
-                    for group in groups {
-                        self.manager.add_resource_group(group);
-                    }
-                }
-                Err(err) => {
-                    error!("failed to list resource groups, err: {:?}", err);
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    continue;
+        // Firstly, load all resource groups as of now.
+        match self.list_resource_groups().await {
+            Ok((groups, revision)) => {
+                self.revision = revision;
+                for group in groups {
+                    self.manager.add_resource_group(group);
                 }
             }
+            Err(err) => error!("failed to list resource groups, err: {:?}", err),
+        }
+        loop {
             // Secondly, start watcher at loading revision.
             match self
                 .pd_client
@@ -82,6 +78,18 @@ impl ResourceManagerService {
                 }
                 Err(PdError::DataCompacted(msg)) => {
                     error!("required revision has been compacted, err: {:?}", msg);
+                    match self.list_resource_groups().await {
+                        Ok((groups, revision)) => {
+                            self.revision = revision;
+                            for group in groups {
+                                self.manager.add_resource_group(group);
+                            }
+                        }
+                        Err(err) => error!(
+                            "failed to list resource groups in re-list groups, err: {:?}",
+                            err
+                        ),
+                    }
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
                 Err(err) => {
@@ -93,21 +101,26 @@ impl ResourceManagerService {
     }
 
     async fn list_resource_groups(&mut self) -> Result<(Vec<ResourceGroup>, i64)> {
-        match self
-            .pd_client
-            .load_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string())
-            .await
-        {
-            Ok((items, revision)) => {
-                let mut groups = Vec::default();
-                for item in items {
-                    if let Ok(group) = protobuf::parse_from_bytes(item.get_value().as_bytes()) {
-                        groups.push(group);
+        loop {
+            match self
+                .pd_client
+                .load_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string())
+                .await
+            {
+                Ok((items, revision)) => {
+                    let mut groups = Vec::default();
+                    for item in items {
+                        if let Ok(group) = protobuf::parse_from_bytes(item.get_value().as_bytes()) {
+                            groups.push(group);
+                        }
                     }
+                    return Ok((groups, revision));
                 }
-                Ok((groups, revision))
+                Err(err) => {
+                    error!("failed to load global config, err: {:?}", err);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
             }
-            Err(err) => return Err(box_err!("failed to load global config, err: {:?}", err)),
         }
     }
 }
