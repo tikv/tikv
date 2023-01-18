@@ -50,8 +50,9 @@ impl ResourceManagerService {
                         match grpc_response {
                             Ok(r) => {
                                 self.revision = r.get_revision();
-                                r.get_changes().into_iter().for_each(|item| {
-                                    match item.get_kind() {
+                                r.get_changes()
+                                    .iter()
+                                    .for_each(|item| match item.get_kind() {
                                         EventType::Put => {
                                             if let Ok(group) =
                                                 protobuf::parse_from_bytes::<ResourceGroup>(
@@ -64,8 +65,7 @@ impl ResourceManagerService {
                                         EventType::Delete => {
                                             self.manager.remove_resource_group(item.get_name());
                                         }
-                                    }
-                                });
+                                    });
                             }
                             Err(err) => {
                                 error!("failed to get stream"; "err" => ?err);
