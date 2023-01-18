@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
+use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
@@ -14,10 +14,9 @@ use grpcio_health::HealthService;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
 };
-use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::{
     coprocessor::dispatcher::CoprocessorHost,
-    router::{LocalReadRouter, RaftStoreRouter},
     store::{
         self,
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
@@ -25,68 +24,69 @@ use raftstore::{
         RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
     },
 };
-use resource_metering::{CollectorRegHandle, ResourceTagFactory};
+use resource_metering::CollectorRegHandle;
 use tikv_util::{
     config::VersionTrack,
-    quota_limiter::QuotaLimiter,
     worker::{LazyWorker, Scheduler, Worker},
 };
 
-use super::{RaftKv, Result};
-use crate::{
-    import::SstImporter,
-    read_pool::ReadPoolHandle,
-    server::Config as ServerConfig,
-    storage::{
-        config::Config as StorageConfig, kv::FlowStatsReporter, lock_manager,
-        txn::flow_controller::FlowController, DynamicConfigs as StorageDynamicConfigs, Storage,
-    },
-};
+use super::Result;
+use crate::{import::SstImporter, server::Config as ServerConfig};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
 
-/// Creates a new storage engine which is backed by the Raft consensus
-/// protocol.
-pub fn create_raft_storage<
-    S,
-    EK,
-    R: FlowStatsReporter,
-    F: KvFormat,
-    LM: lock_manager::LockManager,
->(
-    engine: RaftKv<EK, S>,
-    cfg: &StorageConfig,
-    read_pool: ReadPoolHandle,
-    lock_mgr: LM,
-    concurrency_manager: ConcurrencyManager,
-    dynamic_configs: StorageDynamicConfigs,
-    flow_controller: Arc<FlowController>,
-    reporter: R,
-    resource_tag_factory: ResourceTagFactory,
-    quota_limiter: Arc<QuotaLimiter>,
-    feature_gate: FeatureGate,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
-) -> Result<Storage<RaftKv<EK, S>, LM, F>>
-where
-    S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
-    EK: KvEngine,
-{
-    let store = Storage::from_engine(
-        engine,
-        cfg,
-        read_pool,
-        lock_mgr,
-        concurrency_manager,
-        dynamic_configs,
-        flow_controller,
-        reporter,
-        resource_tag_factory,
-        quota_limiter,
-        feature_gate,
-        causal_ts_provider,
-    )?;
-    Ok(store)
+pub(crate) fn init_store(store: Option<metapb::Store>, cfg: &ServerConfig) -> metapb::Store {
+    let mut store = store.unwrap_or_default();
+    store.set_id(INVALID_ID);
+    if store.get_address().is_empty() {
+        if cfg.advertise_addr.is_empty() {
+            store.set_address(cfg.addr.clone());
+            if store.get_peer_address().is_empty() {
+                store.set_peer_address(cfg.addr.clone());
+            }
+        } else {
+            store.set_address(cfg.advertise_addr.clone());
+            if store.get_peer_address().is_empty() {
+                store.set_peer_address(cfg.advertise_addr.clone());
+            }
+        }
+    }
+    if store.get_status_address().is_empty() {
+        if cfg.advertise_status_addr.is_empty() {
+            store.set_status_address(cfg.status_addr.clone());
+        } else {
+            store.set_status_address(cfg.advertise_status_addr.clone())
+        }
+    }
+    if store.get_version().is_empty() {
+        store.set_version(env!("CARGO_PKG_VERSION").to_string());
+    }
+
+    if let Ok(path) = std::env::current_exe() {
+        if let Some(path) = path.parent() {
+            store.set_deploy_path(path.to_string_lossy().to_string());
+        }
+    };
+
+    store.set_start_timestamp(chrono::Local::now().timestamp());
+    if store.get_git_hash().is_empty() {
+        store.set_git_hash(
+            option_env!("TIKV_BUILD_GIT_HASH")
+                .unwrap_or("Unknown git hash")
+                .to_string(),
+        );
+    }
+
+    let mut labels = Vec::new();
+    for (k, v) in &cfg.labels {
+        let mut label = metapb::StoreLabel::default();
+        label.set_key(k.to_owned());
+        label.set_value(v.to_owned());
+        labels.push(label);
+    }
+    store.set_labels(labels.into());
+    store
 }
 
 /// A wrapper for the raftstore which runs Multi-Raft.
@@ -123,58 +123,7 @@ where
         health_service: Option<HealthService>,
         default_store: Option<metapb::Store>,
     ) -> Node<C, EK, ER> {
-        let mut store = match default_store {
-            None => metapb::Store::default(),
-            Some(s) => s,
-        };
-        store.set_id(INVALID_ID);
-        if store.get_address().is_empty() {
-            if cfg.advertise_addr.is_empty() {
-                store.set_address(cfg.addr.clone());
-                if store.get_peer_address().is_empty() {
-                    store.set_peer_address(cfg.addr.clone());
-                }
-            } else {
-                store.set_address(cfg.advertise_addr.clone());
-                if store.get_peer_address().is_empty() {
-                    store.set_peer_address(cfg.advertise_addr.clone());
-                }
-            }
-        }
-        if store.get_status_address().is_empty() {
-            if cfg.advertise_status_addr.is_empty() {
-                store.set_status_address(cfg.status_addr.clone());
-            } else {
-                store.set_status_address(cfg.advertise_status_addr.clone())
-            }
-        }
-        if store.get_version().is_empty() {
-            store.set_version(env!("CARGO_PKG_VERSION").to_string());
-        }
-
-        if let Ok(path) = std::env::current_exe() {
-            if let Some(path) = path.parent() {
-                store.set_deploy_path(path.to_string_lossy().to_string());
-            }
-        };
-
-        store.set_start_timestamp(chrono::Local::now().timestamp());
-        if store.get_git_hash().is_empty() {
-            store.set_git_hash(
-                option_env!("TIKV_BUILD_GIT_HASH")
-                    .unwrap_or("Unknown git hash")
-                    .to_string(),
-            );
-        }
-
-        let mut labels = Vec::new();
-        for (k, v) in &cfg.labels {
-            let mut label = metapb::StoreLabel::default();
-            label.set_key(k.to_owned());
-            label.set_value(v.to_owned());
-            labels.push(label);
-        }
-        store.set_labels(labels.into());
+        let store = init_store(default_store, cfg);
 
         Node {
             cluster_id: cfg.cluster_id,

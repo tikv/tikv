@@ -70,14 +70,14 @@ use uuid::Uuid;
 
 use super::{
     cmd_resp,
-    local_metrics::{RaftMetrics, TimeTracker},
+    local_metrics::RaftMetrics,
     metrics::*,
     peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
-        self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
-        Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+        self, check_req_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI,
+        ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
     DestroyPeerJob, LocalReadContext,
 };
@@ -141,16 +141,16 @@ impl<C: WriteCallback> ProposalQueue<C> {
 
     /// Find the trackers of given index.
     /// Caller should check if term is matched before using trackers.
-    fn find_trackers(&self, index: u64) -> Option<(u64, &SmallVec<[TimeTracker; 4]>)> {
+    pub fn find_trackers(&self, index: u64) -> Option<(u64, C::TimeTrackerListRef<'_>)> {
         self.queue
             .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
             .ok()
-            .and_then(|i| {
-                self.queue[i]
-                    .cb
-                    .write_trackers()
-                    .map(|ts| (self.queue[i].term, ts))
-            })
+            .map(|i| (self.queue[i].term, self.queue[i].cb.write_trackers()))
+    }
+
+    #[inline]
+    pub fn queue_mut(&mut self) -> &mut VecDeque<Proposal<C>> {
+        &mut self.queue
     }
 
     pub fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
@@ -200,7 +200,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
     }
 
     #[inline]
-    fn oldest(&self) -> Option<&Proposal<C>> {
+    pub fn oldest(&self) -> Option<&Proposal<C>> {
         self.queue.front()
     }
 
@@ -939,6 +939,15 @@ where
     /// The index of last compacted raft log. It is used for the next compact
     /// log task.
     pub last_compacted_idx: u64,
+    /// Record the time of the last raft log compact, the witness should query
+    /// the leader periodically whether `voter_replicated_index` is updated
+    /// if CompactLog admin command isn't triggered for a while.
+    pub last_compacted_time: Instant,
+    /// When the peer is witness, and there is any voter lagging behind, the
+    /// log truncation of the witness shouldn't be triggered even if it's
+    /// force mode, and this item will be set to `true`, after all pending
+    /// compact cmds have been handled, it will be set to `false`.
+    pub has_pending_compact_cmd: bool,
     /// The index of the latest urgent proposal index.
     last_urgent_proposal_idx: u64,
     /// The index of the latest committed split command.
@@ -1083,6 +1092,10 @@ where
 
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
+        // In order to avoid excessive log accumulation due to the loss of pending
+        // compaction cmds after the witness is restarted, it will actively pull
+        // voter_request_index once at start.
+        let has_pending_compact_cmd = peer.is_witness;
 
         let mut peer = Peer {
             peer,
@@ -1118,6 +1131,8 @@ where
             tag: tag.clone(),
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
+            last_compacted_time: Instant::now(),
+            has_pending_compact_cmd,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
             last_sent_snapshot_idx: 0,
@@ -1172,6 +1187,9 @@ where
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
             peer.raft_group.campaign()?;
         }
+
+        let persisted_index = peer.raft_group.raft.raft_log.persisted;
+        peer.mut_store().update_cache_persisted(persisted_index);
 
         Ok(peer)
     }
@@ -1807,7 +1825,7 @@ where
                 {
                     let proposal = &self.proposals.queue[idx];
                     if term == proposal.term {
-                        for tracker in proposal.cb.write_trackers().iter().flat_map(|v| v.iter()) {
+                        for tracker in proposal.cb.write_trackers() {
                             tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
                                 &mut t.metrics.wf_send_proposal_nanos
                             });
@@ -2282,6 +2300,7 @@ where
                     leader_id: ss.leader_id,
                     prev_lead_transferee: self.lead_transferee,
                     vote: self.raft_group.raft.vote,
+                    initialized: self.is_initialized(),
                 },
             );
             self.cmd_epoch_checker.maybe_update_term(self.term());
@@ -2748,8 +2767,8 @@ where
             for entry in ready.entries() {
                 if let Some((term, times)) = self.proposals.find_trackers(entry.get_index()) {
                     if entry.term == term {
-                        trackers.extend_from_slice(times);
                         for tracker in times {
+                            trackers.push(*tracker);
                             tracker.observe(now, &ctx.raft_metrics.wf_send_to_queue, |t| {
                                 &mut t.metrics.wf_send_to_queue_nanos
                             });
@@ -3273,7 +3292,7 @@ where
         let time = monotonic_raw_now();
         for (req, cb, mut read_index) in read.take_cmds().drain(..) {
             cb.read_tracker().map(|tracker| {
-                GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos =
                         (time - read.propose_time).to_std().unwrap().as_nanos() as u64;
                 })
@@ -3668,6 +3687,7 @@ where
                     cb,
                     propose_time: None,
                     must_pass_epoch_check: has_applied_to_current_term,
+                    sent: false,
                 };
                 if let Some(cmd_type) = req_admin_cmd_type {
                     self.cmd_epoch_checker
@@ -3999,6 +4019,7 @@ where
                     cb: Callback::None,
                     propose_time: Some(now),
                     must_pass_epoch_check: false,
+                    sent: false,
                 };
                 self.post_propose(poll_ctx, p);
             }
@@ -4513,7 +4534,7 @@ where
         self.raft_group.raft.msgs.push(msg);
     }
 
-    /// Return true to if the transfer leader request is accepted.
+    /// Return true if the transfer leader request is accepted.
     ///
     /// When transferring leadership begins, leader sends a pre-transfer
     /// to target follower first to ensures it's ready to become leader.
@@ -4708,7 +4729,7 @@ where
     ) -> ReadResponse<EK::Snapshot> {
         let region = self.region().clone();
         if check_epoch {
-            if let Err(e) = check_region_epoch(&req, &region, true) {
+            if let Err(e) = check_req_region_epoch(&req, &region, true) {
                 debug!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
                 let mut response = cmd_resp::new_error(e);
                 cmd_resp::bind_term(&mut response, self.term());
@@ -5655,7 +5676,7 @@ fn is_request_urgent(req: &RaftCmdRequest) -> bool {
     )
 }
 
-fn make_transfer_leader_response() -> RaftCmdResponse {
+pub fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut response = AdminResponse::default();
     response.set_cmd_type(AdminCmdType::TransferLeader);
     response.set_transfer_leader(TransferLeaderResponse::default());
@@ -5922,6 +5943,7 @@ mod tests {
                 cb: Callback::write(Box::new(|_| {})),
                 propose_time: Some(u64_to_timespec(index)),
                 must_pass_epoch_check: false,
+                sent: false,
             });
         };
         for index in 1..=100 {
@@ -5995,6 +6017,7 @@ mod tests {
                 is_conf_change: false,
                 propose_time: None,
                 must_pass_epoch_check: false,
+                sent: false,
             });
         }
         for (index, term) in entries {

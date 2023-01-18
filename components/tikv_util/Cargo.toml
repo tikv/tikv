@@ -19,6 +19,7 @@ collections = { workspace = true }
 cpu-time = "1.0.0"
 crc32fast = "1.2"
 crossbeam = "0.8"
+crossbeam-skiplist = "0.1"
 derive_more = "0.99.3"
 error_code = { workspace = true }
 fail = "0.5"
@@ -37,6 +38,7 @@ num-traits = "0.2"
 num_cpus = "1"
 online_config = { workspace = true }
 openssl = "0.10"
+parking_lot = "0.12.1"
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"

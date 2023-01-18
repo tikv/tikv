@@ -6,7 +6,7 @@ use ::tracker::{get_tls_tracker_token, with_tls_tracker};
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
-use tikv_kv::{with_tls_engine, Engine};
+use tikv_kv::Engine;
 use tikv_util::time::{self, Duration, Instant};
 use txn_types::Key;
 
@@ -147,7 +147,9 @@ impl<E: Engine> Tracker<E> {
             _ => unreachable!(),
         }
 
-        self.with_perf_context(|perf_context| perf_context.start_observe());
+        self.with_perf_context(|perf_context| {
+            perf_context.start_observe();
+        });
         self.current_stage = TrackerState::ItemBegan(now);
     }
 
@@ -160,7 +162,7 @@ impl<E: Engine> Tracker<E> {
                 self.total_storage_stats.add(&storage_stats);
             }
             self.with_perf_context(|perf_context| {
-                perf_context.report_metrics(&[get_tls_tracker_token()])
+                perf_context.report_metrics(&[get_tls_tracker_token()]);
             });
             self.current_stage = TrackerState::ItemFinished(now);
         } else {
@@ -379,13 +381,11 @@ impl<E: Engine> Tracker<E> {
         };
         tls_cell.with(|c| {
             let mut c = c.borrow_mut();
-            let perf_context = c.get_or_insert_with(|| unsafe {
-                with_tls_engine::<E, _, _>(|engine| {
-                    Box::new(engine.kv_engine().unwrap().get_perf_context(
-                        PerfLevel::Uninitialized,
-                        PerfContextKind::Coprocessor(self.req_ctx.tag.get_str()),
-                    ))
-                })
+            let perf_context = c.get_or_insert_with(|| {
+                Box::new(E::Local::get_perf_context(
+                    PerfLevel::Uninitialized,
+                    PerfContextKind::Coprocessor(self.req_ctx.tag.get_str()),
+                )) as Box<dyn PerfContext>
             });
             f(perf_context)
         })

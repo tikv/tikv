@@ -542,7 +542,7 @@ pub trait PdClient {
 
     fn fetch_cluster_id(&mut self) -> Result<u64>;
 
-    fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>>;
+    fn load_global_config(&mut self, config_path: String) -> PdFuture<HashMap<String, String>>;
 
     fn watch_global_config(
         &mut self,
@@ -791,10 +791,10 @@ impl PdClient for RpcClient {
         Ok((tx, resp_rx))
     }
 
-    fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+    fn load_global_config(&mut self, config_path: String) -> PdFuture<HashMap<String, String>> {
         use kvproto::pdpb::LoadGlobalConfigRequest;
         let mut req = LoadGlobalConfigRequest::new();
-        req.set_names(list.into());
+        req.set_config_path(config_path);
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;

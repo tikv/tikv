@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    fmt::{self, Debug, Formatter},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -9,9 +10,10 @@ use std::{
 };
 
 use collections::HashMap;
+use kvproto::metapb::Region;
 use tikv_util::box_err;
 
-use crate::{Error, Result};
+use crate::{Error, FlushState, Result};
 
 #[derive(Debug)]
 struct LatestTablet<EK> {
@@ -29,6 +31,13 @@ pub struct CachedTablet<EK> {
     version: u64,
 }
 
+impl<EK> CachedTablet<EK> {
+    fn release(&mut self) {
+        self.cache = None;
+        self.version = 0;
+    }
+}
+
 impl<EK: Clone> CachedTablet<EK> {
     #[inline]
     fn new(data: Option<EK>) -> Self {
@@ -42,13 +51,11 @@ impl<EK: Clone> CachedTablet<EK> {
         }
     }
 
-    pub fn set(&mut self, data: EK) {
-        self.version = {
-            let mut latest_data = self.latest.data.lock().unwrap();
-            *latest_data = Some(data.clone());
-            self.latest.version.fetch_add(1, Ordering::Relaxed) + 1
-        };
-        self.cache = Some(data);
+    pub fn set(&mut self, data: EK) -> Option<EK> {
+        self.cache = Some(data.clone());
+        let mut latest_data = self.latest.data.lock().unwrap();
+        self.version = self.latest.version.fetch_add(1, Ordering::Relaxed) + 1;
+        latest_data.replace(data)
     }
 
     /// Get the tablet from cache without checking if it's up to date.
@@ -69,20 +76,72 @@ impl<EK: Clone> CachedTablet<EK> {
     }
 }
 
+/// Context to be passed to `TabletFactory`.
+#[derive(Clone)]
+pub struct TabletContext {
+    /// ID of the tablet. It is usually the region ID.
+    pub id: u64,
+    /// Suffix the tablet. It is usually the index that the tablet starts accept
+    /// incremental modification. The reason to have suffix is that we can keep
+    /// more than one tablet for a region.
+    pub suffix: Option<u64>,
+    /// The expected start key of the tablet. The key should be in the format
+    /// tablet is actually stored, for example should have `z` prefix.
+    ///
+    /// Any key that is smaller than this key can be considered obsolete.
+    pub start_key: Box<[u8]>,
+    /// The expected end key of the tablet. The key should be in the format
+    /// tablet is actually stored, for example should have `z` prefix.
+    ///
+    /// Any key that is larger than or equal to this key can be considered
+    /// obsolete.
+    pub end_key: Box<[u8]>,
+    /// The states to be persisted when flush is triggered.
+    ///
+    /// If not set, apply may not be resumed correctly.
+    pub flush_state: Option<Arc<FlushState>>,
+}
+
+impl Debug for TabletContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TabletContext")
+            .field("id", &self.id)
+            .field("suffix", &self.suffix)
+            .field("start_key", &log_wrappers::Value::key(&self.start_key))
+            .field("end_key", &log_wrappers::Value::key(&self.end_key))
+            .finish()
+    }
+}
+
+impl TabletContext {
+    pub fn new(region: &Region, suffix: Option<u64>) -> Self {
+        TabletContext {
+            id: region.get_id(),
+            suffix,
+            start_key: keys::data_key(region.get_start_key()).into_boxed_slice(),
+            end_key: keys::data_end_key(region.get_end_key()).into_boxed_slice(),
+            flush_state: None,
+        }
+    }
+
+    /// Create a context that assumes there is only one region and it covers the
+    /// whole key space. Normally you should only use this in tests.
+    pub fn with_infinite_region(id: u64, suffix: Option<u64>) -> Self {
+        let mut region = Region::default();
+        region.set_id(id);
+        Self::new(&region, suffix)
+    }
+}
+
 /// A factory trait to create new tablet for multi-rocksdb architecture.
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
 pub trait TabletFactory<EK>: Send + Sync {
     /// Open the tablet in `path`.
-    ///
-    /// `id` and `suffix` is used to mark the identity of tablet. The id is
-    /// likely the region Id, the suffix could be the current raft log
-    /// index. The reason to have suffix is that we can keep more than one
-    /// tablet for a region.
-    fn open_tablet(&self, id: u64, suffix: Option<u64>, path: &Path) -> Result<EK>;
+    fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<EK>;
 
     /// Destroy the tablet and its data
-    fn destroy_tablet(&self, id: u64, suffix: Option<u64>, path: &Path) -> Result<()>;
+    fn destroy_tablet(&self, ctx: TabletContext, path: &Path) -> Result<()>;
 
     /// Check if the tablet with specified path exists
     fn exists(&self, path: &Path) -> bool;
@@ -105,12 +164,12 @@ impl<EK: Clone + Send + Sync> TabletFactory<EK> for SingletonFactory<EK> {
     /// likely the region Id, the suffix could be the current raft log
     /// index. The reason to have suffix is that we can keep more than one
     /// tablet for a region.
-    fn open_tablet(&self, _id: u64, _suffix: Option<u64>, _path: &Path) -> Result<EK> {
+    fn open_tablet(&self, _ctx: TabletContext, _path: &Path) -> Result<EK> {
         Ok(self.tablet.clone())
     }
 
     /// Destroy the tablet and its data
-    fn destroy_tablet(&self, _id: u64, _suffix: Option<u64>, _path: &Path) -> Result<()> {
+    fn destroy_tablet(&self, _ctx: TabletContext, _path: &Path) -> Result<()> {
         Ok(())
     }
 
@@ -124,7 +183,6 @@ impl<EK: Clone + Send + Sync> TabletFactory<EK> for SingletonFactory<EK> {
 struct TabletRegistryInner<EK> {
     // region_id, suffix -> tablet
     tablets: Mutex<HashMap<u64, CachedTablet<EK>>>,
-    tombstone: Mutex<Vec<(u64, u64)>>,
     factory: Box<dyn TabletFactory<EK>>,
     root: PathBuf,
 }
@@ -143,9 +201,6 @@ impl<EK> Clone for TabletRegistry<EK> {
     }
 }
 
-unsafe impl<EK: Send> Send for TabletRegistry<EK> {}
-unsafe impl<EK: Send> Sync for TabletRegistry<EK> {}
-
 impl<EK> TabletRegistry<EK> {
     pub fn new(factory: Box<dyn TabletFactory<EK>>, path: impl Into<PathBuf>) -> Result<Self> {
         let root = path.into();
@@ -155,13 +210,31 @@ impl<EK> TabletRegistry<EK> {
                 tablets: Mutex::new(HashMap::default()),
                 factory,
                 root,
-                tombstone: Mutex::default(),
             }),
         })
     }
 
+    /// Format the name as {prefix}_{id}_{suffix}. If prefix is empty, it will
+    /// be format as {id}_{suffix}.
     pub fn tablet_name(&self, prefix: &str, id: u64, suffix: u64) -> String {
-        format!("{}{}_{}", prefix, id, suffix)
+        format!(
+            "{}{:_<width$}{}_{}",
+            prefix,
+            "",
+            id,
+            suffix,
+            width = !prefix.is_empty() as usize
+        )
+    }
+
+    /// Returns the prefix, id and suffix of the tablet name.
+    pub fn parse_tablet_name<'a>(&self, path: &'a Path) -> Option<(&'a str, u64, u64)> {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let mut parts = name.rsplit('_');
+        let suffix = parts.next()?.parse().ok()?;
+        let id = parts.next()?.parse().ok()?;
+        let prefix = parts.as_str();
+        Some((prefix, id, suffix))
     }
 
     pub fn tablet_root(&self) -> &Path {
@@ -205,27 +278,25 @@ impl<EK> TabletRegistry<EK> {
     /// Load the tablet and set it as the latest.
     ///
     /// If the tablet doesn't exist, it will create an empty one.
-    pub fn load(&self, id: u64, suffix: u64, create: bool) -> Result<CachedTablet<EK>>
+    pub fn load(&self, ctx: TabletContext, create: bool) -> Result<CachedTablet<EK>>
     where
         EK: Clone,
     {
-        let path = self.tablet_path(id, suffix);
+        assert!(ctx.suffix.is_some());
+        let id = ctx.id;
+        let path = self.tablet_path(id, ctx.suffix.unwrap());
         if !create && !self.tablets.factory.exists(&path) {
             return Err(Error::Other(box_err!(
                 "tablet ({}, {:?}) doesn't exist",
                 id,
-                suffix
+                ctx.suffix
             )));
         }
-        let tablet = self.tablets.factory.open_tablet(id, Some(suffix), &path)?;
+        // TODO: use compaction filter to trim range.
+        let tablet = self.tablets.factory.open_tablet(ctx, &path)?;
         let mut cached = self.get_or_default(id);
         cached.set(tablet);
         Ok(cached)
-    }
-
-    /// Destroy the tablet and its data
-    pub fn mark_tombstone(&self, id: u64, suffix: u64) {
-        self.tablets.tombstone.lock().unwrap().push((id, suffix));
     }
 
     /// Loop over all opened tablets. Note, it's possible that the visited
@@ -238,8 +309,10 @@ impl<EK> TabletRegistry<EK> {
         let mut tablets = self.tablets.tablets.lock().unwrap();
         for (id, tablet) in tablets.iter_mut() {
             if !f(*id, tablet) {
+                tablet.release();
                 return;
             }
+            tablet.release();
         }
     }
 }
@@ -288,11 +361,13 @@ mod tests {
         let tablet = Arc::new(1);
         let singleton = SingletonFactory::new(tablet.clone());
         let registry = TabletRegistry::new(Box::new(singleton), "").unwrap();
-        registry.load(1, 1, true).unwrap();
+        let mut ctx = TabletContext::with_infinite_region(1, Some(1));
+        registry.load(ctx.clone(), true).unwrap();
         let mut cached = registry.get(1).unwrap();
         assert_eq!(cached.latest().cloned(), Some(tablet.clone()));
 
-        registry.load(2, 1, true).unwrap();
+        ctx.id = 2;
+        registry.load(ctx.clone(), true).unwrap();
         let mut count = 0;
         registry.for_each_opened_tablet(|id, cached| {
             assert!(&[1, 2].contains(&id), "{}", id);
@@ -305,11 +380,12 @@ mod tests {
         // Destroy should be ignored.
         registry
             .tablet_factory()
-            .destroy_tablet(2, Some(1), &registry.tablet_path(2, 1))
+            .destroy_tablet(ctx.clone(), &registry.tablet_path(2, 1))
             .unwrap();
 
         // Exist check should always succeed.
-        registry.load(3, 1, false).unwrap();
+        ctx.id = 3;
+        registry.load(ctx, false).unwrap();
         let mut cached = registry.get(3).unwrap();
         assert_eq!(cached.latest().cloned(), Some(tablet));
     }
@@ -321,12 +397,12 @@ mod tests {
     }
 
     impl TabletFactory<Record> for MemoryTablet {
-        fn open_tablet(&self, id: u64, suffix: Option<u64>, path: &Path) -> Result<Record> {
+        fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<Record> {
             let mut tablet = self.tablet.lock().unwrap();
             if tablet.contains_key(path) {
                 return Err(Error::Other(box_err!("tablet is opened")));
             }
-            tablet.insert(path.to_owned(), Arc::new((id, suffix.unwrap_or(0))));
+            tablet.insert(path.to_owned(), Arc::new((ctx.id, ctx.suffix.unwrap_or(0))));
             Ok(tablet[path].clone())
         }
 
@@ -335,9 +411,9 @@ mod tests {
             tablet.contains_key(path)
         }
 
-        fn destroy_tablet(&self, id: u64, suffix: Option<u64>, path: &Path) -> Result<()> {
+        fn destroy_tablet(&self, ctx: TabletContext, path: &Path) -> Result<()> {
             let prev = self.tablet.lock().unwrap().remove(path).unwrap();
-            assert_eq!((id, suffix.unwrap_or(0)), *prev);
+            assert_eq!((ctx.id, ctx.suffix.unwrap_or(0)), *prev);
             Ok(())
         }
     }
@@ -349,9 +425,10 @@ mod tests {
         };
         let registry = TabletRegistry::new(Box::new(factory), "").unwrap();
 
-        let mut tablet_1_10 = registry.load(1, 10, true).unwrap();
+        let mut ctx = TabletContext::with_infinite_region(1, Some(10));
+        let mut tablet_1_10 = registry.load(ctx.clone(), true).unwrap();
         // It's open already, load it twice should report lock error.
-        registry.load(1, 10, true).unwrap_err();
+        registry.load(ctx.clone(), true).unwrap_err();
         let mut cached = registry.get(1).unwrap();
         assert_eq!(cached.latest(), tablet_1_10.latest());
 
@@ -361,14 +438,15 @@ mod tests {
         let tablet_path = registry.tablet_path(1, 11);
         assert!(!registry.tablet_factory().exists(&tablet_path));
         // Not exist tablet should report error.
-        registry.load(1, 11, false).unwrap_err();
+        ctx.suffix = Some(11);
+        registry.load(ctx.clone(), false).unwrap_err();
         assert!(registry.get(2).is_none());
         // Though path not exist, but we should be able to create an empty one.
         assert_eq!(registry.get_or_default(2).latest(), None);
         assert!(!registry.tablet_factory().exists(&tablet_path));
 
         // Load new suffix should update cache.
-        registry.load(1, 11, true).unwrap();
+        registry.load(ctx, true).unwrap();
         assert_ne!(cached.latest(), tablet_1_10.cache());
         let tablet_path = registry.tablet_path(1, 11);
         assert!(registry.tablet_factory().exists(&tablet_path));
@@ -389,10 +467,19 @@ mod tests {
         });
         assert_eq!(count, 1);
 
-        let name = registry.tablet_name("prefix_", 12, 30);
+        let name = registry.tablet_name("prefix", 12, 30);
         assert_eq!(name, "prefix_12_30");
         let normal_name = registry.tablet_name("", 20, 15);
         let normal_tablet_path = registry.tablet_path(20, 15);
         assert_eq!(registry.tablet_root().join(normal_name), normal_tablet_path);
+
+        let full_prefix_path = registry.tablet_root().join(name);
+        let res = registry.parse_tablet_name(&full_prefix_path);
+        assert_eq!(res, Some(("prefix", 12, 30)));
+        let res = registry.parse_tablet_name(&normal_tablet_path);
+        assert_eq!(res, Some(("", 20, 15)));
+        let invalid_path = registry.tablet_root().join("invalid_12");
+        let res = registry.parse_tablet_name(&invalid_path);
+        assert_eq!(res, None);
     }
 }

@@ -7,16 +7,14 @@ use std::borrow::Cow;
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use raftstore::store::{Config, Transport};
+use raftstore::store::{Config, TabletSnapManager, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     time::{duration_to_sec, Instant},
-    yatp_pool::FuturePool,
 };
 
-use super::ApplyFsm;
 use crate::{
     batch::StoreContext,
     raft::{Peer, Storage},
@@ -32,7 +30,7 @@ pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
     receiver: Receiver<PeerMsg>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks
     /// twice accidentally.
-    tick_registry: u16,
+    tick_registry: [bool; PeerTick::VARIANT_COUNT],
     is_stopped: bool,
 }
 
@@ -40,16 +38,21 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_registry: &TabletRegistry<EK>,
+        snap_mgr: &TabletSnapManager,
         storage: Storage<EK, ER>,
     ) -> Result<SenderFsmPair<EK, ER>> {
-        let peer = Peer::new(cfg, tablet_registry, storage)?;
-        info!(peer.logger, "create peer");
+        let peer = Peer::new(cfg, tablet_registry, snap_mgr, storage)?;
+        info!(peer.logger, "create peer";
+            "raft_state" => ?peer.storage().raft_state(),
+            "apply_state" => ?peer.storage().apply_state(),
+            "region_state" => ?peer.storage().region_state()
+        );
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(PeerFsm {
             peer,
             mailbox: None,
             receiver: rx,
-            tick_registry: 0,
+            tick_registry: [false; PeerTick::VARIANT_COUNT],
             is_stopped: false,
         });
         Ok((tx, fsm))
@@ -127,11 +130,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         Self { fsm, store_ctx }
     }
 
+    #[inline]
+    fn schedule_pending_ticks(&mut self) {
+        let pending_ticks = self.fsm.peer.take_pending_ticks();
+        for tick in pending_ticks {
+            self.schedule_tick(tick);
+        }
+    }
+
     pub fn schedule_tick(&mut self, tick: PeerTick) {
         assert!(PeerTick::VARIANT_COUNT <= u16::BITS as usize);
         let idx = tick as usize;
-        let key = 1u16 << (idx as u16);
-        if self.fsm.tick_registry & key != 0 {
+        if self.fsm.tick_registry[idx] {
             return;
         }
         if is_zero_duration(&self.store_ctx.tick_batch[idx].wait_duration) {
@@ -156,7 +166,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 return;
             }
         };
-        self.fsm.tick_registry |= key;
+        self.fsm.tick_registry[idx] = true;
         let logger = self.fsm.logger().clone();
         // TODO: perhaps following allocation can be removed.
         let cb = Box::new(move || {
@@ -176,9 +186,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_start(&mut self) {
-        self.schedule_tick(PeerTick::Raft);
+        if !self.fsm.peer.maybe_pause_for_recovery(self.store_ctx) {
+            self.schedule_tick(PeerTick::Raft);
+        }
+        self.schedule_tick(PeerTick::SplitRegionCheck);
+        self.schedule_tick(PeerTick::PdHeartbeat);
+        self.schedule_tick(PeerTick::CompactLog);
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
+        }
+        // Speed up setup if there is only one peer.
+        if self.fsm.peer.is_leader() {
+            self.fsm.peer.set_has_ready();
         }
     }
 
@@ -191,40 +210,61 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_tick(&mut self, tick: PeerTick) {
+        self.fsm.tick_registry[tick as usize] = false;
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
-            PeerTick::RaftLogGc => unimplemented!(),
-            PeerTick::SplitRegionCheck => unimplemented!(),
+            PeerTick::CompactLog => self.on_compact_log_tick(false),
+            PeerTick::SplitRegionCheck => self.on_split_region_check(),
             PeerTick::CheckMerge => unimplemented!(),
             PeerTick::CheckPeerStaleState => unimplemented!(),
-            PeerTick::EntryCacheEvict => unimplemented!(),
+            PeerTick::EntryCacheEvict => self.on_entry_cache_evict(),
             PeerTick::CheckLeaderLease => unimplemented!(),
-            PeerTick::ReactivateMemoryLock => unimplemented!(),
+            PeerTick::ReactivateMemoryLock => {
+                self.fsm.peer.on_reactivate_memory_lock_tick(self.store_ctx)
+            }
             PeerTick::ReportBuckets => unimplemented!(),
-            PeerTick::CheckLongUncommitted => unimplemented!(),
+            PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted(),
         }
     }
 
     pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
-                PeerMsg::RaftMessage(msg) => self.fsm.peer.on_raft_message(self.store_ctx, msg),
+                PeerMsg::RaftMessage(msg) => {
+                    self.fsm.peer.on_raft_message(self.store_ctx, msg);
+                }
                 PeerMsg::RaftQuery(cmd) => {
                     self.on_receive_command(cmd.send_time);
                     self.on_query(cmd.request, cmd.ch)
                 }
-                PeerMsg::RaftCommand(cmd) => {
+                PeerMsg::AdminCommand(cmd) => {
                     self.on_receive_command(cmd.send_time);
-                    self.on_command(cmd.request, cmd.ch)
+                    self.fsm
+                        .peer_mut()
+                        .on_admin_command(self.store_ctx, cmd.request, cmd.ch)
+                }
+                PeerMsg::SimpleWrite(write) => {
+                    self.on_receive_command(write.send_time);
+                    self.fsm.peer_mut().on_simple_write(
+                        self.store_ctx,
+                        write.header,
+                        write.data,
+                        write.ch,
+                    );
+                }
+                PeerMsg::UnsafeWrite(write) => {
+                    self.on_receive_command(write.send_time);
+                    self.fsm
+                        .peer_mut()
+                        .on_unsafe_write(self.store_ctx, write.data);
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),
                 PeerMsg::SplitInit(msg) => self.fsm.peer.on_split_init(self.store_ctx, msg),
-                PeerMsg::SplitInitFinish(region_id) => self
-                    .fsm
-                    .peer
-                    .on_split_init_finish(self.store_ctx, region_id),
+                PeerMsg::SplitInitFinish(region_id) => {
+                    self.fsm.peer.on_split_init_finish(region_id)
+                }
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {
@@ -241,11 +281,46 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     self.fsm.peer_mut().on_snapshot_generated(snap_res)
                 }
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
+                PeerMsg::DataFlushed {
+                    cf,
+                    tablet_index,
+                    flushed_index,
+                } => {
+                    self.fsm
+                        .peer_mut()
+                        .on_data_flushed(cf, tablet_index, flushed_index);
+                }
+                PeerMsg::PeerUnreachable { to_peer_id } => {
+                    self.fsm.peer_mut().on_peer_unreachable(to_peer_id)
+                }
+                PeerMsg::StoreUnreachable { to_store_id } => {
+                    self.fsm.peer_mut().on_store_unreachable(to_store_id)
+                }
+                PeerMsg::SnapshotSent { to_peer_id, status } => {
+                    self.fsm.peer_mut().on_snapshot_sent(to_peer_id, status)
+                }
+                PeerMsg::RequestSplit { request, ch } => {
+                    self.fsm
+                        .peer_mut()
+                        .on_request_split(self.store_ctx, request, ch)
+                }
+                PeerMsg::UpdateRegionSize { size } => {
+                    self.fsm.peer_mut().on_update_region_size(size)
+                }
+                PeerMsg::UpdateRegionKeys { keys } => {
+                    self.fsm.peer_mut().on_update_region_keys(keys)
+                }
+                PeerMsg::ClearRegionSize => self.fsm.peer_mut().on_clear_region_size(),
+                PeerMsg::ForceCompactLog => self.on_compact_log_tick(true),
+                PeerMsg::TabletTrimmed { tablet_index } => {
+                    self.fsm.peer_mut().on_tablet_trimmed(tablet_index)
+                }
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.
         self.fsm.peer.propose_pending_writes(self.store_ctx);
+        self.schedule_pending_ticks();
     }
 }

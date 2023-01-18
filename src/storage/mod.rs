@@ -75,7 +75,9 @@ use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine_traits::{
+    raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+};
 use futures::prelude::*;
 use kvproto::{
     kvrpcpb::{
@@ -87,6 +89,7 @@ use kvproto::{
 use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
+use resource_control::ResourceController;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
@@ -127,7 +130,7 @@ use crate::{
         txn::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
-            scheduler::Scheduler as TxnScheduler,
+            scheduler::TxnScheduler,
             Command, ErrorInner as TxnError,
         },
         types::StorageCallbackType,
@@ -268,6 +271,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        resource_ctl: Option<Arc<ResourceController>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -283,6 +287,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             resource_tag_factory.clone(),
             Arc::clone(&quota_limiter),
             feature_gate,
+            resource_ctl,
         );
 
         info!("Storage started.");
@@ -592,6 +597,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -725,6 +731,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -748,6 +755,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
+        let group_name = requests[0]
+            .get_context()
+            .get_resource_group_name()
+            .as_bytes()
+            .to_owned();
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -908,6 +920,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -927,6 +940,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = keys
             .iter()
@@ -1080,6 +1094,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -1107,6 +1122,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1256,6 +1272,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -1274,6 +1291,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<LockInfo>>> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1403,6 +1421,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -1493,15 +1512,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     // Schedule raw modify commands, which reuse the scheduler worker pool.
     // TODO: separate the txn and raw commands if needed in the future.
-    fn sched_raw_command<T>(&self, tag: CommandKind, future: T) -> Result<()>
+    fn sched_raw_command<T>(
+        &self,
+        group_name: &str,
+        pri: CommandPri,
+        tag: CommandKind,
+        future: T,
+    ) -> Result<()>
     where
-        T: Future + Send + 'static,
+        T: Future<Output = ()> + Send + 'static,
     {
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         self.sched
-            .get_sched_pool(CommandPri::Normal)
-            .pool
-            .spawn(future)
+            .get_sched_pool()
+            .spawn(group_name, pri, future)
             .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 
@@ -1538,7 +1562,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             [(Some(start_key.as_encoded()), Some(end_key.as_encoded()))],
         )?;
 
-        let mut modifies = Vec::with_capacity(DATA_CFS.len());
+        let mut modifies = Vec::with_capacity(DATA_CFS_LEN);
         for cf in DATA_CFS {
             modifies.push(Modify::DeleteRange(
                 cf,
@@ -1575,6 +1599,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Option<Vec<u8>>>> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self
             .resource_tag_factory
@@ -1637,6 +1662,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -1655,6 +1681,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = gets[0].get_context().get_priority();
+        let group_name = gets[0]
+            .get_context()
+            .get_resource_group_name()
+            .as_bytes()
+            .to_owned();
         let priority_tag = get_priority_tag(priority);
         let api_version = self.api_version;
 
@@ -1768,6 +1799,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -1784,6 +1816,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = keys.iter().map(|k| (k.clone(), k.clone())).collect();
         let resource_tag = self
@@ -1864,6 +1897,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -1929,7 +1963,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
-        self.sched_raw_command(CMD, async move {
+
+        let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2039,7 +2076,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
-        self.sched_raw_command(CMD, async move {
+        let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2102,7 +2141,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
-        self.sched_raw_command(CMD, async move {
+        let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2161,7 +2202,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let engine = self.engine.clone();
         let deadline = Self::get_deadline(&ctx);
-        self.sched_raw_command(CMD, async move {
+        let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2207,7 +2250,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
-        self.sched_raw_command(CMD, async move {
+        let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2270,6 +2315,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
@@ -2378,6 +2424,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -2398,6 +2445,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = ranges
             .iter()
@@ -2534,6 +2582,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -2551,6 +2600,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Option<u64>>> {
         const CMD: CommandKind = CommandKind::raw_get_key_ttl;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self
             .resource_tag_factory
@@ -2613,6 +2663,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -2640,7 +2691,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
         let sched = self.get_scheduler();
-        self.sched_raw_command(CMD, async move {
+        let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
             Self::sched_raw_atomic_command(
@@ -2671,7 +2724,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Self::check_ttl_valid(pairs.len(), &ttls)?;
 
         let sched = self.get_scheduler();
-        self.sched_raw_command(CMD, async move {
+        let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
             Self::sched_raw_atomic_command(
@@ -2694,7 +2749,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let sched = self.get_scheduler();
-        self.sched_raw_command(CMD, async move {
+        let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = keys
                 .into_iter()
@@ -2717,6 +2774,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<(u64, u64, u64)>> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = ranges
             .iter()
@@ -2791,6 +2849,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_name,
         );
 
         async move {
@@ -3149,6 +3208,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             ts_provider,
+            None,
         )
     }
 
@@ -3179,6 +3239,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             None,
+            Some(Arc::new(ResourceController::new("test".to_owned(), false))),
         )
     }
 }
@@ -3593,6 +3654,7 @@ mod tests {
     use txn_types::{Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::{
+        config::EngineType,
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
         txn::{
@@ -4133,17 +4195,29 @@ mod tests {
         let engine = {
             let path = "".to_owned();
             let cfg_rocksdb = db_config;
-            let cache = BlockCacheConfig::default().build_shared_cache();
+            let shared =
+                cfg_rocksdb.build_cf_resources(BlockCacheConfig::default().build_shared_cache());
             let cfs_opts = vec![
                 (
                     CF_DEFAULT,
-                    cfg_rocksdb
-                        .defaultcf
-                        .build_opt(&cache, None, ApiVersion::V1),
+                    cfg_rocksdb.defaultcf.build_opt(
+                        &shared,
+                        None,
+                        ApiVersion::V1,
+                        EngineType::RaftKv,
+                    ),
                 ),
-                (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                (
+                    CF_LOCK,
+                    cfg_rocksdb.lockcf.build_opt(&shared, EngineType::RaftKv),
+                ),
+                (
+                    CF_WRITE,
+                    cfg_rocksdb
+                        .writecf
+                        .build_opt(&shared, None, EngineType::RaftKv),
+                ),
+                (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&shared)),
             ];
             RocksEngine::new(
                 &path, None, cfs_opts, None, // io_rate_limiter
@@ -5183,6 +5257,74 @@ mod tests {
         );
         expect_none(
             block_on(storage.get(Context::default(), k, flashback_commit_ts))
+                .unwrap()
+                .0,
+        );
+    }
+
+    #[test]
+    fn test_mvcc_flashback_retry_prepare() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let mut ts = TimeStamp::zero();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"k"), b"v@1".to_vec())],
+                    b"k".to_vec(),
+                    *ts.incr(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k")],
+                    ts,
+                    *ts.incr(),
+                    Context::default(),
+                ),
+                expect_value_callback(tx.clone(), 1, TxnStatus::committed(ts)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_value(
+            b"v@1".to_vec(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), ts))
+                .unwrap()
+                .0,
+        );
+        // Try to prepare flashback first.
+        let flashback_start_ts = *ts.incr();
+        let flashback_commit_ts = *ts.incr();
+        storage
+            .sched_txn_command(
+                new_flashback_rollback_lock_cmd(
+                    flashback_start_ts,
+                    TimeStamp::zero(),
+                    Key::from_raw(b"k"),
+                    Some(Key::from_raw(b"z")),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Mock the prepare flashback retry.
+        run_flashback_to_version(
+            &storage,
+            flashback_start_ts,
+            flashback_commit_ts,
+            TimeStamp::zero(),
+            Key::from_raw(b"k"),
+            Some(Key::from_raw(b"z")),
+        );
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), flashback_commit_ts))
                 .unwrap()
                 .0,
         );

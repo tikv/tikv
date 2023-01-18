@@ -9,8 +9,7 @@
 
 use std::time::Instant;
 
-use collections::HashSet;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
     metapb::{self, PeerRole},
     raft_cmdpb::{AdminRequest, AdminResponse, ChangePeerRequest, RaftCmdRequest},
@@ -18,8 +17,8 @@ use kvproto::{
 };
 use protobuf::Message;
 use raft::prelude::*;
-use raft_proto::ConfChangeI;
 use raftstore::{
+    coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
         metrics::{PEER_ADMIN_CMD_COUNTER_VEC, PEER_PROPOSE_LOG_SIZE_HISTOGRAM},
         util::{self, ChangePeerI, ConfChangeKind},
@@ -28,13 +27,12 @@ use raftstore::{
     Error, Result,
 };
 use slog::{error, info, warn};
-use tikv_util::box_err;
+use tikv_util::{box_err, slog_panic};
 
 use super::AdminCmdResult;
 use crate::{
     batch::StoreContext,
     raft::{Apply, Peer},
-    router::ApplyRes,
 };
 
 /// The apply result of conf change.
@@ -56,7 +54,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn propose_conf_change<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
     ) -> Result<u64> {
         if self.raft_group().raft.has_pending_conf() {
             info!(
@@ -67,7 +65,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let data = req.write_to_bytes()?;
         let admin = req.get_admin_request();
-        let leader_role = self.peer().get_role();
         if admin.has_change_peer() {
             self.propose_conf_change_imp(ctx, admin.get_change_peer(), data)
         } else if admin.has_change_peer_v2() {
@@ -149,7 +146,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let remove_self = conf_change.region_state.get_state() == PeerState::Tombstone;
         self.storage_mut()
-            .set_region_state(conf_change.region_state);
+            .set_region_state(conf_change.region_state.clone());
         if self.is_leader() {
             info!(
                 self.logger,
@@ -186,8 +183,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.set_has_ready();
             }
         }
+        ctx.coprocessor_host.on_region_changed(
+            self.region(),
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
+            self.raft_group().raft.state,
+        );
         if remove_self {
+            // When self is destroyed, all metas will be cleaned in `start_destroy`.
             self.mark_for_destroy(None);
+        } else {
+            let region_id = self.region_id();
+            self.state_changes_mut()
+                .put_region_state(region_id, conf_change.index, &conf_change.region_state)
+                .unwrap();
+            self.set_has_extra_write();
         }
     }
 }
@@ -229,9 +238,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         legacy: bool,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         let region = self.region_state().get_region();
-        let peer_id = self.peer().get_id();
         let change_kind = ConfChangeKind::confchange_kind(changes.len());
-        info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch());
+        info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch(), "index" => index);
         let mut new_region = region.clone();
         match change_kind {
             ConfChangeKind::LeaveJoint => self.apply_leave_joint(&mut new_region),
@@ -253,6 +261,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                         "changes" => ?changes,
                         "legacy" => legacy,
                         "original region" => ?region, "err" => ?e);
+                        return Err(e);
                     }
                 }
                 let conf_ver = region.get_region_epoch().get_conf_ver() + changes.len() as u64;
@@ -284,7 +293,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         }
         let mut resp = AdminResponse::default();
         resp.mut_change_peer().set_region(new_region);
-        let mut conf_change = ConfChangeResult {
+        let conf_change = ConfChangeResult {
             index,
             conf_change: cc,
             changes: changes.to_vec(),
@@ -311,10 +320,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             change_num += 1;
         }
         if change_num == 0 {
-            panic!(
-                "{:?} can't leave a non-joint config, region: {:?}",
-                self.logger.list(),
-                self.region_state()
+            slog_panic!(
+                self.logger,
+                "can't leave a non-joint config";
+                "region" => ?self.region_state()
             );
         }
         let conf_ver = region.get_region_epoch().get_conf_ver() + change_num;
@@ -432,11 +441,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         if let Some(exist_peer) = tikv_util::store::find_peer(region, store_id) {
             let r = exist_peer.get_role();
             if r == PeerRole::IncomingVoter || r == PeerRole::DemotingVoter {
-                panic!(
-                    "{:?} can't apply confchange because configuration is still in joint state, confchange: {:?}, region: {:?}",
-                    self.logger.list(),
-                    cp,
-                    self.region_state()
+                slog_panic!(
+                    self.logger,
+                    "can't apply confchange because configuration is still in joint state";
+                    "confchange" => ?cp,
+                    "region_state" => ?self.region_state()
                 );
             }
         }

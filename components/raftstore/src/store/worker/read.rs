@@ -286,7 +286,7 @@ impl Drop for ReadDelegate {
 
 /// #[RaftstoreCommon]
 pub trait ReadExecutorProvider: Send + Clone + 'static {
-    type Executor: ReadExecutor;
+    type Executor;
     type StoreMeta;
 
     fn store_id(&self) -> Option<u64>;
@@ -294,8 +294,6 @@ pub trait ReadExecutorProvider: Send + Clone + 'static {
     /// get the ReadDelegate with region_id and the number of delegates in the
     /// StoreMeta
     fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>);
-
-    fn store_meta(&self) -> &Self::StoreMeta;
 }
 
 #[derive(Clone)]
@@ -345,10 +343,6 @@ where
             );
         }
         (meta.readers.len(), None)
-    }
-
-    fn store_meta(&self) -> &Self::StoreMeta {
-        &self.store_meta
     }
 }
 
@@ -693,11 +687,7 @@ where
 /// #[RaftstoreCommon]: LocalReader is an entry point where local read requests are dipatch to the
 /// relevant regions by LocalReader so that these requests can be handled by the
 /// relevant ReadDelegate respectively.
-pub struct LocalReaderCore<D, S>
-where
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
-{
+pub struct LocalReaderCore<D, S> {
     pub store_id: Cell<Option<u64>>,
     store_meta: S,
     pub delegates: LruCache<u64, D>,
@@ -705,7 +695,7 @@ where
 
 impl<D, S> LocalReaderCore<D, S>
 where
-    D: ReadExecutor + Deref<Target = ReadDelegate> + Clone,
+    D: Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<Executor = D>,
 {
     pub fn new(store_meta: S) -> Self {
@@ -716,8 +706,8 @@ where
         }
     }
 
-    pub fn store_meta(&self) -> &S::StoreMeta {
-        self.store_meta.store_meta()
+    pub fn store_meta(&self) -> &S {
+        &self.store_meta
     }
 
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the
@@ -760,7 +750,7 @@ where
         }
         let store_id = self.store_id.get().unwrap();
 
-        if let Err(e) = util::check_store_id(req, store_id) {
+        if let Err(e) = util::check_store_id(req.get_header(), store_id) {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.store_id_mismatch.inc());
             debug!("rejected by store id not match"; "err" => %e);
             return Err(e);
@@ -780,13 +770,13 @@ where
         fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
-        if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
+        if let Err(e) = util::check_peer_id(req.get_header(), delegate.peer_id) {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.peer_id_mismatch.inc());
             return Err(e);
         }
 
         // Check term.
-        if let Err(e) = util::check_term(req, delegate.term) {
+        if let Err(e) = util::check_term(req.get_header(), delegate.term) {
             debug!(
                 "check term";
                 "delegate_term" => delegate.term,
@@ -797,7 +787,7 @@ where
         }
 
         // Check region epoch.
-        if util::check_region_epoch(req, &delegate.region, false).is_err() {
+        if util::check_req_region_epoch(req, &delegate.region, false).is_err() {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.epoch.inc());
             // Stale epoch, redirect it to raftstore to get the latest region.
             debug!("rejected by epoch not match"; "tag" => &delegate.tag);
@@ -833,8 +823,7 @@ where
 
 impl<D, S> Clone for LocalReaderCore<D, S>
 where
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
+    S: Clone,
 {
     fn clone(&self) -> Self {
         LocalReaderCore {

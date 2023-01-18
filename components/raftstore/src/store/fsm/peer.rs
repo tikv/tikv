@@ -53,8 +53,8 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
-    store::{find_peer, is_learner, region_on_same_stores},
-    sys::{disk::DiskUsage, memory_usage_reaches_high_water},
+    store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
+    sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
     trace, warn,
     worker::{ScheduleError, Scheduler},
@@ -524,13 +524,14 @@ where
                 }))
             };
 
-            let tokens: SmallVec<[TimeTracker; 4]> = cbs
+            let trackers: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
-                .filter_map(|cb| cb.write_trackers().map(|t| t[0]))
+                .flat_map(|cb| cb.write_trackers())
+                .cloned()
                 .collect();
 
-            let mut cb = Callback::write_ext(
-                Box::new(move |resp| {
+            let cb = Callback::Write {
+                cb: Box::new(move |resp| {
                     for cb in cbs {
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
@@ -539,12 +540,8 @@ where
                 }),
                 proposed_cb,
                 committed_cb,
-            );
-
-            if let Some(trackers) = cb.write_trackers_mut() {
-                *trackers = tokens;
-            }
-
+                trackers,
+            };
             return Some((req, cb));
         }
         None
@@ -625,7 +622,7 @@ where
                         .propose_wait_time
                         .observe(propose_time.as_secs_f64());
                     cmd.callback.read_tracker().map(|tracker| {
-                        GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                             t.metrics.read_index_propose_wait_nanos =
                                 propose_time.as_nanos() as u64;
                         })
@@ -1122,6 +1119,8 @@ where
                     store.apply_state(),
                     self.fsm.hibernate_state.group_state(),
                     peer.raft_group.status(),
+                    peer.raft_group.raft.raft_log.last_index(),
+                    peer.raft_group.raft.raft_log.persisted,
                 ))
             }
             CasualMessage::QueryRegionLeaderResp { region, leader } => {
@@ -1193,6 +1192,7 @@ where
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
             PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
+            PeerTick::RequestVoterReplicatedIndex => self.on_request_voter_replicated_index(),
         }
     }
 
@@ -1215,6 +1215,9 @@ where
             self.fsm.has_ready = true;
         }
         self.fsm.peer.maybe_gen_approximate_buckets(self.ctx);
+        if self.fsm.peer.is_witness() {
+            self.register_pull_voter_replicated_index_tick();
+        }
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
@@ -2665,6 +2668,53 @@ where
         );
     }
 
+    fn on_voter_replicated_index_request(&mut self, from: &metapb::Peer) {
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+        let mut voter_replicated_idx = self.fsm.peer.get_store().last_index();
+        for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
+            let peer = find_peer_by_id(self.region(), *peer_id).unwrap();
+            if voter_replicated_idx > p.matched && !is_learner(peer) {
+                voter_replicated_idx = p.matched;
+            }
+        }
+        let first_index = self.fsm.peer.get_store().first_index();
+        if voter_replicated_idx > first_index {
+            voter_replicated_idx = first_index;
+        }
+        let mut resp = ExtraMessage::default();
+        resp.set_type(ExtraMessageType::MsgVoterReplicatedIndexResponse);
+        resp.voter_replicated_index = voter_replicated_idx;
+        self.fsm
+            .peer
+            .send_extra_message(resp, &mut self.ctx.trans, from);
+        debug!(
+            "leader responses voter_replicated_index to witness";
+            "region_id" => self.region().get_id(),
+            "witness_id" => from.id,
+            "leader_id" => self.fsm.peer.peer.get_id(),
+            "voter_replicated_index" => voter_replicated_idx,
+        );
+    }
+
+    fn on_voter_replicated_index_response(&mut self, msg: &ExtraMessage) {
+        if self.fsm.peer.is_leader() || !self.fsm.peer.is_witness() {
+            return;
+        }
+        let voter_replicated_index = msg.voter_replicated_index;
+        if let Ok(voter_replicated_term) = self.fsm.peer.get_store().term(voter_replicated_index) {
+            self.ctx.apply_router.schedule_task(
+                self.region_id(),
+                ApplyTask::CheckCompact {
+                    region_id: self.region_id(),
+                    voter_replicated_index,
+                    voter_replicated_term,
+                },
+            )
+        }
+    }
+
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
@@ -2713,6 +2763,12 @@ where
             }
             ExtraMessageType::MsgAvailabilityResponse => {
                 self.on_availability_response(msg.get_from_peer(), msg.get_extra_msg());
+            }
+            ExtraMessageType::MsgVoterReplicatedIndexRequest => {
+                self.on_voter_replicated_index_request(msg.get_from_peer());
+            }
+            ExtraMessageType::MsgVoterReplicatedIndexResponse => {
+                self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
         }
     }
@@ -3869,6 +3925,9 @@ where
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
         self.fsm.peer.mut_store().on_compact_raftlog(compact_to);
+        if self.fsm.peer.is_witness() {
+            self.fsm.peer.last_compacted_time = Instant::now();
+        }
     }
 
     fn on_ready_split_region(
@@ -4859,8 +4918,13 @@ where
         while let Some(result) = exec_results.pop_front() {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
-                ExecResult::CompactLog { first_index, state } => {
-                    self.on_ready_compact_log(first_index, state)
+                ExecResult::CompactLog {
+                    state,
+                    first_index,
+                    has_pending,
+                } => {
+                    self.fsm.peer.has_pending_compact_cmd = has_pending;
+                    self.on_ready_compact_log(first_index, state);
                 }
                 ExecResult::SplitRegion {
                     derived,
@@ -4895,6 +4959,12 @@ where
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
                 ExecResult::SetFlashbackState { region } => self.on_set_flashback_state(region),
+                ExecResult::HasPendingCompactCmd(has_pending) => {
+                    self.fsm.peer.has_pending_compact_cmd = has_pending;
+                    if has_pending {
+                        self.register_pull_voter_replicated_index_tick();
+                    }
+                }
             }
         }
 
@@ -4985,7 +5055,7 @@ where
         msg: &RaftCmdRequest,
     ) -> Result<Option<RaftCmdResponse>> {
         // Check store_id, make sure that the msg is dispatched to the right place.
-        if let Err(e) = util::check_store_id(msg, self.store_id()) {
+        if let Err(e) = util::check_store_id(msg.get_header(), self.store_id()) {
             self.ctx
                 .raft_metrics
                 .invalid_proposal
@@ -5004,7 +5074,7 @@ where
         let request = msg.get_requests();
 
         // peer_id must be the same as peer's.
-        if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
+        if let Err(e) = util::check_peer_id(msg.get_header(), self.fsm.peer.peer_id()) {
             self.ctx
                 .raft_metrics
                 .invalid_proposal
@@ -5084,12 +5154,12 @@ where
             )));
         }
         // Check whether the term is stale.
-        if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
+        if let Err(e) = util::check_term(msg.get_header(), self.fsm.peer.term()) {
             self.ctx.raft_metrics.invalid_proposal.stale_command.inc();
             return Err(e);
         }
 
-        match util::check_region_epoch(msg, self.fsm.peer.region(), true) {
+        match util::check_req_region_epoch(msg, self.fsm.peer.region(), true) {
             Err(Error::EpochNotMatch(m, mut new_regions)) => {
                 // Attach the region which might be split from the current region. But it
                 // doesn't matter if the region is not split from the current region. If the
@@ -5164,7 +5234,7 @@ where
 
         if self.ctx.raft_metrics.waterfall_metrics {
             let now = Instant::now();
-            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers() {
                 tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
                     &mut t.metrics.wf_batch_wait_nanos
                 });
@@ -5313,8 +5383,13 @@ where
         let first_idx = self.fsm.peer.get_store().first_index();
         let last_idx = self.fsm.peer.get_store().last_index();
 
+        let mut voter_replicated_idx = last_idx;
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
+            let peer = find_peer_by_id(self.region(), *peer_id).unwrap();
+            if !is_learner(peer) && voter_replicated_idx > p.matched {
+                voter_replicated_idx = p.matched;
+            }
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
@@ -5403,7 +5478,8 @@ where
         let region_id = self.fsm.peer.region().get_id();
         let peer = self.fsm.peer.peer.clone();
         let term = self.fsm.peer.get_index_term(compact_idx);
-        let request = new_compact_log_request(region_id, peer, compact_idx, term);
+        let request =
+            new_compact_log_request(region_id, peer, compact_idx, term, voter_replicated_idx);
         self.propose_raft_command_internal(
             request,
             Callback::None,
@@ -5423,12 +5499,9 @@ where
         fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
-        }
-        let mut _usage = 0;
-        if memory_usage_reaches_high_water(&mut _usage)
-            && !self.fsm.peer.get_store().is_entry_cache_empty()
-        {
-            self.register_entry_cache_evict_tick();
+            if !self.fsm.peer.get_store().is_entry_cache_empty() {
+                self.register_entry_cache_evict_tick();
+            }
         }
     }
 
@@ -5443,6 +5516,26 @@ where
         }
         self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
         self.register_check_long_uncommitted_tick();
+    }
+
+    fn on_request_voter_replicated_index(&mut self) {
+        if !self.fsm.peer.is_witness() || !self.fsm.peer.has_pending_compact_cmd {
+            return;
+        }
+        if self.fsm.peer.last_compacted_time.elapsed()
+            > self.ctx.cfg.request_voter_replicated_index_interval.0
+        {
+            let mut msg = ExtraMessage::default();
+            msg.set_type(ExtraMessageType::MsgVoterReplicatedIndexRequest);
+            let leader_id = self.fsm.peer.leader_id();
+            let leader = self.fsm.peer.get_peer_from_cache(leader_id);
+            if let Some(leader) = leader {
+                self.fsm
+                    .peer
+                    .send_extra_message(msg, &mut self.ctx.trans, &leader);
+            }
+        }
+        self.register_pull_voter_replicated_index_tick();
     }
 
     fn register_check_leader_lease_tick(&mut self) {
@@ -5553,7 +5646,34 @@ where
             "split_keys" => %KeysInfoFormatter(split_keys.iter()),
             "source" => source,
         );
-        if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
+
+        if !self.fsm.peer.is_leader() {
+            // region on this store is no longer leader, skipped.
+            info!(
+                "not leader, skip proposing split";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            cb.invoke_with_response(new_error(Error::NotLeader(
+                self.region_id(),
+                self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
+            )));
+            return;
+        }
+        if let Err(e) = util::validate_split_region(
+            self.fsm.region_id(),
+            self.fsm.peer_id(),
+            self.region(),
+            &region_epoch,
+            &split_keys,
+        ) {
+            info!(
+                "invalid split request";
+                "err" => ?e,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "source" => %source
+            );
             cb.invoke_with_response(new_error(e));
             return;
         }
@@ -5581,70 +5701,6 @@ where
                 _ => unreachable!(),
             }
         }
-    }
-
-    fn validate_split_region(
-        &mut self,
-        epoch: &metapb::RegionEpoch,
-        split_keys: &[Vec<u8>],
-    ) -> Result<()> {
-        if split_keys.is_empty() {
-            error!(
-                "no split key is specified.";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            return Err(box_err!("{} no split key is specified.", self.fsm.peer.tag));
-        }
-        for key in split_keys {
-            if key.is_empty() {
-                error!(
-                    "split key should not be empty!!!";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                );
-                return Err(box_err!(
-                    "{} split key should not be empty",
-                    self.fsm.peer.tag
-                ));
-            }
-        }
-        if !self.fsm.peer.is_leader() {
-            // region on this store is no longer leader, skipped.
-            info!(
-                "not leader, skip.";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            return Err(Error::NotLeader(
-                self.region_id(),
-                self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
-            ));
-        }
-
-        let region = self.fsm.peer.region();
-        let latest_epoch = region.get_region_epoch();
-
-        // This is a little difference for `check_region_epoch` in region split case.
-        // Here we just need to check `version` because `conf_ver` will be update
-        // to the latest value of the peer, and then send to PD.
-        if latest_epoch.get_version() != epoch.get_version() {
-            info!(
-                "epoch changed, retry later";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "prev_epoch" => ?region.get_region_epoch(),
-                "epoch" => ?epoch,
-            );
-            return Err(Error::EpochNotMatch(
-                format!(
-                    "{} epoch changed {:?} != {:?}, retry later",
-                    self.fsm.peer.tag, latest_epoch, epoch
-                ),
-                vec![region.to_owned()],
-            ));
-        }
-        Ok(())
     }
 
     fn on_approximate_region_size(&mut self, size: u64) {
@@ -6015,6 +6071,10 @@ where
                 "target peer id" => *peer_id,
             );
         }
+    }
+
+    fn register_pull_voter_replicated_index_tick(&mut self) {
+        self.schedule_tick(PeerTick::RequestVoterReplicatedIndex);
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
@@ -6459,6 +6519,7 @@ fn new_compact_log_request(
     peer: metapb::Peer,
     compact_index: u64,
     compact_term: u64,
+    voter_replicated_index: u64,
 ) -> RaftCmdRequest {
     let mut request = new_admin_request(region_id, peer);
 
@@ -6466,6 +6527,9 @@ fn new_compact_log_request(
     admin.set_cmd_type(AdminCmdType::CompactLog);
     admin.mut_compact_log().set_compact_index(compact_index);
     admin.mut_compact_log().set_compact_term(compact_term);
+    admin
+        .mut_compact_log()
+        .set_voter_replicated_index(voter_replicated_index);
     request.set_admin_request(admin);
     request
 }

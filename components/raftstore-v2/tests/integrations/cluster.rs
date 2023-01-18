@@ -20,23 +20,26 @@ use engine_test::{
     kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::{TabletRegistry, ALL_CFS};
+use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
     metapb::{self, RegionEpoch, Store},
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request},
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
-use raftstore::store::{
-    region_meta::{RegionLocalState, RegionMeta},
-    Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{
+        region_meta::{RegionLocalState, RegionMeta},
+        Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+    },
 };
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
-    Bootstrap, StoreSystem,
+    Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
 use slog::{debug, o, Logger};
 use tempfile::TempDir;
@@ -44,8 +47,21 @@ use test_pd::mocker::Service;
 use tikv_util::{
     config::{ReadableDuration, VersionTrack},
     store::new_peer,
+    worker::{LazyWorker, Worker},
 };
 use txn_types::WriteBatchFlags;
+
+pub fn check_skip_wal(path: &str) {
+    let mut found = false;
+    for f in std::fs::read_dir(path).unwrap() {
+        let e = f.unwrap();
+        if e.path().extension().map_or(false, |ext| ext == "log") {
+            found = true;
+            assert_eq!(e.metadata().unwrap().len(), 0, "{}", e.path().display());
+        }
+    }
+    assert!(found, "no WAL found in {}", path);
+}
 
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
@@ -85,8 +101,19 @@ impl TestRouter {
         None
     }
 
-    pub fn command(&self, region_id: u64, req: RaftCmdRequest) -> Option<RaftCmdResponse> {
-        let (msg, sub) = PeerMsg::raft_command(req);
+    pub fn simple_write(
+        &self,
+        region_id: u64,
+        header: Box<RaftRequestHeader>,
+        write: SimpleWriteEncoder,
+    ) -> Option<RaftCmdResponse> {
+        let (msg, sub) = PeerMsg::simple_write(header, write.encode());
+        self.send(region_id, msg).unwrap();
+        block_on(sub.result())
+    }
+
+    pub fn admin_command(&self, region_id: u64, req: RaftCmdRequest) -> Option<RaftCmdResponse> {
+        let (msg, sub) = PeerMsg::admin_command(req);
         self.send(region_id, msg).unwrap();
         block_on(sub.result())
     }
@@ -160,7 +187,7 @@ impl TestRouter {
         let mut snap_req = Request::default();
         snap_req.set_cmd_type(CmdType::Snap);
         req.mut_requests().push(snap_req);
-        block_on(self.get_snapshot(req)).unwrap()
+        block_on(self.snapshot(req)).unwrap()
     }
 
     pub fn region_detail(&self, region_id: u64) -> metapb::Region {
@@ -197,6 +224,8 @@ pub struct RunningState {
     pub system: StoreSystem<KvTestEngine, RaftTestEngine>,
     pub cfg: Arc<VersionTrack<Config>>,
     pub transport: TestTransport,
+    snap_mgr: TabletSnapManager,
+    background: Worker,
 }
 
 impl RunningState {
@@ -208,46 +237,55 @@ impl RunningState {
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
-    ) -> (TestRouter, TabletSnapManager, Self) {
-        let cf_opts = ALL_CFS
-            .iter()
-            .copied()
-            .map(|cf| (cf, CfOptions::default()))
-            .collect();
-        let factory = Box::new(TestTabletFactory::new(DbOptions::default(), cf_opts));
-        let registry = TabletRegistry::new(factory, path).unwrap();
+    ) -> (TestRouter, Self) {
         let raft_engine =
             engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
                 .unwrap();
+
         let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client.as_ref(), logger.clone());
         let store_id = bootstrap.bootstrap_store().unwrap();
         let mut store = Store::default();
         store.set_id(store_id);
-        if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
-            let factory = registry.tablet_factory();
-            let path = registry.tablet_path(region.get_id(), RAFT_INIT_LOG_INDEX);
-            if factory.exists(&path) {
-                registry.remove(region.get_id());
-                factory
-                    .destroy_tablet(region.get_id(), Some(RAFT_INIT_LOG_INDEX), &path)
-                    .unwrap();
-            }
-            // Create the tablet without loading it in cache.
-            factory
-                .open_tablet(region.get_id(), Some(RAFT_INIT_LOG_INDEX), &path)
-                .unwrap();
-        }
 
         let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(
             &cfg.value(),
             store_id,
             logger.clone(),
         );
+        let cf_opts = DATA_CFS
+            .iter()
+            .copied()
+            .map(|cf| (cf, CfOptions::default()))
+            .collect();
+        let mut db_opt = DbOptions::default();
+        db_opt.set_state_storage(Arc::new(StateStorage::new(
+            raft_engine.clone(),
+            router.clone(),
+        )));
+        let factory = Box::new(TestTabletFactory::new(db_opt, cf_opts));
+        let registry = TabletRegistry::new(factory, path.join("tablets")).unwrap();
+        if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
+            let factory = registry.tablet_factory();
+            let path = registry.tablet_path(region.get_id(), RAFT_INIT_LOG_INDEX);
+            let ctx = TabletContext::new(&region, Some(RAFT_INIT_LOG_INDEX));
+            if factory.exists(&path) {
+                registry.remove(region.get_id());
+                factory.destroy_tablet(ctx.clone(), &path).unwrap();
+            }
+            // Create the tablet without loading it in cache.
+            factory.open_tablet(ctx, &path).unwrap();
+        }
 
-        let router = RaftRouter::new(store_id, registry.clone(), router);
+        let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
-        let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap());
-        snap_mgr.init().unwrap();
+        let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap()).unwrap();
+
+        let coprocessor_host = CoprocessorHost::new(
+            router.store_router().clone(),
+            raftstore::coprocessor::Config::default(),
+        );
+        let background = Worker::new("background");
+        let pd_worker = LazyWorker::new("pd-worker");
         system
             .start(
                 store_id,
@@ -261,6 +299,9 @@ impl RunningState {
                 snap_mgr.clone(),
                 concurrency_manager,
                 causal_ts_provider,
+                coprocessor_host,
+                background.clone(),
+                pd_worker,
             )
             .unwrap();
 
@@ -271,14 +312,17 @@ impl RunningState {
             system,
             cfg,
             transport,
+            snap_mgr,
+            background,
         };
-        (TestRouter(router), snap_mgr, state)
+        (TestRouter(router), state)
     }
 }
 
 impl Drop for RunningState {
     fn drop(&mut self) {
         self.system.shutdown();
+        self.background.stop();
     }
 }
 
@@ -287,7 +331,6 @@ pub struct TestNode {
     path: TempDir,
     running_state: Option<RunningState>,
     logger: Logger,
-    snap_mgr: Option<TabletSnapManager>,
 }
 
 impl TestNode {
@@ -299,12 +342,11 @@ impl TestNode {
             path,
             running_state: None,
             logger,
-            snap_mgr: None,
         }
     }
 
     fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
-        let (router, snap_mgr, state) = RunningState::new(
+        let (router, state) = RunningState::new(
             &self.pd_client,
             self.path.path(),
             cfg,
@@ -314,7 +356,6 @@ impl TestNode {
             &self.logger,
         );
         self.running_state = Some(state);
-        self.snap_mgr = Some(snap_mgr);
         router
     }
 
@@ -341,10 +382,6 @@ impl TestNode {
 
     pub fn running_state(&self) -> Option<&RunningState> {
         self.running_state.as_ref()
-    }
-
-    pub fn snap_mgr(&self) -> Option<&TabletSnapManager> {
-        self.snap_mgr.as_ref()
     }
 
     pub fn id(&self) -> u64 {
@@ -512,8 +549,8 @@ impl Cluster {
                         msg.get_message().get_snapshot().get_metadata().get_term(),
                         msg.get_message().get_snapshot().get_metadata().get_index(),
                     );
-                    let from_snap_mgr = self.node(from_offset).snap_mgr().unwrap();
-                    let to_snap_mgr = self.node(offset).snap_mgr().unwrap();
+                    let from_snap_mgr = &self.node(from_offset).running_state().unwrap().snap_mgr;
+                    let to_snap_mgr = &self.node(offset).running_state().unwrap().snap_mgr;
                     let gen_path = from_snap_mgr.tablet_gen_path(&key);
                     let recv_path = to_snap_mgr.final_recv_path(&key);
                     assert!(gen_path.exists());
@@ -538,5 +575,132 @@ impl Cluster {
                 return;
             }
         }
+    }
+}
+
+impl Drop for Cluster {
+    fn drop(&mut self) {
+        self.routers.clear();
+        for node in &mut self.nodes {
+            node.stop();
+        }
+    }
+}
+
+pub mod split_helper {
+    use std::{thread, time::Duration};
+
+    use engine_traits::CF_DEFAULT;
+    use futures::executor::block_on;
+    use kvproto::{
+        metapb, pdpb,
+        raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, SplitRequest},
+    };
+    use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
+
+    use super::TestRouter;
+
+    pub fn new_batch_split_region_request(
+        split_keys: Vec<Vec<u8>>,
+        ids: Vec<pdpb::SplitId>,
+        right_derive: bool,
+    ) -> AdminRequest {
+        let mut req = AdminRequest::default();
+        req.set_cmd_type(AdminCmdType::BatchSplit);
+        req.mut_splits().set_right_derive(right_derive);
+        let mut requests = Vec::with_capacity(ids.len());
+        for (mut id, key) in ids.into_iter().zip(split_keys) {
+            let mut split = SplitRequest::default();
+            split.set_split_key(key);
+            split.set_new_region_id(id.get_new_region_id());
+            split.set_new_peer_ids(id.take_new_peer_ids());
+            requests.push(split);
+        }
+        req.mut_splits().set_requests(requests.into());
+        req
+    }
+
+    pub fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
+        let (msg, sub) = PeerMsg::admin_command(req);
+        router.send(region_id, msg).unwrap();
+        block_on(sub.result()).unwrap();
+
+        // TODO: when persistent implementation is ready, we can use tablet index of
+        // the parent to check whether the split is done. Now, just sleep a second.
+        thread::sleep(Duration::from_secs(1));
+    }
+
+    pub fn put(router: &mut TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
+        let header = Box::new(router.new_request_for(region_id).take_header());
+        let mut put = SimpleWriteEncoder::with_capacity(64);
+        put.put(CF_DEFAULT, key, b"v1");
+        router.simple_write(region_id, header, put).unwrap()
+    }
+
+    // Split the region according to the parameters
+    // return the updated original region
+    pub fn split_region<'a>(
+        router: &'a mut TestRouter,
+        region: metapb::Region,
+        peer: metapb::Peer,
+        split_region_id: u64,
+        split_peer: metapb::Peer,
+        left_key: Option<&'a [u8]>,
+        right_key: Option<&'a [u8]>,
+        propose_key: &[u8],
+        split_key: &[u8],
+        right_derive: bool,
+    ) -> (metapb::Region, metapb::Region) {
+        let region_id = region.id;
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header()
+            .set_region_epoch(region.get_region_epoch().clone());
+        req.mut_header().set_peer(peer);
+
+        let mut split_id = pdpb::SplitId::new();
+        split_id.new_region_id = split_region_id;
+        split_id.new_peer_ids = vec![split_peer.id];
+        let admin_req = new_batch_split_region_request(
+            vec![propose_key.to_vec()],
+            vec![split_id],
+            right_derive,
+        );
+        req.mut_requests().clear();
+        req.set_admin_request(admin_req);
+
+        must_split(region_id, req, router);
+
+        let (left, right) = if !right_derive {
+            (
+                router.region_detail(region_id),
+                router.region_detail(split_region_id),
+            )
+        } else {
+            (
+                router.region_detail(split_region_id),
+                router.region_detail(region_id),
+            )
+        };
+
+        if let Some(right_key) = right_key {
+            let resp = put(router, left.id, right_key);
+            assert!(resp.get_header().has_error(), "{:?}", resp);
+            let resp = put(router, right.id, right_key);
+            assert!(!resp.get_header().has_error(), "{:?}", resp);
+        }
+        if let Some(left_key) = left_key {
+            let resp = put(router, left.id, left_key);
+            assert!(!resp.get_header().has_error(), "{:?}", resp);
+            let resp = put(router, right.id, left_key);
+            assert!(resp.get_header().has_error(), "{:?}", resp);
+        }
+
+        assert_eq!(left.get_end_key(), split_key);
+        assert_eq!(right.get_start_key(), split_key);
+        assert_eq!(region.get_start_key(), left.get_start_key());
+        assert_eq!(region.get_end_key(), right.get_end_key());
+
+        (left, right)
     }
 }

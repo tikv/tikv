@@ -65,6 +65,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     store_id: u64,
     /// Used to handle requests related to GC.
+    // TODO: make it Some after GC is supported for v2.
     gc_worker: GcWorker<E>,
     // For handling KV requests.
     storage: Storage<E, L, F>,
@@ -170,6 +171,10 @@ macro_rules! handle_request {
             let begin_instant = Instant::now();
 
             let source = req.mut_context().take_request_source();
+            let resource_group_name = req.get_context().get_resource_group_name();
+            GRPC_RESOURCE_GROUP_COUNTER_VEC
+                    .with_label_values(&[resource_group_name])
+                    .inc();
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
@@ -590,7 +595,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         sink: ClientStreamingSink<Done>,
     ) {
         let store_id = self.store_id;
-        let ch = self.storage.get_engine().raft_extension().clone();
+        let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
@@ -633,7 +638,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) {
         info!("batch_raft RPC is called, new gRPC stream established");
         let store_id = self.store_id;
-        let ch = self.storage.get_engine().raft_extension().clone();
+        let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
@@ -1042,6 +1047,10 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default());
                 },
                 Some(batch_commands_request::request::Cmd::Get(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
@@ -1056,6 +1065,10 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
@@ -1070,6 +1083,10 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
@@ -1097,6 +1114,10 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
                     let resp = $future_fn($($arg,)* req)

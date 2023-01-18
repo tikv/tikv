@@ -66,10 +66,7 @@ use time::{self, Timespec};
 
 use crate::{
     bytes_capacity,
-    coprocessor::{
-        split_observer::SplitObserver, BoxAdminObserver, CoprocessorHost, RegionChangeEvent,
-        RegionChangeReason,
-    },
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
         async_io::{
             read::{ReadRunner, ReadTask},
@@ -109,13 +106,21 @@ use crate::{
 type Key = Vec<u8>;
 
 pub const PENDING_MSG_CAP: usize = 100;
-const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
+pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
     pub raft_engine: ER,
     pub capacity: u64,
+}
+
+/// A trait that provide the meta information that can be accessed outside
+/// of raftstore.
+pub trait StoreRegionMeta: Send {
+    fn store_id(&self) -> u64;
+    fn region_read_progress(&self) -> &RegionReadProgressRegistry;
+    fn search_region(&self, start_key: &[u8], end_key: &[u8], visitor: impl FnMut(&Region));
 }
 
 pub struct StoreMeta {
@@ -155,6 +160,34 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
+}
+
+impl StoreRegionMeta for StoreMeta {
+    #[inline]
+    fn store_id(&self) -> u64 {
+        self.store_id.unwrap()
+    }
+
+    #[inline]
+    fn search_region(&self, start_key: &[u8], end_key: &[u8], mut visitor: impl FnMut(&Region)) {
+        let start_key = data_key(start_key);
+        for (_, id) in self
+            .region_ranges
+            .range((Excluded(start_key), Unbounded::<Vec<u8>>))
+        {
+            let region = &self.regions[id];
+            if end_key.is_empty() || end_key > region.get_start_key() {
+                visitor(region);
+            } else {
+                break;
+            }
+        }
+    }
+
+    #[inline]
+    fn region_read_progress(&self) -> &RegionReadProgressRegistry {
+        &self.region_read_progress
+    }
 }
 
 impl StoreMeta {
@@ -561,6 +594,9 @@ where
             self.cfg.check_long_uncommitted_interval.0;
         self.tick_batch[PeerTick::CheckPeersAvailability as usize].wait_duration =
             self.cfg.check_peers_availability_interval.0;
+        // TODO: make it reasonable
+        self.tick_batch[PeerTick::RequestVoterReplicatedIndex as usize].wait_duration =
+            self.cfg.raft_log_gc_tick_interval.0 * 2;
     }
 }
 
@@ -1338,14 +1374,14 @@ where
             ready_count: 0,
             has_ready: false,
             current_time: None,
-            raft_perf_context: self
-                .engines
-                .raft
-                .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
-            kv_perf_context: self
-                .engines
-                .kv
-                .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
+            raft_perf_context: ER::get_perf_context(
+                self.cfg.value().perf_level,
+                PerfContextKind::RaftstoreStore,
+            ),
+            kv_perf_context: EK::get_perf_context(
+                self.cfg.value().perf_level,
+                PerfContextKind::RaftstoreStore,
+            ),
             tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
@@ -1467,7 +1503,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mgr: SnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        mut coprocessor_host: CoprocessorHost<EK>,
+        coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         background_worker: Worker,
@@ -1480,12 +1516,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
-
-        // TODO load coprocessors from configuration
-        coprocessor_host
-            .registry
-            .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
-
         let purge_worker = if engines.raft.need_manual_purge() {
             let worker = Worker::new("purge-worker");
             let raft_clone = engines.raft.clone();

@@ -37,8 +37,30 @@ pub enum DeleteStrategy {
     DeleteByWriter { sst_path: String },
 }
 
+/// `StatisticsReporter` can be used to report engine's private statistics to
+/// prometheus metrics. For one single engine, using it is equivalent to calling
+/// `KvEngine::flush_metrics("name")`. For multiple engines, it can aggregate
+/// statistics accordingly.
+/// Note that it is not responsible for managing the statistics from
+/// user-provided collectors that are potentially shared between engines.
+pub trait StatisticsReporter<T: ?Sized> {
+    fn new(name: &str) -> Self;
+
+    /// Collect statistics from one single engine.
+    fn collect(&mut self, engine: &T);
+
+    /// Aggregate and report statistics to prometheus metrics counters. The
+    /// statistics are not cleared afterwards.
+    fn flush(&mut self);
+}
+
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
-    fn flush_cfs(&self, wait: bool) -> Result<()>;
+    type StatisticsReporter: StatisticsReporter<Self>;
+
+    /// Flush all specified column families at once.
+    ///
+    /// If `cfs` is empty, it will try to flush all available column families.
+    fn flush_cfs(&self, cfs: &[&str], wait: bool) -> Result<()>;
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;
 
@@ -62,6 +84,8 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool>;
 
+    fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>>;
+
     /// Gets total used size of rocksdb engine, including:
     /// * total size (bytes) of all SST files.
     /// * total size (bytes) of active and unflushed immutable memtables.
@@ -73,8 +97,12 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn sync_wal(&self) -> Result<()>;
 
+    fn pause_background_work(&self) -> Result<()>;
+
     /// Check whether a database exists at a given path
     fn exists(path: &str) -> bool;
+
+    fn locked(path: &str) -> Result<bool>;
 
     /// Dump stats about the database into a string.
     ///
