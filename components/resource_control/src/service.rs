@@ -33,18 +33,22 @@ impl ResourceManagerService {
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
-        // Firstly, load all resource groups as of now.
-        match self.list_resource_groups().await {
-            Ok((groups, revision)) => {
-                self.revision = revision;
-                for group in groups {
-                    self.manager.add_resource_group(group);
+        loop {
+            // Firstly, load all resource groups as of now.
+            match self.list_resource_groups().await {
+                Ok((groups, revision)) => {
+                    self.revision = revision;
+                    for group in groups {
+                        self.manager.add_resource_group(group);
+                    }
+                }
+                Err(err) => {
+                    error!("failed to list resource groups, err: {:?}", err);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
                 }
             }
-            Err(err) => error!("failed to list resource groups, err: {:?}", err),
-        }
-        // Secondly, start watcher at loading revision.
-        loop {
+            // Secondly, start watcher at loading revision.
             match self
                 .pd_client
                 .watch_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), self.revision)
@@ -78,18 +82,7 @@ impl ResourceManagerService {
                 }
                 Err(PdError::DataCompacted(msg)) => {
                     error!("required revision has been compacted, err: {:?}", msg);
-                    match self.list_resource_groups().await {
-                        Ok((groups, revision)) => {
-                            self.revision = revision;
-                            for group in groups {
-                                self.manager.add_resource_group(group);
-                            }
-                        }
-                        Err(err) => error!(
-                            "failed to list resource groups in re-list groups, err: {:?}",
-                            err
-                        ),
-                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
                 Err(err) => {
                     error!("failed to watch resource groups, err: {:?}", err);
