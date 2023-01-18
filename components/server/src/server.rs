@@ -342,7 +342,7 @@ where
         };
 
         // Initialize raftstore channels.
-        let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
+        let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 
         let mut coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),

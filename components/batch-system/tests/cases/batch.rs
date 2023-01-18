@@ -13,7 +13,7 @@ use tikv_util::mpsc;
 fn test_batch() {
     let (control_tx, control_fsm) = Runner::new(10);
     let (router, mut system) =
-        batch_system::create_system(&Config::default(), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
     let builder = Builder::new();
     let metrics = builder.metrics.clone();
     system.spawn("test".to_owned(), builder);
@@ -55,7 +55,7 @@ fn test_batch() {
 fn test_priority() {
     let (control_tx, control_fsm) = Runner::new(10);
     let (router, mut system) =
-        batch_system::create_system(&Config::default(), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
     let builder = Builder::new();
     system.spawn("test".to_owned(), builder);
     let (tx, rx) = mpsc::unbounded();
