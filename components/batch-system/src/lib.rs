@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-#![feature(cell_leak)]
-#![feature(string_leak)]
+//#![feature(cell_leak)]
+//#![feature(string_leak)]
 
 mod batch;
 mod config;

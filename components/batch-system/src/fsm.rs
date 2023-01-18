@@ -11,7 +11,6 @@ use std::{
 };
 
 use collections::HashMap;
-use resource_control::ResourceController;
 
 use crate::mailbox::BasicMailbox;
 
@@ -27,11 +26,14 @@ pub trait FsmScheduler {
 
     /// Schedule a Fsm for later handling.
     fn schedule(&self, fsm: Box<Self::Fsm>);
+
     /// Shutdown the scheduler, which indicates that resources like
     /// background thread pool should be released.
     fn shutdown(&self);
 
-    fn resource_ctl(&self) -> &ResourceController;
+    /// Consume the resources of msg in resource controller if enabled,
+    /// otherwise do nothing.
+    fn consume_msg_resource(&self, msg: &<Self::Fsm as Fsm>::Message);
 }
 
 pub trait ResourceMetered {
@@ -65,10 +67,6 @@ pub trait Fsm: Send + 'static {
 
     fn get_priority(&self) -> Priority {
         Priority::Normal
-    }
-
-    fn get_last_msg_group(&self) -> &str {
-        "default"
     }
 }
 

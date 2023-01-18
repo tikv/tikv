@@ -4286,11 +4286,6 @@ where
     fn get_priority(&self) -> Priority {
         self.delegate.priority
     }
-
-    #[inline]
-    fn get_last_msg_group(&self) -> &str {
-        self.mailbox.as_ref().unwrap().last_msg_group()
-    }
 }
 
 impl<EK> Drop for ApplyFsm<EK>

@@ -22,7 +22,7 @@ const TASK_EXTRA_FACTOR_BY_LEVEL: [u64; 3] = [0, 20, 100];
 /// duration to update the minimal priority value of each resource group.
 pub const MIN_PRIORITY_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 /// default resource group name
-const DEFAULT_RESOURCE_GROUP_NAME: &str = "default";
+const DEFAULT_RESOURCE_GROUP_NAME: &str = "";
 /// default value of max RU quota.
 const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 
@@ -248,9 +248,9 @@ impl ResourceController {
 
     pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
         let level = match pri {
-            CommandPri::Low => 0,
+            CommandPri::Low => 2,
             CommandPri::Normal => 1,
-            CommandPri::High => 2,
+            CommandPri::High => 0,
         };
         self.resource_group(name).get_priority(level)
     }
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn test_resource_group() {
-        let resource_manager = ResourceGroupManager::new();
+        let resource_manager = ResourceGroupManager::default();
 
         let group1 = new_resource_group("TEST".into(), true, 100, 100);
         resource_manager.add_resource_group(group1);
@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn test_adjust_resource_group_weight() {
-        let resource_manager = ResourceGroupManager::new();
+        let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
 

@@ -287,6 +287,7 @@ where
             config.quota.max_delay_duration,
             config.quota.enable_auto_tune,
         ));
+
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::default());
             let mgr1 = mgr.clone();

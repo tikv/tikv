@@ -20,7 +20,7 @@ fn end_hook(tx: &std::sync::mpsc::Sender<()>) -> Message {
 fn bench_spawn_many(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) =
-        batch_system::create_system(&Config::default(), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
     system.spawn("test".to_owned(), Builder::new());
     const ID_LIMIT: u64 = 32;
     const MESSAGE_LIMIT: usize = 256;

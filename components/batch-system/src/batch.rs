@@ -9,17 +9,18 @@
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
+    cell::RefCell,
     ops::{Deref, DerefMut},
     sync::{atomic::AtomicUsize, Arc, Mutex},
     thread::{self, current, JoinHandle, ThreadId},
     time::Duration,
 };
 
-use crossbeam::channel::SendError;
+use crossbeam::channel::{self, RecvError, SendError, TryRecvError, TrySendError};
 use fail::fail_point;
 use file_system::{set_io_type, IoType};
 use kvproto::kvrpcpb::CommandPri;
-use resource_control::ResourceController;
+use resource_control::{ResourceConsumeType, ResourceController};
 use tikv_util::{
     debug, error, info, mpsc, mpsc::priority_queue, safe_panic, sys::thread::StdThreadBuildWrapper,
     thd_name, time::Instant, warn,
@@ -27,7 +28,7 @@ use tikv_util::{
 
 use crate::{
     config::Config,
-    fsm::{Fsm, FsmScheduler, Priority},
+    fsm::{Fsm, FsmScheduler, Priority, ResourceMetered},
     mailbox::BasicMailbox,
     router::Router,
 };
@@ -40,71 +41,244 @@ pub enum FsmTypes<N, C> {
     Empty,
 }
 
-// A macro to introduce common definition of scheduler.
-macro_rules! impl_sched {
-    ($name:ident, $ty:path,Fsm = $fsm:tt) => {
-        pub struct $name<N: Fsm, C: Fsm> {
-            resource_ctl: Arc<ResourceController>,
-            sender: priority_queue::Sender<FsmTypes<N, C>>,
-            low_sender: priority_queue::Sender<FsmTypes<N, C>>,
-        }
-
-        impl<N: Fsm, C: Fsm> Clone for $name<N, C> {
-            #[inline]
-            fn clone(&self) -> $name<N, C> {
-                $name {
-                    resource_ctl: self.resource_ctl.clone(),
-                    sender: self.sender.clone(),
-                    low_sender: self.low_sender.clone(),
-                }
-            }
-        }
-
-        impl<N, C> FsmScheduler for $name<N, C>
-        where
-            $fsm: Fsm,
-            N: Fsm,
-            C: Fsm,
-        {
-            type Fsm = $fsm;
-
-            #[inline]
-            fn schedule(&self, fsm: Box<Self::Fsm>) {
-                let sender = match fsm.get_priority() {
-                    Priority::Normal => &self.sender,
-                    Priority::Low => &self.low_sender,
-                };
-
-                // TODO: pass different priority.
-                let pri = self
-                    .resource_ctl
-                    .get_priority(fsm.get_last_msg_group().as_bytes(), CommandPri::Normal);
-                match sender.send($ty(fsm), pri) {
-                    Ok(()) => {}
-                    // TODO: use debug instead.
-                    Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
-                    _ => unreachable!(),
-                }
-            }
-
-            fn shutdown(&self) {
-                // TODO: close it explicitly once it's supported.
-                // Magic number, actually any number greater than poll pool size works.
-                for _ in 0..256 {
-                    let _ = self.sender.send(FsmTypes::Empty, 0);
-                    let _ = self.low_sender.send(FsmTypes::Empty, 0);
-                }
-            }
-
-            fn resource_ctl(&self) -> &ResourceController {
-                &self.resource_ctl
-            }
-        }
-    };
+pub fn fsm_channel<N: Fsm, C: Fsm>(
+    resource_ctl: Option<Arc<ResourceController>>,
+) -> (FsmSender<N, C>, FsmReceiver<N, C>) {
+    if let Some(ctl) = resource_ctl {
+        let (tx, rx) = priority_queue::unbounded();
+        (
+            FsmSender::Priority {
+                resource_ctl: ctl,
+                sender: tx,
+                last_msg_group: RefCell::new(String::new()),
+            },
+            FsmReceiver::Priority(rx),
+        )
+    } else {
+        let (tx, rx) = channel::unbounded();
+        (FsmSender::Vanilla(tx), FsmReceiver::Vanilla(rx))
+    }
 }
 
-impl_sched!(NormalScheduler, FsmTypes::Normal, Fsm = N);
-impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
+pub struct NormalScheduler<N: Fsm, C: Fsm> {
+    sender: FsmSender<N, C>,
+    low_sender: FsmSender<N, C>,
+}
+
+impl<N, C> Clone for NormalScheduler<N, C>
+where
+    N: Fsm,
+    C: Fsm,
+{
+    fn clone(&self) -> Self {
+        NormalScheduler {
+            sender: self.sender.clone(),
+            low_sender: self.low_sender.clone(),
+        }
+    }
+}
+
+impl<N, C> FsmScheduler for NormalScheduler<N, C>
+where
+    N: Fsm,
+    C: Fsm,
+{
+    type Fsm = N;
+
+    fn consume_msg_resource(&self, msg: &<Self::Fsm as Fsm>::Message) {
+        self.sender.consume_msg_resource(msg);
+    }
+
+    #[inline]
+    fn schedule(&self, fsm: Box<N>) {
+        let sender = match fsm.get_priority() {
+            Priority::Normal => &self.sender,
+            Priority::Low => &self.low_sender,
+        };
+
+        match sender.send(FsmTypes::Normal(fsm)) {
+            Ok(()) => {}
+            Err(SendError(FsmTypes::Normal(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
+            _ => unreachable!(),
+        }
+    }
+
+    fn shutdown(&self) {
+        // TODO: close it explicitly once it's supported.
+        // Magic number, actually any number greater than poll pool size works.
+        for _ in 0..256 {
+            let _ = self.sender.send(FsmTypes::Empty);
+            let _ = self.low_sender.send(FsmTypes::Empty);
+        }
+    }
+}
+
+pub struct ControlScheduler<N: Fsm, C: Fsm> {
+    sender: FsmSender<N, C>,
+}
+
+impl<N, C> Clone for ControlScheduler<N, C>
+where
+    N: Fsm,
+    C: Fsm,
+{
+    fn clone(&self) -> Self {
+        ControlScheduler {
+            sender: self.sender.clone(),
+        }
+    }
+}
+
+impl<N, C> FsmScheduler for ControlScheduler<N, C>
+where
+    N: Fsm,
+    C: Fsm,
+{
+    type Fsm = C;
+
+    fn consume_msg_resource(&self, _msg: &<Self::Fsm as Fsm>::Message) {}
+
+    #[inline]
+    fn schedule(&self, fsm: Box<C>) {
+        match self.sender.send(FsmTypes::Control(fsm)) {
+            Ok(()) => {}
+            Err(SendError(FsmTypes::Control(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
+            _ => unreachable!(),
+        }
+    }
+
+    fn shutdown(&self) {
+        // TODO: close it explicitly once it's supported.
+        // Magic number, actually any number greater than poll pool size works.
+        for _ in 0..256 {
+            let _ = self.sender.send(FsmTypes::Empty);
+        }
+    }
+}
+
+pub enum FsmSender<N: Fsm, C: Fsm> {
+    Vanilla(channel::Sender<FsmTypes<N, C>>),
+    Priority {
+        resource_ctl: Arc<ResourceController>,
+        sender: priority_queue::Sender<FsmTypes<N, C>>,
+        last_msg_group: RefCell<String>,
+    },
+}
+
+impl<N, C> Clone for FsmSender<N, C>
+where
+    N: Fsm,
+    C: Fsm,
+{
+    fn clone(&self) -> Self {
+        match self {
+            FsmSender::Vanilla(sender) => FsmSender::Vanilla(sender.clone()),
+            FsmSender::Priority {
+                resource_ctl,
+                sender,
+                ..
+            } => FsmSender::Priority {
+                resource_ctl: resource_ctl.clone(),
+                sender: sender.clone(),
+                last_msg_group: RefCell::new(String::new()),
+            },
+        }
+    }
+}
+
+impl<N: Fsm, C: Fsm> FsmSender<N, C> {
+    pub fn send(&self, fsm: FsmTypes<N, C>) -> Result<(), SendError<FsmTypes<N, C>>> {
+        match self {
+            FsmSender::Vanilla(sender) => sender.send(fsm),
+            FsmSender::Priority {
+                resource_ctl,
+                sender,
+                last_msg_group,
+            } => {
+                // TODO: pass different priority
+                let pri = resource_ctl
+                    .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
+                sender.send(fsm, pri)
+            }
+        }
+    }
+
+    pub fn try_send(&self, fsm: FsmTypes<N, C>) -> Result<(), TrySendError<FsmTypes<N, C>>> {
+        match self {
+            FsmSender::Vanilla(sender) => sender.try_send(fsm),
+            FsmSender::Priority {
+                resource_ctl,
+                sender,
+                last_msg_group,
+            } => {
+                let priority = resource_ctl
+                    .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
+                sender.try_send(fsm, priority)
+            }
+        }
+    }
+
+    fn consume_msg_resource(&self, msg: &N::Message) {
+        match self {
+            FsmSender::Vanilla(_) => {}
+            FsmSender::Priority {
+                resource_ctl,
+                last_msg_group,
+                ..
+            } => {
+                let mut dominant_group = "".to_owned();
+                let mut max_write_bytes = 0;
+                if let Some(mut groups) = msg.get_resource_consumptions() {
+                    for (group_name, write_bytes) in groups.drain() {
+                        resource_ctl.consume(
+                            group_name.as_bytes(),
+                            ResourceConsumeType::IoBytes(write_bytes),
+                        );
+                        if write_bytes > max_write_bytes {
+                            dominant_group = group_name;
+                            max_write_bytes = write_bytes;
+                        }
+                    }
+                }
+                *last_msg_group.borrow_mut() = dominant_group;
+            }
+        }
+    }
+}
+
+pub enum FsmReceiver<N: Fsm, C: Fsm> {
+    Vanilla(channel::Receiver<FsmTypes<N, C>>),
+    Priority(priority_queue::Receiver<FsmTypes<N, C>>),
+}
+
+impl<N, C> Clone for FsmReceiver<N, C>
+where
+    N: Fsm,
+    C: Fsm,
+{
+    fn clone(&self) -> Self {
+        match self {
+            FsmReceiver::Vanilla(receiver) => FsmReceiver::Vanilla(receiver.clone()),
+            FsmReceiver::Priority(receiver) => FsmReceiver::Priority(receiver.clone()),
+        }
+    }
+}
+
+impl<N: Fsm, C: Fsm> FsmReceiver<N, C> {
+    pub fn recv(&self) -> Result<FsmTypes<N, C>, RecvError> {
+        match self {
+            FsmReceiver::Vanilla(receiver) => receiver.recv(),
+            FsmReceiver::Priority(receiver) => receiver.recv(),
+        }
+    }
+
+    pub fn try_recv(&self) -> Result<FsmTypes<N, C>, TryRecvError> {
+        match self {
+            FsmReceiver::Vanilla(receiver) => receiver.try_recv(),
+            FsmReceiver::Priority(receiver) => receiver.try_recv(),
+        }
+    }
+}
 
 pub struct NormalFsm<N> {
     fsm: Box<N>,
@@ -356,7 +530,7 @@ pub trait PollHandler<N, C>: Send + 'static {
 /// Internal poller that fetches batch and call handler hooks for readiness.
 pub struct Poller<N: Fsm, C: Fsm, Handler> {
     pub router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
-    pub fsm_receiver: priority_queue::Receiver<FsmTypes<N, C>>,
+    pub fsm_receiver: FsmReceiver<N, C>,
     pub handler: Handler,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
@@ -549,8 +723,8 @@ pub trait HandlerBuilder<N, C> {
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
-    receiver: priority_queue::Receiver<FsmTypes<N, C>>,
-    low_receiver: priority_queue::Receiver<FsmTypes<N, C>>,
+    receiver: FsmReceiver<N, C>,
+    low_receiver: FsmReceiver<N, C>,
     pool_size: usize,
     max_batch_size: usize,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -667,8 +841,8 @@ where
 struct PoolStateBuilder<N: Fsm, C: Fsm> {
     max_batch_size: usize,
     reschedule_duration: Duration,
-    fsm_receiver: priority_queue::Receiver<FsmTypes<N, C>>,
-    fsm_sender: priority_queue::Sender<FsmTypes<N, C>>,
+    fsm_receiver: FsmReceiver<N, C>,
+    fsm_sender: FsmSender<N, C>,
     pool_size: usize,
 }
 
@@ -701,8 +875,8 @@ impl<N: Fsm, C: Fsm> PoolStateBuilder<N, C> {
 pub struct PoolState<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub name_prefix: String,
     pub handler_builder: H,
-    pub fsm_receiver: priority_queue::Receiver<FsmTypes<N, C>>,
-    pub fsm_sender: priority_queue::Sender<FsmTypes<N, C>>,
+    pub fsm_receiver: FsmReceiver<N, C>,
+    pub fsm_sender: FsmSender<N, C>,
     pub low_priority_pool_size: usize,
     pub expected_pool_size: usize,
     pub workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -726,32 +900,28 @@ pub fn create_system<N: Fsm, C: Fsm>(
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
     let state_cnt = Arc::new(AtomicUsize::new(0));
     let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
-    let (tx, rx) = priority_queue::unbounded();
-    let (tx2, rx2) = priority_queue::unbounded();
-    let resource_ctl = resource_ctl.unwrap();
+    let (sender, receiver) = fsm_channel(resource_ctl);
+    let (low_sender, low_receiver) = fsm_channel(None); // no resource control for low fsm
     let normal_scheduler = NormalScheduler {
-        sender: tx.clone(),
-        low_sender: tx2.clone(),
-        resource_ctl: resource_ctl.clone(),
+        sender: sender.clone(),
+        low_sender: low_sender.clone(),
     };
     let control_scheduler = ControlScheduler {
-        sender: tx.clone(),
-        low_sender: tx2,
-        resource_ctl,
+        sender: sender.clone(),
     };
     let pool_state_builder = PoolStateBuilder {
         max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
-        fsm_receiver: rx.clone(),
-        fsm_sender: tx,
+        fsm_receiver: receiver.clone(),
+        fsm_sender: sender,
         pool_size: cfg.pool_size,
     };
     let router = Router::new(control_box, normal_scheduler, control_scheduler, state_cnt);
     let system = BatchSystem {
         name_prefix: None,
         router: router.clone(),
-        receiver: rx,
-        low_receiver: rx2,
+        receiver,
+        low_receiver,
         pool_size: cfg.pool_size,
         max_batch_size: cfg.max_batch_size(),
         workers: Arc::new(Mutex::new(Vec::new())),

@@ -17,8 +17,8 @@ use futures::executor::block_on;
 use grpcio::*;
 use kvproto::{
     kvrpcpb::{
-        self, AssertionLevel, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op,
-        PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
+        self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
+        Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
     },
     tikvpb::TikvClient,
 };

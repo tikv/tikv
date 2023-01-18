@@ -56,10 +56,6 @@ impl Fsm for Runner {
     fn get_priority(&self) -> Priority {
         self.priority
     }
-
-    fn get_last_msg_group(&self) -> &str {
-        "default"
-    }
 }
 
 impl Runner {

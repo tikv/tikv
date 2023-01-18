@@ -1002,7 +1002,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let self1 = self.clone();
         let group_name1 = group_name.to_owned();
         self.get_sched_pool()
-            .spawn(&group_name, CommandPri::High, async move {
+            .spawn(group_name, CommandPri::High, async move {
                 for (lock_info, released_lock) in legacy_wake_up_list {
                     let cb = lock_info.key_cb.unwrap().into_inner();
                     let e = StorageError::from(Error::from(MvccError::from(

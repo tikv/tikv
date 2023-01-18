@@ -818,7 +818,7 @@ where
             storage_read_pools.handle()
         };
 
-        let storage = Storage::from_engine(
+        let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -970,7 +970,7 @@ where
 
         self.snap_mgr = Some(snap_mgr.clone());
         // Create server
-        let server = Server::new::<_, F>(
+        let server = Server::new(
             node.id(),
             &server_config,
             &self.security_mgr,

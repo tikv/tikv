@@ -12,7 +12,6 @@ use raftstore::{
     store::{GlobalReplicationState, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX},
 };
 use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
-use resource_control::ResourceController;
 use slog::{info, o, Logger};
 use tikv_util::{
     config::VersionTrack,
