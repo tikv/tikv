@@ -5,10 +5,11 @@ use std::time::Duration;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{metapb, pdpb};
 use pd_client::{metrics::PD_HEARTBEAT_COUNTER_VEC, PdClient, RegionStat};
-use slog::{debug, info};
+use slog::{debug, error, info};
 use tikv_util::{store::QueryStats, time::UnixSecs};
 
 use super::{requests::*, Runner};
+use crate::router::PeerMsg;
 
 pub struct RegionHeartbeatTask {
     pub term: u64,
@@ -219,11 +220,27 @@ where
                         );
                         send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
                     } else if resp.has_split_region() {
-                        // TODO
-                        info!(logger, "pd asks for split but ignored");
+                        PD_HEARTBEAT_COUNTER_VEC
+                            .with_label_values(&["split region"])
+                            .inc();
+
+                        let mut split_region = resp.take_split_region();
+                        info!(logger, "try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
+                        if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
+                            let (msg, _) = PeerMsg::request_split(epoch, split_region.take_keys().into(), "pd".into());
+                            if let Err(e) = router.send(region_id, msg) {
+                                error!(logger, "send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
+                            }
+                        } else {
+                            info!(logger, "half split is not implemented");
+                        }
                     } else if resp.has_merge() {
-                        // TODO
-                        info!(logger, "pd asks for merge but ignored");
+                        PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
+
+                        let merge = resp.take_merge();
+                        info!(logger, "try to merge"; "region_id" => region_id, "merge" => ?merge);
+                        let req = new_merge_request(merge);
+                        send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
                     } else {
                         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                     }

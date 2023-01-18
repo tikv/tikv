@@ -27,14 +27,13 @@
 //! Start the tick (`Peer::on_merge_check_tick`) to periodically check the
 //! eligibility of merge.
 
-use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};
 use kvproto::{
-    metapb::Region,
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, CmdType, PrepareMergeRequest, PutRequest,
         RaftCmdRequest, Request,
     },
-    raft_serverpb::{MergeState, PeerState},
+    raft_serverpb::{MergeState, PeerState, RegionLocalState},
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use protobuf::Message;
@@ -56,7 +55,7 @@ use crate::{
 
 #[derive(Debug)]
 pub struct PrepareMergeResult {
-    pub region: Region,
+    pub region_state: RegionLocalState,
     pub state: MergeState,
 }
 
@@ -372,6 +371,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
+    // Match v1::exec_prepare_merge.
     pub fn apply_prepare_merge(
         &mut self,
         req: &AdminRequest,
@@ -408,7 +408,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         Ok((
             AdminResponse::default(),
             AdminCmdResult::PrepareMerge(PrepareMergeResult {
-                region,
+                region_state: self.region_state().clone(),
                 state: merging_state,
             }),
         ))
@@ -416,23 +416,34 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    // Match v1::on_ready_prepare_merge.
     pub fn on_apply_res_prepare_merge<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         res: PrepareMergeResult,
     ) {
+        let region = res.region_state.get_region().clone();
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
-            meta.set_region(&res.region, true, &self.logger);
-            let (reader, _) = meta.readers.get_mut(&res.region.get_id()).unwrap();
+            meta.set_region(&region, true, &self.logger);
+            let (reader, _) = meta.readers.get_mut(&region.get_id()).unwrap();
             self.set_region(
                 &store_ctx.coprocessor_host,
                 reader,
-                res.region.clone(),
+                region,
                 RegionChangeReason::PrepareMerge,
                 res.state.get_commit(),
             );
         }
+
+        self.storage_mut()
+            .set_region_state(res.region_state.clone());
+        let region_id = self.region_id();
+        self.state_changes_mut()
+            .put_region_state(region_id, res.state.get_commit(), &res.region_state)
+            .unwrap();
+        self.set_has_extra_write();
+        self.set_has_ready();
 
         self.proposal_control_mut()
             .enter_prepare_merge(res.state.get_commit());

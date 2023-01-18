@@ -10,7 +10,7 @@ use futures::executor::block_on;
 use raftstore::store::RAFT_INIT_LOG_INDEX;
 use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 
-use crate::cluster::{split_helper::split_region, Cluster};
+use crate::cluster::{helper::split_region, Cluster};
 
 /// If a node is restarted after metadata is persisted before tablet is not
 /// installed, it should resume install the tablet.

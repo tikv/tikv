@@ -134,7 +134,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
         self.region_state_mut().set_region(region.clone());
-        self.region_state_mut().set_state(PeerState::Merging);
+        self.region_state_mut().set_state(PeerState::Normal);
         self.region_state_mut()
             .set_merge_state(MergeState::default());
 

@@ -444,29 +444,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         PEER_ADMIN_CMD_COUNTER.commit_merge.all.inc();
 
-        let merge = req.get_commit_merge();
-        let source_region = merge.get_source();
-        let region_id = self.region_id();
-        let state = self.region_state();
-        if state.get_state() != PeerState::Merging {
-            slog_panic!(
-                self.logger,
-                "unexpected state of merging region";
-                "state" => ?state,
-            );
-        }
-        let exist_region = state.get_region().to_owned();
-        if *source_region != exist_region {
-            slog_panic!(
-                self.logger,
-                "merge source region mismatch";
-                "existed" => ?exist_region,
-                "provided" => ?source_region,
-            );
-        }
-
         self.flush();
 
+        // Note: doesn't validate region state from kvdb any more.
+        let merge = req.get_commit_merge();
+        let source_region = merge.get_source();
         let (tx, rx) = oneshot::channel();
         self.res_reporter().send(PeerMsg::CatchUpLogs(CatchUpLogs {
             target_region_id: self.region_id(),
@@ -508,7 +490,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.tablet().flush_cfs(&[], true).unwrap();
         // TODO: check both are trimmed.
         let reg = self.tablet_registry();
-        let tmp_path = reg.tablet_path(region_id, index);
+        let tmp_path = reg.tablet_path(self.region_id(), index);
         if tmp_path.exists() {
             std::fs::remove_dir_all(&tmp_path).unwrap();
         }
@@ -520,7 +502,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 .unwrap();
             tablet.merge(&[&source_tablet, self.tablet()]).unwrap();
         }
-        let path = reg.tablet_path(region_id, index);
+        let path = reg.tablet_path(self.region_id(), index);
         std::fs::rename(&tmp_path, &path).unwrap();
         // Now the tablet is flushed, so all previous states should be persisted.
         // Reusing the tablet should not be a problem.
@@ -804,7 +786,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
-        self.storage_mut().set_has_dirty_data(true);
 
         if let Err(e) = store_ctx.router.force_send(
             res.source.get_id(),

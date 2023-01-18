@@ -1208,6 +1208,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 region,
             ));
             peer.peer.init_replication_mode(&mut replication_state);
+            // TODO(tabokie)
             if local_state.get_state() == PeerState::Merging {
                 info!("region is merging"; "region" => ?region, "store_id" => store_id);
                 merging_count += 1;

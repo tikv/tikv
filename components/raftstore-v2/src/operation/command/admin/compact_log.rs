@@ -358,7 +358,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             return;
         }
-        // TODO: check is_merging
+        if self.merge_context().pending.is_some() {
+            info!(
+                self.logger,
+                "in merging mode, skip compact";
+                "compact_index" => res.compact_index
+            );
+            return;
+        }
         // TODO: check entry_cache_warmup_state
         self.entry_storage_mut()
             .compact_entry_cache(res.compact_index);
@@ -385,8 +392,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if old_truncated + 1 < self.storage().apply_trace().persisted_apply_index()
             && let Some(index) = self.compact_log_index() {
             // Raft Engine doesn't care about first index.
-            if let Err(e) =
-            store_ctx
+            if let Err(e) = store_ctx
                 .engine
                 .gc(self.region_id(), 0, index, self.state_changes_mut())
             {

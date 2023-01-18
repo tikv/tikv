@@ -45,7 +45,7 @@ use slog::{debug, o, Logger};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::{
-    config::{ReadableDuration, VersionTrack},
+    config::{ReadableDuration, ReadableSize, VersionTrack},
     store::new_peer,
     worker::{LazyWorker, Worker},
 };
@@ -490,6 +490,10 @@ impl Cluster {
         } else {
             v2_default_config()
         };
+        // TODO: validate the cfg.
+        if cfg.region_split_check_diff.is_none() {
+            cfg.region_split_check_diff = Some(ReadableSize::mb(96 / 16));
+        }
         disable_all_auto_ticks(&mut cfg);
         for _ in 1..=count {
             let mut node = TestNode::with_pd(&cluster.pd_server, cluster.logger.clone());
@@ -587,7 +591,7 @@ impl Drop for Cluster {
     }
 }
 
-pub mod split_helper {
+pub mod helper {
     use std::{thread, time::Duration};
 
     use engine_traits::CF_DEFAULT;
@@ -702,5 +706,44 @@ pub mod split_helper {
         assert_eq!(region.get_end_key(), right.get_end_key());
 
         (left, right)
+    }
+
+    pub fn merge_region(
+        router: &mut TestRouter,
+        source: metapb::Region,
+        source_peer: metapb::Peer,
+        target: metapb::Region,
+    ) -> metapb::Region {
+        let region_id = source.id;
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header()
+            .set_region_epoch(source.get_region_epoch().clone());
+        req.mut_header().set_peer(source_peer);
+
+        let mut admin_req = AdminRequest::default();
+        admin_req.set_cmd_type(AdminCmdType::PrepareMerge);
+        admin_req.mut_prepare_merge().set_target(target.clone());
+        req.set_admin_request(admin_req);
+
+        let (msg, sub) = PeerMsg::admin_command(req);
+        router.send(region_id, msg).unwrap();
+        block_on(sub.result()).unwrap();
+
+        // TODO: when persistent implementation is ready, we can use tablet index of
+        // the parent to check whether the split is done. Now, just sleep a second.
+        thread::sleep(Duration::from_secs(1));
+
+        let new_target = router.region_detail(target.id);
+        if new_target.get_start_key() == source.get_start_key() {
+            // [source, target] => new_target
+            assert_eq!(new_target.get_end_key(), target.get_end_key());
+        } else {
+            // [target, source] => new_target
+            assert_eq!(new_target.get_start_key(), target.get_start_key());
+            assert_eq!(new_target.get_end_key(), source.get_end_key());
+        }
+
+        new_target
     }
 }
