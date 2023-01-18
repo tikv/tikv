@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 use futures::StreamExt;
 use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
 use pd_client::{Error as PdError, PdClient, Result, RpcClient, RESOURCE_CONTROL_CONFIG_PATH};
-use tikv_util::{box_err, error};
+use tikv_util::error;
 
 use crate::ResourceGroupManager;
 
