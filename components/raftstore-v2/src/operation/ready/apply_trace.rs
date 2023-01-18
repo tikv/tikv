@@ -40,7 +40,7 @@ use kvproto::{
 use raftstore::store::{
     ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
-use slog::{trace, Logger};
+use slog::{info, trace, Logger};
 use tikv_util::{box_err, slog_panic, worker::Scheduler};
 
 use crate::{
@@ -133,7 +133,8 @@ pub type DataTrace = [u64; DATA_CFS_LEN];
 #[derive(Clone, Copy, Default, Debug)]
 struct Progress {
     flushed: u64,
-    /// The index of last entry that has modification to the CF.
+    /// The index of last entry that has modification to the CF. The value
+    /// can be larger than the index that actually modifies the CF in apply.
     ///
     /// If `flushed` == `last_modified`, then all data in the CF is persisted.
     last_modified: u64,
@@ -192,9 +193,13 @@ impl ApplyTrace {
         trace.admin.last_modified = i;
         trace.persisted_applied = i;
         trace.last_flush_trigger = i;
-        let applied_region_state = engine
-            .get_region_state(region_id, trace.admin.flushed)?
-            .unwrap();
+        let applied_region_state = match engine.get_region_state(region_id, trace.admin.flushed)? {
+            Some(s) => s,
+            None => panic!(
+                "failed to get region state [region_id={}] [apply_trace={:?}]",
+                region_id, trace
+            ),
+        };
         Ok((trace, applied_region_state))
     }
 
@@ -242,7 +247,7 @@ impl ApplyTrace {
                 }
             })
             .max();
-        if let Some(m) = last_modified && m >= self.admin.flushed + 4096 && m >= self.last_flush_trigger + 4096 {
+        if let Some(m) = last_modified && m >= self.admin.flushed + 4096000 && m >= self.last_flush_trigger + 4096000 {
             self.last_flush_trigger = m;
             true
         } else {
@@ -257,10 +262,17 @@ impl ApplyTrace {
         }
         let min_flushed = self
             .data_cfs
-            .iter()
+            .iter_mut()
             // Only unflushed CFs are considered. Flushed CF always have uptodate changes
             // persisted.
             .filter_map(|pr| {
+                // All modifications before mem_index must be seen. If following condition is
+                // true, it means the modification comes beyond general apply process (like
+                // transaction GC unsafe write). Align `last_modified` to `flushed` to avoid
+                // blocking raft log GC.
+                if mem_index >= pr.flushed && pr.flushed > pr.last_modified {
+                    pr.last_modified = pr.flushed;
+                }
                 if pr.last_modified != pr.flushed {
                     Some(pr.flushed)
                 } else {
@@ -484,6 +496,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let lb = write_task
             .extra_write
             .ensure_v2(|| raft_engine.log_batch(1));
+        info!(self.logger(), "persisting admin flushed"; "tablet_index" => tablet_index, "flushed" => trace.admin.flushed);
         let trace = self.apply_trace_mut();
         lb.put_flushed_index(region_id, CF_RAFT, tablet_index, trace.admin.flushed)
             .unwrap();
@@ -660,6 +673,12 @@ mod tests {
             ([(8, 2), (9, 3), (7, 5)], (4, 4), 5, 5),
             ([(8, 2), (9, 3), (7, 5)], (5, 5), 5, 5),
             ([(2, 3), (9, 3), (7, 5)], (2, 2), 5, 2),
+            // In special cae, some CF may be flushed without any modification recorded,
+            // we should still able to advance the apply index forward.
+            ([(5, 2), (9, 3), (7, 3)], (2, 2), 3, 3),
+            ([(5, 2), (9, 3), (7, 3)], (2, 2), 6, 6),
+            ([(5, 2), (9, 3), (7, 3)], (2, 2), 10, 10),
+            ([(5, 2), (9, 3), (7, 3)], (2, 3), 10, 2),
         ];
         for (case, (data_cfs, admin, mem_index, exp)) in cases.iter().enumerate() {
             let mut trace = ApplyTrace::default();

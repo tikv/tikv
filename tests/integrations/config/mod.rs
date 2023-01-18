@@ -180,6 +180,7 @@ fn test_serde_custom_tikv_config() {
         raft_entry_max_size: ReadableSize::mb(12),
         raft_log_compact_sync_interval: ReadableDuration::secs(12),
         raft_log_gc_tick_interval: ReadableDuration::secs(12),
+        request_voter_replicated_index_interval: ReadableDuration::minutes(5),
         raft_log_gc_threshold: 12,
         raft_log_gc_count_limit: Some(12),
         raft_log_gc_size_limit: Some(ReadableSize::kb(1)),

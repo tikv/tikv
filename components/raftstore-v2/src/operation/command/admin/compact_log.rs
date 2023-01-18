@@ -73,6 +73,11 @@ impl CompactLogContext {
     pub fn set_last_applying_index(&mut self, index: u64) {
         self.last_applying_index = index;
     }
+
+    #[inline]
+    pub fn last_applying_index(&self) -> u64 {
+        self.last_applying_index
+    }
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
