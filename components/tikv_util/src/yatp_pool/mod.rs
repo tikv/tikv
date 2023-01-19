@@ -10,7 +10,7 @@ pub use future_pool::{Full, FuturePool};
 use prometheus::{local::LocalHistogram, Histogram};
 use yatp::{
     pool::{CloneRunnerBuilder, Local, Runner},
-    queue::{multilevel, QueueType, TaskCell as _},
+    queue::{multilevel, priority, QueueType, TaskCell as _},
     task::future::{Runner as FutureRunner, TaskCell},
     ThreadPool,
 };
@@ -198,42 +198,42 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         }
     }
 
-    pub fn config(&mut self, config: Config) -> &mut Self {
+    pub fn config(self, config: Config) -> Self {
         // TODO: maybe we should use (1, num_cpu) for min and max thread count.
         self.thread_count(config.workers, config.workers, config.workers)
             .stack_size(config.stack_size)
             .max_tasks(config.workers.saturating_mul(config.max_tasks_per_worker))
     }
 
-    pub fn stack_size(&mut self, val: usize) -> &mut Self {
+    pub fn stack_size(mut self, val: usize) -> Self {
         self.stack_size = val;
         self
     }
 
-    pub fn name_prefix(&mut self, val: impl Into<String>) -> &mut Self {
+    pub fn name_prefix(mut self, val: impl Into<String>) -> Self {
         let name = val.into();
         self.name_prefix = Some(name);
         self
     }
 
     pub fn thread_count(
-        &mut self,
+        mut self,
         min_thread_count: usize,
         core_thread_count: usize,
         max_thread_count: usize,
-    ) -> &mut Self {
+    ) -> Self {
         self.min_thread_count = min_thread_count;
         self.core_thread_count = core_thread_count;
         self.max_thread_count = max_thread_count;
         self
     }
 
-    pub fn max_tasks(&mut self, tasks: usize) -> &mut Self {
+    pub fn max_tasks(mut self, tasks: usize) -> Self {
         self.max_tasks = tasks;
         self
     }
 
-    pub fn before_stop<F>(&mut self, f: F) -> &mut Self
+    pub fn before_stop<F>(mut self, f: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
     {
@@ -241,7 +241,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn after_start<F>(&mut self, f: F) -> &mut Self
+    pub fn after_start<F>(mut self, f: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
     {
@@ -249,7 +249,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn before_pause<F>(&mut self, f: F) -> &mut Self
+    pub fn before_pause<F>(mut self, f: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
     {
@@ -257,13 +257,32 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn build_future_pool(&mut self) -> FuturePool {
+    pub fn build_future_pool(self) -> FuturePool {
+        let name = self
+            .name_prefix
+            .clone()
+            .unwrap_or_else(|| "yatp_pool".to_string());
+        let size = self.core_thread_count;
+        let task = self.max_tasks;
         let pool = self.build_single_level_pool();
-        let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
-        FuturePool::from_pool(pool, name, self.core_thread_count, self.max_tasks)
+        FuturePool::from_pool(pool, &name, size, task)
     }
 
-    pub fn build_single_level_pool(&mut self) -> ThreadPool<TaskCell> {
+    pub fn build_priority_future_pool(
+        self,
+        priority_provider: Arc<dyn priority::TaskPriorityProvider>,
+    ) -> FuturePool {
+        let name = self
+            .name_prefix
+            .clone()
+            .unwrap_or_else(|| "yatp_pool".to_string());
+        let size = self.core_thread_count;
+        let task = self.max_tasks;
+        let pool = self.build_priority_pool(priority_provider);
+        FuturePool::from_pool(pool, &name, size, task)
+    }
+
+    pub fn build_single_level_pool(self) -> ThreadPool<TaskCell> {
         let (builder, runner) = self.create_builder();
         builder.build_with_queue_and_runner(
             yatp::queue::QueueType::SingleLevel,
@@ -271,9 +290,12 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         )
     }
 
-    pub fn build_multi_level_pool(&mut self) -> ThreadPool<TaskCell> {
+    pub fn build_multi_level_pool(self) -> ThreadPool<TaskCell> {
+        let name = self
+            .name_prefix
+            .clone()
+            .unwrap_or_else(|| "yatp_pool".to_string());
         let (builder, read_pool_runner) = self.create_builder();
-        let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
         let multilevel_builder =
             multilevel::Builder::new(multilevel::Config::default().name(Some(name)));
         let runner_builder =
@@ -282,8 +304,25 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder)
     }
 
-    fn create_builder(&mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
-        let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
+    pub fn build_priority_pool(
+        self,
+        priority_provider: Arc<dyn priority::TaskPriorityProvider>,
+    ) -> ThreadPool<TaskCell> {
+        let name = self
+            .name_prefix
+            .clone()
+            .unwrap_or_else(|| "yatp_pool".to_string());
+        let (builder, read_pool_runner) = self.create_builder();
+        let priority_builder = priority::Builder::new(
+            priority::Config::default().name(Some(name)),
+            priority_provider,
+        );
+        let runner_builder = priority_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
+        builder.build_with_queue_and_runner(QueueType::Priority(priority_builder), runner_builder)
+    }
+
+    fn create_builder(mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
+        let name = self.name_prefix.unwrap_or_else(|| "yatp_pool".to_string());
         let mut builder = yatp::Builder::new(thd_name!(name));
         builder
             .stack_size(self.stack_size)
@@ -295,7 +334,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         let before_stop = self.before_stop.take();
         let before_pause = self.before_pause.take();
         let schedule_wait_duration =
-            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name]);
+            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[&name]);
         let read_pool_runner = YatpPoolRunner::new(
             Default::default(),
             self.ticker.clone(),
