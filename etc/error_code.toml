@@ -448,6 +448,11 @@ error = '''
 KV:Raftstore:FlashbackNotPrepared
 '''
 
+["KV:Raftstore:IsWitness"]
+error = '''
+KV:Raftstore:IsWitness
+'''
+
 ["KV:Raftstore:SnapAbort"]
 error = '''
 KV:Raftstore:SnapAbort

@@ -190,6 +190,10 @@ impl SecurityManager {
             )
         }
     }
+
+    pub fn get_config(&self) -> &SecurityConfig {
+        &self.cfg
+    }
 }
 
 #[derive(Clone)]
