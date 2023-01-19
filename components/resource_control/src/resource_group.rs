@@ -51,12 +51,12 @@ impl ResourceGroupManager {
             // TODO: currently we only consider the cpu usage in the read path, we may also take
             // io read bytes into account later.
             (GroupMode::RawMode, true) => rg
-                .get_resource_settings()
+                .get_raw_resource_settings()
                 .get_cpu()
                 .get_settings()
                 .get_fill_rate(),
             (GroupMode::RawMode, false) => rg
-                .get_resource_settings()
+                .get_raw_resource_settings()
                 .get_io_write()
                 .get_settings()
                 .get_fill_rate(),
@@ -327,7 +327,7 @@ mod tests {
                 .set_fill_rate(write_tokens);
             group.set_r_u_settings(ru_setting);
         } else {
-            let mut resource_setting = GroupResourceSettings::new();
+            let mut resource_setting = GroupRawResourceSettings::new();
             resource_setting
                 .mut_cpu()
                 .mut_settings()
@@ -336,7 +336,7 @@ mod tests {
                 .mut_io_write()
                 .mut_settings()
                 .set_fill_rate(write_tokens);
-            group.set_resource_settings(resource_setting);
+            group.set_raw_resource_settings(resource_setting);
         }
         group
     }

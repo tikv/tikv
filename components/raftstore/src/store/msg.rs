@@ -384,7 +384,8 @@ pub enum PeerTick {
     ReportBuckets = 9,
     CheckLongUncommitted = 10,
     CheckPeersAvailability = 11,
-    RequestVoterReplicatedIndex = 12,
+    RequestSnapshot = 12,
+    RequestVoterReplicatedIndex = 13,
 }
 
 impl PeerTick {
@@ -405,6 +406,7 @@ impl PeerTick {
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
             PeerTick::CheckPeersAvailability => "check_peers_availability",
+            PeerTick::RequestSnapshot => "request_snapshot",
             PeerTick::RequestVoterReplicatedIndex => "request_voter_replicated_index",
         }
     }
@@ -423,6 +425,7 @@ impl PeerTick {
             PeerTick::ReportBuckets,
             PeerTick::CheckLongUncommitted,
             PeerTick::CheckPeersAvailability,
+            PeerTick::RequestSnapshot,
             PeerTick::RequestVoterReplicatedIndex,
         ];
         TICKS

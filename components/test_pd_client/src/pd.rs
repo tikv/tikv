@@ -27,8 +27,8 @@ use keys::{self, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, PeerRole},
     pdpb::{
-        self, ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
-        TransferLeader,
+        self, BatchSwitchWitness, ChangePeer, ChangePeerV2, CheckPolicy, Merge,
+        RegionHeartbeatResponse, SplitRegion, SwitchWitness, TransferLeader,
     },
     replication_modepb::{
         DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
@@ -40,7 +40,7 @@ use pd_client::{
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
-    store::{check_key_in_region, find_peer, is_learner, new_peer, QueryStats},
+    store::{check_key_in_region, find_peer, find_peer_by_id, is_learner, new_peer, QueryStats},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     Either, HandyRwLock,
@@ -135,6 +135,11 @@ enum Operator {
         remove_peers: Vec<metapb::Peer>,
         policy: SchedulePolicy,
     },
+    BatchSwitchWitness {
+        peer_ids: Vec<u64>,
+        is_witnesses: Vec<bool>,
+        policy: SchedulePolicy,
+    },
 }
 
 pub fn sleep_ms(ms: u64) {
@@ -198,6 +203,22 @@ pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResp
 
     let mut resp = RegionHeartbeatResponse::default();
     resp.set_merge(merge);
+    resp
+}
+
+fn switch_witness(peer_id: u64, is_witness: bool) -> SwitchWitness {
+    let mut sw = SwitchWitness::default();
+    sw.set_peer_id(peer_id);
+    sw.set_is_witness(is_witness);
+    sw
+}
+
+pub fn new_pd_batch_switch_witnesses(switches: Vec<SwitchWitness>) -> RegionHeartbeatResponse {
+    let mut switch_witnesses = BatchSwitchWitness::default();
+    switch_witnesses.set_switch_witnesses(switches.into());
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_switch_witnesses(switch_witnesses);
     resp
 }
 
@@ -275,6 +296,17 @@ impl Operator {
                     cps.push(change_peer(ConfChangeType::RemoveNode, peer.clone()));
                 }
                 new_pd_change_peer_v2(cps)
+            }
+            Operator::BatchSwitchWitness {
+                ref peer_ids,
+                ref is_witnesses,
+                ..
+            } => {
+                let mut switches = Vec::with_capacity(peer_ids.len());
+                for (peer_id, is_witness) in peer_ids.iter().zip(is_witnesses.iter()) {
+                    switches.push(switch_witness(*peer_id, *is_witness));
+                }
+                new_pd_batch_switch_witnesses(switches)
             }
         }
     }
@@ -359,6 +391,26 @@ impl Operator {
                     .all(|peer| region.get_peers().iter().all(|p| p != peer));
 
                 add && remove || !policy.schedule()
+            }
+            Operator::BatchSwitchWitness {
+                ref peer_ids,
+                ref is_witnesses,
+                ref mut policy,
+            } => {
+                if !policy.schedule() {
+                    return true;
+                }
+                for (peer_id, is_witness) in peer_ids.iter().zip(is_witnesses.iter()) {
+                    if region
+                        .get_peers()
+                        .iter()
+                        .any(|p| (p.get_id() == *peer_id) && (p.get_is_witness() != *is_witness))
+                        || cluster.pending_peers.contains_key(peer_id)
+                    {
+                        return false;
+                    }
+                }
+                true
             }
         }
     }
@@ -1043,6 +1095,48 @@ impl TestPdClient {
         panic!("region {:?} failed to leave joint", region);
     }
 
+    pub fn must_finish_switch_witnesses(
+        &self,
+        region_id: u64,
+        peer_ids: Vec<u64>,
+        is_witnesses: Vec<bool>,
+    ) {
+        for _ in 1..500 {
+            sleep_ms(10);
+            let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
+                Some(region) => region,
+                None => continue,
+            };
+
+            for p in region.get_peers().iter() {
+                error!("in must_finish_switch_witnesses, p: {:?}", p);
+            }
+
+            let mut need_retry = false;
+            for (peer_id, is_witness) in peer_ids.iter().zip(is_witnesses.iter()) {
+                match find_peer_by_id(&region, *peer_id) {
+                    Some(p) => {
+                        if p.get_is_witness() != *is_witness
+                            || self.cluster.rl().pending_peers.contains_key(&p.get_id())
+                        {
+                            need_retry = true;
+                            break;
+                        }
+                    }
+                    None => {
+                        need_retry = true;
+                        break;
+                    }
+                }
+            }
+            if !need_retry {
+                return;
+            }
+        }
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
+        panic!("region {:?} failed to finish switch witnesses", region);
+    }
+
     pub fn add_region(&self, region: &metapb::Region) {
         self.cluster.wl().add_region(region)
     }
@@ -1067,6 +1161,15 @@ impl TestPdClient {
     pub fn remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         let op = Operator::RemovePeer {
             peer,
+            policy: SchedulePolicy::TillSuccess,
+        };
+        self.schedule_operator(region_id, op);
+    }
+
+    pub fn switch_witnesses(&self, region_id: u64, peer_ids: Vec<u64>, is_witnesses: Vec<bool>) {
+        let op = Operator::BatchSwitchWitness {
+            peer_ids,
+            is_witnesses,
             policy: SchedulePolicy::TillSuccess,
         };
         self.schedule_operator(region_id, op);
@@ -1187,6 +1290,16 @@ impl TestPdClient {
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.remove_peer(region_id, peer.clone());
         self.must_none_peer(region_id, peer);
+    }
+
+    pub fn must_switch_witnesses(
+        &self,
+        region_id: u64,
+        peer_ids: Vec<u64>,
+        is_witnesses: Vec<bool>,
+    ) {
+        self.switch_witnesses(region_id, peer_ids.clone(), is_witnesses.clone());
+        self.must_finish_switch_witnesses(region_id, peer_ids, is_witnesses);
     }
 
     pub fn must_joint_confchange(
