@@ -59,6 +59,7 @@ make_static_metric! {
         witness,
         flashback_not_prepared,
         flashback_in_progress,
+        wait_data,
     }
 
     pub struct LocalReadRejectCounter : LocalIntCounter {

@@ -300,6 +300,7 @@ pub enum RegionChangeReason {
     PrepareMerge,
     CommitMerge,
     RollbackMerge,
+    SwitchWitness,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
