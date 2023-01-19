@@ -84,6 +84,7 @@ dependencies = [
  "codec",
  "engine_traits",
  "kvproto",
+ "log_wrappers",
  "match-template",
  "panic_hook",
  "thiserror",
@@ -2726,7 +2727,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a14c44ef44b378d15adb5baad8402b838f031b51"
+source = "git+https://github.com/pingcap/kvproto.git#adcf4c414bfd0ccf18436b377430aa2450fd4c81"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5895,6 +5896,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "server",
@@ -6008,6 +6010,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "rand_xorshift",
+ "resource_control",
  "resource_metering",
  "security",
  "serde_json",
@@ -6115,6 +6118,7 @@ name = "tidb_query_common"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "api_version",
  "async-trait",
  "byteorder",
  "derive_more",
@@ -6136,6 +6140,7 @@ dependencies = [
 name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "base64",
  "bitfield",
  "bitflags",
@@ -6176,6 +6181,7 @@ name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "api_version",
  "async-trait",
  "codec",
  "collections",
@@ -6605,7 +6611,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#f3286471a05a4454a1071dd5f66ac7dbf6c79ba3"
+source = "git+https://github.com/pingcap/tipb.git#c6b7a5a1623bb2766a502301ecc3ac8f98cc7c79"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

@@ -26,6 +26,8 @@ pub enum Error {
     StoreTombstone(String),
     #[error("global config item {0} not found")]
     GlobalConfigNotFound(String),
+    #[error("required watch revision is smaller than current compact/min revision. {0:?}")]
+    DataCompacted(String),
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -38,6 +40,7 @@ impl Error {
             | Error::RegionNotFound(_)
             | Error::StoreTombstone(_)
             | Error::GlobalConfigNotFound(_)
+            | Error::DataCompacted(_)
             | Error::ClusterBootstrapped(_)
             | Error::Incompatible => false,
         }
@@ -55,6 +58,7 @@ impl ErrorCodeExt for Error {
             Error::RegionNotFound(_) => error_code::pd::REGION_NOT_FOUND,
             Error::StoreTombstone(_) => error_code::pd::STORE_TOMBSTONE,
             Error::GlobalConfigNotFound(_) => error_code::pd::GLOBAL_CONFIG_NOT_FOUND,
+            Error::DataCompacted(_) => error_code::pd::DATA_COMPACTED,
             Error::Other(_) => error_code::pd::UNKNOWN,
         }
     }

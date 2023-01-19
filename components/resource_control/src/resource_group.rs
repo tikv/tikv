@@ -51,12 +51,12 @@ impl ResourceGroupManager {
             // TODO: currently we only consider the cpu usage in the read path, we may also take
             // io read bytes into account later.
             (GroupMode::RawMode, true) => rg
-                .get_resource_settings()
+                .get_raw_resource_settings()
                 .get_cpu()
                 .get_settings()
                 .get_fill_rate(),
             (GroupMode::RawMode, false) => rg
-                .get_resource_settings()
+                .get_raw_resource_settings()
                 .get_io_write()
                 .get_settings()
                 .get_fill_rate(),
@@ -327,7 +327,7 @@ mod tests {
                 .set_fill_rate(write_tokens);
             group.set_r_u_settings(ru_setting);
         } else {
-            let mut resource_setting = GroupResourceSettings::new();
+            let mut resource_setting = GroupRawResourceSettings::new();
             resource_setting
                 .mut_cpu()
                 .mut_settings()
@@ -336,7 +336,7 @@ mod tests {
                 .mut_io_write()
                 .mut_settings()
                 .set_fill_rate(write_tokens);
-            group.set_resource_settings(resource_setting);
+            group.set_raw_resource_settings(resource_setting);
         }
         group
     }
@@ -382,40 +382,40 @@ mod tests {
         resource_manager.add_resource_group(group2);
         assert_eq!(resource_manager.resource_groups.len(), 2);
 
-        let resouce_ctl = resource_manager.derive_controller("test_read".into(), true);
-        assert_eq!(resouce_ctl.resource_consumptions.len(), 3);
+        let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
+        assert_eq!(resource_ctl.resource_consumptions.len(), 3);
 
-        let group1 = resouce_ctl.resource_group("test".as_bytes());
+        let group1 = resource_ctl.resource_group("test".as_bytes());
         assert_eq!(group1.weight, 500);
-        let group2 = resouce_ctl.resource_group("test2".as_bytes());
+        let group2 = resource_ctl.resource_group("test2".as_bytes());
         assert_eq!(group2.weight, 250);
         assert_eq!(group1.current_vt(), 0);
 
         let mut extras1 = Extras::single_level();
         extras1.set_metadata("test".as_bytes().to_owned());
-        assert_eq!(resouce_ctl.priority_of(&extras1), 25_000);
+        assert_eq!(resource_ctl.priority_of(&extras1), 25_000);
         assert_eq!(group1.current_vt(), 25_000);
 
         let mut extras2 = Extras::single_level();
         extras2.set_metadata("test2".as_bytes().to_owned());
-        assert_eq!(resouce_ctl.priority_of(&extras2), 12_500);
+        assert_eq!(resource_ctl.priority_of(&extras2), 12_500);
         assert_eq!(group2.current_vt(), 12_500);
 
         let mut extras3 = Extras::single_level();
         extras3.set_metadata("unknown_group".as_bytes().to_owned());
-        assert_eq!(resouce_ctl.priority_of(&extras3), 50);
+        assert_eq!(resource_ctl.priority_of(&extras3), 50);
         assert_eq!(
-            resouce_ctl
+            resource_ctl
                 .resource_group("default".as_bytes())
                 .current_vt(),
             50
         );
 
-        resouce_ctl.consume(
+        resource_ctl.consume(
             "test".as_bytes(),
             ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
         );
-        resouce_ctl.consume(
+        resource_ctl.consume(
             "test2".as_bytes(),
             ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
         );
@@ -429,7 +429,7 @@ mod tests {
         assert_eq!(group1_vt, 5_025_000);
         assert!(group2.current_vt() >= group1.current_vt() * 3 / 4);
         assert!(
-            resouce_ctl
+            resource_ctl
                 .resource_group("default".as_bytes())
                 .current_vt()
                 >= group1.current_vt() / 2
@@ -442,8 +442,8 @@ mod tests {
         let new_group = new_resource_group("new_group".into(), true, 500, 500);
         resource_manager.add_resource_group(new_group);
 
-        assert_eq!(resouce_ctl.resource_consumptions.len(), 4);
-        let group3 = resouce_ctl.resource_group("new_group".as_bytes());
+        assert_eq!(resource_ctl.resource_consumptions.len(), 4);
+        let group3 = resource_ctl.resource_group("new_group".as_bytes());
         assert_eq!(group3.weight, 200);
         assert!(group3.current_vt() >= group1_vt / 2);
     }

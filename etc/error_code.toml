@@ -263,6 +263,11 @@ error = '''
 KV:Pd:GlobalConfigNotFound
 '''
 
+["KV:Pd:DataCompacted"]
+error = '''
+KV:Pd:DataCompacted
+'''
+
 ["KV:Pd:Unknown"]
 error = '''
 KV:Pd:Unknown
