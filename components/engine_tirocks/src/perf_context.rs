@@ -136,7 +136,6 @@ impl engine_traits::PerfContextExt for RocksEngine {
     type PerfContext = RocksPerfContext;
 
     fn get_perf_context(
-        &self,
         level: engine_traits::PerfLevel,
         kind: engine_traits::PerfContextKind,
     ) -> Self::PerfContext {

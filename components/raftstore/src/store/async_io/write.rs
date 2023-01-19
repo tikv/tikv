@@ -465,11 +465,12 @@ where
         self.flush_states_to_raft_wb();
         if metrics.waterfall_metrics {
             let now = std::time::Instant::now();
-            for task in &self.tasks {
-                for tracker in &task.trackers {
+            for task in &mut self.tasks {
+                for tracker in &mut task.trackers {
                     tracker.observe(now, &metrics.wf_before_write, |t| {
                         &mut t.metrics.wf_before_write_nanos
                     });
+                    tracker.reset(now);
                 }
             }
         }
@@ -549,7 +550,7 @@ where
     ) -> Self {
         let batch = WriteTaskBatch::new(raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE));
         let perf_context =
-            raft_engine.get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
+            ER::get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
         let cfg_tracker = cfg.clone().tracker(tag.clone());
         Self {
             store_id,
@@ -718,11 +719,7 @@ where
                 .batch
                 .tasks
                 .iter()
-                .flat_map(|task| {
-                    task.trackers
-                        .iter()
-                        .flat_map(|t| t.as_tracker_token().cloned())
-                })
+                .flat_map(|task| task.trackers.iter().flat_map(|t| t.as_tracker_token()))
                 .collect();
             self.perf_context.report_metrics(&trackers);
             write_raft_time = duration_to_sec(now.saturating_elapsed());

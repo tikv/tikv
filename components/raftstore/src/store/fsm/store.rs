@@ -1374,14 +1374,14 @@ where
             ready_count: 0,
             has_ready: false,
             current_time: None,
-            raft_perf_context: self
-                .engines
-                .raft
-                .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
-            kv_perf_context: self
-                .engines
-                .kv
-                .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
+            raft_perf_context: ER::get_perf_context(
+                self.cfg.value().perf_level,
+                PerfContextKind::RaftstoreStore,
+            ),
+            kv_perf_context: EK::get_perf_context(
+                self.cfg.value().perf_level,
+                PerfContextKind::RaftstoreStore,
+            ),
             tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
@@ -1516,7 +1516,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
-        let purge_worker = if engines.raft.need_manual_purge() {
+        let purge_worker = if engines.raft.need_manual_purge()
+            && !cfg.value().raft_engine_purge_interval.0.is_zero()
+        {
             let worker = Worker::new("purge-worker");
             let raft_clone = engines.raft.clone();
             let router_clone = self.router();
@@ -1735,7 +1737,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             Arc::clone(&pd_client),
             self.router.clone(),
             workers.pd_worker.scheduler(),
-            cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
             concurrency_manager,
             snap_mgr,

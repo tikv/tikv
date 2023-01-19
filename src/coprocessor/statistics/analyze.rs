@@ -2,7 +2,7 @@
 
 use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData, mem, sync::Arc};
 
-use api_version::KvFormat;
+use api_version::{keyspace::KvPair, KvFormat};
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;

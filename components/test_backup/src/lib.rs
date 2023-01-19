@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::{dispatch_api_version, ApiV1, KvFormat, RawValue};
+use api_version::{dispatch_api_version, keyspace::KvPair, ApiV1, KvFormat, RawValue};
 use backup::Task;
 use collections::HashMap;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};

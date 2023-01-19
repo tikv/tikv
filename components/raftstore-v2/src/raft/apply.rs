@@ -81,7 +81,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let applied_index = flush_state.applied_index();
         assert_ne!(applied_index, 0, "{}", SlogFormat(&logger));
         let tablet = remote_tablet.latest().unwrap().clone();
-        let perf_context = tablet.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply);
+        let perf_context = EK::get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply);
         Apply {
             peer,
             tablet,

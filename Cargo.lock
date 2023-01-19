@@ -2728,7 +2728,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/iosmanthus/kvproto?branch=keyspace-br#ce45afba8f2b942cfbd172fea9cbd732ce5b19cc"
+source = "git+https://github.com/iosmanthus/kvproto?branch=keyspace-br#02fccd65f46f949620e5b335963e04f7bdaba4d5"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4659,6 +4659,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "resource_control"
+version = "0.0.1"
+dependencies = [
+ "byteorder",
+ "crossbeam-skiplist",
+ "dashmap",
+ "kvproto",
+ "lazy_static",
+ "online_config",
+ "pin-project",
+ "prometheus",
+ "serde",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "yatp",
+]
+
+[[package]]
 name = "resource_metering"
 version = "0.0.1"
 dependencies = [
@@ -5211,6 +5230,7 @@ dependencies = [
  "raftstore-v2",
  "rand 0.8.5",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "serde_json",
@@ -5865,6 +5885,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "server",
@@ -5978,6 +5999,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "rand_xorshift",
+ "resource_control",
  "resource_metering",
  "security",
  "serde_json",
@@ -6295,6 +6317,7 @@ dependencies = [
  "rand 0.7.3",
  "regex",
  "reqwest",
+ "resource_control",
  "resource_metering",
  "rev_lines",
  "seahash",
@@ -7368,9 +7391,11 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#39cb495953d40a7e846363c06090755c2eac65fa"
+source = "git+https://github.com/tikv/yatp.git?branch=master#bcf431a2619c06ab7fa0c72073a0c775646c484f"
 dependencies = [
  "crossbeam-deque",
+ "crossbeam-skiplist",
+ "crossbeam-utils 0.8.8",
  "dashmap",
  "fail",
  "lazy_static",

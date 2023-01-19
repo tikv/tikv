@@ -31,8 +31,8 @@ use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
-        needs_evict_entry_cache, util, FetchedLogs, ReadProgress, Transport, WriteCallback,
-        WriteTask,
+        needs_evict_entry_cache, util, worker_metrics::SNAP_COUNTER, FetchedLogs, ReadProgress,
+        Transport, WriteCallback, WriteTask,
     },
 };
 use slog::{debug, error, info, trace, warn};
@@ -80,6 +80,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             self.fsm.peer_mut().set_has_ready();
         }
         self.schedule_tick(PeerTick::Raft);
+    }
+
+    pub fn on_check_long_uncommitted(&mut self) {
+        if !self.fsm.peer().is_leader() {
+            return;
+        }
+        self.fsm
+            .peer_mut()
+            .check_long_uncommitted_proposals(self.store_ctx);
+        self.schedule_tick(PeerTick::CheckLongUncommitted);
     }
 }
 
@@ -396,9 +406,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         // smaller than propose_time of a command, which was
                         // proposed in another thread while this thread receives its
                         // AppendEntriesResponse and is ready to calculate its commit-log-duration.
-                        ctx.current_time.replace(monotonic_raw_now());
+                        let current_time = monotonic_raw_now();
+                        ctx.current_time.replace(current_time);
                         ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                            (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
+                            (current_time - propose_time).to_std().unwrap(),
                         ));
                         self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
                         update_lease = false;
@@ -717,12 +728,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // latency.
                     self.raft_group_mut().skip_bcast_commit(false);
 
-                    // Init the in-memory pessimistic lock table when the peer becomes leader.
-                    self.activate_in_memory_pessimistic_locks();
-
-                    // A more recent read may happen on the old leader. So max ts should
-                    // be updated after a peer becomes leader.
-                    self.require_updating_max_ts(ctx);
+                    self.txn_context().on_became_leader(
+                        ctx,
+                        self.term(),
+                        self.region(),
+                        &self.logger,
+                    );
 
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
@@ -730,11 +741,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.region_heartbeat_pd(ctx);
                     self.add_pending_tick(PeerTick::CompactLog);
                     self.add_pending_tick(PeerTick::SplitRegionCheck);
+                    self.add_pending_tick(PeerTick::CheckLongUncommitted);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
                     self.storage_mut().cancel_generating_snap(None);
-                    self.clear_in_memory_pessimistic_locks();
+                    self.txn_context()
+                        .on_became_follower(self.term(), self.region());
                 }
                 _ => {}
             }
@@ -793,6 +806,56 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.read_progress_mut().discard();
         }
     }
+
+    /// Check if there is long uncommitted proposal.
+    ///
+    /// This will increase the threshold when a long uncommitted proposal is
+    /// detected, and reset the threshold when there is no long uncommitted
+    /// proposal.
+    fn has_long_uncommitted_proposals<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) -> bool {
+        let mut has_long_uncommitted = false;
+        let base_threshold = ctx.cfg.long_uncommitted_base_threshold.0;
+        if let Some(propose_time) = self.proposals().oldest().and_then(|p| p.propose_time) {
+            // When a proposal was proposed with this ctx before, the current_time can be
+            // some.
+            let current_time = *ctx.current_time.get_or_insert_with(monotonic_raw_now);
+            let elapsed = match (current_time - propose_time).to_std() {
+                Ok(elapsed) => elapsed,
+                Err(_) => return false,
+            };
+            // Increase the threshold for next turn when a long uncommitted proposal is
+            // detected.
+            let threshold = self.long_uncommitted_threshold();
+            if elapsed >= threshold {
+                has_long_uncommitted = true;
+                self.set_long_uncommitted_threshold(threshold + base_threshold);
+            } else if elapsed < base_threshold {
+                self.set_long_uncommitted_threshold(base_threshold);
+            }
+        } else {
+            self.set_long_uncommitted_threshold(base_threshold);
+        }
+        has_long_uncommitted
+    }
+
+    fn check_long_uncommitted_proposals<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        if self.has_long_uncommitted_proposals(ctx) {
+            let status = self.raft_group().status();
+            let mut buffer: Vec<(u64, u64, u64)> = Vec::new();
+            if let Some(prs) = status.progress {
+                for (id, p) in prs.iter() {
+                    buffer.push((*id, p.commit_group_id, p.matched));
+                }
+            }
+            warn!(
+                self.logger,
+                "found long uncommitted proposals";
+                "progress" => ?buffer,
+                "cache_first_index" => ?self.entry_storage().entry_cache_first_index(),
+                "next_turn_threshold" => ?self.long_uncommitted_threshold(),
+            );
+        }
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
@@ -814,6 +877,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 ctx.snap_mgr.clone(),
                 ctx.tablet_registry.clone(),
             ) {
+                SNAP_COUNTER.apply.fail.inc();
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)
             }
         }

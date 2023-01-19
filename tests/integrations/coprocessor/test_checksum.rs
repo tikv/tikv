@@ -2,7 +2,7 @@
 
 use std::u64;
 
-use api_version::ApiV1;
+use api_version::{keyspace::KvPair, ApiV1};
 use futures::executor::block_on;
 use kvproto::{
     coprocessor::{KeyRange, Request},
