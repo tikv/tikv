@@ -8,8 +8,8 @@ use engine_rocks::{
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
 };
 use engine_traits::{
-    CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
-    TabletFactory, CF_DEFAULT, CF_WRITE,
+    CompactionJobInfo, DbOptionsExt, MiscExt, PersistenceListener, Result, StateStorage,
+    TabletContext, TabletFactory, CF_DEFAULT, CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
@@ -206,9 +206,15 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
             engine_rocks::util::new_engine_opt(path.to_str().unwrap(), db_opts, cf_opts);
         if let Err(e) = &kv_engine {
             error!("failed to create tablet"; "id" => ctx.id, "suffix" => ?ctx.suffix, "path" => %path.display(), "err" => ?e);
-        } else if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
-            listener.clone_with(ctx.id, suffix).on_created();
+        } else if let Ok(engine) = &kv_engine {
+            engine
+                .set_db_options(&[("stats_persist_period_sec", "0")])
+                .unwrap();
+            if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
+                listener.clone_with(ctx.id, suffix).on_created();
+            }
         }
+
         kv_engine
     }
 
