@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -14,7 +14,7 @@ use tikv_util::{
     stream::{RetryError, RetryExt},
     warn,
 };
-use tokio::sync::{Mutex as AsyncMutex, OnceCell};
+use tokio::sync::Mutex as AsyncMutex;
 
 use super::{etcd::EtcdSnapshot, EtcdStore, MetaStore};
 use crate::errors::{ContextualResultExt, Result};
@@ -162,7 +162,7 @@ impl LazyEtcdClientInner {
         .await
         .context("during connecting to the etcd")?;
         let store = EtcdStore::from(store);
-        self.cli = Some(store.clone());
+        self.cli = Some(store);
         Ok(self.cli.as_ref().unwrap())
     }
 
