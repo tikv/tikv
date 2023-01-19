@@ -181,7 +181,7 @@ where
             // to 2, also, the check meets `last_unpersisted.is_some()` and no
             // rescheduling, current calling of `send()` would panic as
             // `writer_id` is out of bound.
-            async_io_pool_size != ctx.config().store_io_pool_size
+            self.writer_id >= async_io_pool_size
         };
         if last_unpersisted.is_none() || need_correct_writer_id {
             // If no previous pending ready, we can randomly select a new writer worker.
