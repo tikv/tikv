@@ -16,7 +16,8 @@ use encryption_export::{
 use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_RAFT,
+    CfNamesExt, Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, CF_DEFAULT,
+    CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::executor::block_on;
@@ -101,7 +102,7 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
     assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
     let start_key = keys::data_key(region.get_start_key());
     let end_key = keys::data_key(region.get_end_key());
-    for cf in ALL_CFS {
+    for cf in engine.kv.cf_names() {
         engine
             .kv
             .scan(cf, &start_key, &end_key, false, |k, v| {
