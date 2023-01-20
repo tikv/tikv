@@ -581,9 +581,11 @@ dependencies = [
  "derive_more",
  "fail",
  "file_system",
+ "kvproto",
  "lazy_static",
  "online_config",
  "prometheus",
+ "resource_control",
  "serde",
  "serde_derive",
  "slog",
@@ -2727,7 +2729,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#adcf4c414bfd0ccf18436b377430aa2450fd4c81"
+source = "git+https://github.com/pingcap/kvproto.git#009f31598ac3200dc8b32e18f96fc4deb7b32e48"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4312,6 +4314,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "rand 0.8.5",
+ "resource_control",
  "resource_metering",
  "serde",
  "serde_derive",
@@ -4362,6 +4365,7 @@ dependencies = [
  "raft-proto",
  "raftstore",
  "rand 0.8.5",
+ "resource_control",
  "resource_metering",
  "slog",
  "slog-global",
@@ -6565,7 +6569,7 @@ dependencies = [
  "openssl",
  "page_size",
  "panic_hook",
- "parking_lot 0.12.1",
+ "parking_lot_core 0.9.1",
  "pin-project",
  "procfs",
  "procinfo",

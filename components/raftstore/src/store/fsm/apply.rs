@@ -24,7 +24,7 @@ use std::{
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
-    HandlerBuilder, PollHandler, Priority,
+    HandlerBuilder, PollHandler, Priority, ResourceMetered,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -46,11 +46,12 @@ use kvproto::{
 };
 use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
-use protobuf::{wire_format::WireType, CodedInputStream};
+use protobuf::{wire_format::WireType, CodedInputStream, Message};
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
+use resource_control::ResourceController;
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -1695,6 +1696,7 @@ where
             }
             AdminCmdType::BatchSwitchWitness => self.exec_batch_switch_witness(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
+            AdminCmdType::UpdateGcPeer => unimplemented!(),
         }?;
         response.set_cmd_type(cmd_type);
 
@@ -3709,6 +3711,26 @@ where
     },
 }
 
+impl<EK: KvEngine> ResourceMetered for Msg<EK> {
+    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+        match self {
+            Msg::Apply { apply, .. } => {
+                let mut map = HashMap::default();
+                for cached_entries in &apply.entries {
+                    cached_entries.iter_entries(|entry| {
+                        // TODO: maybe use a more efficient way to get the resource group name.
+                        let header = util::get_entry_header(entry);
+                        let group_name = header.get_resource_group_name().to_owned();
+                        *map.entry(group_name).or_default() += entry.compute_size() as u64;
+                    });
+                }
+                Some(map)
+            }
+            _ => None,
+        }
+    }
+}
+
 impl<EK> Msg<EK>
 where
     EK: KvEngine,
@@ -4406,6 +4428,7 @@ pub enum ControlMsg {
     },
 }
 
+impl ResourceMetered for ControlMsg {}
 pub struct ControlFsm {
     receiver: Receiver<ControlMsg>,
     stopped: bool,
@@ -4834,10 +4857,15 @@ impl<EK: KvEngine> ApplyBatchSystem<EK> {
 
 pub fn create_apply_batch_system<EK: KvEngine>(
     cfg: &Config,
+    resource_ctl: Option<Arc<ResourceController>>,
 ) -> (ApplyRouter<EK>, ApplyBatchSystem<EK>) {
     let (control_tx, control_fsm) = ControlFsm::new();
-    let (router, system) =
-        batch_system::create_system(&cfg.apply_batch_system, control_tx, control_fsm);
+    let (router, system) = batch_system::create_system(
+        &cfg.apply_batch_system,
+        control_tx,
+        control_fsm,
+        resource_ctl,
+    );
     (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
@@ -4984,6 +5012,7 @@ mod tests {
             cmd.mut_put().set_key(b"key".to_vec());
             cmd.mut_put().set_value(b"value".to_vec());
             let mut req = RaftCmdRequest::default();
+            req.set_header(RaftRequestHeader::default());
             req.mut_requests().push(cmd);
             e.set_data(req.write_to_bytes().unwrap().into())
         }
@@ -5251,7 +5280,7 @@ mod tests {
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, mut snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -5715,7 +5744,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -6054,7 +6083,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -6145,7 +6174,7 @@ mod tests {
             cfg.apply_batch_system.low_priority_pool_size = 0;
             Arc::new(VersionTrack::new(cfg))
         };
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -6325,7 +6354,7 @@ mod tests {
             cfg.apply_batch_system.low_priority_pool_size = 0;
             Arc::new(VersionTrack::new(cfg))
         };
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -6418,7 +6447,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Config::default();
-        let (router, mut system) = create_apply_batch_system(&cfg);
+        let (router, mut system) = create_apply_batch_system(&cfg, None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-exec-observer".to_owned(),
@@ -6642,7 +6671,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Config::default();
-        let (router, mut system) = create_apply_batch_system(&cfg);
+        let (router, mut system) = create_apply_batch_system(&cfg, None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -6922,7 +6951,7 @@ mod tests {
             .register_cmd_observer(1, BoxCmdObserver::new(obs));
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -7148,7 +7177,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "flashback_need_to_be_applied".to_owned(),

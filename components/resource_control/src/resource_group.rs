@@ -9,7 +9,10 @@ use std::{
 };
 
 use dashmap::{mapref::one::Ref, DashMap};
-use kvproto::resource_manager::{GroupMode, ResourceGroup};
+use kvproto::{
+    kvrpcpb::CommandPri,
+    resource_manager::{GroupMode, ResourceGroup},
+};
 use yatp::queue::priority::TaskPriorityProvider;
 
 // a read task cost at least 50us.
@@ -97,7 +100,6 @@ impl ResourceGroupManager {
             let ru_quota = Self::get_ru_setting(g.value(), controller.is_read);
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota);
         }
-
         controller
     }
 
@@ -242,6 +244,15 @@ impl ResourceController {
         // max_vt is actually a little bigger than the current min vt, but we don't
         // need totally accurate here.
         self.last_min_vt.store(max_vt, Ordering::Relaxed);
+    }
+
+    pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
+        let level = match pri {
+            CommandPri::Low => 2,
+            CommandPri::Normal => 1,
+            CommandPri::High => 0,
+        };
+        self.resource_group(name).get_priority(level)
     }
 }
 
