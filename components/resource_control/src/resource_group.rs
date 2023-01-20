@@ -22,7 +22,7 @@ const TASK_EXTRA_FACTOR_BY_LEVEL: [u64; 3] = [0, 20, 100];
 /// duration to update the minimal priority value of each resource group.
 pub const MIN_PRIORITY_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 /// default resource group name
-const DEFAULT_RESOURCE_GROUP_NAME: &str = "";
+const DEFAULT_RESOURCE_GROUP_NAME: &str = "default";
 /// default value of max RU quota.
 const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 
