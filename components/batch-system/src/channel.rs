@@ -197,9 +197,9 @@ impl<N: Fsm, C: Fsm> FsmSender<N, C> {
                 last_msg_group,
                 ..
             } => {
-                let mut dominant_group = "".to_owned();
-                let mut max_write_bytes = 0;
                 if let Some(mut groups) = msg.get_resource_consumptions() {
+                    let mut dominant_group = "".to_owned();
+                    let mut max_write_bytes = 0;
                     for (group_name, write_bytes) in groups.drain() {
                         resource_ctl.consume(
                             group_name.as_bytes(),
@@ -210,8 +210,8 @@ impl<N: Fsm, C: Fsm> FsmSender<N, C> {
                             max_write_bytes = write_bytes;
                         }
                     }
+                    *last_msg_group.borrow_mut() = dominant_group;
                 }
-                *last_msg_group.borrow_mut() = dominant_group;
             }
         }
     }

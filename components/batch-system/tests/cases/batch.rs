@@ -7,7 +7,7 @@ use std::{
 };
 
 use batch_system::{test_runner::*, *};
-use kvproto::resource_manager::{GroupMode, GroupResourceSettings, ResourceGroup};
+use kvproto::resource_manager::{GroupMode, GroupRawResourceSettings, ResourceGroup};
 use resource_control::ResourceGroupManager;
 use tikv_util::mpsc;
 
@@ -113,7 +113,7 @@ fn test_resource_group() {
         let mut group = ResourceGroup::new();
         group.set_name(name.to_string());
         group.set_mode(GroupMode::RawMode);
-        let mut resource_setting = GroupResourceSettings::new();
+        let mut resource_setting = GroupRawResourceSettings::new();
         resource_setting
             .mut_cpu()
             .mut_settings()
@@ -122,7 +122,7 @@ fn test_resource_group() {
             .mut_io_write()
             .mut_settings()
             .set_fill_rate(write_tokens);
-        group.set_resource_settings(resource_setting);
+        group.set_raw_resource_settings(resource_setting);
         group
     };
 
@@ -132,7 +132,7 @@ fn test_resource_group() {
     let mut cfg = Config::default();
     cfg.pool_size = 1;
     let (router, mut system) = batch_system::create_system(
-        &Config::default(),
+        &cfg,
         control_tx,
         control_fsm,
         Some(resource_manager.derive_controller("test".to_string(), false)),
@@ -156,15 +156,18 @@ fn test_resource_group() {
         .unwrap();
     assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(0));
 
+    let tx_ = tx.clone();
     let (tx1, rx1) = std::sync::mpsc::sync_channel(0);
     // block the thread
     router
         .send_control(Message::Callback(Box::new(
             move |_: &Handler, _: &mut Runner| {
+                tx_.send(0).unwrap();
                 tx1.send(0).unwrap();
             },
         )))
         .unwrap();
+    assert_eq!(rx.recv(), Ok(0));
 
     router
         .send(1, Message::Resource("group1".to_string(), 1))
