@@ -229,6 +229,7 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
             AdminCmdEpochState::new(true, true, false, false)
         }
         AdminCmdType::BatchSwitchWitness => AdminCmdEpochState::new(false, true, false, true),
+        AdminCmdType::UpdateGcPeer => AdminCmdEpochState::new(false, false, false, false),
     }
 }
 
