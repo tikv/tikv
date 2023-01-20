@@ -167,7 +167,7 @@ fn test_resource_group() {
             },
         )))
         .unwrap();
-    assert_eq!(rx.recv(), Ok(0));
+    assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(0));
 
     router
         .send(1, Message::Resource("group1".to_string(), 1))
