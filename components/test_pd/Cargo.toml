@@ -10,8 +10,11 @@ fail = "0.5"
 futures = "0.3"
 grpcio = { workspace = true }
 kvproto = { workspace = true }
+log_wrappers = { workspace = true }
 pd_client = { workspace = true }
 security = { workspace = true }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_util = { workspace = true }
+tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1"

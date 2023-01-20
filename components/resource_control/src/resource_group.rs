@@ -54,12 +54,12 @@ impl ResourceGroupManager {
             // TODO: currently we only consider the cpu usage in the read path, we may also take
             // io read bytes into account later.
             (GroupMode::RawMode, true) => rg
-                .get_resource_settings()
+                .get_raw_resource_settings()
                 .get_cpu()
                 .get_settings()
                 .get_fill_rate(),
             (GroupMode::RawMode, false) => rg
-                .get_resource_settings()
+                .get_raw_resource_settings()
                 .get_io_write()
                 .get_settings()
                 .get_fill_rate(),
@@ -306,18 +306,19 @@ impl GroupPriorityTracker {
 }
 
 #[cfg(test)]
-mod tests {
-    use kvproto::resource_manager::*;
+pub(crate) mod tests {
     use yatp::queue::Extras;
 
     use super::*;
 
-    fn new_resource_group(
+    pub fn new_resource_group(
         name: String,
         is_ru_mode: bool,
         read_tokens: u64,
         write_tokens: u64,
     ) -> ResourceGroup {
+        use kvproto::resource_manager::{GroupRawResourceSettings, GroupRequestUnitSettings};
+
         let mut group = ResourceGroup::new();
         group.set_name(name);
         let mode = if is_ru_mode {
@@ -338,7 +339,7 @@ mod tests {
                 .set_fill_rate(write_tokens);
             group.set_r_u_settings(ru_setting);
         } else {
-            let mut resource_setting = GroupResourceSettings::new();
+            let mut resource_setting = GroupRawResourceSettings::new();
             resource_setting
                 .mut_cpu()
                 .mut_settings()
@@ -347,7 +348,7 @@ mod tests {
                 .mut_io_write()
                 .mut_settings()
                 .set_fill_rate(write_tokens);
-            group.set_resource_settings(resource_setting);
+            group.set_raw_resource_settings(resource_setting);
         }
         group
     }

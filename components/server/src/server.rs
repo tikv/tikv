@@ -82,7 +82,9 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use resource_control::{ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL};
+use resource_control::{
+    ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
+};
 use security::SecurityManager;
 use snap_recovery::RecoveryService;
 use tikv::{
@@ -330,11 +332,17 @@ where
 
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::default());
-            let mgr1 = mgr.clone();
+            let mut resource_mgr_service =
+                ResourceManagerService::new(mgr.clone(), pd_client.clone());
             // spawn a task to periodically update the minimal virtual time of all resource
-            // group.
+            // groups.
+            let resource_mgr = mgr.clone();
             background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
-                mgr1.advance_min_virtual_time();
+                resource_mgr.advance_min_virtual_time();
+            });
+            // spawn a task to watch all resource groups update.
+            background_worker.spawn_async_task(async move {
+                resource_mgr_service.watch_resource_groups().await;
             });
             Some(mgr)
         } else {
@@ -1022,13 +1030,7 @@ where
                 ConnectionConfig {
                     keep_alive_interval: self.config.server.grpc_keepalive_time.0,
                     keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
-                    tls: self
-                        .security_mgr
-                        .client_suite()
-                        .map_err(|err| {
-                            warn!("Failed to load client TLS suite, ignoring TLS config."; "err" => %err);
-                        })
-                        .ok(),
+                    tls: Arc::clone(&self.security_mgr),
                 },
             );
             let backup_stream_endpoint = backup_stream::Endpoint::new(
