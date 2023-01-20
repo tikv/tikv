@@ -295,18 +295,19 @@ impl GroupPriorityTracker {
 }
 
 #[cfg(test)]
-mod tests {
-    use kvproto::resource_manager::*;
+pub(crate) mod tests {
     use yatp::queue::Extras;
 
     use super::*;
 
-    fn new_resource_group(
+    pub fn new_resource_group(
         name: String,
         is_ru_mode: bool,
         read_tokens: u64,
         write_tokens: u64,
     ) -> ResourceGroup {
+        use kvproto::resource_manager::{GroupRawResourceSettings, GroupRequestUnitSettings};
+
         let mut group = ResourceGroup::new();
         group.set_name(name);
         let mode = if is_ru_mode {
