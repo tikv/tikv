@@ -182,12 +182,11 @@ fn test_resource_group() {
     router
         .send(2, Message::Resource("group2".to_string(), 1))
         .unwrap();
-    let tx_ = tx.clone();
     router
         .send(
             2,
             Message::Callback(Box::new(move |_: &Handler, _: &mut Runner| {
-                tx_.send(2).unwrap();
+                tx.send(2).unwrap();
             })),
         )
         .unwrap();
