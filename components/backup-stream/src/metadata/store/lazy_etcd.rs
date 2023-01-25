@@ -4,10 +4,13 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
+use openssl::{
+    pkey::PKey,
+    x509::{X509, verify::X509VerifyFlags},
+};
 
 use etcd_client::{ConnectOptions, Error as EtcdError, OpenSslClientConfig};
 use futures::Future;
-use openssl::x509::verify::X509VerifyFlags;
 use security::SecurityManager;
 use tikv_util::{
     info,
@@ -59,7 +62,16 @@ impl ConnectionConfig {
                     // We haven't make it configurable because it is enabled in gRPC by default too.
                     // TODO: Perhaps implement grpc-io based etcd client, fully remove the difference between gRPC TLS and our custom TLS?
                     .manually(|c| c.cert_store_mut().set_flags(X509VerifyFlags::PARTIAL_CHAIN))
-                    .client_cert_pem_and_key(&tls.client_cert, &tls.client_key.0),
+                    .manually(|c| {
+                        let client_certs= X509::stack_from_pem(&tls.client_cert)?;
+                        let client_key = PKey::private_key_from_pem(&tls.client_key.0)?;
+                        c.set_certificate(&client_certs[0].to_owned())?;
+                        for i in &client_certs[1..] {
+                             c.add_extra_chain_cert(i.to_owned())?;
+                        }
+                        c.set_private_key(&client_key)?;
+                        Ok(())
+                    })
             )
         }
         opts = opts
