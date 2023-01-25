@@ -4,13 +4,13 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
-use openssl::{
-    pkey::PKey,
-    x509::{X509, verify::X509VerifyFlags},
-};
 
 use etcd_client::{ConnectOptions, Error as EtcdError, OpenSslClientConfig};
 use futures::Future;
+use openssl::{
+    pkey::PKey,
+    x509::{verify::X509VerifyFlags, X509},
+};
 use security::SecurityManager;
 use tikv_util::{
     info,
@@ -65,13 +65,17 @@ impl ConnectionConfig {
                     .manually(|c| {
                         let client_certs= X509::stack_from_pem(&tls.client_cert)?;
                         let client_key = PKey::private_key_from_pem(&tls.client_key.0)?;
-                        c.set_certificate(&client_certs[0].to_owned())?;
-                        for i in &client_certs[1..] {
-                             c.add_extra_chain_cert(i.to_owned())?;
+                        if client_certs.len() > 0 {
+                            c.set_certificate(&client_certs[0].to_owned())?;
+                        }
+                        if client_certs.len() > 1 {
+                            for i in &client_certs[1..] {
+                                c.add_extra_chain_cert(i.to_owned())?;
+                            }
                         }
                         c.set_private_key(&client_key)?;
                         Ok(())
-                    })
+                    }),
             )
         }
         opts = opts
