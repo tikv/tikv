@@ -245,6 +245,14 @@ impl Buffer for BatchMessageBuffer {
     #[inline]
     fn push(&mut self, msg: RaftMessage) {
         let msg_size = Self::message_size(&msg);
+        if msg.get_message().get_msg_type() == raft::eraftpb::MessageType::MsgHeartbeat {
+            let hb_size = msg.compute_size();
+            info!("Heartbeat Size"; "actual_size" => hb_size, "estiamted_size" => msg_size);
+        }
+        if msg.get_message().get_msg_type() == raft::eraftpb::MessageType::MsgHeartbeatResponse {
+            let hb_size = msg.compute_size();
+            info!("HeartbeatResp Size"; "actual_size" => hb_size, "estiamted_size" => msg_size);
+        }
         // To avoid building too large batch, we limit each batch's size. Since
         // `msg_size` is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
@@ -267,6 +275,11 @@ impl Buffer for BatchMessageBuffer {
     #[inline]
     fn flush(&mut self, sender: &mut ClientCStreamSender<BatchRaftMessage>) -> grpcio::Result<()> {
         let batch = mem::take(&mut self.batch);
+        let count = self.batch.get_msgs().len();
+        let size = self.batch.compute_size();
+        if size != 0 {
+            info!("raft_msgs_batch_size"; "total_size" => size, "count" => count);
+        }
         let res = Pin::new(sender).start_send((
             batch,
             WriteFlags::default().buffer_hint(self.overflowing.is_some()),
@@ -335,6 +348,8 @@ impl Buffer for MessageBuffer {
     #[inline]
     fn flush(&mut self, sender: &mut ClientCStreamSender<RaftMessage>) -> grpcio::Result<()> {
         if let Some(msg) = self.batch.pop_front() {
+            let hb_size = msg.compute_size();
+            info!("flush_message"; "actual_size" => hb_size, "type" => ?msg.get_message().get_msg_type());
             Pin::new(sender).start_send((
                 msg,
                 WriteFlags::default().buffer_hint(!self.batch.is_empty()),

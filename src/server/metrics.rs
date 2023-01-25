@@ -63,6 +63,10 @@ make_auto_flush_static_metric! {
         read_index,
         check_leader,
         batch_commands,
+        raft,
+        batch_raft,
+        get_lock_wait_info,
+        get_store_safe_ts,
     }
 
     pub label_enum GcCommandKind {
@@ -122,6 +126,10 @@ make_auto_flush_static_metric! {
     }
 
     pub struct GrpcMsgFailCounterVec: LocalIntCounter {
+        "type" => GrpcTypeKind,
+    }
+
+    pub struct GrpcMsgBytesCounterVec: LocalIntCounter {
         "type" => GrpcTypeKind,
     }
 
@@ -236,6 +244,12 @@ lazy_static! {
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
+    pub static ref GRPC_MSG_BYTES_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_grpc_recv_msg_bytes",
+        "grpc recv msg bytes",
+        &["type"]
+    )
+    .unwrap();
     pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_server_info",
         "Indicate the tikv server info, and the value is the server startup timestamp(s).",
@@ -288,6 +302,8 @@ lazy_static! {
         auto_flush_from!(RESOLVE_STORE_COUNTER, ResolveStoreCounterVec);
     pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec =
         auto_flush_from!(GRPC_MSG_FAIL_COUNTER_VEC, GrpcMsgFailCounterVec);
+    pub static ref GRPC_MSG_BYTES_COUNTER: GrpcMsgBytesCounterVec =
+        auto_flush_from!(GRPC_MSG_BYTES_COUNTER_VEC, GrpcMsgBytesCounterVec);
     pub static ref GRPC_PROXY_MSG_COUNTER: GrpcProxyMsgCounterVec =
         auto_flush_from!(GRPC_PROXY_MSG_COUNTER_VEC, GrpcProxyMsgCounterVec);
     pub static ref GC_KEYS_COUNTER_STATIC: GcKeysCounterVec =
