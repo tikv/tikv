@@ -248,7 +248,7 @@ impl LeadershipResolver {
     // This function broadcasts a special message to all stores, gets the leader id
     // of them to confirm whether current peer has a quorum which accepts its
     // leadership.
-    pub async fn resolve(&mut self, _regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
         // Clear previous result before resolving.
         self.clear();
         // GC when necessary to prevent memory leak.
@@ -256,15 +256,22 @@ impl LeadershipResolver {
 
         PENDING_RTS_COUNT.inc();
         defer!(PENDING_RTS_COUNT.dec());
-        fail_point!("before_sync_replica_read_state", |_| _regions.clone());
+        fail_point!("before_sync_replica_read_state", |_| regions.clone());
 
         let store_id = self.store_id;
         let valid_regions = &mut self.valid_regions;
         let region_map = &mut self.region_map;
         let resp_map = &mut self.resp_map;
         let store_req_map = &mut self.store_req_map;
+        let mut checking_regions = HashSet::default();
+        for region_id in &regions {
+            checking_regions.insert(*region_id);
+        }
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
+                if !checking_regions.contains(region_id) {
+                    continue;
+                }
                 let core = read_progress.get_core();
                 let local_leader_info = core.get_local_leader_info();
                 let leader_id = local_leader_info.get_leader_id();
