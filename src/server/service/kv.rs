@@ -168,11 +168,6 @@ macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, mut req: $req_ty, sink: UnarySink<$resp_ty>) {
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
-            let size = req.compute_size();
-            GRPC_MSG_BYTES_COUNTER
-                .$fn_name
-                .inc_by(size as u64);
-            warn!("grpc fn_name size"; "size" => size);
             let begin_instant = Instant::now();
 
             let source = req.mut_context().take_request_source();
@@ -423,10 +418,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut req: FlashbackToVersionRequest,
         sink: UnarySink<FlashbackToVersionResponse>,
     ) {
-        let size = req.compute_size();
-        GRPC_MSG_BYTES_COUNTER
-            .kv_flashback_to_version
-            .inc_by(size as u64);
         let begin_instant = Instant::now();
 
         let source = req.mut_context().take_request_source();
@@ -453,9 +444,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, mut req: Request, sink: UnarySink<Response>) {
-        let size = req.compute_size();
-        info!("coprocessor"; "req_size" => size);
-        GRPC_MSG_BYTES_COUNTER.coprocessor.inc_by(size as u64);
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let source = req.mut_context().take_request_source();
         let begin_instant = Instant::now();
@@ -487,9 +475,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut req: RawCoprocessorRequest,
         sink: UnarySink<RawCoprocessorResponse>,
     ) {
-        let size = req.compute_size();
-        info!("rawcoprocessor"; "req_size" => size);
-        GRPC_MSG_BYTES_COUNTER.coprocessor.inc_by(size as u64);
         let source = req.mut_context().take_request_source();
         let begin_instant = Instant::now();
         let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
@@ -520,10 +505,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut req: UnsafeDestroyRangeRequest,
         sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
-        let size = req.compute_size();
-        GRPC_MSG_BYTES_COUNTER
-            .unsafe_destroy_range
-            .inc_by(size as u64);
         let begin_instant = Instant::now();
 
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as
@@ -575,11 +556,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         req: Request,
         mut sink: ServerStreamingSink<Response>,
     ) {
-        let size = req.compute_size();
-        GRPC_MSG_BYTES_COUNTER
-            .coprocessor_stream
-            .inc_by(size as u64);
-
         let begin_instant = Instant::now();
 
         let mut stream = self
@@ -625,8 +601,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let res = async move {
             let mut stream = stream.map_err(Error::from);
             while let Some(msg) = stream.try_next().await? {
-                let size = msg.compute_size();
-                GRPC_MSG_BYTES_COUNTER.raft.inc_by(size as u64);
                 RAFT_MESSAGE_RECV_COUNTER.inc();
                 let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
                 if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
@@ -731,8 +705,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
-        let size = req.compute_size();
-        GRPC_MSG_BYTES_COUNTER.split_region.inc_by(size as u64);
         forward_unary!(self.proxy, split_region, ctx, req, sink);
         let begin_instant = Instant::now();
 
@@ -984,8 +956,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut request: StoreSafeTsRequest,
         sink: UnarySink<StoreSafeTsResponse>,
     ) {
-        let size = request.compute_size();
-        GRPC_MSG_BYTES_COUNTER.get_store_safe_ts.inc_by(size as u64);
         let key_range = request.take_key_range();
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
@@ -1013,10 +983,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         _request: GetLockWaitInfoRequest,
         sink: UnarySink<GetLockWaitInfoResponse>,
     ) {
-        let size = _request.compute_size();
-        GRPC_MSG_BYTES_COUNTER
-            .get_lock_wait_info
-            .inc_by(size as u64);
         let (cb, f) = paired_future_callback();
         self.storage.dump_wait_for_entries(cb);
         let task = async move {
@@ -1128,7 +1094,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
                     let size = req.compute_size();
-                    info!("coprocessor"; "req_size" => size);
                     GRPC_MSG_BYTES_COUNTER.coprocessor.inc_by(size as u64);
                     let resource_group_name = req.get_context().get_resource_group_name();
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
@@ -1954,7 +1919,6 @@ macro_rules! txn_command_future {
             GRPC_MSG_BYTES_COUNTER
                 .kv_prewrite
                 .inc_by(size as u64);
-            warn!("grpc $fn_name size"; "size" => size);
             let res = storage.sched_txn_command($req.into(), cb);
 
             async move {
