@@ -648,7 +648,7 @@ impl Config {
         // prevent mistakenly inputting too large values, the max limit is made
         // according to the cpu quota * 10. Notice 10 is only an estimate, not an
         // empirical value.
-        let limit = SysQuota::cpu_cores_quota() as usize * 10;
+        let limit = (SysQuota::cpu_cores_quota() * 10.0) as usize;
         if self.apply_batch_system.pool_size == 0 || self.apply_batch_system.pool_size > limit {
             return Err(box_err!(
                 "apply-pool-size should be greater than 0 and less than or equal to: {}",
