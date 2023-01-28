@@ -590,6 +590,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::InvalidAdmin => {
                     return Err(box_err!("invalid admin command type"));
                 }
+                AdminCmdType::UpdateGcPeer => unimplemented!(),
             };
 
             match admin_result {

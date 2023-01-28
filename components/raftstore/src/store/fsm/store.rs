@@ -42,6 +42,7 @@ use kvproto::{
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
+use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -1795,11 +1796,21 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
 pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
     cfg: &Config,
+    resource_manager: &Option<Arc<ResourceGroupManager>>,
 ) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
-    let (apply_router, apply_system) = create_apply_batch_system(cfg);
-    let (router, system) =
-        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
+    let (apply_router, apply_system) = create_apply_batch_system(
+        cfg,
+        resource_manager
+            .as_ref()
+            .map(|m| m.derive_controller("apply".to_owned(), false)),
+    );
+    let (router, system) = batch_system::create_system(
+        &cfg.store_batch_system,
+        store_tx,
+        store_fsm,
+        None, // Do not do priority scheduling for store batch system
+    );
     let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
         system,
