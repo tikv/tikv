@@ -31,7 +31,9 @@ use raft::{
 };
 use raft_proto::ConfChangeI;
 use tikv_util::{
-    box_err, debug, info,
+    box_err,
+    codec::number::{decode_u64, NumberEncoder},
+    debug, info,
     store::{find_peer_by_id, region},
     time::monotonic_raw_now,
     Either,
@@ -336,6 +338,7 @@ pub fn compare_region_epoch(
 // flashback.
 pub fn check_flashback_state(
     is_in_flashback: bool,
+    flashback_start_ts: u64,
     req: &RaftCmdRequest,
     region_id: u64,
     skip_not_prepared: bool,
@@ -349,9 +352,16 @@ pub fn check_flashback_state(
     }
     let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
         .contains(WriteBatchFlags::FLASHBACK);
-    // If the region is in the flashback state, the only allowed request is the
-    // flashback request itself.
+    // If the region is in the flashback state:
+    //   - A request with flashback flag will be allowed.
+    //   - A read request whose `read_ts` is smaller than `flashback_start_ts` will
+    //     be allowed.
     if is_in_flashback && !is_flashback_request {
+        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+            if read_ts < flashback_start_ts {
+                return Ok(());
+            }
+        }
         return Err(Error::FlashbackInProgress(region_id));
     }
     // If the region is not in the flashback state, the flashback request itself
@@ -359,6 +369,13 @@ pub fn check_flashback_state(
     if !is_in_flashback && is_flashback_request && !skip_not_prepared {
         return Err(Error::FlashbackNotPrepared(region_id));
     }
+    Ok(())
+}
+
+pub fn encode_start_ts_into_flag_data(header: &mut RaftRequestHeader, start_ts: u64) -> Result<()> {
+    let mut data = [0u8; 8];
+    (&mut data[..]).encode_u64(start_ts)?;
+    header.set_flag_data(data.into());
     Ok(())
 }
 
