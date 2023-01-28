@@ -6,18 +6,15 @@ use prometheus_static_metric::{make_static_metric, register_static_histogram_vec
 
 make_static_metric! {
     pub label_enum PDRequestEventType {
-        // gets given key's Region and Region's leader from PD.
         get_region,
         get_region_by_id,
         get_region_leader_by_id,
-        // scatters the specified regions.
         scatter_region,
         get_store,
         get_store_async,
         put_store,
         get_all_stores,
         get_store_and_stats,
-        // global config relevant.
         store_global_config,
         load_global_config,
         watch_global_config,
