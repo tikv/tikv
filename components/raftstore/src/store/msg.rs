@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::{borrow::Cow, fmt};
 
+use batch_system::ResourceMetered;
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
@@ -384,7 +385,8 @@ pub enum PeerTick {
     ReportBuckets = 9,
     CheckLongUncommitted = 10,
     CheckPeersAvailability = 11,
-    RequestVoterReplicatedIndex = 12,
+    RequestSnapshot = 12,
+    RequestVoterReplicatedIndex = 13,
 }
 
 impl PeerTick {
@@ -405,6 +407,7 @@ impl PeerTick {
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
             PeerTick::CheckPeersAvailability => "check_peers_availability",
+            PeerTick::RequestSnapshot => "request_snapshot",
             PeerTick::RequestVoterReplicatedIndex => "request_voter_replicated_index",
         }
     }
@@ -423,6 +426,7 @@ impl PeerTick {
             PeerTick::ReportBuckets,
             PeerTick::CheckLongUncommitted,
             PeerTick::CheckPeersAvailability,
+            PeerTick::RequestSnapshot,
             PeerTick::RequestVoterReplicatedIndex,
         ];
         TICKS
@@ -769,6 +773,8 @@ pub enum PeerMsg<EK: KvEngine> {
     Destroy(u64),
 }
 
+impl<EK: KvEngine> ResourceMetered for PeerMsg<EK> {}
+
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -863,6 +869,8 @@ where
         abnormal_stores: Vec<u64>,
     },
 }
+
+impl<EK: KvEngine> ResourceMetered for StoreMsg<EK> {}
 
 impl<EK> fmt::Debug for StoreMsg<EK>
 where

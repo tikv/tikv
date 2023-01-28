@@ -24,7 +24,7 @@ use std::{
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
-    HandlerBuilder, PollHandler, Priority,
+    HandlerBuilder, PollHandler, Priority, ResourceMetered,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -40,17 +40,18 @@ use kvproto::{
     metapb::{self, PeerRole, Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-        RaftCmdRequest, RaftCmdResponse, Request, SplitRequest,
+        RaftCmdRequest, RaftCmdResponse, Request, SplitRequest, SwitchWitnessRequest,
     },
     raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
 };
 use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
-use protobuf::{wire_format::WireType, CodedInputStream};
+use protobuf::{wire_format::WireType, CodedInputStream, Message};
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
+use resource_control::ResourceController;
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -252,12 +253,20 @@ impl Range {
     }
 }
 
+#[derive(Default, Debug)]
+pub struct SwitchWitness {
+    pub index: u64,
+    pub switches: Vec<SwitchWitnessRequest>,
+    pub region: Region,
+}
+
 #[derive(Debug)]
 pub enum ExecResult<S> {
     ChangePeer(ChangePeer),
     CompactLog {
         state: RaftTruncatedState,
         first_index: u64,
+        has_pending: bool,
     },
     SplitRegion {
         regions: Vec<Region>,
@@ -300,7 +309,13 @@ pub enum ExecResult<S> {
     SetFlashbackState {
         region: Region,
     },
-    PendingCompactCmd,
+    BatchSwitchWitness(SwitchWitness),
+    // The raftstore thread will use it to update the internal state of `PeerFsm`. If it is
+    // `true`, when the raftstore detects that the raft log has not been gc for a long time,
+    // the raftstore thread will actively pull the `voter_replicated_index` from the leader
+    // and try to compact pending gc. If false, raftstore does not do any additional
+    // processing.
+    HasPendingCompactCmd(bool),
 }
 
 /// The possible returned value when applying logs.
@@ -973,6 +988,9 @@ where
     /// in same Ready should be applied failed.
     pending_remove: bool,
 
+    /// Indicates whether the peer is waiting data. See more in `Peer`.
+    wait_data: bool,
+
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue<Callback<EK::Snapshot>>,
     /// The counter of pending request snapshots. See more in `Peer`.
@@ -1035,6 +1053,7 @@ where
             peer: find_peer_by_id(&reg.region, reg.id).unwrap().clone(),
             region: reg.region,
             pending_remove: false,
+            wait_data: false,
             last_flush_applied_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_term: reg.applied_term,
@@ -1113,7 +1132,13 @@ where
 
             match res {
                 ApplyResult::None => {}
-                ApplyResult::Res(res) => results.push_back(res),
+                ApplyResult::Res(res) => {
+                    results.push_back(res);
+                    if self.wait_data {
+                        apply_ctx.committed_count -= committed_entries_drainer.len();
+                        break;
+                    }
+                }
                 ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
                     // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= committed_entries_drainer.len() + 1;
@@ -1508,7 +1533,7 @@ where
                 | ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. }
                 | ExecResult::TransferLeader { .. }
-                | ExecResult::PendingCompactCmd => {}
+                | ExecResult::HasPendingCompactCmd(..) => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1528,6 +1553,12 @@ where
                 }
                 ExecResult::SetFlashbackState { ref region } => {
                     self.region = region.clone();
+                }
+                ExecResult::BatchSwitchWitness(ref switches) => {
+                    self.region = switches.region.clone();
+                    if let Some(p) = find_peer_by_id(&self.region, self.id()) {
+                        self.peer = p.clone();
+                    }
                 }
             }
         }
@@ -1663,8 +1694,9 @@ where
             AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                 self.exec_flashback(ctx, request)
             }
-            AdminCmdType::BatchSwitchWitness => Err(box_err!("unsupported admin command type")),
+            AdminCmdType::BatchSwitchWitness => self.exec_batch_switch_witness(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
+            AdminCmdType::UpdateGcPeer => unimplemented!(),
         }?;
         response.set_cmd_type(cmd_type);
 
@@ -2966,11 +2998,13 @@ where
         ))
     }
 
+    // When the first return value is true, it means that we have updated
+    // `RaftApplyState`, and the caller needs to do persistence.
     fn try_compact_log(
         &mut self,
         voter_replicated_index: u64,
         voter_replicated_term: u64,
-    ) -> Result<Option<TaskRes<EK::Snapshot>>> {
+    ) -> Result<(bool, Option<ExecResult<EK::Snapshot>>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
         let first_index = entry_storage::first_index(&self.apply_state);
 
@@ -2981,7 +3015,7 @@ where
                 "peer_id" => self.id(),
                 "voter_replicated_index" => voter_replicated_index,
             );
-            return Ok(None);
+            return Ok((false, None));
         }
 
         // When the witness restarted, the pending compact cmd has been lost, so use
@@ -2995,11 +3029,7 @@ where
                     "compact_index" => voter_replicated_index,
                     "first_index" => first_index,
                 );
-                return Ok(Some(TaskRes::Compact {
-                    state: self.apply_state.get_truncated_state().clone(),
-                    first_index: 0,
-                    has_pending: false,
-                }));
+                return Ok((false, Some(ExecResult::HasPendingCompactCmd(false))));
             }
             // compact failure is safe to be omitted, no need to assert.
             compact_raft_log(
@@ -3009,11 +3039,7 @@ where
                 voter_replicated_term,
             )?;
             PEER_ADMIN_CMD_COUNTER.compact.success.inc();
-            return Ok(Some(TaskRes::Compact {
-                state: self.apply_state.get_truncated_state().clone(),
-                first_index,
-                has_pending: false,
-            }));
+            return Ok((true, Some(ExecResult::HasPendingCompactCmd(false))));
         }
 
         match self.pending_cmds.pop_compact(voter_replicated_index) {
@@ -3021,11 +3047,14 @@ where
                 // compact failure is safe to be omitted, no need to assert.
                 compact_raft_log(&self.tag, &mut self.apply_state, cmd.index, cmd.term)?;
                 PEER_ADMIN_CMD_COUNTER.compact.success.inc();
-                Ok(Some(TaskRes::Compact {
-                    state: self.apply_state.get_truncated_state().clone(),
-                    first_index,
-                    has_pending: self.pending_cmds.has_compact(),
-                }))
+                Ok((
+                    true,
+                    Some(ExecResult::CompactLog {
+                        state: self.apply_state.get_truncated_state().clone(),
+                        first_index,
+                        has_pending: self.pending_cmds.has_compact(),
+                    }),
+                ))
             }
             None => {
                 info!(
@@ -3034,7 +3063,7 @@ where
                     "peer_id" => self.id(),
                     "voter_replicated_index" => voter_replicated_index,
                 );
-                Ok(None)
+                Ok((false, None))
             }
         }
     }
@@ -3109,7 +3138,10 @@ where
                             "peer_id" => self.id(),
                             "command" => ?req.get_compact_log()
                         );
-                        return Ok((resp, ApplyResult::Res(ExecResult::PendingCompactCmd)));
+                        return Ok((
+                            resp,
+                            ApplyResult::Res(ExecResult::HasPendingCompactCmd(true)),
+                        ));
                     }
                 }
             } else {
@@ -3133,6 +3165,7 @@ where
             ApplyResult::Res(ExecResult::CompactLog {
                 state: self.apply_state.get_truncated_state().clone(),
                 first_index,
+                has_pending: self.pending_cmds.has_compact(),
             }),
         ))
     }
@@ -3192,6 +3225,90 @@ where
                 context,
                 hash,
             }),
+        ))
+    }
+
+    fn exec_batch_switch_witness(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        request: &AdminRequest,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        assert!(request.has_switch_witnesses());
+        let switches = request
+            .get_switch_witnesses()
+            .get_switch_witnesses()
+            .to_vec();
+
+        info!(
+            "exec BatchSwitchWitness";
+            "region_id" => self.region_id(),
+            "peer_id" => self.id(),
+            "epoch" => ?self.region.get_region_epoch(),
+        );
+
+        let mut region = self.region.clone();
+        for s in switches.as_slice() {
+            PEER_ADMIN_CMD_COUNTER.batch_switch_witness.all.inc();
+            let (peer_id, is_witness) = (s.get_peer_id(), s.get_is_witness());
+            let mut peer_is_exist = false;
+            for p in region.mut_peers().iter_mut() {
+                if p.id == peer_id {
+                    if p.is_witness == is_witness {
+                        return Err(box_err!(
+                            "switch peer {:?} on region {:?} is no-op",
+                            p,
+                            self.region
+                        ));
+                    }
+                    p.is_witness = is_witness;
+                    peer_is_exist = true;
+                    break;
+                }
+            }
+            if !peer_is_exist {
+                return Err(box_err!(
+                    "switch peer {} on region {:?} failed: peer does not exist",
+                    peer_id,
+                    self.region
+                ));
+            }
+            PEER_ADMIN_CMD_COUNTER.batch_switch_witness.success.inc();
+            if self.id() == peer_id && !is_witness {
+                self.wait_data = true;
+                self.peer.is_witness = false;
+            }
+        }
+        let conf_ver = region.get_region_epoch().get_conf_ver() + switches.len() as u64;
+        region.mut_region_epoch().set_conf_ver(conf_ver);
+        info!(
+            "switch witness successfully";
+            "region_id" => self.region_id(),
+            "peer_id" => self.id(),
+            "switches" => ?switches,
+            "original region" => ?&self.region,
+            "current region" => ?&region,
+        );
+
+        let state = if self.pending_remove {
+            PeerState::Tombstone
+        } else if self.wait_data {
+            PeerState::Unavailable
+        } else {
+            PeerState::Normal
+        };
+
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
+            panic!("{} failed to update region state: {:?}", self.tag, e);
+        }
+
+        let resp = AdminResponse::default();
+        Ok((
+            resp,
+            ApplyResult::Res(ExecResult::BatchSwitchWitness(SwitchWitness {
+                index: ctx.exec_log_index,
+                switches,
+                region,
+            })),
         ))
     }
 
@@ -3586,11 +3703,32 @@ where
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
     Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
+    Recover(u64),
     CheckCompact {
         region_id: u64,
         voter_replicated_index: u64,
         voter_replicated_term: u64,
     },
+}
+
+impl<EK: KvEngine> ResourceMetered for Msg<EK> {
+    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+        match self {
+            Msg::Apply { apply, .. } => {
+                let mut map = HashMap::default();
+                for cached_entries in &apply.entries {
+                    cached_entries.iter_entries(|entry| {
+                        // TODO: maybe use a more efficient way to get the resource group name.
+                        let header = util::get_entry_header(entry);
+                        let group_name = header.get_resource_group_name().to_owned();
+                        *map.entry(group_name).or_default() += entry.compute_size() as u64;
+                    });
+                }
+                Some(map)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl<EK> Msg<EK>
@@ -3638,6 +3776,7 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
+            Msg::Recover(region_id) => write!(f, "recover [region {}] apply", region_id),
             Msg::CheckCompact {
                 region_id,
                 voter_replicated_index,
@@ -3692,11 +3831,6 @@ where
         peer_id: u64,
         // Whether destroy request is from its target region's snapshot
         merge_from_snapshot: bool,
-    },
-    Compact {
-        state: RaftTruncatedState,
-        first_index: u64,
-        has_pending: bool,
     },
 }
 
@@ -3765,6 +3899,10 @@ where
         fail_point!("on_handle_apply_store_1", apply_ctx.store_id == 1, |_| {});
 
         if self.delegate.pending_remove || self.delegate.stopped {
+            return;
+        }
+
+        if self.delegate.wait_data {
             return;
         }
 
@@ -3970,8 +4108,9 @@ where
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-        if self.delegate.peer.is_witness {
-            // witness shouldn't generate snapshot.
+        if self.delegate.peer.is_witness || self.delegate.wait_data {
+            // witness or non-witness hasn't finish applying snapshot shouldn't generate
+            // snapshot.
             return;
         }
         let applied_index = self.delegate.apply_state.get_applied_index();
@@ -4109,18 +4248,29 @@ where
         voter_replicated_index: u64,
         voter_replicated_term: u64,
     ) {
+        if self.delegate.pending_remove || self.delegate.stopped {
+            return;
+        }
+
         let res = self
             .delegate
             .try_compact_log(voter_replicated_index, voter_replicated_term);
         match res {
-            Ok(res) => {
+            Ok((should_write, res)) => {
                 if let Some(res) = res {
+                    if ctx.timer.is_none() {
+                        ctx.timer = Some(Instant::now_coarse());
+                    }
                     ctx.prepare_for(&mut self.delegate);
-                    self.delegate.write_apply_state(ctx.kv_wb_mut());
-                    ctx.commit_opt(&mut self.delegate, true);
-                    ctx.finish_for(&mut self.delegate, VecDeque::new());
-                    ctx.notifier
-                        .notify_one(self.delegate.region_id(), PeerMsg::ApplyRes { res });
+                    let mut result = VecDeque::new();
+                    // If modified `truncated_state` in `try_compact_log`, the apply state should be
+                    // persisted.
+                    if should_write {
+                        self.delegate.write_apply_state(ctx.kv_wb_mut());
+                        ctx.commit_opt(&mut self.delegate, true);
+                    }
+                    result.push_back(res);
+                    ctx.finish_for(&mut self.delegate, result);
                 }
             }
             Err(e) => error!(?e;
@@ -4186,8 +4336,11 @@ where
                             }
                         }
                     }
-                    batch_apply = Some(apply);
+                    if !self.delegate.wait_data {
+                        batch_apply = Some(apply);
+                    }
                 }
+                Msg::Recover(..) => self.delegate.wait_data = false,
                 Msg::Registration(reg) => self.handle_registration(reg),
                 Msg::Destroy(d) => self.handle_destroy(apply_ctx, d),
                 Msg::LogsUpToDate(cul) => self.logs_up_to_date_for_merge(apply_ctx, cul),
@@ -4275,6 +4428,7 @@ pub enum ControlMsg {
     },
 }
 
+impl ResourceMetered for ControlMsg {}
 pub struct ControlFsm {
     receiver: Receiver<ControlMsg>,
     stopped: bool,
@@ -4624,6 +4778,11 @@ where
                 }
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => return,
+                Msg::Recover(region_id) => {
+                    info!("recover apply";
+                          "region_id" => region_id);
+                    return;
+                }
                 Msg::CheckCompact { region_id, .. } => {
                     info!("target region is not found";
                             "region_id" => region_id);
@@ -4698,10 +4857,15 @@ impl<EK: KvEngine> ApplyBatchSystem<EK> {
 
 pub fn create_apply_batch_system<EK: KvEngine>(
     cfg: &Config,
+    resource_ctl: Option<Arc<ResourceController>>,
 ) -> (ApplyRouter<EK>, ApplyBatchSystem<EK>) {
     let (control_tx, control_fsm) = ControlFsm::new();
-    let (router, system) =
-        batch_system::create_system(&cfg.apply_batch_system, control_tx, control_fsm);
+    let (router, system) = batch_system::create_system(
+        &cfg.apply_batch_system,
+        control_tx,
+        control_fsm,
+        resource_ctl,
+    );
     (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
@@ -4761,6 +4925,7 @@ mod memtrace {
                 | Msg::Change { .. } => 0,
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => 0,
+                Msg::Recover(..) => 0,
                 Msg::CheckCompact { .. } => 0,
             }
         }
@@ -4847,6 +5012,7 @@ mod tests {
             cmd.mut_put().set_key(b"key".to_vec());
             cmd.mut_put().set_value(b"value".to_vec());
             let mut req = RaftCmdRequest::default();
+            req.set_header(RaftRequestHeader::default());
             req.mut_requests().push(cmd);
             e.set_data(req.write_to_bytes().unwrap().into())
         }
@@ -5114,7 +5280,7 @@ mod tests {
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, mut snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -5578,7 +5744,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -5917,7 +6083,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -6008,7 +6174,7 @@ mod tests {
             cfg.apply_batch_system.low_priority_pool_size = 0;
             Arc::new(VersionTrack::new(cfg))
         };
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -6188,7 +6354,7 @@ mod tests {
             cfg.apply_batch_system.low_priority_pool_size = 0;
             Arc::new(VersionTrack::new(cfg))
         };
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -6281,7 +6447,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Config::default();
-        let (router, mut system) = create_apply_batch_system(&cfg);
+        let (router, mut system) = create_apply_batch_system(&cfg, None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-exec-observer".to_owned(),
@@ -6505,7 +6671,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Config::default();
-        let (router, mut system) = create_apply_batch_system(&cfg);
+        let (router, mut system) = create_apply_batch_system(&cfg, None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -6785,7 +6951,7 @@ mod tests {
             .register_cmd_observer(1, BoxCmdObserver::new(obs));
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
@@ -7011,7 +7177,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
             tag: "flashback_need_to_be_applied".to_owned(),

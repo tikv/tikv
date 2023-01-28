@@ -75,7 +75,7 @@ use crate::{
             apply,
             store::{PollContext, StoreMeta},
             ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
-            ExecResult,
+            ExecResult, SwitchWitness,
         },
         hibernate_state::{GroupState, HibernateState},
         local_metrics::{RaftMetrics, TimeTracker},
@@ -247,6 +247,7 @@ where
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
+        wait_data: bool,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match find_peer(region, store_id) {
             None => {
@@ -277,6 +278,7 @@ where
                     engines,
                     region,
                     meta_peer,
+                    wait_data,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -331,6 +333,7 @@ where
                     engines,
                     &region,
                     peer,
+                    false,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -1192,6 +1195,7 @@ where
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
             PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
+            PeerTick::RequestSnapshot => self.on_request_snapshot_tick(),
             PeerTick::RequestVoterReplicatedIndex => self.on_request_voter_replicated_index(),
         }
     }
@@ -1203,6 +1207,9 @@ where
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
+        if self.fsm.peer.wait_data {
+            self.on_request_snapshot_tick();
+        }
         // Apply committed entries more quickly.
         // Or if it's a leader. This implicitly means it's a singleton
         // because it becomes leader in `Peer::new` when it's a
@@ -1951,6 +1958,7 @@ where
                 self.register_raft_gc_log_tick();
                 self.register_check_leader_lease_tick();
                 self.register_report_region_buckets_tick();
+                self.register_check_peers_availability_tick();
             }
 
             if let Some(ForceLeaderState::ForceLeader { .. }) = self.fsm.peer.force_leader {
@@ -2161,12 +2169,6 @@ where
             return;
         }
 
-        // Keep ticking if there are disk full peers for the Region.
-        if !self.fsm.peer.disk_full_peers.is_empty() {
-            self.register_raft_base_tick();
-            return;
-        }
-
         debug!("stop ticking"; "res" => ?res,
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
@@ -2258,6 +2260,9 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
+                if self.fsm.peer.wait_data {
+                    return;
+                }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
                 if self.fsm.stopped {
                     return;
@@ -2309,21 +2314,6 @@ where
                         .get_mut(&region_id)
                         .unwrap();
                     *is_ready = true;
-                }
-            }
-            ApplyTaskRes::Compact {
-                state,
-                first_index,
-                has_pending,
-            } => {
-                self.fsm.peer.has_pending_compact_cmd = has_pending;
-                // When the witness restarts, the pending compact cmds will be lost. We will try
-                // to use `voter_replicated_index` as the `compact index` to avoid log
-                // accumulation, but if `voter_replicated_index` is less than `first_index`,
-                // then gc is not needed. In this case, the `first_index` we pass back will be
-                // 0, and `has_pending` set to false.
-                if first_index != 0 {
-                    self.on_ready_compact_log(first_index, state);
                 }
             }
         }
@@ -2482,6 +2472,17 @@ where
             return Ok(());
         }
 
+        if MessageType::MsgAppend == msg_type
+            && self.fsm.peer.wait_data
+            && self.fsm.peer.should_reject_msgappend
+        {
+            debug!("skip {:?} because of non-witness waiting data", msg_type;
+                   "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+            );
+            self.ctx.raft_metrics.message_dropped.non_witness.inc();
+            return Ok(());
+        }
+
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
@@ -2618,6 +2619,7 @@ where
     fn on_hibernate_request(&mut self, from: &metapb::Peer) {
         if !self.ctx.cfg.hibernate_regions
             || self.fsm.peer.has_uncommitted_log()
+            || self.fsm.peer.wait_data
             || from.get_id() != self.fsm.peer.leader_id()
         {
             // Ignore the message means rejecting implicitly.
@@ -2700,7 +2702,7 @@ where
         }
         let mut resp = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgVoterReplicatedIndexResponse);
-        resp.voter_replicated_index = voter_replicated_idx;
+        resp.index = voter_replicated_idx;
         self.fsm
             .peer
             .send_extra_message(resp, &mut self.ctx.trans, from);
@@ -2717,7 +2719,7 @@ where
         if self.fsm.peer.is_leader() || !self.fsm.peer.is_witness() {
             return;
         }
-        let voter_replicated_index = msg.voter_replicated_index;
+        let voter_replicated_index = msg.index;
         if let Ok(voter_replicated_term) = self.fsm.peer.get_store().term(voter_replicated_index) {
             self.ctx.apply_router.schedule_task(
                 self.region_id(),
@@ -2785,6 +2787,8 @@ where
             ExtraMessageType::MsgVoterReplicatedIndexResponse => {
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
+            ExtraMessageType::MsgGcPeerRequest => unimplemented!(),
+            ExtraMessageType::MsgGcPeerResponse => unimplemented!(),
         }
     }
 
@@ -3068,7 +3072,7 @@ where
         if snap.get_metadata().get_index() < self.fsm.peer.get_store().applied_index()
             && snap_data.get_meta().get_for_witness() != self.fsm.peer.is_witness()
         {
-            info!(
+            error!(
                 "mismatch witness snapshot";
                 "region_id" => region_id,
                 "peer_id" => self.fsm.peer_id(),
@@ -3370,7 +3374,6 @@ where
                         );
                     } else {
                         self.fsm.peer.transfer_leader(&from);
-                        self.fsm.peer.wait_data_peers.clear();
                     }
                 }
             }
@@ -4084,6 +4087,7 @@ where
                 self.ctx.raftlog_fetch_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
+                false,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
@@ -4933,8 +4937,13 @@ where
         while let Some(result) = exec_results.pop_front() {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
-                ExecResult::CompactLog { first_index, state } => {
-                    self.on_ready_compact_log(first_index, state)
+                ExecResult::CompactLog {
+                    state,
+                    first_index,
+                    has_pending,
+                } => {
+                    self.fsm.peer.has_pending_compact_cmd = has_pending;
+                    self.on_ready_compact_log(first_index, state);
                 }
                 ExecResult::SplitRegion {
                     derived,
@@ -4969,9 +4978,14 @@ where
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
                 ExecResult::SetFlashbackState { region } => self.on_set_flashback_state(region),
-                ExecResult::PendingCompactCmd => {
-                    self.fsm.peer.has_pending_compact_cmd = true;
-                    self.register_pull_voter_replicated_index_tick();
+                ExecResult::BatchSwitchWitness(switches) => {
+                    self.on_ready_batch_switch_witness(switches)
+                }
+                ExecResult::HasPendingCompactCmd(has_pending) => {
+                    self.fsm.peer.has_pending_compact_cmd = has_pending;
+                    if has_pending {
+                        self.register_pull_voter_replicated_index_tick();
+                    }
                 }
             }
         }
@@ -5134,8 +5148,29 @@ where
                 && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
         {
             self.ctx.raft_metrics.invalid_proposal.witness.inc();
-            // TODO: use a dedicated error type
-            return Err(Error::RecoveryInProgress(self.region_id()));
+            return Err(Error::IsWitness(self.region_id()));
+        }
+
+        // Forbid requests to switch it into a witness when it's a leader
+        if self.fsm.peer.is_leader()
+            && msg.has_admin_request()
+            && msg.get_admin_request().get_cmd_type() == AdminCmdType::BatchSwitchWitness
+            && msg
+                .get_admin_request()
+                .get_switch_witnesses()
+                .get_switch_witnesses()
+                .iter()
+                .any(|s| s.get_peer_id() == self.fsm.peer.peer.get_id() && s.get_is_witness())
+        {
+            self.ctx.raft_metrics.invalid_proposal.witness.inc();
+            return Err(Error::IsWitness(self.region_id()));
+        }
+
+        // Forbid requests when it becomes to non-witness but not finish applying
+        // snapshot.
+        if self.fsm.peer.wait_data {
+            self.ctx.raft_metrics.invalid_proposal.non_witness.inc();
+            return Err(Error::IsWitness(self.region_id()));
         }
 
         // check whether the peer is initialized.
@@ -5526,13 +5561,42 @@ where
         self.register_check_long_uncommitted_tick();
     }
 
+    fn on_request_snapshot_tick(&mut self) {
+        fail_point!("ignore request snapshot", |_| {
+            self.schedule_tick(PeerTick::RequestSnapshot);
+        });
+        if !self.fsm.peer.wait_data || self.fsm.peer.is_leader() {
+            return;
+        }
+        self.fsm.peer.request_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
+        let last_term = self.fsm.peer.get_index_term(self.fsm.peer.request_index);
+        if last_term == self.fsm.peer.term() {
+            self.fsm.peer.should_reject_msgappend = true;
+            if let Err(e) = self.fsm.peer.raft_group.request_snapshot() {
+                error!(
+                    "failed to request snapshot";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "err" => %e,
+                );
+            }
+        } else {
+            // If a leader change occurs after switch to non-witness, it should be
+            // continue processing `MsgAppend` until `last_term == term`, then retry
+            // to request snapshot.
+            self.fsm.peer.should_reject_msgappend = false;
+        }
+        // Requesting a snapshot may fail, so register a periodic event as a defense
+        // until succeeded.
+        self.schedule_tick(PeerTick::RequestSnapshot);
+    }
+
     fn on_request_voter_replicated_index(&mut self) {
         if !self.fsm.peer.is_witness() || !self.fsm.peer.has_pending_compact_cmd {
             return;
         }
-        // TODO: make it configurable
         if self.fsm.peer.last_compacted_time.elapsed()
-            > self.ctx.cfg.raft_log_gc_tick_interval.0 * 2
+            > self.ctx.cfg.request_voter_replicated_index_interval.0
         {
             let mut msg = ExtraMessage::default();
             msg.set_type(ExtraMessageType::MsgVoterReplicatedIndexRequest);
@@ -6068,18 +6132,31 @@ where
     }
 
     fn on_check_peers_availability(&mut self) {
+        let mut invalid_peers: Vec<u64> = Vec::new();
         for peer_id in self.fsm.peer.wait_data_peers.iter() {
-            let peer = self.fsm.peer.get_peer_from_cache(*peer_id).unwrap();
-            let mut msg = ExtraMessage::default();
-            msg.set_type(ExtraMessageType::MsgAvailabilityRequest);
-            self.fsm
-                .peer
-                .send_extra_message(msg, &mut self.ctx.trans, &peer);
-            debug!(
-                "check peer availability";
-                "target peer id" => *peer_id,
-            );
+            match self.fsm.peer.get_peer_from_cache(*peer_id) {
+                Some(peer) => {
+                    let mut msg = ExtraMessage::default();
+                    msg.set_type(ExtraMessageType::MsgAvailabilityRequest);
+                    self.fsm
+                        .peer
+                        .send_extra_message(msg, &mut self.ctx.trans, &peer);
+                    debug!(
+                        "check peer availability";
+                        "target peer id" => *peer_id,
+                    );
+                }
+                None => invalid_peers.push(*peer_id),
+            }
         }
+        // For some reasons, the peer corresponding to the previously saved peer_id
+        // no longer exists. In order to avoid passing invalid information to pd when
+        // reporting pending peers and affecting pd scheduling, remove it from the
+        // `wait_data_peers`.
+        self.fsm
+            .peer
+            .wait_data_peers
+            .retain(|peer_id| !invalid_peers.contains(peer_id));
     }
 
     fn register_pull_voter_replicated_index_tick(&mut self) {
@@ -6362,6 +6439,50 @@ where
         })());
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
+    }
+
+    fn on_ready_batch_switch_witness(&mut self, sw: SwitchWitness) {
+        {
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.set_region(
+                &self.ctx.coprocessor_host,
+                sw.region,
+                &mut self.fsm.peer,
+                RegionChangeReason::SwitchWitness,
+            );
+        }
+        for s in sw.switches {
+            let (peer_id, is_witness) = (s.get_peer_id(), s.get_is_witness());
+            if self.fsm.peer_id() == peer_id {
+                if is_witness && !self.fsm.peer.is_leader() {
+                    let _ = self.fsm.peer.get_store().clear_data();
+                    self.fsm.peer.raft_group.set_priority(-1);
+                } else {
+                    self.fsm
+                        .peer
+                        .update_read_progress(self.ctx, ReadProgress::WaitData(true));
+                    self.fsm.peer.wait_data = true;
+                    self.on_request_snapshot_tick();
+                }
+                self.fsm.peer.peer.is_witness = is_witness;
+                continue;
+            }
+            if !is_witness && !self.fsm.peer.wait_data_peers.contains(&peer_id) {
+                self.fsm.peer.wait_data_peers.push(peer_id);
+            }
+        }
+        if self.fsm.peer.is_leader() {
+            info!(
+               "notify pd with change peer region";
+               "region_id" => self.fsm.region_id(),
+               "peer_id" => self.fsm.peer_id(),
+               "region" => ?self.fsm.peer.region(),
+            );
+            self.fsm.peer.heartbeat_pd(self.ctx);
+            if !self.fsm.peer.wait_data_peers.is_empty() {
+                self.register_check_peers_availability_tick();
+            }
+        }
     }
 
     /// Verify and store the hash to state. return true means the hash has been

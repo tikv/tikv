@@ -28,6 +28,8 @@ struct Env {
 }
 
 #[derive(Clone)]
+// FuturePool wraps a yatp thread pool providing task count metrics and gate
+// maximum running tasks.
 pub struct FuturePool {
     inner: Arc<PoolInner>,
 }

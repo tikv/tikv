@@ -84,6 +84,7 @@ dependencies = [
  "codec",
  "engine_traits",
  "kvproto",
+ "log_wrappers",
  "match-template",
  "panic_hook",
  "thiserror",
@@ -580,9 +581,11 @@ dependencies = [
  "derive_more",
  "fail",
  "file_system",
+ "kvproto",
  "lazy_static",
  "online_config",
  "prometheus",
+ "resource_control",
  "serde",
  "serde_derive",
  "slog",
@@ -2726,12 +2729,12 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a14c44ef44b378d15adb5baad8402b838f031b51"
+source = "git+https://github.com/pingcap/kvproto.git#009f31598ac3200dc8b32e18f96fc4deb7b32e48"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.13.0",
  "raft-proto",
 ]
 
@@ -4121,6 +4124,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf-build"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fb3c02f54ecaf12572c1a60dbdb36b1f8f713a16105881143f2be84cca5bbe3"
+dependencies = [
+ "bitflags",
+ "protobuf",
+ "protobuf-codegen",
+ "regex",
+]
+
+[[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
 source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
@@ -4160,7 +4175,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/tikv/raft-rs?branch=master#f73766712a538c2f6eb135b455297ad6c03fc58d"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4219,11 +4234,11 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/tikv/raft-rs?branch=master#f73766712a538c2f6eb135b455297ad6c03fc58d"
 dependencies = [
  "bytes",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.14.0",
 ]
 
 [[package]]
@@ -4299,6 +4314,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "rand 0.8.5",
+ "resource_control",
  "resource_metering",
  "serde",
  "serde_derive",
@@ -4349,6 +4365,7 @@ dependencies = [
  "raft-proto",
  "raftstore",
  "rand 0.8.5",
+ "resource_control",
  "resource_metering",
  "slog",
  "slog-global",
@@ -4663,15 +4680,22 @@ dependencies = [
  "byteorder",
  "crossbeam-skiplist",
  "dashmap",
+ "fail",
+ "futures 0.3.15",
  "kvproto",
  "lazy_static",
  "online_config",
+ "pd_client",
  "pin-project",
  "prometheus",
+ "protobuf",
  "serde",
  "slog",
  "slog-global",
+ "test_pd",
+ "test_pd_client",
  "tikv_util",
+ "tokio",
  "yatp",
 ]
 
@@ -5825,11 +5849,14 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "kvproto",
+ "log_wrappers",
  "pd_client",
  "security",
  "slog",
  "slog-global",
  "tikv_util",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -5883,6 +5910,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "server",
@@ -5996,6 +6024,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "rand_xorshift",
+ "resource_control",
  "resource_metering",
  "security",
  "serde_json",
@@ -6103,6 +6132,7 @@ name = "tidb_query_common"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "api_version",
  "async-trait",
  "byteorder",
  "derive_more",
@@ -6124,6 +6154,7 @@ dependencies = [
 name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "base64",
  "bitfield",
  "bitflags",
@@ -6164,6 +6195,7 @@ name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "api_version",
  "async-trait",
  "codec",
  "collections",
@@ -6537,7 +6569,7 @@ dependencies = [
  "openssl",
  "page_size",
  "panic_hook",
- "parking_lot 0.12.1",
+ "parking_lot_core 0.9.1",
  "pin-project",
  "procfs",
  "procinfo",
@@ -6593,12 +6625,12 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#f3286471a05a4454a1071dd5f66ac7dbf6c79ba3"
+source = "git+https://github.com/pingcap/tipb.git#c6b7a5a1623bb2766a502301ecc3ac8f98cc7c79"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.13.0",
 ]
 
 [[package]]

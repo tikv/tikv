@@ -261,6 +261,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                         "changes" => ?changes,
                         "legacy" => legacy,
                         "original region" => ?region, "err" => ?e);
+                        return Err(e);
                     }
                 }
                 let conf_ver = region.get_region_epoch().get_conf_ver() + changes.len() as u64;
