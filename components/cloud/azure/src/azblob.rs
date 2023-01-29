@@ -26,7 +26,9 @@ use futures_util::{
     TryStreamExt,
 };
 pub use kvproto::brpb::{AzureBlobStorage as InputConfig, Bucket as InputBucket, CloudDynamic};
+use lazy_static::lazy_static;
 use oauth2::{ClientId, ClientSecret};
+use regex::Regex;
 use tikv_util::{
     debug,
     stream::{retry, RetryError},
@@ -246,11 +248,16 @@ impl RetryError for RequestError {
     }
 }
 
+
 fn err_is_retryable(err_info: &str) -> bool {
     // HTTP Code 503: The server is busy
     // HTTP Code 500: Operation could not be completed within the specified time.
     // More details seen in https://learn.microsoft.com/en-us/rest/api/storageservices/blob-service-error-codes
-    err_info.contains("status: 500") || err_info.contains("status: 503")
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r"status: 5[0-9][0-9],").unwrap();
+    }
+    
+    RE.is_match(err_info)
 }
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
@@ -780,6 +787,10 @@ mod tests {
         assert!(err_is_retryable(err_info));
         let err_info = "HTTP error status (status: 500,... Operation could not be completed within the specified time.";
         assert!(err_is_retryable(err_info));
+        let err_info = "HTTP error status (status: 409,... The blob type is invalid for this operation.";
+        assert!(!err_is_retryable(err_info));
+        let err_info = "HTTP error status (status: 50,... ";
+        assert!(!err_is_retryable(err_info));
         let err = "NaN".parse::<u32>().unwrap_err();
         let err1 = RequestError::InvalidInput(Box::new(err), "invalid-input".to_owned());
         let err2 = RequestError::InternalError("internal-error".to_owned());
