@@ -542,7 +542,7 @@ pub trait PdClient {
 
     fn fetch_cluster_id(&mut self) -> Result<u64>;
 
-    fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>>;
+    fn load_global_config(&mut self, config_path: String) -> PdFuture<HashMap<String, String>>;
 
     fn watch_global_config(
         &mut self,
@@ -791,10 +791,10 @@ impl PdClient for RpcClient {
         Ok((tx, resp_rx))
     }
 
-    fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+    fn load_global_config(&mut self, config_path: String) -> PdFuture<HashMap<String, String>> {
         use kvproto::pdpb::LoadGlobalConfigRequest;
         let mut req = LoadGlobalConfigRequest::new();
-        req.set_names(list.into());
+        req.set_config_path(config_path);
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
@@ -803,11 +803,7 @@ impl PdClient for RpcClient {
                 Ok(grpc_response) => {
                     let mut res = HashMap::with_capacity(grpc_response.get_items().len());
                     for c in grpc_response.get_items() {
-                        if c.has_error() {
-                            error!("failed to load global config with key {:?}", c.get_error());
-                        } else {
-                            res.insert(c.get_name().to_owned(), c.get_value().to_owned());
-                        }
+                        res.insert(c.get_name().to_owned(), c.get_value().to_owned());
                     }
                     Ok(res)
                 }

@@ -32,7 +32,7 @@ use raftstore::{
             apply::{self, APPLY_WB_SHRINK_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP},
             Proposal,
         },
-        local_metrics::{RaftMetrics, TimeTracker},
+        local_metrics::RaftMetrics,
         metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
         msg::ErrorCallback,
         util, Config, WriteCallback,
@@ -302,9 +302,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     t.metrics.write_instant = Some(now);
                     &mut t.metrics.store_time_nanos
                 });
-                if let TimeTracker::Instant(t) = tracker {
-                    *t = now;
-                }
+                tracker.reset(now);
             }
         }
     }
@@ -314,7 +312,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         // TODO: remove following log once stable.
-        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res);
+        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
             // Ignore admin command side effects, otherwise it may split incomplete
@@ -377,6 +375,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
             }
+        }
+        let last_applying_index = self.compact_log_context().last_applying_index();
+        let committed_index = self.entry_storage().commit_index();
+        if last_applying_index < committed_index {
+            // We need to continue to apply after previous page is finished.
+            self.set_has_ready();
         }
     }
 }
@@ -586,6 +590,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::InvalidAdmin => {
                     return Err(box_err!("invalid admin command type"));
                 }
+                AdminCmdType::UpdateGcPeer => unimplemented!(),
             };
 
             match admin_result {
@@ -691,11 +696,23 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 .iter()
                 .flat_map(|(v, _)| {
                     v.write_trackers()
-                        .flat_map(|t| t.as_tracker_token().cloned())
+                        .flat_map(|t| t.as_tracker_token())
                 })
                 .collect();
             self.perf_context().report_metrics(&tokens);
         }
+        let mut apply_res = ApplyRes::default();
+        apply_res.applied_index = index;
+        apply_res.applied_term = term;
+        apply_res.admin_result = self.take_admin_result().into_boxed_slice();
+        apply_res.modifications = *self.modifications_mut();
+        apply_res.metrics = mem::take(&mut self.metrics);
+        let written_bytes = apply_res.metrics.written_bytes;
+        self.res_reporter().report(apply_res);
+
+        // Report result first and then invoking callbacks. This may delays callback a
+        // little bit, but can make sure all following messages must see the side
+        // effect of admin commands.
         let callbacks = self.callbacks_mut();
         let now = std::time::Instant::now();
         let apply_time = APPLY_TIME_HISTOGRAM.local();
@@ -709,14 +726,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         if callbacks.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP {
             callbacks.shrink_to(SHRINK_PENDING_CMD_QUEUE_CAP);
         }
-        let mut apply_res = ApplyRes::default();
-        apply_res.applied_index = index;
-        apply_res.applied_term = term;
-        apply_res.admin_result = self.take_admin_result().into_boxed_slice();
-        apply_res.modifications = *self.modifications_mut();
-        apply_res.metrics = mem::take(&mut self.metrics);
-        let written_bytes = apply_res.metrics.written_bytes;
-        self.res_reporter().report(apply_res);
         written_bytes
     }
 }

@@ -15,15 +15,16 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::channel::{self, SendError};
 use fail::fail_point;
 use file_system::{set_io_type, IoType};
+use resource_control::ResourceController;
 use tikv_util::{
     debug, error, info, mpsc, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name,
-    time::Instant, warn,
+    time::Instant,
 };
 
 use crate::{
+    channel::{fsm_channel, ControlScheduler, FsmReceiver, FsmSender, NormalScheduler},
     config::Config,
     fsm::{Fsm, FsmScheduler, Priority},
     mailbox::BasicMailbox,
@@ -37,60 +38,6 @@ pub enum FsmTypes<N, C> {
     // Used as a signal that scheduler should be shutdown.
     Empty,
 }
-
-// A macro to introduce common definition of scheduler.
-macro_rules! impl_sched {
-    ($name:ident, $ty:path,Fsm = $fsm:tt) => {
-        pub struct $name<N, C> {
-            sender: channel::Sender<FsmTypes<N, C>>,
-            low_sender: channel::Sender<FsmTypes<N, C>>,
-        }
-
-        impl<N, C> Clone for $name<N, C> {
-            #[inline]
-            fn clone(&self) -> $name<N, C> {
-                $name {
-                    sender: self.sender.clone(),
-                    low_sender: self.low_sender.clone(),
-                }
-            }
-        }
-
-        impl<N, C> FsmScheduler for $name<N, C>
-        where
-            $fsm: Fsm,
-        {
-            type Fsm = $fsm;
-
-            #[inline]
-            fn schedule(&self, fsm: Box<Self::Fsm>) {
-                let sender = match fsm.get_priority() {
-                    Priority::Normal => &self.sender,
-                    Priority::Low => &self.low_sender,
-                };
-                match sender.send($ty(fsm)) {
-                    Ok(()) => {}
-                    // TODO: use debug instead.
-                    Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
-                    _ => unreachable!(),
-                }
-            }
-
-            fn shutdown(&self) {
-                // TODO: close it explicitly once it's supported.
-                // Magic number, actually any number greater than poll pool size works.
-                for _ in 0..256 {
-                    let _ = self.sender.send(FsmTypes::Empty);
-                    let _ = self.low_sender.send(FsmTypes::Empty);
-                }
-            }
-        }
-    };
-}
-
-impl_sched!(NormalScheduler, FsmTypes::Normal, Fsm = N);
-impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
-
 pub struct NormalFsm<N> {
     fsm: Box<N>,
     timer: Instant,
@@ -168,7 +115,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     ///
     /// When pending messages of the FSM is different than `expected_len`,
     /// attempts to schedule it in this poller again. Returns the `fsm` if the
-    /// re-scheduling suceeds.
+    /// re-scheduling succeeds.
     fn release(&mut self, mut fsm: NormalFsm<N>, expected_len: usize) -> Option<NormalFsm<N>> {
         let mailbox = fsm.take_mailbox().unwrap();
         mailbox.release(fsm.fsm);
@@ -341,7 +288,7 @@ pub trait PollHandler<N, C>: Send + 'static {
 /// Internal poller that fetches batch and call handler hooks for readiness.
 pub struct Poller<N: Fsm, C: Fsm, Handler> {
     pub router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
-    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub fsm_receiver: FsmReceiver<N, C>,
     pub handler: Handler,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
@@ -534,8 +481,8 @@ pub trait HandlerBuilder<N, C> {
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
-    receiver: channel::Receiver<FsmTypes<N, C>>,
-    low_receiver: channel::Receiver<FsmTypes<N, C>>,
+    receiver: FsmReceiver<N, C>,
+    low_receiver: FsmReceiver<N, C>,
     pool_size: usize,
     max_batch_size: usize,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -649,15 +596,15 @@ where
     }
 }
 
-struct PoolStateBuilder<N, C> {
+struct PoolStateBuilder<N: Fsm, C: Fsm> {
     max_batch_size: usize,
     reschedule_duration: Duration,
-    fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
-    fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    fsm_receiver: FsmReceiver<N, C>,
+    fsm_sender: FsmSender<N, C>,
     pool_size: usize,
 }
 
-impl<N, C> PoolStateBuilder<N, C> {
+impl<N: Fsm, C: Fsm> PoolStateBuilder<N, C> {
     fn build<H: HandlerBuilder<N, C>>(
         self,
         name_prefix: String,
@@ -683,11 +630,11 @@ impl<N, C> PoolStateBuilder<N, C> {
     }
 }
 
-pub struct PoolState<N, C, H: HandlerBuilder<N, C>> {
+pub struct PoolState<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub name_prefix: String,
     pub handler_builder: H,
-    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
-    pub fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    pub fsm_receiver: FsmReceiver<N, C>,
+    pub fsm_sender: FsmSender<N, C>,
     pub low_priority_pool_size: usize,
     pub expected_pool_size: usize,
     pub workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -707,32 +654,32 @@ pub fn create_system<N: Fsm, C: Fsm>(
     cfg: &Config,
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
+    resource_ctl: Option<Arc<ResourceController>>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
     let state_cnt = Arc::new(AtomicUsize::new(0));
     let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
-    let (tx, rx) = channel::unbounded();
-    let (tx2, rx2) = channel::unbounded();
+    let (sender, receiver) = fsm_channel(resource_ctl);
+    let (low_sender, low_receiver) = fsm_channel(None); // no resource control for low fsm
     let normal_scheduler = NormalScheduler {
-        sender: tx.clone(),
-        low_sender: tx2.clone(),
+        sender: sender.clone(),
+        low_sender,
     };
     let control_scheduler = ControlScheduler {
-        sender: tx.clone(),
-        low_sender: tx2,
+        sender: sender.clone(),
     };
     let pool_state_builder = PoolStateBuilder {
         max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
-        fsm_receiver: rx.clone(),
-        fsm_sender: tx,
+        fsm_receiver: receiver.clone(),
+        fsm_sender: sender,
         pool_size: cfg.pool_size,
     };
     let router = Router::new(control_box, normal_scheduler, control_scheduler, state_cnt);
     let system = BatchSystem {
         name_prefix: None,
         router: router.clone(),
-        receiver: rx,
-        low_receiver: rx2,
+        receiver,
+        low_receiver,
         pool_size: cfg.pool_size,
         max_batch_size: cfg.max_batch_size(),
         workers: Arc::new(Mutex::new(Vec::new())),

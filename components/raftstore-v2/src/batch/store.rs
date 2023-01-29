@@ -26,10 +26,11 @@ use raftstore::{
     store::{
         fsm::store::{PeerTickBatch, ENTRY_CACHE_EVICT_TICK_DURATION},
         local_metrics::RaftMetrics,
-        Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask, StoreWriters,
-        TabletSnapManager, Transport, WriteSenders,
+        AutoSplitController, Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask,
+        StoreWriters, TabletSnapManager, Transport, WriteSenders,
     },
 };
+use resource_metering::CollectorRegHandle;
 use slog::{warn, Logger};
 use tikv_util::{
     box_err,
@@ -188,6 +189,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
             self.poll_ctx.update_ticks_timeout();
         }
         self.poll_ctx.has_ready = false;
+        self.poll_ctx.current_time = None;
         self.timer = tikv_util::time::Instant::now();
     }
 
@@ -510,6 +512,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
+        auto_split_controller: AutoSplitController,
+        collector_reg_handle: CollectorRegHandle,
         background: Worker,
         pd_worker: LazyWorker<pd::Task>,
     ) -> Result<()>
@@ -525,7 +529,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
         });
 
-        let purge_worker = if raft_engine.need_manual_purge() {
+        let purge_worker = if raft_engine.need_manual_purge()
+            && !cfg.value().raft_engine_purge_interval.0.is_zero()
+        {
             let worker = Worker::new("purge-worker");
             let raft_clone = raft_engine.clone();
             let logger = self.logger.clone();
@@ -566,10 +572,14 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             workers.pd.remote(),
             concurrency_manager,
             causal_ts_provider,
+            workers.pd.scheduler(),
+            auto_split_controller,
+            store_meta.lock().unwrap().region_read_progress.clone(),
+            collector_reg_handle,
             self.logger.clone(),
             self.shutdown.clone(),
             cfg.clone(),
-        ));
+        )?);
 
         let split_check_scheduler = workers.background.start(
             "split-check",
@@ -739,7 +749,7 @@ where
 {
     let (store_tx, store_fsm) = StoreFsm::new(cfg, store_id, logger.clone());
     let (router, system) =
-        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
+        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm, None);
     let system = StoreSystem {
         system,
         workers: None,
