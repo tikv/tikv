@@ -2,6 +2,7 @@
 
 use std::{convert::TryFrom, sync::Arc};
 
+use api_version::KvFormat;
 use fail::fail_point;
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
@@ -149,6 +150,15 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypePartitionTableScan => {
                     other_err!("PartitionTableScan executor not implemented");
                 }
+                ExecType::TypeSort => {
+                    other_err!("Sort executor not implemented");
+                }
+                ExecType::TypeWindow => {
+                    other_err!("Window executor not implemented");
+                }
+                ExecType::TypeExpand => {
+                    other_err!("Expand executor not implemented");
+                }
             }
         }
 
@@ -164,7 +174,7 @@ fn is_arrow_encodable(schema: &[FieldType]) -> bool {
 }
 
 #[allow(clippy::explicit_counter_loop)]
-pub fn build_executors<S: Storage + 'static>(
+pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     executor_descriptors: Vec<tipb::Executor>,
     storage: S,
     ranges: Vec<KeyRange>,
@@ -192,7 +202,7 @@ pub fn build_executors<S: Storage + 'static>(
             let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
             Box::new(
-                BatchTableScanExecutor::new(
+                BatchTableScanExecutor::<_, F>::new(
                     storage,
                     config.clone(),
                     columns_info,
@@ -212,7 +222,7 @@ pub fn build_executors<S: Storage + 'static>(
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids_len = descriptor.take_primary_column_ids().len();
             Box::new(
-                BatchIndexScanExecutor::new(
+                BatchIndexScanExecutor::<_, F>::new(
                     storage,
                     config.clone(),
                     columns_info,
@@ -364,7 +374,7 @@ pub fn build_executors<S: Storage + 'static>(
 }
 
 impl<SS: 'static> BatchExecutorsRunner<SS> {
-    pub fn from_request<S: Storage<Statistics = SS> + 'static>(
+    pub fn from_request<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
         mut req: DagRequest,
         ranges: Vec<KeyRange>,
         storage: S,
@@ -380,7 +390,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         config.paging_size = paging_size;
         let config = Arc::new(config);
 
-        let out_most_executor = build_executors(
+        let out_most_executor = build_executors::<_, F>(
             req.take_executors().into(),
             storage,
             ranges,
