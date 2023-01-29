@@ -1,17 +1,16 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    mem,
-    sync::{atomic::Ordering, Arc},
+    cmp, mem,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use collections::{HashMap, HashSet};
-use crossbeam::atomic::AtomicCell;
 use engine_traits::{
     CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
 };
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
+use kvproto::{metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -19,21 +18,20 @@ use raftstore::{
     store::{
         fsm::ApplyMetrics,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, LocksStatus, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue,
-        ReadProgress, TabletSnapManager, TxnExt, WriteTask,
+        Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
+        TabletSnapManager, WriteTask,
     },
 };
 use slog::Logger;
 
 use super::storage::Storage;
 use crate::{
-    batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
+        AsyncWriter, CompactLogContext, DestroyProgress, ProposalControl, SimpleWriteReqEncoder,
+        SplitFlowControl, TxnContext,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
-    worker::tablet_gc,
     Result,
 };
 
@@ -43,11 +41,6 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
-    /// Tombstone tablets can only be destroyed when the tablet that replaces it
-    /// is persisted. This is a list of tablet index that awaits to be
-    /// persisted. When persisted_apply is advanced, we need to notify tablet_gc
-    /// worker to destroy them.
-    pending_tombstone_tablets: Vec<u64>,
 
     /// Statistics for self.
     self_stat: PeerStat,
@@ -60,8 +53,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     peer_heartbeats: HashMap<u64, Instant>,
 
     /// For raft log compaction.
-    skip_compact_log_ticks: usize,
-    approximate_raft_log_size: u64,
+    compact_log_context: CompactLogContext,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -73,6 +65,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     has_ready: bool,
     /// Sometimes there is no ready at all, but we need to trigger async write.
     has_extra_write: bool,
+    pause_for_recovery: bool,
     /// Writer for persisting side effects asynchronously.
     pub(crate) async_writer: AsyncWriter<EK, ER>,
 
@@ -88,8 +81,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     last_region_buckets: Option<BucketStat>,
 
     /// Transaction extensions related to this peer.
-    txn_ext: Arc<TxnExt>,
-    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    txn_context: TxnContext,
 
     pending_ticks: Vec<PeerTick>,
 
@@ -109,6 +101,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     leader_transferee: u64,
+
+    long_uncommitted_threshold: u64,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -133,7 +127,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
 
-        let flush_state: Arc<FlushState> = Arc::default();
+        let flush_state: Arc<FlushState> = Arc::new(FlushState::new(applied_index));
         // We can't create tablet if tablet index is 0. It can introduce race when gc
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.
@@ -149,18 +143,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: cached_tablet,
-            pending_tombstone_tablets: Vec::new(),
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
-            skip_compact_log_ticks: 0,
-            approximate_raft_log_size: 0,
+            compact_log_context: CompactLogContext::new(applied_index),
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
             apply_scheduler: None,
             has_ready: false,
             has_extra_write: false,
+            pause_for_recovery: false,
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
@@ -177,8 +170,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ),
             region_buckets: None,
             last_region_buckets: None,
-            txn_ext: Arc::default(),
-            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            txn_context: TxnContext::default(),
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
             split_trace: vec![],
@@ -186,6 +178,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             flush_state,
             split_flow_control: SplitFlowControl::default(),
             leader_transferee: raft::INVALID_ID,
+            long_uncommitted_threshold: cmp::max(
+                cfg.long_uncommitted_base_threshold.0.as_secs(),
+                1,
+            ),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -261,11 +257,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.read_progress
             .update_leader_info(self.leader_id(), self.term(), self.region());
 
-        {
-            let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-            pessimistic_locks.term = self.term();
-            pessimistic_locks.version = self.region().get_region_epoch().get_version();
-        }
+        self.txn_context
+            .on_region_changed(self.term(), self.region());
 
         if self.serving() {
             host.on_region_changed(
@@ -342,38 +335,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn record_tablet_as_tombstone_and_refresh<T>(
-        &mut self,
-        new_tablet_index: u64,
-        ctx: &StoreContext<EK, ER, T>,
-    ) {
-        if let Some(old_tablet) = self.tablet.cache() {
-            self.pending_tombstone_tablets.push(new_tablet_index);
-            let _ = ctx
-                .schedulers
-                .tablet_gc
-                .schedule(tablet_gc::Task::prepare_destroy(
-                    old_tablet.clone(),
-                    self.region_id(),
-                    new_tablet_index,
-                ));
-        }
-        // TODO: Handle race between split and snapshot. So that we can assert
-        // `self.tablet.refresh() == 1`
-        assert!(self.tablet.refresh() > 0);
+    pub fn set_tablet(&mut self, tablet: EK) -> Option<EK> {
+        self.tablet.set(tablet)
     }
 
-    /// Returns if there's any tombstone being removed.
     #[inline]
-    pub fn remove_tombstone_tablets_before(&mut self, persisted: u64) -> bool {
-        let mut removed = 0;
-        while let Some(i) = self.pending_tombstone_tablets.first()
-            && *i <= persisted
-        {
-            removed += 1;
-        }
-        self.pending_tombstone_tablets.drain(..removed);
-        removed > 0
+    pub fn compact_log_context_mut(&mut self) -> &mut CompactLogContext {
+        &mut self.compact_log_context
+    }
+
+    #[inline]
+    pub fn compact_log_context(&self) -> &CompactLogContext {
+        &self.compact_log_context
     }
 
     #[inline]
@@ -429,6 +402,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn reset_has_extra_write(&mut self) -> bool {
         mem::take(&mut self.has_extra_write)
+    }
+
+    #[inline]
+    pub fn set_pause_for_recovery(&mut self, pause: bool) {
+        self.pause_for_recovery = pause;
+    }
+
+    #[inline]
+    pub fn pause_for_recovery(&self) -> bool {
+        self.pause_for_recovery
     }
 
     #[inline]
@@ -524,31 +507,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: `refill_disk_full_peers`
         down_peers
-    }
-
-    #[inline]
-    pub fn reset_skip_compact_log_ticks(&mut self) {
-        self.skip_compact_log_ticks = 0;
-    }
-
-    #[inline]
-    pub fn maybe_skip_compact_log(&mut self, max_skip_ticks: usize) -> bool {
-        if self.skip_compact_log_ticks < max_skip_ticks {
-            self.skip_compact_log_ticks += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    #[inline]
-    pub fn approximate_raft_log_size(&self) -> u64 {
-        self.approximate_raft_log_size
-    }
-
-    #[inline]
-    pub fn update_approximate_raft_log_size(&mut self, f: impl Fn(u64) -> u64) {
-        self.approximate_raft_log_size = f(self.approximate_raft_log_size);
     }
 
     #[inline]
@@ -654,8 +612,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// See the comments of `check_snap_status` for more details.
     #[inline]
     pub fn is_handling_snapshot(&self) -> bool {
-        // todo: This method may be unnecessary now?
-        false
+        self.persisted_index() < self.entry_storage().truncated_index()
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not
@@ -673,21 +630,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn take_pending_ticks(&mut self) -> Vec<PeerTick> {
         mem::take(&mut self.pending_ticks)
-    }
-
-    pub fn activate_in_memory_pessimistic_locks(&mut self) {
-        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-        pessimistic_locks.status = LocksStatus::Normal;
-        pessimistic_locks.term = self.term();
-        pessimistic_locks.version = self.region().get_region_epoch().get_version();
-    }
-
-    pub fn clear_in_memory_pessimistic_locks(&mut self) {
-        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-        pessimistic_locks.status = LocksStatus::NotLeader;
-        pessimistic_locks.clear();
-        pessimistic_locks.term = self.term();
-        pessimistic_locks.version = self.region().get_region_epoch().get_version();
     }
 
     #[inline]
@@ -714,8 +656,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn txn_ext(&self) -> &Arc<TxnExt> {
-        &self.txn_ext
+    pub fn txn_context(&self) -> &TxnContext {
+        &self.txn_context
+    }
+
+    #[inline]
+    pub fn txn_context_mut(&mut self) -> &mut TxnContext {
+        &mut self.txn_context
     }
 
     pub fn generate_read_delegate(&self) -> ReadDelegate {
@@ -726,8 +673,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.term(),
             self.region().clone(),
             self.storage().entry_storage().applied_term(),
-            self.txn_extra_op.clone(),
-            self.txn_ext.clone(),
+            self.txn_context.extra_op().clone(),
+            self.txn_context.ext().clone(),
             self.read_progress().clone(),
             self.region_buckets.as_ref().map(|b| b.meta.clone()),
         )
@@ -751,19 +698,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .advance_apply(apply_index, term, region);
     }
 
-    // TODO: find a better place to put all txn related stuff.
-    pub fn require_updating_max_ts<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        let epoch = self.region().get_region_epoch();
-        let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
-        let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
-        let initial_status = (term_low_bits << 32) | (version_lot_bits << 1);
-        self.txn_ext
-            .max_ts_sync_status
-            .store(initial_status, Ordering::SeqCst);
-
-        self.update_max_timestamp_pd(ctx, initial_status);
-    }
-
     #[inline]
     pub fn split_trace_mut(&mut self) -> &mut Vec<(u64, HashSet<u64>)> {
         &mut self.split_trace
@@ -774,8 +708,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.flush_state
     }
 
-    pub fn reset_flush_state(&mut self) {
-        self.flush_state = Arc::default();
+    pub fn reset_flush_state(&mut self, index: u64) {
+        self.flush_state = Arc::new(FlushState::new(index));
     }
 
     // Note: Call `set_has_extra_write` after adding new state changes.
@@ -810,5 +744,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .lead_transferee
                 .unwrap_or(raft::INVALID_ID),
         )
+    }
+
+    #[inline]
+    pub fn long_uncommitted_threshold(&self) -> Duration {
+        Duration::from_secs(self.long_uncommitted_threshold)
+    }
+
+    #[inline]
+    pub fn set_long_uncommitted_threshold(&mut self, dur: Duration) {
+        self.long_uncommitted_threshold = cmp::max(dur.as_secs(), 1);
     }
 }

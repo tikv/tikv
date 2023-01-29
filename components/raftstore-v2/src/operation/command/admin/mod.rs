@@ -5,6 +5,7 @@ mod conf_change;
 mod split;
 mod transfer_leader;
 
+pub use compact_log::CompactLogContext;
 use compact_log::CompactLogResult;
 use conf_change::ConfChangeResult;
 use engine_traits::{KvEngine, RaftEngine};
@@ -14,7 +15,7 @@ use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
 use split::SplitResult;
 pub use split::{temp_split_path, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
-use tikv_util::box_err;
+use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;
 
 use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
@@ -42,7 +43,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         if !req.has_admin_request() {
-            let e = box_err!("{:?} expect only execute admin command", self.logger.list());
+            let e = box_err!(
+                "{} expect only execute admin command",
+                SlogFormat(&self.logger)
+            );
             let resp = cmd_resp::new_error(e);
             ch.report_error(resp);
             return;
@@ -66,8 +70,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // checker.
         if !self.applied_to_current_term() {
             let e = box_err!(
-                "{:?} peer has not applied to current term, applied_term {}, current_term {}",
-                self.logger.list(),
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
+                SlogFormat(&self.logger),
                 self.storage().entry_storage().applied_term(),
                 self.term()
             );
@@ -110,9 +114,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         };
         match &res {
-            Ok(index) => self
-                .proposal_control_mut()
-                .record_proposed_admin(cmd_type, *index),
+            Ok(index) => {
+                self.proposal_control_mut()
+                    .record_proposed_admin(cmd_type, *index);
+                if self.proposal_control_mut().has_uncommitted_admin() {
+                    self.raft_group_mut().skip_bcast_commit(false);
+                }
+            }
             Err(e) => {
                 info!(
                     self.logger,

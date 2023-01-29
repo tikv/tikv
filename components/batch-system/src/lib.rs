@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod batch;
+mod channel;
 mod config;
 mod fsm;
 mod mailbox;
@@ -16,7 +17,7 @@ pub use self::{
         PollHandler, Poller, PoolState,
     },
     config::Config,
-    fsm::{Fsm, FsmScheduler, Priority},
+    fsm::{Fsm, FsmScheduler, Priority, ResourceMetered},
     mailbox::{BasicMailbox, Mailbox},
     router::Router,
 };

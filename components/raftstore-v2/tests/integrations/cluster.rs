@@ -33,7 +33,8 @@ use raftstore::{
     coprocessor::CoprocessorHost,
     store::{
         region_meta::{RegionLocalState, RegionMeta},
-        Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+        AutoSplitController, Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport,
+        RAFT_INIT_LOG_INDEX,
     },
 };
 use raftstore_v2::{
@@ -41,6 +42,7 @@ use raftstore_v2::{
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
     Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
+use resource_metering::CollectorRegHandle;
 use slog::{debug, o, Logger};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
@@ -276,7 +278,7 @@ impl RunningState {
             factory.open_tablet(ctx, &path).unwrap();
         }
 
-        let router = RaftRouter::new(store_id, registry.clone(), router);
+        let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
         let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap()).unwrap();
 
@@ -300,6 +302,8 @@ impl RunningState {
                 concurrency_manager,
                 causal_ts_provider,
                 coprocessor_host,
+                AutoSplitController::default(),
+                CollectorRegHandle::new_for_test(),
                 background.clone(),
                 pd_worker,
             )

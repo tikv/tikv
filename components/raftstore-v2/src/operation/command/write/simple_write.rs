@@ -5,6 +5,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
 use protobuf::{CodedInputStream, Message};
 use raftstore::store::WriteCallback;
 use slog::Logger;
+use tikv_util::slog_panic;
 
 use crate::{operation::command::parse_at, router::CmdResChannel};
 
@@ -191,12 +192,12 @@ impl<'a> SimpleWriteReqDecoder<'a> {
                 let mut is = CodedInputStream::from_bytes(&buf[1..]);
                 let header = match is.read_message() {
                     Ok(h) => h,
-                    Err(e) => panic!(
-                        "{:?} data corrupted at [{}] {}: {:?}",
-                        logger.list(),
-                        term,
-                        index,
-                        e
+                    Err(e) => slog_panic!(
+                        logger,
+                        "data corrupted";
+                        "term" => term,
+                        "index" => index,
+                        "error" => ?e
                     ),
                 };
                 let read = is.pos();
