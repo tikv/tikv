@@ -219,7 +219,7 @@ fn test_destroy_by_larger_id() {
         .receiver(0)
         .recv_timeout(Duration::from_millis(300))
         .unwrap();
-    assert_valid_report(&report, test_region_id, 8);
+    assert_valid_report(&report, test_region_id, test_peer_id - 1);
 
     // Larger ID should trigger destroy.
     let mut larger_id_msg = smaller_id_msg;
@@ -280,7 +280,7 @@ fn test_gc_peer_request() {
         .receiver(0)
         .recv_timeout(Duration::from_millis(300))
         .unwrap();
-    assert_valid_report(&report, test_region_id, test_leader_id);
+    assert_valid_report(&report, test_region_id, test_peer_id);
 }
 
 #[test]
