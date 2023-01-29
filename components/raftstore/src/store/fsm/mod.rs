@@ -14,7 +14,7 @@ pub use self::{
         check_sst_for_ingestion, create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics,
         ApplyRes, ApplyRouter, Builder as ApplyPollerBuilder, CatchUpLogs, ChangeObserver,
         ChangePeer, ExecResult, GenSnapTask, Msg as ApplyTask, Notifier as ApplyNotifier, Proposal,
-        Registration, TaskRes as ApplyTaskRes,
+        Registration, SwitchWitness, TaskRes as ApplyTaskRes,
     },
     peer::{new_admin_request, DestroyPeerJob, PeerFsm, MAX_PROPOSAL_SIZE_RATIO},
     store::{
