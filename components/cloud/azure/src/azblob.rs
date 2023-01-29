@@ -224,6 +224,7 @@ impl BlobConfig for Config {
 
 enum RequestError {
     InvalidInput(Box<dyn std::error::Error + Send + Sync>, String),
+    InternalError(String),
     TimeOut(String),
 }
 
@@ -233,6 +234,7 @@ impl From<RequestError> for io::Error {
             RequestError::InvalidInput(e, tag) => {
                 Self::new(io::ErrorKind::InvalidInput, format!("{}: {}", tag, &e))
             }
+            RequestError::InternalError(msg) => Self::new(io::ErrorKind::Other, msg),
             RequestError::TimeOut(msg) => Self::new(io::ErrorKind::TimedOut, msg),
         }
     }
@@ -240,8 +242,15 @@ impl From<RequestError> for io::Error {
 
 impl RetryError for RequestError {
     fn is_retryable(&self) -> bool {
-        matches!(self, Self::TimeOut(_))
+        matches!(self, Self::TimeOut(_) | Self::InternalError(_))
     }
+}
+
+fn err_is_retryable(err_info: &str) -> bool {
+    // HTTP Code 503: The server is busy
+    // HTTP Code 500: Operation could not be completed within the specified time.
+    // More details seen in https://learn.microsoft.com/en-us/rest/api/storageservices/blob-service-error-codes
+    err_info.contains("status: 500") || err_info.contains("status: 503")
 }
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
@@ -308,10 +317,9 @@ impl AzureUploader {
                 Ok(_) => Ok(()),
                 Err(err) => {
                     let err_info = ToString::to_string(&err);
-                    if err_info.contains("busy") {
-                        // server is busy, retry later
-                        Err(RequestError::TimeOut(format!(
-                            "the resource is busy: {}, retry later",
+                    if err_is_retryable(&err_info) {
+                        Err(RequestError::InternalError(format!(
+                            "internal error: {}, retry later",
                             err_info
                         )))
                     } else {
@@ -764,5 +772,20 @@ mod tests {
         cd.set_attrs(attrs);
         cd.set_bucket(bucket);
         cd
+    }
+
+    #[tokio::test]
+    async fn test_error_retryable() {
+        let err_info = "HTTP error status (status: 503,... The server is busy.";
+        assert!(err_is_retryable(err_info));
+        let err_info = "HTTP error status (status: 500,... Operation could not be completed within the specified time.";
+        assert!(err_is_retryable(err_info));
+        let err = "NaN".parse::<u32>().unwrap_err();
+        let err1 = RequestError::InvalidInput(Box::new(err), "invalid-input".to_owned());
+        let err2 = RequestError::InternalError("internal-error".to_owned());
+        let err3 = RequestError::TimeOut("time-out".to_owned());
+        assert!(!err1.is_retryable());
+        assert!(err2.is_retryable());
+        assert!(err3.is_retryable());
     }
 }
