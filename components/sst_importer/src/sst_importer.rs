@@ -1019,9 +1019,9 @@ impl SstImporter {
 
         // perform iteration and key rewrite.
         let mut data_key = keys::DATA_PREFIX_KEY.to_vec();
-        let data_key_prefix_len = data_key.len();
+        let data_key_prefix_len = keys::DATA_PREFIX_KEY.len();
         let mut user_key = new_prefix.to_vec();
-        let user_key_prefix_len = user_key.len();
+        let user_key_prefix_len = new_prefix.len();
         let mut first_key = None;
 
         match range_start {
