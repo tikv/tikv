@@ -26,14 +26,16 @@ mod metrics;
 pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
+use kvproto::raft_serverpb::RaftMessage;
 
 pub use self::{
     config::{Config, ConsistencyCheckMethod},
     consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver},
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
-        BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver,
-        BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry, StoreHandle,
+        BoxMessageObserver, BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver,
+        BoxRoleObserver, BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry,
+        StoreHandle,
     },
     error::{Error, Result},
     region_info_accessor::{
@@ -333,6 +335,12 @@ pub trait RegionChangeObserver: Coprocessor {
     /// this write.
     fn pre_write_apply_state(&self, _: &mut ObserverContext<'_>) -> bool {
         true
+    }
+}
+
+pub trait MessageObserver: Coprocessor {
+    fn should_skip_raft_message(&self, _: &RaftMessage) -> bool {
+        false
     }
 }
 
