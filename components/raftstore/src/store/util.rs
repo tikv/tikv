@@ -358,7 +358,7 @@ pub fn check_flashback_state(
     //     be allowed.
     if is_in_flashback && !is_flashback_request {
         if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
-            if read_ts < flashback_start_ts {
+            if read_ts != 0 && read_ts < flashback_start_ts {
                 return Ok(());
             }
         }

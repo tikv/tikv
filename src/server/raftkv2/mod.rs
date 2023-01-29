@@ -153,15 +153,16 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
 
         let mut header = new_request_header(ctx.pb_ctx);
         let mut flags = 0;
-        if ctx.pb_ctx.get_stale_read() {
+        let need_encoded_start_ts = ctx.start_ts.map_or(true, |ts| !ts.is_zero());
+        if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
             flags |= WriteBatchFlags::STALE_READ.bits();
         }
         if ctx.allowed_in_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
         header.set_flags(flags);
-        // Set `start_ts` in `flag_data` for the check of stale read and flashback.
-        if ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
+        // Encode `start_ts` in `flag_data` for the check of stale read and flashback.
+        if need_encoded_start_ts {
             encode_start_ts_into_flag_data(
                 &mut header,
                 ctx.start_ts.unwrap_or_default().into_inner(),
