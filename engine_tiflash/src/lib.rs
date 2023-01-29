@@ -15,9 +15,7 @@
 //!
 //! Please read the engine_trait crate docs before hacking.
 #![allow(dead_code)]
-#![feature(backtrace)]
 #![cfg_attr(test, feature(test))]
-#![feature(generic_associated_types)]
 #![feature(let_chains)]
 #![feature(option_get_or_insert_default)]
 
