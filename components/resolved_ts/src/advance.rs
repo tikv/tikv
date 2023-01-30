@@ -554,7 +554,7 @@ mod tests {
     impl Tikv for MockTikv {
         fn check_leader(
             &mut self,
-            ctx: grpcio::RpcContext,
+            ctx: grpcio::RpcContext<'_>,
             req: CheckLeaderRequest,
             sink: ::grpcio::UnarySink<CheckLeaderResponse>,
         ) {
