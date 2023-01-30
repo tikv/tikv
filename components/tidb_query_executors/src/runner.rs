@@ -151,13 +151,16 @@ impl BatchExecutorsRunner<()> {
                     other_err!("PartitionTableScan executor not implemented");
                 }
                 ExecType::TypeSort => {
-                    other_err!("Sort executor not implemented");
+                    other_err!("TypeSort executor not implemented");
                 }
                 ExecType::TypeWindow => {
-                    other_err!("Window executor not implemented");
+                    other_err!("TypeWindow executor not implemented");
                 }
                 ExecType::TypeExpand => {
-                    other_err!("Expand executor not implemented");
+                    other_err!("TypeExpand executor not implemented");
+                }
+                ExecType::TypePartitionTopN => {
+                    todo!()
                 }
             }
         }
