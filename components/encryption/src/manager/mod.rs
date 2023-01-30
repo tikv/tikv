@@ -193,36 +193,40 @@ impl Dicts {
     }
 
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
-        let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let iv = if method != EncryptionMethod::Plaintext {
             Iv::new_ctr()
         } else {
             Iv::Empty
         };
-        let file = FileInfo {
+        let info = FileInfo {
             iv: iv.as_slice().to_vec(),
             key_id: self.current_key_id.load(Ordering::SeqCst),
             method,
             ..Default::default()
         };
+        self.insert_file(fname, &info)?;
+        Ok(info)
+    }
+
+    fn insert_file(&self, fname: &str, info: &FileInfo) -> Result<()> {
+        let mut file_dict_file = self.file_dict_file.lock().unwrap();
+        file_dict_file.insert(fname, info)?;
         let file_num = {
             let mut file_dict = self.file_dict.lock().unwrap();
-            file_dict.files.insert(fname.to_owned(), file.clone());
+            file_dict.files.insert(fname.to_owned(), info.clone());
             file_dict.files.len() as _
         };
-
-        file_dict_file.insert(fname, &file)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
-        if method != EncryptionMethod::Plaintext {
+        if info.method != EncryptionMethod::Plaintext {
             debug!("new encrypted file";
                   "fname" => fname,
-                  "method" => format!("{:?}", method),
-                  "iv" => hex::encode(iv.as_slice()));
+                  "method" => format!("{:?}", info.method),
+                  "iv" => hex::encode(info.iv.as_slice()));
         } else {
             debug!("new plaintext file"; "fname" => fname);
         }
-        Ok(file)
+        Ok(())
     }
 
     // If the file does not exist, return Ok(())
@@ -731,6 +735,17 @@ impl DataKeyManager {
             iv,
         };
         Ok(Some(encrypted_file))
+    }
+
+    #[inline]
+    pub fn get_file_raw(&self, fname: &str) -> Option<FileInfo> {
+        self.dicts.get_file(fname)
+    }
+
+    #[inline]
+    pub fn insert_file_raw(&self, fname: &str, info: FileInfo) -> IoResult<()> {
+        self.dicts.insert_file(fname, &info)?;
+        Ok(())
     }
 
     /// Return which method this manager is using.

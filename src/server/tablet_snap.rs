@@ -1,9 +1,24 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Sending and receiving tablet snapshot.
+//!
+//! # Format
+//!
+//! Data are sent in the unit of `SnapshotChunk`. The first chunk of a snapshot
+//! carries a Raft message that should be sent to the snapshot recipient after
+//! the snapshot is persisted there. Its data payload contains some metadata for
+//! the sake of compatibility.
+//!
+//! Subsequent chunks contains data of individual files. First chunk for a file
+//! includes metadata such as file name, encryption key. A chunk with payload
+//! shorter than expected is interpreted as EOF. Therefore sometimes an empty
+//! chunk needs to be sent to conclude a file.
+
 use std::{
     convert::{TryFrom, TryInto},
     fs::{self, File},
     io::{Read, Write},
+    mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -11,6 +26,7 @@ use std::{
     time::Duration,
 };
 
+use encryption_export::DataKeyManager;
 use file_system::{IoType, WithIoType};
 use futures::{
     future::{Future, TryFutureExt},
@@ -57,10 +73,6 @@ impl RecvTabletSnapContext {
             return Err(box_err!("no raft message in the first chunk"));
         }
 
-        let chunk_size = match head.take_data().try_into() {
-            Ok(buff) => usize::from_ne_bytes(buff),
-            Err(_) => return Err(box_err!("failed to get chunk size")),
-        };
         let meta = head.take_message();
         let key = TabletSnapKey::from_region_snap(
             meta.get_region_id(),
@@ -68,6 +80,13 @@ impl RecvTabletSnapContext {
             meta.get_message().get_snapshot(),
         );
         let io_type = io_type_from_raft_message(&meta)?;
+
+        let data = head.take_data();
+        let chunk_size = if data.len() >= 8 {
+            u64::from_le_bytes(data[..8].try_into().unwrap()) as usize
+        } else {
+            return Err(box_err!("failed to get chunk size"));
+        };
 
         Ok(RecvTabletSnapContext {
             key,
@@ -105,6 +124,7 @@ async fn send_snap_files(
     msg: RaftMessage,
     key: TabletSnapKey,
     limiter: Limiter,
+    key_manager: Option<Arc<DataKeyManager>>,
 ) -> Result<u64> {
     let path = mgr.tablet_gen_path(&key);
     info!("begin to send snapshot file";"snap_key" => %key);
@@ -117,45 +137,49 @@ async fn send_snap_files(
     let mut total_sent = msg.compute_size() as u64;
     let mut chunk = SnapshotChunk::default();
     chunk.set_message(msg);
-    chunk.set_data(usize::to_ne_bytes(SNAP_CHUNK_LEN).to_vec());
+    chunk.set_data(u64::to_le_bytes(SNAP_CHUNK_LEN as u64).to_vec());
     sender
         .feed((chunk, WriteFlags::default().buffer_hint(true)))
         .await?;
     for path in files {
         let name = path.file_name().unwrap().to_str().unwrap();
+        let mut chunk = SnapshotChunk::default();
+        if let Some(mgr) = &key_manager
+            && let Some(info) = mgr.get_file_raw(name)
+            && info.method != kvproto::encryptionpb::EncryptionMethod::Plaintext
+        {
+            chunk.set_encryption_info(info);
+        }
         let mut buffer = Vec::with_capacity(SNAP_CHUNK_LEN);
         buffer.push(name.len() as u8);
         buffer.extend_from_slice(name.as_bytes());
         let mut f = File::open(&path)?;
         let mut off = buffer.len();
         loop {
-            unsafe {
-                buffer.set_len(SNAP_CHUNK_LEN);
-            }
+            buffer.resize(SNAP_CHUNK_LEN, 0);
             // it should break if readed len is zero or the buffer is full.
             while off < SNAP_CHUNK_LEN {
                 let readed = f.read(&mut buffer[off..])?;
                 if readed == 0 {
-                    unsafe {
-                        buffer.set_len(off);
-                    }
+                    buffer.truncate(off);
                     break;
                 }
                 off += readed;
             }
             limiter.consume(off);
             total_sent += off as u64;
-            let mut chunk = SnapshotChunk::default();
-            chunk.set_data(buffer);
+            chunk.set_data(mem::take(&mut buffer));
             sender
-                .feed((chunk, WriteFlags::default().buffer_hint(true)))
+                .feed((
+                    mem::take(&mut chunk),
+                    WriteFlags::default().buffer_hint(true),
+                ))
                 .await?;
             // It should switch the next file if the read buffer len is less than the
             // SNAP_CHUNK_LEN.
             if off < SNAP_CHUNK_LEN {
                 break;
             }
-            buffer = Vec::with_capacity(SNAP_CHUNK_LEN);
             off = 0
         }
     }
@@ -172,6 +196,7 @@ pub fn send_snap(
     env: Arc<Environment>,
     mgr: TabletSnapManager,
     security_mgr: Arc<SecurityManager>,
+    key_manager: Option<Arc<DataKeyManager>>,
     cfg: &Config,
     addr: &str,
     msg: RaftMessage,
@@ -199,7 +224,8 @@ pub fn send_snap(
     let (sink, receiver) = client.snapshot()?;
     let send_task = async move {
         let sink = sink.sink_map_err(Error::from);
-        let total_size = send_snap_files(&mgr, sink, msg, key.clone(), limiter).await?;
+        let total_size =
+            send_snap_files(&mgr, sink, msg, key.clone(), limiter, key_manager).await?;
         let recv_result = receiver.map_err(Error::from).await;
         send_timer.observe_duration();
         drop(client);
@@ -222,6 +248,7 @@ async fn recv_snap_files(
     snap_mgr: TabletSnapManager,
     mut stream: impl Stream<Item = Result<SnapshotChunk>> + Unpin,
     limit: Limiter,
+    key_manager: Option<Arc<DataKeyManager>>,
 ) -> Result<RecvTabletSnapContext> {
     let head = stream
         .next()
@@ -234,32 +261,39 @@ async fn recv_snap_files(
     info!("begin to receive tablet snapshot files"; "file" => %path.display());
     fs::create_dir_all(&path)?;
     let _with_io_type = WithIoType::new(context.io_type);
-    loop {
-        let mut chunk = match stream.next().await {
-            Some(Ok(mut c)) if !c.has_message() => c.take_data(),
-            Some(_) => {
-                return Err(box_err!("duplicated metadata"));
-            }
-            None => break,
-        };
+    while let Some(chunk) = stream.next().await {
+        let mut chunk = chunk?;
+        if chunk.has_message() {
+            return Err(box_err!("duplicated metadata"));
+        }
+        let mut data = chunk.take_data();
         // the format of chunk:
         // |--name_len--|--name--|--content--|
-        let len = chunk[0] as usize;
-        let file_name = box_try!(std::str::from_utf8(&chunk[1..len + 1]));
+        let len = data[0] as usize;
+        let file_name = box_try!(std::str::from_utf8(&data[1..len + 1]));
         let p = path.join(file_name);
         let mut f = File::create(&p)?;
-        let mut size = chunk.len() - len - 1;
-        f.write_all(&chunk[len + 1..])?;
+        if chunk.has_encryption_info() {
+            let info = chunk.take_encryption_info();
+            if let Some(mgr) = &key_manager {
+                mgr.insert_file_raw(p.to_str().unwrap(), info)?;
+            } else {
+                return Err(box_err!("Encryption data key manager not available"));
+            }
+        }
+
+        let mut size = data.len() - len - 1;
+        f.write_all(&data[len + 1..])?;
         // It should switch next file if the chunk size is less than the SNAP_CHUNK_LEN.
-        while chunk.len() >= chunk_size {
-            chunk = match stream.next().await {
+        while data.len() >= chunk_size {
+            data = match stream.next().await {
                 Some(Ok(mut c)) if !c.has_message() => c.take_data(),
                 Some(_) => return Err(box_err!("duplicated metadata")),
                 None => return Err(box_err!("missing chunk")),
             };
-            f.write_all(&chunk[..])?;
-            limit.consume(chunk.len());
-            size += chunk.len();
+            f.write_all(&data[..])?;
+            limit.consume(data.len());
+            size += data.len();
         }
         debug!("received snap file"; "file" => %p.display(), "size" => size);
         SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
@@ -277,12 +311,13 @@ fn recv_snap<R: RaftExtension + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: TabletSnapManager,
+    key_manager: Option<Arc<DataKeyManager>>,
     raft_router: R,
     limit: Limiter,
 ) -> impl Future<Output = Result<()>> {
     let recv_task = async move {
         let stream = stream.map_err(Error::from);
-        let context = recv_snap_files(snap_mgr, stream, limit).await?;
+        let context = recv_snap_files(snap_mgr, stream, limit, key_manager).await?;
         context.finish(raft_router)
     };
     async move {
@@ -300,6 +335,7 @@ pub struct TabletRunner<R: RaftExtension + 'static> {
     env: Arc<Environment>,
     snap_mgr: TabletSnapManager,
     security_mgr: Arc<SecurityManager>,
+    key_manager: Option<Arc<DataKeyManager>>,
     pool: Runtime,
     raft_router: R,
     cfg_tracker: Tracker<Config>,
@@ -315,6 +351,7 @@ impl<R: RaftExtension> TabletRunner<R> {
         snap_mgr: TabletSnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
+        key_manager: Option<Arc<DataKeyManager>>,
         cfg: Arc<VersionTrack<Config>>,
     ) -> Self {
         let config = cfg.value().clone();
@@ -339,6 +376,7 @@ impl<R: RaftExtension> TabletRunner<R> {
                 .unwrap(),
             raft_router: r,
             security_mgr,
+            key_manager,
             cfg_tracker,
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
@@ -394,9 +432,11 @@ impl<R: RaftExtension> Runnable for TabletRunner<R> {
                 let raft_router = self.raft_router.clone();
                 let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
-                let limit = self.limiter.clone();
+                let limiter = self.limiter.clone();
+                let key_manager = self.key_manager.clone();
                 let task = async move {
-                    let result = recv_snap(stream, sink, snap_mgr, raft_router, limit).await;
+                    let result =
+                        recv_snap(stream, sink, snap_mgr, key_manager, raft_router, limiter).await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
                         error!("failed to recv snapshot"; "err" => %e);
@@ -423,8 +463,16 @@ impl<R: RaftExtension> Runnable for TabletRunner<R> {
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
                 let limit = self.limiter.clone();
-                let send_task =
-                    send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg, limit);
+                let send_task = send_snap(
+                    env,
+                    mgr,
+                    security_mgr,
+                    self.key_manager.clone(),
+                    &self.cfg.clone(),
+                    &addr,
+                    msg,
+                    limit,
+                );
                 let task = async move {
                     let res = match send_task {
                         Err(e) => Err(e),
@@ -521,12 +569,13 @@ mod tests {
             msg,
             snap_key.clone(),
             limiter.clone(),
+            None,
         ))
         .unwrap();
 
         let stream = rx.map(|x: (SnapshotChunk, WriteFlags)| Ok(x.0));
         let final_path = recv_snap_manager.final_recv_path(&snap_key);
-        let r = block_on(recv_snap_files(recv_snap_manager, stream, limiter)).unwrap();
+        let r = block_on(recv_snap_files(recv_snap_manager, stream, limiter, None)).unwrap();
         assert_eq!(r.key, snap_key);
         std::thread::sleep(std::time::Duration::from_secs(1));
         let dir = std::fs::read_dir(final_path).unwrap();

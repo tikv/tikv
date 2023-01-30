@@ -1286,7 +1286,11 @@ where
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
             .server
-            .start(server_config, self.security_mgr.clone())
+            .start(
+                server_config,
+                self.security_mgr.clone(),
+                self.encryption_key_manager.clone(),
+            )
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
     }
 

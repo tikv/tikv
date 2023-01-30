@@ -9,6 +9,7 @@ use std::{
 };
 
 use api_version::KvFormat;
+use encryption_export::DataKeyManager;
 use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
@@ -251,6 +252,7 @@ where
         &mut self,
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<()> {
         match self.snap_mgr.clone() {
             Either::Left(mgr) => {
@@ -269,6 +271,7 @@ where
                     mgr,
                     self.raft_router.clone(),
                     security_mgr,
+                    key_manager,
                     cfg,
                 );
                 self.snap_worker.start(snap_runner);
@@ -589,7 +592,7 @@ mod tests {
         .unwrap();
 
         server.build_and_bind().unwrap();
-        server.start(cfg, security_mgr).unwrap();
+        server.start(cfg, security_mgr, None).unwrap();
 
         let mut trans = server.transport();
         router.report_unreachable(0, 0).unwrap();

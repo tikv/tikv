@@ -454,7 +454,7 @@ impl ServerCluster {
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
             .max_total_size(cfg.server.snap_max_total_size.0)
-            .encryption_key_manager(key_manager)
+            .encryption_key_manager(key_manager.clone())
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(true)
             .build(tmp_str);
@@ -620,7 +620,7 @@ impl ServerCluster {
             )
             .unwrap();
 
-        server.start(server_cfg, security_mgr).unwrap();
+        server.start(server_cfg, security_mgr, key_manager).unwrap();
 
         self.metas.insert(
             node_id,
