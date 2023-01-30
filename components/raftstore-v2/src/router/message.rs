@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 
+use batch_system::ResourceMetered;
 use kvproto::{
     metapb,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
@@ -197,6 +198,8 @@ pub enum PeerMsg {
     WaitFlush(super::FlushChannel),
 }
 
+impl ResourceMetered for PeerMsg {}
+
 impl PeerMsg {
     pub fn raft_query(req: RaftCmdRequest) -> (Self, QueryResSubscriber) {
         let (ch, sub) = QueryResChannel::pair();
@@ -259,3 +262,5 @@ pub enum StoreMsg {
     Start,
     StoreUnreachable { to_store_id: u64 },
 }
+
+impl ResourceMetered for StoreMsg {}

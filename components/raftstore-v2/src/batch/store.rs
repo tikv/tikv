@@ -749,7 +749,7 @@ where
 {
     let (store_tx, store_fsm) = StoreFsm::new(cfg, store_id, logger.clone());
     let (router, system) =
-        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
+        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm, None);
     let system = StoreSystem {
         system,
         workers: None,

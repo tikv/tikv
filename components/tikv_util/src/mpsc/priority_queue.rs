@@ -7,7 +7,9 @@ use std::sync::{
 
 use crossbeam::channel::{RecvError, SendError, TryRecvError, TrySendError};
 use crossbeam_skiplist::SkipMap;
-use parking_lot::{Condvar, Mutex};
+use parking_lot_core::{
+    park, unpark_all, unpark_one, SpinWait, DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN,
+};
 
 // Create a priority based channel. Sender can send message with priority of
 // u64, and receiver will receive messages in ascending order of priority. For
@@ -54,8 +56,6 @@ impl<T> Drop for Cell<T> {
 #[derive(Default)]
 struct PriorityQueue<T> {
     queue: SkipMap<MapKey, Cell<T>>,
-    disconnected: Mutex<bool>,
-    available: Condvar,
 
     sequencer: AtomicU64,
 
@@ -67,8 +67,6 @@ impl<T> PriorityQueue<T> {
     pub fn new() -> Self {
         Self {
             queue: SkipMap::new(),
-            disconnected: Mutex::new(false),
-            available: Condvar::new(),
             sequencer: AtomicU64::new(0),
             senders: AtomicUsize::new(1),
             receivers: AtomicUsize::new(1),
@@ -80,6 +78,10 @@ impl<T> PriorityQueue<T> {
             priority: pri,
             sequence: self.sequencer.fetch_add(1, Ordering::Relaxed),
         }
+    }
+
+    fn is_disconnected(&self) -> bool {
+        self.senders.load(Ordering::SeqCst) == 0
     }
 }
 
@@ -109,7 +111,10 @@ impl<T: Send + 'static> Sender<T> {
         self.inner
             .queue
             .insert(self.inner.get_map_key(pri), Cell::new(msg));
-        self.inner.available.notify_one();
+        let addr = &*self.inner as *const PriorityQueue<T> as usize;
+        unsafe {
+            unpark_one(addr, |_| DEFAULT_UNPARK_TOKEN);
+        }
         Ok(())
     }
 
@@ -132,8 +137,10 @@ impl<T: Send> Drop for Sender<T> {
     fn drop(&mut self) {
         let old = self.inner.senders.fetch_sub(1, Ordering::AcqRel);
         if old <= 1 {
-            *self.inner.disconnected.lock() = true;
-            self.inner.available.notify_all();
+            let addr = &*self.inner as *const PriorityQueue<T> as usize;
+            unsafe {
+                unpark_all(addr, DEFAULT_UNPARK_TOKEN);
+            }
         }
     }
 }
@@ -146,14 +153,13 @@ impl<T: Send + 'static> Receiver<T> {
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         match self.inner.queue.pop_front() {
             Some(entry) => Ok(entry.value().take().unwrap()),
-            None if self.inner.senders.load(Ordering::SeqCst) == 0 => {
-                Err(TryRecvError::Disconnected)
-            }
+            None if self.inner.is_disconnected() => Err(TryRecvError::Disconnected),
             None => Err(TryRecvError::Empty),
         }
     }
 
     pub fn recv(&self) -> Result<T, RecvError> {
+        let mut spin = SpinWait::new();
         loop {
             match self.try_recv() {
                 Ok(msg) => return Ok(msg),
@@ -161,17 +167,25 @@ impl<T: Send + 'static> Receiver<T> {
                     return Err(RecvError);
                 }
                 Err(TryRecvError::Empty) => {
-                    let mut disconnected = self.inner.disconnected.lock();
-                    if *disconnected {
-                        return Err(RecvError);
+                    if spin.spin() {
+                        continue;
                     }
-                    self.inner.available.wait(&mut disconnected);
+                    let addr = &*self.inner as *const PriorityQueue<T> as usize;
+                    unsafe {
+                        park(
+                            addr,
+                            || self.len() == 0 && !self.inner.is_disconnected(),
+                            || {},
+                            |_, _| {},
+                            DEFAULT_PARK_TOKEN,
+                            None,
+                        );
+                    }
                 }
             }
         }
     }
 
-    #[cfg(test)]
     fn len(&self) -> usize {
         self.inner.queue.len()
     }
