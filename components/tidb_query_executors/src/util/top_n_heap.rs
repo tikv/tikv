@@ -10,14 +10,19 @@ use tidb_query_datatype::codec::{
 use tidb_query_expr::RpnStackNode;
 use tipb::FieldType;
 
-pub struct Heap {
+/// TopNHeap is the common data structure used in TopN-like executors.
+pub struct TopNHeap {
     /// The maximum number of rows in the heap.
     n: usize,
     /// The heap.
     heap: BinaryHeap<HeapItemUnsafe>,
 }
 
-impl Heap {
+impl TopNHeap {
+    /// parameters:
+    /// - n: The maximum number of rows in the heaps
+    /// note: to avoid large N causing OOM, the initial capacity will be limited
+    /// up to 1024.
     pub fn new(n: usize) -> Self {
         Self {
             n,

@@ -14,7 +14,7 @@ use tipb::{Expr, FieldType, TopN};
 use crate::{
     interface::*,
     util::{
-        top_n_heap::{Heap, HeapItemSourceData, HeapItemUnsafe},
+        top_n_heap::{HeapItemSourceData, HeapItemUnsafe, TopNHeap},
         *,
     },
 };
@@ -25,7 +25,7 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// This field is placed before `eval_columns_buffer_unsafe`, `order_exprs`,
     /// `order_is_desc` and `src` because it relies on data in those fields
     /// and we want this field to be dropped first.
-    heap: Heap,
+    heap: TopNHeap,
 
     /// A collection of all evaluated columns. This is to avoid repeated
     /// allocations in each `next_batch()`.
@@ -100,7 +100,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Self {
-            heap: Heap::new(n),
+            heap: TopNHeap::new(n),
             eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
@@ -129,7 +129,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Self {
-            heap: Heap::new(n),
+            heap: TopNHeap::new(n),
             eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
@@ -166,7 +166,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Ok(Self {
-            heap: Heap::new(n),
+            heap: TopNHeap::new(n),
             // Simply large enough to avoid repeated allocations
             eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
             order_exprs: order_exprs.into_boxed_slice(),
