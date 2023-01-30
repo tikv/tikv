@@ -166,6 +166,10 @@ impl RaftEngineReadOnly for RocksEngine {
         panic!()
     }
 
+    fn get_dirty_mark(&self, _raft_group_id: u64, _tablet_index: u64) -> Result<bool> {
+        panic!()
+    }
+
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
         self.get_msg_cf(CF_DEFAULT, keys::RECOVER_STATE_KEY)
     }
@@ -435,6 +439,15 @@ impl RaftLogBatch for RocksWriteBatchVec {
         _cf: &str,
         _tablet_index: u64,
         _apply_index: u64,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_dirty_mark(
+        &mut self,
+        _raft_group_id: u64,
+        _tablet_index: u64,
+        _dirty: bool,
     ) -> Result<()> {
         panic!()
     }

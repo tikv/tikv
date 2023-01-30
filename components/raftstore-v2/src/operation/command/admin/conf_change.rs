@@ -9,7 +9,7 @@
 
 use std::time::Instant;
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
     metapb::{self, PeerRole},
     raft_cmdpb::{AdminRequest, AdminResponse, ChangePeerRequest, RaftCmdRequest},
@@ -146,7 +146,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let remove_self = conf_change.region_state.get_state() == PeerState::Tombstone;
         self.storage_mut()
-            .set_region_state(conf_change.region_state);
+            .set_region_state(conf_change.region_state.clone());
         if self.is_leader() {
             info!(
                 self.logger,
@@ -189,7 +189,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.raft_group().raft.state,
         );
         if remove_self {
+            // When self is destroyed, all metas will be cleaned in `start_destroy`.
             self.mark_for_destroy(None);
+        } else {
+            let region_id = self.region_id();
+            self.state_changes_mut()
+                .put_region_state(region_id, conf_change.index, &conf_change.region_state)
+                .unwrap();
+            self.set_has_extra_write();
         }
     }
 }
@@ -254,6 +261,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                         "changes" => ?changes,
                         "legacy" => legacy,
                         "original region" => ?region, "err" => ?e);
+                        return Err(e);
                     }
                 }
                 let conf_ver = region.get_region_epoch().get_conf_ver() + changes.len() as u64;

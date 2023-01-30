@@ -449,6 +449,11 @@ where
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// available snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
+        fail_point!("ignore generate snapshot", self.peer_id == 1, |_| {
+            Err(raft::Error::Store(
+                raft::StorageError::SnapshotTemporarilyUnavailable,
+            ))
+        });
         if self.peer.as_ref().unwrap().is_witness {
             // witness could be the leader for a while, do not generate snapshot now
             return Err(raft::Error::Store(
@@ -457,6 +462,18 @@ where
         }
 
         if find_peer_by_id(&self.region, to).map_or(false, |p| p.is_witness) {
+            // Although we always sending snapshot task behind apply task to get latest
+            // snapshot, we can't use `last_applying_idx` here, as below the judgment
+            // condition will generate an witness snapshot directly, the new non-witness
+            // will ingore this mismatch snapshot and can't request snapshot successfully
+            // again.
+            if self.applied_index() < request_index {
+                // It may be a request from non-witness. In order to avoid generating mismatch
+                // snapshots, wait for apply non-witness to complete
+                return Err(raft::Error::Store(
+                    raft::StorageError::SnapshotTemporarilyUnavailable,
+                ));
+            }
             // generate an empty snapshot for witness directly
             return Ok(util::new_empty_snapshot(
                 self.region.clone(),
@@ -666,6 +683,7 @@ where
             "peer_id" => self.peer_id,
             "region" => ?region,
             "state" => ?self.apply_state(),
+            "for_witness" => for_witness,
         );
 
         Ok((region, for_witness))

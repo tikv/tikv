@@ -55,6 +55,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, RegionInfoAccessor},
     store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
 };
+use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use serde::{
@@ -115,7 +116,8 @@ fn bloom_filter_ratio(et: EngineType) -> f64 {
         EngineType::RaftKv => 0.1,
         // In v2, every peer has its own tablet. The data scale is about tens of
         // GiBs. We only need a small portion for those key.
-        EngineType::RaftKv2 => 0.005,
+        // TODO: disable it for now until find out the proper ratio
+        EngineType::RaftKv2 => 0.0,
     }
 }
 
@@ -1228,6 +1230,10 @@ impl DbConfig {
                 self.write_buffer_limit.get_or_insert(ReadableSize(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                 ));
+                self.defaultcf.disable_write_stall = true;
+                self.writecf.disable_write_stall = true;
+                self.lockcf.disable_write_stall = true;
+                self.raftcf.disable_write_stall = true;
             }
         }
     }
@@ -1390,7 +1396,7 @@ impl DbConfig {
         // prevent mistakenly inputting too large values, the max limit is made
         // according to the cpu quota * 10. Notice 10 is only an estimate, not an
         // empirical value.
-        let limit = SysQuota::cpu_cores_quota() as i32 * 10;
+        let limit = (SysQuota::cpu_cores_quota() * 10.0) as i32;
         if self.max_background_jobs <= 0 || self.max_background_jobs > limit {
             return Err(format!(
                 "max_background_jobs should be greater than 0 and less than or equal to {:?}",
@@ -3039,6 +3045,9 @@ pub struct TikvConfig {
 
     #[online_config(skip)]
     pub causal_ts: CausalTsConfig,
+
+    #[online_config(submodule)]
+    pub resource_control: ResourceControlConfig,
 }
 
 impl Default for TikvConfig {
@@ -3081,6 +3090,7 @@ impl Default for TikvConfig {
             resource_metering: ResourceMeteringConfig::default(),
             backup_stream: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
+            resource_control: ResourceControlConfig::default(),
         }
     }
 }
@@ -4920,14 +4930,8 @@ mod tests {
         let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
 
         let check_scale_pool_size = |size: usize, ok: bool| {
-            let origin_pool_size = scheduler
-                .get_sched_pool(CommandPri::Normal)
-                .pool
-                .get_pool_size();
-            let origin_pool_size_high = scheduler
-                .get_sched_pool(CommandPri::High)
-                .pool
-                .get_pool_size();
+            let origin_pool_size = scheduler.get_sched_pool().get_pool_size(CommandPri::Normal);
+            let origin_pool_size_high = scheduler.get_sched_pool().get_pool_size(CommandPri::High);
             let res = cfg_controller
                 .update_config("storage.scheduler-worker-pool-size", &format!("{}", size));
             let (expected_size, expected_size_high) = if ok {
@@ -4938,17 +4942,11 @@ mod tests {
                 (origin_pool_size, origin_pool_size_high)
             };
             assert_eq!(
-                scheduler
-                    .get_sched_pool(CommandPri::Normal)
-                    .pool
-                    .get_pool_size(),
+                scheduler.get_sched_pool().get_pool_size(CommandPri::Normal),
                 expected_size
             );
             assert_eq!(
-                scheduler
-                    .get_sched_pool(CommandPri::High)
-                    .pool
-                    .get_pool_size(),
+                scheduler.get_sched_pool().get_pool_size(CommandPri::High),
                 expected_size_high
             );
         };

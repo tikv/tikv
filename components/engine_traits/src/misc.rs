@@ -115,6 +115,8 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>>;
 
+    fn get_num_keys(&self) -> Result<u64>;
+
     fn get_range_entries_and_versions(
         &self,
         cf: &str,

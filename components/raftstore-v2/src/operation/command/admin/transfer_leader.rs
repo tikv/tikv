@@ -3,22 +3,19 @@
 use std::cmp::Ordering;
 
 use bytes::Bytes;
-use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
-use fail::fail_point;
+use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     disk_usage::DiskUsage,
     metapb,
     raft_cmdpb::{
-        AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest, RaftRequestHeader,
-        TransferLeaderRequest,
+        AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest, TransferLeaderRequest,
     },
 };
-use parking_lot::RwLockWriteGuard;
 use raft::{eraftpb, ProgressState, Storage};
 use raftstore::{
     store::{
         fsm::new_admin_request, make_transfer_leader_response, metrics::PEER_ADMIN_CMD_COUNTER,
-        LocksStatus, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+        TRANSFER_LEADER_COMMAND_REPLY_CTX,
     },
     Result,
 };
@@ -30,9 +27,8 @@ use super::AdminCmdResult;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
-    operation::command::write::SimpleWriteEncoder,
     raft::{Apply, Peer},
-    router::{CmdResChannel, PeerMsg, PeerTick},
+    router::{CmdResChannel, PeerMsg},
 };
 
 fn transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
@@ -295,91 +291,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return Some("log gap");
         }
         None
-    }
-
-    // Returns whether we should propose another TransferLeader command. This is
-    // for:
-    // - Considering the amount of pessimistic locks can be big, it can reduce
-    //   unavailable time caused by waiting for the transferee catching up logs.
-    // - Make transferring leader strictly after write commands that executes before
-    //   proposing the locks, preventing unexpected lock loss.
-    fn propose_locks_before_transfer_leader<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        msg: &eraftpb::Message,
-    ) -> bool {
-        // 1. Disable in-memory pessimistic locks.
-
-        // Clone to make borrow checker happy when registering ticks.
-        let txn_ext = self.txn_ext().clone();
-        let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
-
-        // If the message context == TRANSFER_LEADER_COMMAND_REPLY_CTX, the message
-        // is a reply to a transfer leader command before. If the locks status remain
-        // in the TransferringLeader status, we can safely initiate transferring leader
-        // now.
-        // If it's not in TransferringLeader status now, it is probably because several
-        // ticks have passed after proposing the locks in the last time and we
-        // reactivate the memory locks. Then, we should propose the locks again.
-        if msg.get_context() == TRANSFER_LEADER_COMMAND_REPLY_CTX
-            && pessimistic_locks.status == LocksStatus::TransferringLeader
-        {
-            return false;
-        }
-
-        // If it is not writable, it's probably because it's a retried TransferLeader
-        // and the locks have been proposed. But we still need to return true to
-        // propose another TransferLeader command. Otherwise, some write requests that
-        // have marked some locks as deleted will fail because raft rejects more
-        // proposals.
-        // It is OK to return true here if it's in other states like MergingRegion or
-        // NotLeader. In those cases, the locks will fail to propose and nothing will
-        // happen.
-        if !pessimistic_locks.is_writable() {
-            return true;
-        }
-        pessimistic_locks.status = LocksStatus::TransferringLeader;
-        self.add_pending_tick(PeerTick::ReactivateMemoryLock);
-
-        // 2. Propose pessimistic locks
-        if pessimistic_locks.is_empty() {
-            return false;
-        }
-        // FIXME: Raft command has size limit. Either limit the total size of
-        // pessimistic locks in a region, or split commands here.
-        let mut encoder = SimpleWriteEncoder::with_capacity(512);
-        let mut lock_count = 0;
-        {
-            // Downgrade to a read guard, do not block readers in the scheduler as far as
-            // possible.
-            let pessimistic_locks = RwLockWriteGuard::downgrade(pessimistic_locks);
-            fail_point!("invalidate_locks_before_transfer_leader");
-            for (key, (lock, deleted)) in &*pessimistic_locks {
-                if *deleted {
-                    continue;
-                }
-                lock_count += 1;
-                encoder.put(CF_LOCK, key.as_encoded(), &lock.to_lock().to_bytes());
-            }
-        }
-        if lock_count == 0 {
-            // If the map is not empty but all locks are deleted, it is possible that a
-            // write command has just marked locks deleted but not proposed yet.
-            // It might cause that command to fail if we skip proposing the
-            // extra TransferLeader command here.
-            return true;
-        }
-        let mut header = Box::<RaftRequestHeader>::default();
-        header.set_region_id(self.region_id());
-        header.set_region_epoch(self.region().get_region_epoch().clone());
-        header.set_peer(self.peer().clone());
-        info!(
-            self.logger,
-            "propose {} locks before transferring leader", lock_count;
-        );
-        let PeerMsg::SimpleWrite(write) = PeerMsg::simple_write(header, encoder.encode()).0 else {unreachable!()};
-        self.on_simple_write(ctx, write.header, write.data, write.ch);
-        true
     }
 }
 
