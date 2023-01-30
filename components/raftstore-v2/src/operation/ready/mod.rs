@@ -228,11 +228,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         if msg.has_extra_msg() {
-            match msg.get_extra_msg().get_type() {
-                ExtraMessageType::MsgGcPeerResponse => self.on_gc_peer_response(&msg),
-                _ => unimplemented!(),
-            }
-            return;
+            unimplemented!();
         }
 
         // TODO: drop all msg append when the peer is uninitialized and has conflict

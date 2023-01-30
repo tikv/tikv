@@ -306,7 +306,7 @@ impl Store {
     }
 }
 
-/// Tell leader that target peer is destroyed.
+/// Tell leader that `to_peer` is destroyed.
 fn report_peer_destroyed(tombstone_msg: &mut RaftMessage) -> Option<RaftMessage> {
     let to_region_id = if tombstone_msg.has_extra_msg() {
         assert_eq!(
