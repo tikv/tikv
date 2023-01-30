@@ -204,14 +204,18 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         }
         let kv_engine =
             engine_rocks::util::new_engine_opt(path.to_str().unwrap(), db_opts, cf_opts);
-        if let Err(e) = &kv_engine {
-            error!("failed to create tablet"; "id" => ctx.id, "suffix" => ?ctx.suffix, "path" => %path.display(), "err" => ?e);
-        } else if let Ok(engine) = &kv_engine {
-            engine
-                .set_db_options(&[("stats_persist_period_sec", "0")])
-                .unwrap();
-            if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
-                listener.clone_with(ctx.id, suffix).on_created();
+        match &kv_engine {
+            Err(e) => {
+                error!("failed to create tablet"; "id" => ctx.id, "suffix" => ?ctx.suffix, "path" => %path.display(), "err" => ?e);
+            }
+            Ok(engine) => {
+                // disable the stats history as it occupies too much memory in multi-rocksdb
+                engine
+                    .set_db_options(&[("stats_persist_period_sec", "0")])
+                    .unwrap();
+                if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
+                    listener.clone_with(ctx.id, suffix).on_created();
+                }
             }
         }
 
