@@ -140,7 +140,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     }
 
     pub fn new(
-        config: std::sync::Arc<EvalConfig>,
+        config: Arc<EvalConfig>,
         src: Src,
         order_exprs_def: Vec<Expr>,
         order_is_desc: Vec<bool>,
@@ -182,7 +182,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     async fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
         // Use max batch size from the beginning because top N
         // always needs to calculate over all data.
-        let src_result = self.src.next_batch(crate::runner::BATCH_MAX_SIZE).await;
+        let src_result = self.src.next_batch(BATCH_MAX_SIZE).await;
 
         self.context.warnings = src_result.warnings;
 
@@ -474,10 +474,10 @@ impl HeapItemUnsafe {
             if ord == Ordering::Equal {
                 continue;
             }
-            if !order_is_desc[column_idx] {
-                return Ok(ord);
+            return if !order_is_desc[column_idx] {
+                Ok(ord)
             } else {
-                return Ok(ord.reverse());
+                Ok(ord.reverse())
             }
         }
 
