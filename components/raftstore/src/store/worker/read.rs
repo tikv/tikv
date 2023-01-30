@@ -822,7 +822,10 @@ where
         // Check whether the region is in the flashback state and the local read could
         // be performed.
         let is_in_flashback = delegate.region.is_in_flashback;
-        if let Err(e) = util::check_flashback_state(is_in_flashback, req, region_id, false) {
+        let flashback_start_ts = delegate.region.flashback_start_ts;
+        if let Err(e) =
+            util::check_flashback_state(is_in_flashback, flashback_start_ts, req, region_id, false)
+        {
             TLS_LOCAL_READ_METRICS.with(|m| match e {
                 Error::FlashbackNotPrepared(_) => {
                     m.borrow_mut().reject_reason.flashback_not_prepared.inc()
