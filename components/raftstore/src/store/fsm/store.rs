@@ -812,7 +812,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .raft_metrics
             .event_time
             .store_msg
-            .observe(duration_to_sec(timer.saturating_elapsed()));
+            .observe(timer.saturating_elapsed_secs());
     }
 
     fn start(&mut self, store: metapb::Store) {
