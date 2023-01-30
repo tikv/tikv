@@ -1,16 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tidb_query_common::Result;
-use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
-use tidb_query_expr::{RpnExpression, RpnStackNode};
-use tipb::FieldType;
-
 pub mod aggr_executor;
 pub mod hash_aggr_helper;
 #[cfg(test)]
 pub mod mock_executor;
 pub mod scan_executor;
 pub mod top_n_heap;
+
+use tidb_query_common::Result;
+use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
+use tidb_query_expr::{RpnExpression, RpnStackNode};
+use tipb::FieldType;
 
 /// Decodes all columns that are not decoded.
 pub fn ensure_columns_decoded(
