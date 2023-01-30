@@ -800,6 +800,12 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::AwakenRegions { abnormal_stores } => {
                     self.on_wake_up_regions(abnormal_stores);
                 }
+                StoreMsg::UpdateStoreWriters { size, notifier } => {
+                    self.ctx.write_senders.update(size);
+                    if let Err(e) = notifier.send(0) {
+                        error!("failed to update store writers"; "err_msg" => ?e);
+                    }
+                }
             }
         }
         self.ctx
@@ -904,8 +910,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             self.poll_ctx.update_ticks_timeout();
             update_cfg(&incoming.store_batch_system);
         }
-        // refresh store writers
-        self.poll_ctx.write_senders.refresh();
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
@@ -1051,7 +1055,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
         } else {
-            let writer_id = rand::random::<usize>() % self.poll_ctx.write_senders.capacity();
+            // If the size of store writers has been resized by background worker, the
+            // `capacity()` will be inconsistent with `cfg.store_io_pool_size`
+            // during the asynchronous updating of `write_senders.capacity()`. The valid
+            // size of store writers should be the smaller one.
+            let writer_id = rand::random::<usize>()
+                % std::cmp::min(
+                    self.poll_ctx.write_senders.capacity(),
+                    self.poll_ctx.cfg.store_io_pool_size,
+                );
             if let Err(err) = self.poll_ctx.write_senders.try_send(
                 writer_id,
                 WriteMsg::LatencyInspect {

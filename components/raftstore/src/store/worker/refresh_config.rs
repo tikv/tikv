@@ -6,6 +6,7 @@ use std::{
 };
 
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
+use crossbeam::channel;
 use file_system::{set_io_type, IoType};
 use tikv_util::{
     debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable,
@@ -18,6 +19,7 @@ use crate::store::{
         store::{RaftRouter, StoreFsm},
         PeerFsm,
     },
+    msg::StoreMsg,
     transport::Transport,
     PersistedNotifier,
 };
@@ -261,19 +263,73 @@ where
     /// Resizes the count of background threads in store_writers.
     fn resize_store_writers(&mut self, size: usize) {
         // To avoid concurrent racing write when decreasing or increasing background
-        // threads for async-ios, the `resize` progress will take the following steps:
-        // [1] Release all existing pollers. It will make sure all existing or
-        // unpersisted messages have been persisted into raftdb.
-        // [2] Resize the async-ios.
-        // [3] Restart all poller.
-        if self.writer_ctrl.store_writers.need_resize(size) {
-            let current_pool_size = self.raft_pool.state.expected_pool_size;
-            self.resize_raft_pool(0);
-            let writer_meta = self.writer_ctrl.writer_meta.clone();
-            if let Err(e) = self.writer_ctrl.store_writers.resize(size, writer_meta) {
-                error!("failed to resize store writers size, err_msg: {:?}", e);
+        // threads for async-ios, the `resize` progress will restart all pollers to
+        // confirm that `poll_ctx.write_senders` in each PollContext could be refreshed.
+        let current_size = self.writer_ctrl.store_writers.size();
+        match current_size.cmp(&size) {
+            std::cmp::Ordering::Greater => {
+                // When decreasing the size of store writers, the size of store writers
+                // should be updated in advance.
+                self.send_refresh_msg(size as i64);
+                let current_pool_size = self.raft_pool.state.expected_pool_size;
+                self.resize_raft_pool(0);
+                if let Err(e) = self
+                    .writer_ctrl
+                    .store_writers
+                    .decrease_by(current_size - size)
+                {
+                    error!("failed to decrease store writers size";
+                            "err_msg" => ?e);
+                }
+                // Refresh
+                self.resize_raft_pool(current_pool_size);
             }
-            self.resize_raft_pool(current_pool_size);
+            std::cmp::Ordering::Less => {
+                let writer_meta = self.writer_ctrl.writer_meta.clone();
+                if let Err(e) = self
+                    .writer_ctrl
+                    .store_writers
+                    .increase_by(size - current_size, writer_meta)
+                {
+                    error!("failed to increase store writers size";
+                            "err_msg" => ?e);
+                }
+                self.send_refresh_msg(-1_i64);
+                // Refresh
+                let current_pool_size = self.raft_pool.state.expected_pool_size;
+                self.resize_raft_pool(0);
+                self.resize_raft_pool(current_pool_size);
+            }
+            std::cmp::Ordering::Equal => return,
+        }
+        info!(
+            "resize store writers pool";
+            "from" => current_size,
+            "to" => size
+        );
+    }
+
+    /// Send message to notify Poller to update the size of store writers.
+    fn send_refresh_msg(&mut self, size: i64) {
+        // Build one-shot mailbox to wait for the completion of updating of write
+        // senders.
+        let (sender, receiver) = channel::unbounded();
+        if let Err(e) = self
+            .raft_pool
+            .router
+            .send_control(StoreMsg::UpdateStoreWriters {
+                size,
+                notifier: sender,
+            })
+        {
+            error!(
+                "failed to notify refresh store writers message";
+                "err_msg" => ?e
+            );
+            return;
+        }
+        if let Err(e) = receiver.recv() {
+            error!("failed to notify refresh store writers"; "error" => ?e);
         }
     }
 }
