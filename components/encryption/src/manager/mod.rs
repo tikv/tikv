@@ -17,15 +17,17 @@ use engine_traits::{
 };
 use fail::fail_point;
 use file_system::File;
-use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
-use protobuf::Message;
+use kvproto::encryptionpb::{
+    DataKey, EncryptionMethod, FileDictionary, FileDictionaryV2, FileInfo, KeyDictionary,
+};
+use protobuf::{parse_from_bytes, Message};
 use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, thd_name, warn};
 
 use crate::{
     config::EncryptionConfig,
     crypter::{self, Iv},
     encrypted_file::EncryptedFile,
-    file_dict_file::FileDictionaryFile,
+    file_dict_file::{DataKeyDictionaryItem, DictionaryFile},
     io::{DecrypterReader, EncrypterWriter},
     master_key::Backend,
     metrics::*,
@@ -34,12 +36,32 @@ use crate::{
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
+const FILE_DICT_V2_NAME: &str = "file.dict.v2";
 const ROTATE_CHECK_PERIOD: u64 = 600; // 10min
 
 struct Dicts {
-    // Maps data file paths to key id and metadata. This file is stored as plaintext.
+    base: PathBuf,
+    rotation_period: Duration,
+    // Directories directly under these (`whitelist/<name>`) will be represented using Dir ID. This
+    // makes it possible to rename directory without modifying records of every file.
+    //
+    // The reasons for having a whitelist instead of treating all directories this way:
+    // (1) keep v1 data keys file backward compatible.
+    // (2) make it easy to find the right prefix of a file path to locate its Dir ID.
+    v2_directory_whitelist: Vec<String>,
+
+    // File Full Path -> FileInfo.
     file_dict: Mutex<FileDictionary>,
-    file_dict_file: Mutex<FileDictionaryFile>,
+    // `data_keys` stored as plaintext.
+    file_dict_file: Mutex<DictionaryFile<FileDictionary>>,
+
+    // Dir Path -> Dir ID; (Dir ID + File Relative Path) -> FileInfo.
+    file_dict_v2: Mutex<FileDictionaryV2>,
+    // `file_dict_v2` stored as plaintext.
+    file_dict_file_v2: Mutex<DictionaryFile<FileDictionaryV2>>,
+    // Used to allocate new Dir ID.
+    next_dir_id: AtomicU64,
+
     // Maps data key id to data keys, together with metadata. Also stores the data
     // key id used to encrypt the encryption file dictionary. The content is encrypted
     // using master key.
@@ -48,8 +70,6 @@ struct Dicts {
     // write it back to `key_dict`. Reader should always use this atomic, instead of
     // key_dict.current_key_id, since the latter can reflect an update-in-progress key.
     current_key_id: AtomicU64,
-    rotation_period: Duration,
-    base: PathBuf,
 }
 
 impl Dicts {
@@ -60,20 +80,29 @@ impl Dicts {
         file_dictionary_rewrite_threshold: u64,
     ) -> Result<Dicts> {
         Ok(Dicts {
+            base: Path::new(path).to_owned(),
+            rotation_period,
+            v2_directory_whitelist: Vec::new(),
             file_dict: Mutex::new(FileDictionary::default()),
-            file_dict_file: Mutex::new(FileDictionaryFile::new(
+            file_dict_file: Mutex::new(DictionaryFile::<FileDictionary>::new(
                 Path::new(path),
                 FILE_DICT_NAME,
                 enable_file_dictionary_log,
                 file_dictionary_rewrite_threshold,
             )?),
+            file_dict_v2: Mutex::new(FileDictionaryV2::default()),
+            file_dict_file_v2: Mutex::new(DictionaryFile::<FileDictionaryV2>::new(
+                Path::new(path),
+                FILE_DICT_NAME,
+                enable_file_dictionary_log,
+                file_dictionary_rewrite_threshold,
+            )?),
+            next_dir_id: AtomicU64::new(0),
             key_dict: Mutex::new(KeyDictionary {
                 current_key_id: 0,
                 ..Default::default()
             }),
             current_key_id: AtomicU64::new(0),
-            rotation_period,
-            base: Path::new(path).to_owned(),
         })
     }
 
@@ -86,36 +115,63 @@ impl Dicts {
     ) -> Result<Option<Dicts>> {
         let base = Path::new(path);
 
-        // File dict is saved in plaintext.
-        let log_content = FileDictionaryFile::open(
+        let file_dict_file = DictionaryFile::<FileDictionary>::open(
             base,
             FILE_DICT_NAME,
             enable_file_dictionary_log,
             file_dictionary_rewrite_threshold,
             false,
         );
+        let key_bytes = EncryptedFile::new(base, KEY_DICT_NAME).read(master_key);
 
-        let key_file = EncryptedFile::new(base, KEY_DICT_NAME);
-        let key_bytes = key_file.read(master_key);
-
-        match (log_content, key_bytes) {
+        match (file_dict_file, key_bytes) {
             // Both files are found.
-            (Ok((file_dict_file, file_dict)), Ok(key_bytes)) => {
+            (Ok(file_dict_file), Ok(key_bytes)) => {
                 info!("encryption: found both of key dictionary and file dictionary.");
-                let mut key_dict = KeyDictionary::default();
-                key_dict.merge_from_bytes(&key_bytes)?;
+                let mut key_dict: KeyDictionary = parse_from_bytes(&key_bytes)?;
                 let current_key_id = AtomicU64::new(key_dict.current_key_id);
-
                 ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
-                ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
+
+                let file_dict = file_dict_file.dict().clone();
+                let mut total_files = file_dict.files.len();
+
+                let file_dict_file_v2 = match DictionaryFile::<FileDictionaryV2>::open(
+                    base,
+                    FILE_DICT_V2_NAME,
+                    enable_file_dictionary_log,
+                    file_dictionary_rewrite_threshold,
+                    false,
+                ) {
+                    Ok(d) => d,
+                    Err(Error::Io(e)) if e.kind() == ErrorKind::NotFound => {
+                        DictionaryFile::<FileDictionaryV2>::new(
+                            base,
+                            FILE_DICT_V2_NAME,
+                            enable_file_dictionary_log,
+                            file_dictionary_rewrite_threshold,
+                        )?
+                    }
+                    Err(e) => return Err(e),
+                };
+                let file_dict_v2 = file_dict_file_v2.dict().clone();
+                let mut max_dir_id = 0;
+                for (dir_id, files) in &file_dict_v2.dir_files {
+                    max_dir_id = std::cmp::max(*dir_id, max_dir_id);
+                    total_files += files.files.len();
+                }
+                ENCRYPTION_FILE_NUM_GAUGE.set(total_files as _);
 
                 Ok(Some(Dicts {
+                    base: base.to_owned(),
+                    rotation_period,
+                    v2_directory_whitelist: Vec::new(),
                     file_dict: Mutex::new(file_dict),
                     file_dict_file: Mutex::new(file_dict_file),
+                    file_dict_v2: Mutex::new(file_dict_v2),
+                    file_dict_file_v2: Mutex::new(file_dict_file_v2),
+                    next_dir_id: AtomicU64::new(max_dir_id + 1),
                     key_dict: Mutex::new(key_dict),
                     current_key_id,
-                    rotation_period,
-                    base: base.to_owned(),
                 }))
             }
             // If neither files are found, encryption was never enabled.
@@ -126,22 +182,22 @@ impl Dicts {
                 info!("encryption: none of key dictionary and file dictionary are found.");
                 Ok(None)
             }
-            (Ok((file_dict_file, file_dict)), Err(Error::Io(key_err)))
-                if key_err.kind() == ErrorKind::NotFound && file_dict.files.is_empty() =>
+            (Ok(file_dict_file), Err(Error::Io(key_err)))
+                if key_err.kind() == ErrorKind::NotFound
+                    && file_dict_file.dict().files.is_empty() =>
             {
                 std::fs::remove_file(file_dict_file.file_path())?;
                 info!("encryption: file dict is empty and none of key dictionary are found.");
                 Ok(None)
             }
             // ...else, return either error.
-            (file_dict_file, key_bytes) => {
-                if let Err(key_err) = key_bytes {
-                    error!("encryption: failed to load key dictionary.");
-                    Err(key_err)
-                } else {
-                    error!("encryption: failed to load file dictionary.");
-                    Err(file_dict_file.unwrap_err())
-                }
+            (Err(e), _) => {
+                error!("encryption: failed to load file dictionary.");
+                Err(e)
+            }
+            (_, Err(e)) => {
+                error!("encryption: failed to load key dictionary.");
+                Err(e)
             }
         }
     }
@@ -187,13 +243,41 @@ impl Dicts {
         )
     }
 
+    // Returns Dir, Relative Path.
+    fn parse_v2(&self, fname: &str) -> Option<(String, String)> {
+        debug_assert!(Path::new(fname).is_file());
+        for p in &self.v2_directory_whitelist {
+            if let Some(name) = fname.strip_prefix(p)
+                && let name = name.trim_start_matches('/')
+                && let Some(root) = name.find('/')
+            {
+                let dir = p.to_string() + &name[..root];
+                let relative_path = name[root + 1..].trim_start_matches('/');
+                return Some((dir, relative_path.to_string()))
+            }
+        }
+        None
+    }
+
     fn get_file(&self, fname: &str) -> Option<FileInfo> {
-        let dict = self.file_dict.lock().unwrap();
-        dict.files.get(fname).cloned()
+        let info = {
+            let dict = self.file_dict.lock().unwrap();
+            dict.files.get(fname).cloned()
+        };
+        if info.is_none() {
+            if let Some((dir, relative_path)) = self.parse_v2(fname) {
+                let mut dict = self.file_dict_v2.lock().unwrap();
+                return dict.dirs.get(&dir).and_then(|dir_id| {
+                    dict.dir_files
+                        .get(&dir_id)
+                        .and_then(|files| files.files.get(&relative_path).cloned())
+                });
+            }
+        }
+        info
     }
 
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
-        let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let iv = if method != EncryptionMethod::Plaintext {
             Iv::new_ctr()
         } else {
@@ -205,13 +289,30 @@ impl Dicts {
             method,
             ..Default::default()
         };
+        if let Some((dir, relative_path)) = self.parse_v2(fname) {
+            let mut dict = self.file_dict_v2.lock().unwrap();
+            let dir_id = *dict
+                .dirs
+                .entry(dir)
+                .or_insert_with(|| self.next_dir_id.fetch_add(1, Ordering::Relaxed));
+            dict.dir_files
+                .entry(dir_id)
+                .or_default()
+                .files
+                .insert(relative_path, file.clone());
+            return Ok(file);
+        }
+        let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let file_num = {
             let mut file_dict = self.file_dict.lock().unwrap();
             file_dict.files.insert(fname.to_owned(), file.clone());
             file_dict.files.len() as _
         };
 
-        file_dict_file.insert(fname, &file)?;
+        file_dict_file.add(&DataKeyDictionaryItem::Insert(
+            fname.to_owned(),
+            file.clone(),
+        ))?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -245,7 +346,7 @@ impl Dicts {
             }
         };
 
-        file_dict_file.remove(fname)?;
+        file_dict_file.add(&DataKeyDictionaryItem::Remove(fname.to_owned()))?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
         if file.method != EncryptionMethod::Plaintext {
             debug!("delete encrypted file"; "fname" => fname);
@@ -267,16 +368,34 @@ impl Dicts {
                     return Ok(None);
                 }
             };
+
             // When an encrypted file exists in the file system, the file_dict must have
             // info about this file. But the opposite is not true, this is because the
             // actual file operation and file_dict operation are not atomic.
-            check_stale_file_exist(dst_fname, &mut file_dict, &mut file_dict_file)?;
+            if file_dict.files.get(dst_fname).is_some() {
+                if Path::new(dst_fname).exists() {
+                    return Err(Error::Io(IoError::new(
+                        ErrorKind::AlreadyExists,
+                        format!("file already exists, {}", dst_fname),
+                    )));
+                }
+                info!(
+                    "Clean stale file information in file dictionary: {:?}",
+                    dst_fname
+                );
+                file_dict_file.add(&DataKeyDictionaryItem::Remove(dst_fname.to_owned()))?;
+                let _ = file_dict.files.remove(dst_fname);
+            }
+
             let method = file.method;
             file_dict.files.insert(dst_fname.to_owned(), file.clone());
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
         };
-        file_dict_file.insert(dst_fname, &file)?;
+        file_dict_file.add(&DataKeyDictionaryItem::Insert(
+            dst_fname.to_owned(),
+            file.clone(),
+        ))?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -347,28 +466,34 @@ impl Dicts {
         };
         self.rotate_key(key_id, data_key, master_key)
     }
-}
 
-fn check_stale_file_exist(
-    fname: &str,
-    file_dict: &mut FileDictionary,
-    file_dict_file: &mut FileDictionaryFile,
-) -> Result<()> {
-    if file_dict.files.get(fname).is_some() {
-        if Path::new(fname).exists() {
-            return Err(Error::Io(IoError::new(
-                ErrorKind::AlreadyExists,
-                format!("file already exists, {}", fname),
-            )));
+    fn rename_dir(&self, src_name: &str, dst_name: &str) -> Result<()> {
+        if let Some((dir, relative_path)) = self.parse_v2(src_name) {
+            let mut dict = self.file_dict_v2.lock().unwrap();
+            if let Some(&dir_id) = dict.dirs.get(&dir) {
+                if !relative_path.is_empty() {
+                    return Err(box_err!("Renaming from nested directory is not supported."));
+                }
+                if let Some((dst_dir, dst_relative)) = self.parse_v2(dst_name) {
+                    if !dst_relative.is_empty() {
+                        return Err(box_err!("Renaming to nested directory is not supported."));
+                    }
+                    dict.dirs.remove(&dir);
+                    dict.dirs.insert(dst_dir, dir_id);
+                } else {
+                    return Err(box_err!(
+                        "Renaming to non whitelisted directory is not supported."
+                    ));
+                }
+            }
+            // The directory doesn't contain any encrypted file.
+        } else {
+            return Err(box_err!(
+                "Renaming from non whitelisted directory is not supported."
+            ));
         }
-        info!(
-            "Clean stale file information in file dictionary: {:?}",
-            fname
-        );
-        file_dict_file.remove(fname)?;
-        let _ = file_dict.files.remove(fname);
+        Ok(())
     }
-    Ok(())
 }
 
 fn run_background_rotate_work(
@@ -479,7 +604,9 @@ impl DataKeyManager {
             if info.method != EncryptionMethod::Plaintext {
                 let retain = f(fname);
                 if !retain {
-                    file_dict_file.remove(fname).unwrap();
+                    file_dict_file
+                        .add(&DataKeyDictionaryItem::Remove(fname.clone()))
+                        .unwrap();
                 }
                 retain
             } else {
@@ -685,7 +812,7 @@ impl DataKeyManager {
     }
 
     pub fn dump_file_dict(dict_path: &str, file_path: Option<&str>) -> Result<()> {
-        let (_, file_dict) = FileDictionaryFile::open(
+        let dict_file = DictionaryFile::<FileDictionary>::open(
             dict_path,
             FILE_DICT_NAME,
             true, // enable_file_dictionary_log
@@ -693,11 +820,11 @@ impl DataKeyManager {
             true, // skip_rewrite
         )?;
         if let Some(file_path) = file_path {
-            if let Some(info) = file_dict.files.get(file_path) {
+            if let Some(info) = dict_file.dict().files.get(file_path) {
                 println!("{}: {:?}", file_path, info);
             }
         } else {
-            for (path, info) in file_dict.files.iter() {
+            for (path, info) in dict_file.dict().files.iter() {
                 println!("{}: {:?}", path, info);
             }
         }
@@ -794,6 +921,12 @@ impl EncryptionKeyManager for DataKeyManager {
         self.dicts.link_file(src_fname, dst_fname)?;
         Ok(())
     }
+
+    // fn create_dir(&self, dname: &str) -> IoResult<()> {}
+
+    // fn rename_dir(&self, src_dname: &str, dst_dname: &str) -> IoResult<()> {}
+
+    // fn delete_dir(&self, dname: &str) -> IoResult<()> {}
 }
 
 #[cfg(test)]

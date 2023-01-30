@@ -1,12 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use encryption::FileDictionaryFile;
-use kvproto::encryptionpb::{EncryptionMethod, FileInfo};
+use encryption::DictionaryFile;
+use kvproto::encryptionpb::{EncryptionMethod, FileDictionary, FileInfo};
 
 #[test]
 fn test_file_dict_file_record_corrupted() {
     let tempdir = tempfile::tempdir().unwrap();
-    let mut file_dict_file = FileDictionaryFile::new(
+    let mut file_dict_file = DictionaryFile::<FileDictionary>::new(
         tempdir.path(),
         "test_file_dict_file_record_corrupted_1",
         true,
@@ -25,7 +25,7 @@ fn test_file_dict_file_record_corrupted() {
     // Intermediate record damage is not allowed.
     file_dict_file.recovery().unwrap_err();
 
-    let mut file_dict_file = FileDictionaryFile::new(
+    let mut file_dict_file = DictionaryFile::<FileDictionary>::new(
         tempdir.path(),
         "test_file_dict_file_record_corrupted_2",
         true,

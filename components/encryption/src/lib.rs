@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(let_chains)]
+
 mod config;
 mod crypter;
 mod encrypted_file;
@@ -18,7 +20,7 @@ pub use self::{
     },
     encrypted_file::EncryptedFile,
     errors::{Error, Result, RetryCodedError},
-    file_dict_file::FileDictionaryFile,
+    file_dict_file::DictionaryFile,
     io::{
         create_aes_ctr_crypter, DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter,
     },
