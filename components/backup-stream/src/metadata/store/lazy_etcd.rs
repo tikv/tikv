@@ -65,7 +65,7 @@ impl ConnectionConfig {
                     .manually(|c| {
                         let client_certs= X509::stack_from_pem(&tls.client_cert)?;
                         let client_key = PKey::private_key_from_pem(&tls.client_key.0)?;
-                        if client_certs.len() > 0 {
+                        if !client_certs.is_empty() {
                             c.set_certificate(&client_certs[0].to_owned())?;
                         }
                         if client_certs.len() > 1 {
