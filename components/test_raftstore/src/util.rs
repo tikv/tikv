@@ -1246,15 +1246,9 @@ pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<V
     }
 }
 
-pub fn must_flashback_to_version(
-    client: &TikvClient,
-    ctx: Context,
-    version: u64,
-    start_ts: u64,
-    commit_ts: u64,
-) {
+pub fn must_prepare_flashback(client: &TikvClient, ctx: Context, version: u64, start_ts: u64) {
     let mut prepare_req = PrepareFlashbackToVersionRequest::default();
-    prepare_req.set_context(ctx.clone());
+    prepare_req.set_context(ctx);
     prepare_req.set_start_ts(start_ts);
     prepare_req.set_version(version);
     prepare_req.set_start_key(b"a".to_vec());
@@ -1262,6 +1256,15 @@ pub fn must_flashback_to_version(
     client
         .kv_prepare_flashback_to_version(&prepare_req)
         .unwrap();
+}
+
+pub fn must_finish_flashback(
+    client: &TikvClient,
+    ctx: Context,
+    version: u64,
+    start_ts: u64,
+    commit_ts: u64,
+) {
     let mut req = FlashbackToVersionRequest::default();
     req.set_context(ctx);
     req.set_start_ts(start_ts);
@@ -1272,6 +1275,17 @@ pub fn must_flashback_to_version(
     let resp = client.kv_flashback_to_version(&req).unwrap();
     assert!(!resp.has_region_error());
     assert!(resp.get_error().is_empty());
+}
+
+pub fn must_flashback_to_version(
+    client: &TikvClient,
+    ctx: Context,
+    version: u64,
+    start_ts: u64,
+    commit_ts: u64,
+) {
+    must_prepare_flashback(client, ctx.clone(), version, start_ts);
+    must_finish_flashback(client, ctx, version, start_ts, commit_ts);
 }
 
 // A helpful wrapper to make the test logic clear
