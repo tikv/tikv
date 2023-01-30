@@ -10,6 +10,8 @@ use std::{
     usize,
 };
 
+use collections::HashMap;
+
 use crate::mailbox::BasicMailbox;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -24,15 +26,26 @@ pub trait FsmScheduler {
 
     /// Schedule a Fsm for later handling.
     fn schedule(&self, fsm: Box<Self::Fsm>);
+
     /// Shutdown the scheduler, which indicates that resources like
     /// background thread pool should be released.
     fn shutdown(&self);
+
+    /// Consume the resources of msg in resource controller if enabled,
+    /// otherwise do nothing.
+    fn consume_msg_resource(&self, msg: &<Self::Fsm as Fsm>::Message);
+}
+
+pub trait ResourceMetered {
+    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+        None
+    }
 }
 
 /// A `Fsm` is a finite state machine. It should be able to be notified for
 /// updating internal state according to incoming messages.
-pub trait Fsm {
-    type Message: Send;
+pub trait Fsm: Send + 'static {
+    type Message: Send + ResourceMetered;
 
     fn is_stopped(&self) -> bool;
 
@@ -42,6 +55,7 @@ pub trait Fsm {
         Self: Sized,
     {
     }
+
     /// Take the mailbox from FSM. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>

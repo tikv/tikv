@@ -55,7 +55,7 @@ use tikv_util::{
     mpsc::{self, LooseBoundedSender, Receiver},
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    time::{monotonic_raw_now, Instant as TiInstant},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -694,7 +694,7 @@ where
             .raft_metrics
             .event_time
             .peer_msg
-            .observe(duration_to_sec(timer.saturating_elapsed()));
+            .observe(timer.saturating_elapsed_secs());
     }
 
     #[inline]
@@ -2702,7 +2702,7 @@ where
         }
         let mut resp = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgVoterReplicatedIndexResponse);
-        resp.voter_replicated_index = voter_replicated_idx;
+        resp.index = voter_replicated_idx;
         self.fsm
             .peer
             .send_extra_message(resp, &mut self.ctx.trans, from);
@@ -2719,7 +2719,7 @@ where
         if self.fsm.peer.is_leader() || !self.fsm.peer.is_witness() {
             return;
         }
-        let voter_replicated_index = msg.voter_replicated_index;
+        let voter_replicated_index = msg.index;
         if let Ok(voter_replicated_term) = self.fsm.peer.get_store().term(voter_replicated_index) {
             self.ctx.apply_router.schedule_task(
                 self.region_id(),
@@ -2787,6 +2787,8 @@ where
             ExtraMessageType::MsgVoterReplicatedIndexResponse => {
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
+            ExtraMessageType::MsgGcPeerRequest => unimplemented!(),
+            ExtraMessageType::MsgGcPeerResponse => unimplemented!(),
         }
     }
 
@@ -5221,9 +5223,13 @@ where
         // the apply phase and because a read-only request doesn't need to be applied,
         // so it will be allowed during the flashback progress, for example, a snapshot
         // request.
-        if let Err(e) =
-            util::check_flashback_state(self.region().is_in_flashback, msg, region_id, true)
-        {
+        if let Err(e) = util::check_flashback_state(
+            self.region().is_in_flashback,
+            self.region().flashback_start_ts,
+            msg,
+            region_id,
+            true,
+        ) {
             match e {
                 Error::FlashbackInProgress(_) => self
                     .ctx
