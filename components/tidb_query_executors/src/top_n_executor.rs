@@ -16,13 +16,103 @@ use tipb::{Expr, FieldType, TopN};
 
 use crate::{interface::*, util::*};
 
+struct Heap {
+    /// The maximum number of rows in the heap.
+    n: usize,
+    /// The heap.
+    heap: BinaryHeap<HeapItemUnsafe>,
+}
+
+impl Heap {
+    fn new(n: usize) -> Self {
+        Self {
+            n,
+            // Avoid large N causing OOM
+            heap: BinaryHeap::with_capacity(n.min(1024)),
+        }
+    }
+
+    fn add_row(&mut self, row: HeapItemUnsafe) -> Result<()> {
+        if self.heap.len() < self.n {
+            // HeapItemUnsafe must be checked valid to compare in advance, or else it may
+            // panic inside BinaryHeap.
+            row.cmp_sort_key(&row)?;
+
+            // Push into heap when heap is not full.
+            self.heap.push(row);
+        } else {
+            // Swap the greatest row in the heap if this row is smaller than that row.
+            let mut greatest_row = self.heap.peek_mut().unwrap();
+            if row.cmp_sort_key(&greatest_row)? == Ordering::Less {
+                *greatest_row = row;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::clone_on_copy)]
+    fn take_all(&mut self) -> LazyBatchColumnVec {
+        let heap = std::mem::take(&mut self.heap);
+        let sorted_items = heap.into_sorted_vec();
+        if sorted_items.is_empty() {
+            return LazyBatchColumnVec::empty();
+        }
+
+        let mut result = sorted_items[0]
+            .source_data
+            .physical_columns
+            .clone_empty(sorted_items.len());
+
+        for (column_index, result_column) in result.as_mut_slice().iter_mut().enumerate() {
+            match result_column {
+                LazyBatchColumn::Raw(dest_column) => {
+                    for item in &sorted_items {
+                        let src = item.source_data.physical_columns[column_index].raw();
+                        dest_column
+                            .push(&src[item.source_data.logical_rows[item.logical_row_index]]);
+                    }
+                }
+                LazyBatchColumn::Decoded(dest_vector_value) => {
+                    match_template::match_template! {
+                        TT = [
+                            Int,
+                            Real,
+                            Duration,
+                            Decimal,
+                            DateTime,
+                            Bytes => BytesRef,
+                            Json => JsonRef,
+                            Enum => EnumRef,
+                            Set => SetRef,
+                        ],
+                        match dest_vector_value {
+                            VectorValue::TT(dest_column) => {
+                                for item in &sorted_items {
+                                    let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
+                                    let src_ref = TT::borrow_vector_value(src);
+                                    // TODO: This clone is not necessary.
+                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.into_owned_value()));
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        }
+
+        result.assert_columns_equal_length();
+        result
+    }
+}
+
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// The heap, which contains N rows at most.
     ///
     /// This field is placed before `eval_columns_buffer_unsafe`, `order_exprs`,
     /// `order_is_desc` and `src` because it relies on data in those fields
     /// and we want this field to be dropped first.
-    heap: BinaryHeap<HeapItemUnsafe>,
+    heap: Heap,
 
     /// A collection of all evaluated columns. This is to avoid repeated
     /// allocations in each `next_batch()`.
@@ -97,7 +187,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Self {
-            heap: BinaryHeap::new(),
+            heap: Heap::new(n),
             eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
@@ -126,7 +216,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Self {
-            heap: BinaryHeap::new(),
+            heap: Heap::new(n),
             eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
@@ -163,8 +253,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Ok(Self {
-            // Avoid large N causing OOM
-            heap: BinaryHeap::with_capacity(n.min(1024)),
+            heap: Heap::new(n),
             // Simply large enough to avoid repeated allocations
             eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
             order_exprs: order_exprs.into_boxed_slice(),
@@ -193,7 +282,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         }
 
         if src_is_drained {
-            Ok(Some(self.heap_take_all()))
+            Ok(Some(self.heap.take_all()))
         } else {
             Ok(None)
         }
@@ -240,83 +329,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                 eval_columns_offset: eval_offset,
                 logical_row_index,
             };
-            self.heap_add_row(row)?;
+            self.heap.add_row(row)?;
         }
 
         Ok(())
-    }
-
-    fn heap_add_row(&mut self, row: HeapItemUnsafe) -> Result<()> {
-        if self.heap.len() < self.n {
-            // HeapItemUnsafe must be checked valid to compare in advance, or else it may
-            // panic inside BinaryHeap.
-            row.cmp_sort_key(&row)?;
-
-            // Push into heap when heap is not full.
-            self.heap.push(row);
-        } else {
-            // Swap the greatest row in the heap if this row is smaller than that row.
-            let mut greatest_row = self.heap.peek_mut().unwrap();
-            if row.cmp_sort_key(&greatest_row)? == Ordering::Less {
-                *greatest_row = row;
-            }
-        }
-
-        Ok(())
-    }
-
-    #[allow(clippy::clone_on_copy)]
-    fn heap_take_all(&mut self) -> LazyBatchColumnVec {
-        let heap = std::mem::take(&mut self.heap);
-        let sorted_items = heap.into_sorted_vec();
-        if sorted_items.is_empty() {
-            return LazyBatchColumnVec::empty();
-        }
-
-        let mut result = sorted_items[0]
-            .source_data
-            .physical_columns
-            .clone_empty(sorted_items.len());
-
-        for (column_index, result_column) in result.as_mut_slice().iter_mut().enumerate() {
-            match result_column {
-                LazyBatchColumn::Raw(dest_column) => {
-                    for item in &sorted_items {
-                        let src = item.source_data.physical_columns[column_index].raw();
-                        dest_column
-                            .push(&src[item.source_data.logical_rows[item.logical_row_index]]);
-                    }
-                }
-                LazyBatchColumn::Decoded(dest_vector_value) => {
-                    match_template::match_template! {
-                        TT = [
-                            Int,
-                            Real,
-                            Duration,
-                            Decimal,
-                            DateTime,
-                            Bytes => BytesRef,
-                            Json => JsonRef,
-                            Enum => EnumRef,
-                            Set => SetRef,
-                        ],
-                        match dest_vector_value {
-                            VectorValue::TT(dest_column) => {
-                                for item in &sorted_items {
-                                    let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
-                                    let src_ref = TT::borrow_vector_value(src);
-                                    // TODO: This clone is not necessary.
-                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.into_owned_value()));
-                                }
-                            },
-                        }
-                    }
-                }
-            }
-        }
-
-        result.assert_columns_equal_length();
-        result
     }
 }
 
@@ -478,7 +494,7 @@ impl HeapItemUnsafe {
                 Ok(ord)
             } else {
                 Ok(ord.reverse())
-            }
+            };
         }
 
         Ok(Ordering::Equal)
