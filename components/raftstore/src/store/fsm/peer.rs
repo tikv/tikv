@@ -55,7 +55,7 @@ use tikv_util::{
     mpsc::{self, LooseBoundedSender, Receiver},
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    time::{monotonic_raw_now, Instant as TiInstant},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -694,7 +694,7 @@ where
             .raft_metrics
             .event_time
             .peer_msg
-            .observe(duration_to_sec(timer.saturating_elapsed()));
+            .observe(timer.saturating_elapsed_secs());
     }
 
     #[inline]

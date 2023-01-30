@@ -3696,6 +3696,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "prometheus",
+ "prometheus-static-metric",
  "security",
  "semver 0.10.0",
  "serde",
