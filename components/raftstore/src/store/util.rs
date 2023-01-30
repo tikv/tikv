@@ -350,6 +350,8 @@ pub fn check_flashback_state(
     {
         return Ok(());
     }
+    // TODO: only use `flashback_start_ts` to check flashback state.
+    let is_in_flashback = is_in_flashback || flashback_start_ts > 0;
     let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
         .contains(WriteBatchFlags::FLASHBACK);
     // If the region is in the flashback state:
@@ -372,11 +374,10 @@ pub fn check_flashback_state(
     Ok(())
 }
 
-pub fn encode_start_ts_into_flag_data(header: &mut RaftRequestHeader, start_ts: u64) -> Result<()> {
+pub fn encode_start_ts_into_flag_data(header: &mut RaftRequestHeader, start_ts: u64) {
     let mut data = [0u8; 8];
-    (&mut data[..]).encode_u64(start_ts)?;
+    (&mut data[..]).encode_u64(start_ts).unwrap();
     header.set_flag_data(data.into());
-    Ok(())
 }
 
 pub fn is_region_epoch_equal(

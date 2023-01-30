@@ -166,8 +166,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             encode_start_ts_into_flag_data(
                 &mut header,
                 ctx.start_ts.unwrap_or_default().into_inner(),
-            )
-            .unwrap();
+            );
         }
 
         let mut cmd = RaftCmdRequest::default();
