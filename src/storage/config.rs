@@ -35,6 +35,7 @@ const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
 #[serde(rename_all = "kebab-case")]
 pub enum EngineType {
     RaftKv,
+    #[serde(alias = "partitioned-raft-kv")]
     RaftKv2,
 }
 
