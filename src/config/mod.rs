@@ -631,7 +631,7 @@ impl Default for DefaultCfConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
 
         DefaultCfConfig {
-            block_size: ReadableSize::kb(64),
+            block_size: ReadableSize::kb(16),
             block_cache_size: memory_limit_for_cf(false, CF_DEFAULT, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
@@ -756,7 +756,7 @@ impl Default for WriteCfConfig {
         };
 
         WriteCfConfig {
-            block_size: ReadableSize::kb(64),
+            block_size: ReadableSize::kb(16),
             block_cache_size: memory_limit_for_cf(false, CF_WRITE, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
