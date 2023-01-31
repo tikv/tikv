@@ -121,13 +121,11 @@ where
             .fetch_sub(1, Ordering::SeqCst);
 
         STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.dec();
-        let async_io_pool_size = std::cmp::min(
-            ctx.config().store_io_pool_size,
-            ctx.write_senders().capacity(),
-        );
+
         let pre_writer_id = self.writer_id;
         self.writer_id = self.next_writer_id.take().unwrap();
         // Update writer_id if it's stale because of resizing.
+        let async_io_pool_size = ctx.write_senders().capacity();
         if self.writer_id >= async_io_pool_size {
             self.writer_id %= async_io_pool_size;
         }
@@ -165,15 +163,7 @@ where
         if self.last_unpersisted.is_some() {
             return false;
         }
-        // If the size of store writers is decreased, the
-        // `ctx.config().store_io_pool_size` will be updated in advance, making
-        // it inconsistent with the local `capacity()`. To avoid concurrent
-        // racing problems, the real capacity should be updated during
-        // the updating of store writers.
-        let async_io_pool_size = std::cmp::min(
-            ctx.config().store_io_pool_size,
-            ctx.write_senders().capacity(),
-        );
+        let async_io_pool_size = ctx.write_senders().capacity();
         if async_io_pool_size <= 1 {
             self.writer_id = 0;
             return true;

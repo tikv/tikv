@@ -265,14 +265,16 @@ where
         // The resizing of store writers will not update the local cached store writers
         // in each `poll_ctx`. Therefore, it necessary to restart all pollers to
         // confirm that `poll_ctx.write_senders` in each PollContext could be refreshed.
+        // Meanwhile, to avoid the side effect when starting all raftstore threads, it
+        // will remain only one in advance, and make others restart.
         let current_size = self.writer_ctrl.store_writers.size();
         match current_size.cmp(&size) {
             std::cmp::Ordering::Greater => {
                 // When decreasing the size of store writers, the size of store writers
-                // should be updated in advance.
-                self.send_refresh_msg(size as i64);
+                // in the remained Poller should be updated in advance.
                 let current_pool_size = self.raft_pool.state.expected_pool_size;
-                self.resize_raft_pool(0);
+                self.resize_raft_pool(1);
+                self.send_refresh_msg(size as i64);
                 if let Err(e) = self
                     .writer_ctrl
                     .store_writers
@@ -285,6 +287,8 @@ where
                 self.resize_raft_pool(current_pool_size);
             }
             std::cmp::Ordering::Less => {
+                // When increasing the size of store writers, the size of store writers
+                // in RaftBatchSystem should be updated in advance.
                 let writer_meta = self.writer_ctrl.writer_meta.clone();
                 if let Err(e) = self
                     .writer_ctrl
@@ -294,10 +298,10 @@ where
                     error!("failed to increase store writers size";
                             "err_msg" => ?e);
                 }
+                let current_pool_size = self.raft_pool.state.expected_pool_size;
+                self.resize_raft_pool(1);
                 self.send_refresh_msg(-1_i64);
                 // Refresh store writers in each `poll_ctx`.
-                let current_pool_size = self.raft_pool.state.expected_pool_size;
-                self.resize_raft_pool(0);
                 self.resize_raft_pool(current_pool_size);
             }
             std::cmp::Ordering::Equal => return,
@@ -309,7 +313,8 @@ where
         );
     }
 
-    /// Send message to notify Poller to update the size of store writers.
+    /// Send message to notify the only remained Poller to update the size of
+    /// store writers.
     fn send_refresh_msg(&mut self, size: i64) {
         // Build one-shot mailbox to wait for the completion of updating of write
         // senders.

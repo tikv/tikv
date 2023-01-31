@@ -1055,15 +1055,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
         } else {
-            // If the size of store writers has been resized by background worker, the
-            // `capacity()` will be inconsistent with `cfg.store_io_pool_size`
-            // during the asynchronous updating of `write_senders.capacity()`. The valid
-            // size of store writers should be the smaller one.
-            let writer_id = rand::random::<usize>()
-                % std::cmp::min(
-                    self.poll_ctx.write_senders.capacity(),
-                    self.poll_ctx.cfg.store_io_pool_size,
-                );
+            let writer_id = rand::random::<usize>() % self.poll_ctx.write_senders.capacity();
             if let Err(err) = self.poll_ctx.write_senders.try_send(
                 writer_id,
                 WriteMsg::LatencyInspect {
