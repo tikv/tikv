@@ -262,8 +262,8 @@ where
 
     /// Resizes the count of background threads in store_writers.
     fn resize_store_writers(&mut self, size: usize) {
-        // To avoid concurrent racing write when decreasing or increasing background
-        // threads for async-ios, the `resize` progress will restart all pollers to
+        // The resizing of store writers will not update the local cached store writers
+        // in each `poll_ctx`. Therefore, it necessary to restart all pollers to
         // confirm that `poll_ctx.write_senders` in each PollContext could be refreshed.
         let current_size = self.writer_ctrl.store_writers.size();
         match current_size.cmp(&size) {
@@ -281,7 +281,7 @@ where
                     error!("failed to decrease store writers size";
                             "err_msg" => ?e);
                 }
-                // Refresh
+                // Refresh store writers in each `poll_ctx`.
                 self.resize_raft_pool(current_pool_size);
             }
             std::cmp::Ordering::Less => {
@@ -295,7 +295,7 @@ where
                             "err_msg" => ?e);
                 }
                 self.send_refresh_msg(-1_i64);
-                // Refresh
+                // Refresh store writers in each `poll_ctx`.
                 let current_pool_size = self.raft_pool.state.expected_pool_size;
                 self.resize_raft_pool(0);
                 self.resize_raft_pool(current_pool_size);
