@@ -1301,6 +1301,7 @@ mod test {
         let mut suite = super::SuiteBuilder::new_named("network_partition")
             .nodes(3)
             .build();
+        let stream = suite.flush_stream();
         suite.must_register_task(1, "network_partition");
         let leader = suite.cluster.leader_of_region(1).unwrap();
         let others = {
@@ -1308,16 +1309,12 @@ mod test {
             os.remove(&leader.store_id);
             os.into_iter().collect::<Vec<_>>()
         };
-        let round1 = run_async_test(suite.write_records(0, 128, 1));
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        let round1 = run_async_test(suite.write_records(0, 64, 1));
 
         println!("{:?} {:?}", leader.store_id, others);
         suite
             .cluster
             .add_send_filter(IsolationFilterFactory::new(leader.store_id));
-        suite
-            .cluster
-            .add_recv_filter(IsolationFilterFactory::new(leader.store_id));
         suite.must_shuffle_leader(1);
         let leader = suite.cluster.leader_of_region(1).unwrap();
         println!("leader is {:?} now", leader);
@@ -1332,8 +1329,15 @@ mod test {
         suite.force_flush_files("network_partition");
         suite.wait_for_flush();
 
-        let cp = suite.global_checkpoint();
-        assert!(cp <= ts.into_inner(), "cp={} ts={}", cp, ts);
+        let cps = run_async_test(collect_current(stream, 2));
+        assert!(
+            cps.iter()
+                .flat_map(|(_s, cp)| cp.events.iter().map(|resp| resp.checkpoint))
+                .all(|cp| cp <= ts.into_inner()),
+            "ts={} cps={:?}",
+            ts,
+            cps
+        );
         run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.iter().map(|k| k.as_slice()),
