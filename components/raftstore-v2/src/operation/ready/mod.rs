@@ -557,7 +557,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if write_task.messages.is_empty() {
                 write_task.messages = self.take_pending_messages();
             } else {
-                write_task.messages.extend(self.take_pending_messages());
+                write_task
+                    .messages
+                    .append(&mut self.take_pending_messages());
             }
         }
         if !self.serving() {

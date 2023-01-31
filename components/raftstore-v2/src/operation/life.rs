@@ -226,7 +226,7 @@ impl Store {
         }
         if destroyed {
             if msg.get_is_tombstone() {
-                if let Some(msg) = report_peer_destroyed(&mut msg) {
+                if let Some(msg) = build_peer_destroyed_report(&mut msg) {
                     let _ = ctx.trans.send(msg);
                 }
                 return;
@@ -236,7 +236,7 @@ impl Store {
                 if extra_msg.get_type() == ExtraMessageType::MsgGcPeerRequest
                     && extra_msg.has_check_gc_peer()
                 {
-                    tell_source_peer_to_destroy(ctx, &msg);
+                    forward_destroy_source_peer(ctx, &msg);
                     return;
                 }
             }
@@ -306,8 +306,8 @@ impl Store {
     }
 }
 
-/// Tell leader that `to_peer` is destroyed.
-fn report_peer_destroyed(tombstone_msg: &mut RaftMessage) -> Option<RaftMessage> {
+/// Tell leader that `to_peer` from `tombstone_msg` is destroyed.
+fn build_peer_destroyed_report(tombstone_msg: &mut RaftMessage) -> Option<RaftMessage> {
     let to_region_id = if tombstone_msg.has_extra_msg() {
         assert_eq!(
             tombstone_msg.get_extra_msg().get_type(),
@@ -332,7 +332,8 @@ fn report_peer_destroyed(tombstone_msg: &mut RaftMessage) -> Option<RaftMessage>
     Some(msg)
 }
 
-fn tell_source_peer_to_destroy<EK, ER, T>(ctx: &mut StoreContext<EK, ER, T>, msg: &RaftMessage)
+/// Forward the destroy request from target peer to merged source peer.
+fn forward_destroy_source_peer<EK, ER, T>(ctx: &mut StoreContext<EK, ER, T>, msg: &RaftMessage)
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -400,7 +401,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_tombstone_message(&mut self, msg: &mut RaftMessage) {
         match msg.get_to_peer().get_id().cmp(&self.peer_id()) {
             cmp::Ordering::Less => {
-                if let Some(msg) = report_peer_destroyed(msg) {
+                if let Some(msg) = build_peer_destroyed_report(msg) {
                     self.add_message(msg);
                     self.set_has_ready();
                 }
@@ -413,8 +414,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// When leader tries to gc merged source peer, it will send a gc request to
-    /// target peer. If target peer makes sure the merged is finished, it should
-    /// send back a gc response to leader.
+    /// target peer. If target peer makes sure the merged is finished, it
+    /// forward the message to source peer and let source peer send back a
+    /// response.
     pub fn on_gc_peer_request<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
@@ -430,7 +432,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        tell_source_peer_to_destroy(ctx, msg);
+        forward_destroy_source_peer(ctx, msg);
     }
 
     /// A peer confirms it's destroyed.
