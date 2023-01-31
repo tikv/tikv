@@ -3135,7 +3135,7 @@ impl TikvConfig {
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
             if !self.raft_engine.enable {
-                panic!("raft-kv2 only supports raft log engine.");
+                panic!("partitioned-raft-kv only supports raft log engine.");
             }
         }
 
