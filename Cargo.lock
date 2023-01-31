@@ -84,6 +84,7 @@ dependencies = [
  "codec",
  "engine_traits",
  "kvproto",
+ "log_wrappers",
  "match-template",
  "panic_hook",
  "thiserror",
@@ -579,9 +580,11 @@ dependencies = [
  "derive_more",
  "fail",
  "file_system",
+ "kvproto",
  "lazy_static",
  "online_config",
  "prometheus",
+ "resource_control",
  "serde",
  "serde_derive",
  "slog",
@@ -803,7 +806,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -1014,7 +1017,7 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "kvproto",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "rand 0.8.5",
  "tikv_alloc",
  "tikv_util",
@@ -1188,18 +1191,6 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3",
- "lazy_static",
- "memoffset",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-epoch"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1145cf131a2c6ba0615079ab6a638f7e1973ac9c2634fcbeaaad6114246efe8c"
@@ -1237,12 +1228,13 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-skiplist"
-version = "0.0.0"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "883a5821d7d079fcf34ac55f27a833ee61678110f6b97637cc74513c0d0b42fc"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.3",
- "crossbeam-utils 0.8.3",
+ "crossbeam-epoch 0.9.8",
+ "crossbeam-utils 0.8.8",
  "scopeguard",
 ]
 
@@ -1254,16 +1246,6 @@ checksum = "c3c7c73a2d1e9fc0886a08b93e98eb643461230d5f1925e4036204d5f2e261a8"
 dependencies = [
  "autocfg",
  "cfg-if 0.1.10",
- "lazy_static",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
-dependencies = [
- "autocfg",
- "cfg-if 1.0.0",
  "lazy_static",
 ]
 
@@ -1361,7 +1343,7 @@ checksum = "c0834a35a3fce649144119e18da2a4d8ed12ef3862f47183fd46f625d072d96c"
 dependencies = [
  "cfg-if 1.0.0",
  "num_cpus",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
 ]
 
 [[package]]
@@ -1623,7 +1605,7 @@ dependencies = [
  "online_config",
  "ordered-float",
  "panic_hook",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -1969,7 +1951,7 @@ dependencies = [
  "maligned",
  "online_config",
  "openssl",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "prometheus",
  "prometheus-static-metric",
  "rand 0.8.5",
@@ -2862,17 +2844,18 @@ dependencies = [
  "panic_hook",
  "thiserror",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#e53d558bc6d7d8b7bb2d283cdf6dda52a2615632"
+source = "git+https://github.com/pingcap/kvproto.git#1b2b4114103afb06796b7e44f45f7e55133673c0"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.13.0",
  "raft-proto",
 ]
 
@@ -3400,6 +3383,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "slog",
@@ -3834,9 +3818,9 @@ dependencies = [
 
 [[package]]
 name = "parking_lot"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87f5ec2493a61ac0506c0f4199f99070cbe83857b0337006a30f3e6719b8ef58"
+checksum = "3742b2c103b9f06bc9fff0a37ff4912935851bee6d36f3c02bcc755bcfec228f"
 dependencies = [
  "lock_api",
  "parking_lot_core 0.9.1",
@@ -3898,6 +3882,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "prometheus",
+ "prometheus-static-metric",
  "security",
  "semver 0.10.0",
  "serde",
@@ -4113,7 +4098,7 @@ dependencies = [
  "log",
  "nix 0.24.1",
  "once_cell",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "protobuf",
  "protobuf-codegen-pure",
  "smallvec",
@@ -4348,6 +4333,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf-build"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fb3c02f54ecaf12572c1a60dbdb36b1f8f713a16105881143f2be84cca5bbe3"
+dependencies = [
+ "bitflags",
+ "protobuf",
+ "protobuf-codegen",
+ "regex",
+]
+
+[[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
 source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
@@ -4417,6 +4414,7 @@ dependencies = [
  "rand 0.8.5",
  "regex",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "serde",
@@ -4546,7 +4544,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/tikv/raft-rs?branch=master#f73766712a538c2f6eb135b455297ad6c03fc58d"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4579,7 +4577,7 @@ dependencies = [
  "nix 0.25.0",
  "num-derive",
  "num-traits",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -4594,11 +4592,11 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/tikv/raft-rs?branch=master#f73766712a538c2f6eb135b455297ad6c03fc58d"
 dependencies = [
  "bytes",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.14.0",
 ]
 
 [[package]]
@@ -4666,7 +4664,7 @@ dependencies = [
  "openssl",
  "ordered-float",
  "panic_hook",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -4674,6 +4672,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "rand 0.8.5",
+ "resource_control",
  "resource_metering",
  "serde",
  "serde_derive",
@@ -4723,7 +4722,7 @@ dependencies = [
  "keys",
  "kvproto",
  "log_wrappers",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
  "protobuf",
@@ -4731,6 +4730,7 @@ dependencies = [
  "raft-proto",
  "raftstore",
  "rand 0.8.5",
+ "resource_control",
  "resource_metering",
  "slog",
  "slog-global",
@@ -5036,6 +5036,32 @@ dependencies = [
  "tikv_util",
  "tokio",
  "txn_types",
+]
+
+[[package]]
+name = "resource_control"
+version = "0.0.1"
+dependencies = [
+ "byteorder",
+ "crossbeam-skiplist",
+ "dashmap",
+ "fail",
+ "futures 0.3.15",
+ "kvproto",
+ "lazy_static",
+ "online_config",
+ "pd_client",
+ "pin-project",
+ "prometheus",
+ "protobuf",
+ "serde",
+ "slog",
+ "slog-global",
+ "test_pd",
+ "test_pd_client",
+ "tikv_util",
+ "tokio",
+ "yatp",
 ]
 
 [[package]]
@@ -5565,6 +5591,7 @@ dependencies = [
  "raftstore-v2",
  "rand 0.8.5",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "serde_json",
@@ -6155,11 +6182,14 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "kvproto",
+ "log_wrappers",
  "pd_client",
  "security",
  "slog",
  "slog-global",
  "tikv_util",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -6213,6 +6243,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "server",
@@ -6326,6 +6357,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "rand_xorshift",
+ "resource_control",
  "resource_metering",
  "security",
  "serde_json",
@@ -6427,6 +6459,7 @@ name = "tidb_query_common"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "api_version",
  "async-trait",
  "byteorder",
  "derive_more",
@@ -6448,6 +6481,7 @@ dependencies = [
 name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "base64",
  "bitfield",
  "bitflags",
@@ -6488,6 +6522,7 @@ name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "api_version",
  "async-trait",
  "codec",
  "collections",
@@ -6617,7 +6652,7 @@ dependencies = [
  "online_config",
  "openssl",
  "panic_hook",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "paste",
  "pd_client",
  "pin-project",
@@ -6635,6 +6670,7 @@ dependencies = [
  "rand 0.7.3",
  "regex",
  "reqwest",
+ "resource_control",
  "resource_metering",
  "rev_lines",
  "seahash",
@@ -6774,6 +6810,7 @@ dependencies = [
  "cpu-time",
  "crc32fast",
  "crossbeam",
+ "crossbeam-skiplist",
  "derive_more",
  "error_code",
  "fail",
@@ -6795,6 +6832,7 @@ dependencies = [
  "openssl",
  "page_size",
  "panic_hook",
+ "parking_lot_core 0.9.1",
  "pin-project",
  "procfs",
  "procinfo",
@@ -6850,12 +6888,12 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#f3286471a05a4454a1071dd5f66ac7dbf6c79ba3"
+source = "git+https://github.com/pingcap/tipb.git#c6b7a5a1623bb2766a502301ecc3ac8f98cc7c79"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.13.0",
 ]
 
 [[package]]
@@ -6879,7 +6917,7 @@ dependencies = [
  "memchr",
  "mio 0.8.5",
  "num_cpus",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -7133,7 +7171,7 @@ dependencies = [
  "crossbeam-utils 0.8.8",
  "kvproto",
  "lazy_static",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pin-project",
  "prometheus",
  "slab",
@@ -7656,9 +7694,11 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#39cb495953d40a7e846363c06090755c2eac65fa"
+source = "git+https://github.com/tikv/yatp.git?branch=master#bcf431a2619c06ab7fa0c72073a0c775646c484f"
 dependencies = [
  "crossbeam-deque",
+ "crossbeam-skiplist",
+ "crossbeam-utils 0.8.8",
  "dashmap",
  "fail",
  "lazy_static",

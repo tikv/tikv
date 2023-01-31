@@ -40,8 +40,8 @@ use kvproto::{
 use raftstore::store::{
     ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
-use slog::Logger;
-use tikv_util::{box_err, worker::Scheduler};
+use slog::{info, trace, Logger};
+use tikv_util::{box_err, slog_panic, worker::Scheduler};
 
 use crate::{
     operation::{
@@ -130,10 +130,11 @@ impl<EK: KvEngine, ER: RaftEngine> engine_traits::StateStorage for StateStorage<
 /// Mapping from data cf to an u64 index.
 pub type DataTrace = [u64; DATA_CFS_LEN];
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct Progress {
     flushed: u64,
-    /// The index of last entry that has modification to the CF.
+    /// The index of last entry that has modification to the CF. The value
+    /// can be larger than the index that actually modifies the CF in apply.
     ///
     /// If `flushed` == `last_modified`, then all data in the CF is persisted.
     last_modified: u64,
@@ -154,7 +155,7 @@ pub fn cf_offset(cf: &str) -> usize {
 ///   interact with other peers will be traced.
 /// - support query the flushed progress without actually scanning raft engine,
 ///   which is useful for cleaning up stale flush records.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ApplyTrace {
     /// The modified indexes and flushed index of each data CF.
     data_cfs: Box<[Progress; DATA_CFS_LEN]>,
@@ -168,6 +169,10 @@ pub struct ApplyTrace {
     admin: Progress,
     /// Index that is issued to be written. It may not be truely persisted.
     persisted_applied: u64,
+    /// Flush will be triggered explicitly when there are too many pending
+    /// writes. It marks the last index that is flushed to avoid too many
+    /// flushes.
+    last_flush_trigger: u64,
     /// `true` means the raft cf record should be persisted in next ready.
     try_persist: bool,
 }
@@ -187,9 +192,14 @@ impl ApplyTrace {
         trace.admin.flushed = i;
         trace.admin.last_modified = i;
         trace.persisted_applied = i;
-        let applied_region_state = engine
-            .get_region_state(region_id, trace.admin.flushed)?
-            .unwrap();
+        trace.last_flush_trigger = i;
+        let applied_region_state = match engine.get_region_state(region_id, trace.admin.flushed)? {
+            Some(s) => s,
+            None => panic!(
+                "failed to get region state [region_id={}] [apply_trace={:?}]",
+                region_id, trace
+            ),
+        };
         Ok((trace, applied_region_state))
     }
 
@@ -218,7 +228,31 @@ impl ApplyTrace {
     }
 
     pub fn persisted_apply_index(&self) -> u64 {
-        self.admin.flushed
+        self.persisted_applied
+    }
+
+    pub fn should_flush(&mut self) -> bool {
+        if self.admin.flushed < self.admin.last_modified {
+            // It's waiting for other peers, flush will not help.
+            return false;
+        }
+        let last_modified = self
+            .data_cfs
+            .iter()
+            .filter_map(|pr| {
+                if pr.last_modified != pr.flushed {
+                    Some(pr.last_modified)
+                } else {
+                    None
+                }
+            })
+            .max();
+        if let Some(m) = last_modified && m >= self.admin.flushed + 4096000 && m >= self.last_flush_trigger + 4096000 {
+            self.last_flush_trigger = m;
+            true
+        } else {
+            false
+        }
     }
 
     // All events before `mem_index` must be consumed before calling this function.
@@ -228,10 +262,17 @@ impl ApplyTrace {
         }
         let min_flushed = self
             .data_cfs
-            .iter()
+            .iter_mut()
             // Only unflushed CFs are considered. Flushed CF always have uptodate changes
             // persisted.
             .filter_map(|pr| {
+                // All modifications before mem_index must be seen. If following condition is
+                // true, it means the modification comes beyond general apply process (like
+                // transaction GC unsafe write). Align `last_modified` to `flushed` to avoid
+                // blocking raft log GC.
+                if mem_index >= pr.flushed && pr.flushed > pr.last_modified {
+                    pr.last_modified = pr.flushed;
+                }
                 if pr.last_modified != pr.flushed {
                     Some(pr.flushed)
                 } else {
@@ -272,19 +313,24 @@ impl ApplyTrace {
         None
     }
 
-    pub fn reset_snapshot(&mut self, index: u64) {
+    pub fn restore_snapshot(&mut self, index: u64) {
         for pr in self.data_cfs.iter_mut() {
-            pr.flushed = index;
             pr.last_modified = index;
         }
-        self.admin.flushed = index;
+        self.admin.last_modified = index;
+        // Snapshot is a special case that KVs are not flushed yet, so all flushed
+        // state should not be changed. But persisted_applied is updated whenever an
+        // asynchronous write is triggered. So it can lead to a special case that
+        // persisted_applied < admin.flushed. It seems no harm ATM though.
         self.persisted_applied = index;
         self.try_persist = false;
     }
 
-    #[inline]
-    pub fn reset_should_persist(&mut self) {
-        self.try_persist = false;
+    pub fn on_applied_snapshot(&mut self, index: u64) {
+        for pr in self.data_cfs.iter_mut() {
+            pr.flushed = index;
+        }
+        self.admin.flushed = index;
     }
 
     #[inline]
@@ -415,11 +461,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 return;
             }
         }
-        panic!(
-            "{:?} data loss detected: {}_{} not found",
-            self.logger().list(),
-            region_id,
-            tablet_index
+        slog_panic!(
+            self.logger(),
+            "tablet loss detected";
+            "tablet_index" => tablet_index
         );
     }
 
@@ -440,12 +485,18 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     }
 
     pub fn record_apply_trace(&mut self, write_task: &mut WriteTask<EK, ER>) {
+        let trace = self.apply_trace();
+        // Maybe tablet index can be different?
+        if trace.persisted_applied > trace.admin.flushed {
+            return;
+        }
         let region_id = self.region().get_id();
         let raft_engine = self.entry_storage().raft_engine();
         let tablet_index = self.tablet_index();
         let lb = write_task
             .extra_write
             .ensure_v2(|| raft_engine.log_batch(1));
+        info!(self.logger(), "persisting admin flushed"; "tablet_index" => tablet_index, "flushed" => trace.admin.flushed);
         let trace = self.apply_trace_mut();
         lb.put_flushed_index(region_id, CF_RAFT, tablet_index, trace.admin.flushed)
             .unwrap();
@@ -456,6 +507,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_data_flushed(&mut self, cf: &str, tablet_index: u64, index: u64) {
+        trace!(self.logger, "data flushed"; "cf" => cf, "tablet_index" => tablet_index, "index" => index, "trace" => ?self.storage().apply_trace());
         if tablet_index < self.storage().tablet_index() {
             // Stale tablet.
             return;
@@ -467,6 +519,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_data_modified(&mut self, modification: DataTrace) {
+        trace!(self.logger, "on data modified"; "modification" => ?modification, "trace" => ?self.storage().apply_trace());
         let apply_index = self.storage().entry_storage().applied_index();
         let apply_trace = self.storage_mut().apply_trace_mut();
         for (cf, index) in DATA_CFS.iter().zip(modification) {
@@ -556,22 +609,22 @@ mod tests {
     #[test]
     fn test_apply_trace() {
         let mut trace = ApplyTrace::default();
-        assert_eq!(0, trace.persisted_apply_index());
+        assert_eq!(0, trace.admin.flushed);
         // If there is no modifications, index should be advanced anyway.
         trace.maybe_advance_admin_flushed(2);
-        assert_eq!(2, trace.persisted_apply_index());
+        assert_eq!(2, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_modify(cf, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // Modification is not flushed.
-        assert_eq!(2, trace.persisted_apply_index());
+        assert_eq!(2, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_flush(cf, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // No admin is recorded, index should be advanced.
-        assert_eq!(3, trace.persisted_apply_index());
+        assert_eq!(3, trace.admin.flushed);
         trace.on_admin_modify(4);
         for cf in DATA_CFS {
             trace.on_flush(cf, 4);
@@ -581,25 +634,25 @@ mod tests {
         }
         trace.maybe_advance_admin_flushed(4);
         // Unflushed admin modification should hold index.
-        assert_eq!(3, trace.persisted_apply_index());
+        assert_eq!(3, trace.admin.flushed);
         trace.on_admin_flush(4);
         trace.maybe_advance_admin_flushed(4);
         // Admin is flushed, index should be advanced.
-        assert_eq!(4, trace.persisted_apply_index());
+        assert_eq!(4, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_flush(cf, 5);
         }
         trace.maybe_advance_admin_flushed(4);
         // Though all data CFs are flushed, but index should not be
         // advanced as we don't know whether there is admin modification.
-        assert_eq!(4, trace.persisted_apply_index());
+        assert_eq!(4, trace.admin.flushed);
         for cf in DATA_CFS {
             trace.on_modify(cf, 5);
         }
         trace.maybe_advance_admin_flushed(5);
         // Because modify is recorded, so we know there should be no admin
         // modification and index can be advanced.
-        assert_eq!(5, trace.persisted_apply_index());
+        assert_eq!(5, trace.admin.flushed);
     }
 
     #[test]
@@ -620,6 +673,12 @@ mod tests {
             ([(8, 2), (9, 3), (7, 5)], (4, 4), 5, 5),
             ([(8, 2), (9, 3), (7, 5)], (5, 5), 5, 5),
             ([(2, 3), (9, 3), (7, 5)], (2, 2), 5, 2),
+            // In special cae, some CF may be flushed without any modification recorded,
+            // we should still able to advance the apply index forward.
+            ([(5, 2), (9, 3), (7, 3)], (2, 2), 3, 3),
+            ([(5, 2), (9, 3), (7, 3)], (2, 2), 6, 6),
+            ([(5, 2), (9, 3), (7, 3)], (2, 2), 10, 10),
+            ([(5, 2), (9, 3), (7, 3)], (2, 3), 10, 2),
         ];
         for (case, (data_cfs, admin, mem_index, exp)) in cases.iter().enumerate() {
             let mut trace = ApplyTrace::default();

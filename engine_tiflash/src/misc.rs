@@ -315,6 +315,18 @@ impl MiscExt for RocksEngine {
             .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE))
     }
 
+    fn get_num_keys(&self) -> Result<u64> {
+        let mut total = 0;
+        for cf in self.cf_names() {
+            let handle = util::get_cf_handle(self.as_inner(), cf).unwrap();
+            total += self
+                .as_inner()
+                .get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS)
+                .unwrap_or_default();
+        }
+        Ok(total)
+    }
+
     fn get_range_entries_and_versions(
         &self,
         cf: &str,

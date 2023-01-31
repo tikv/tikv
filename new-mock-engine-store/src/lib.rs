@@ -87,7 +87,7 @@ pub fn copy_data_from(
         .unwrap();
     debug!("copy raft log {:?}", entries);
 
-    raft_wb.append(region_id, entries)?;
+    raft_wb.append(region_id, None, entries)?;
     box_try!(target_engines.raft.consume(&mut raft_wb, true));
     Ok(())
 }

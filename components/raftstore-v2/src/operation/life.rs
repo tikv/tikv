@@ -10,8 +10,6 @@
 //! sending a message to store fsm first, and then using split to initialized
 //! the peer.
 
-use std::cmp;
-
 use batch_system::BasicMailbox;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
@@ -288,6 +286,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let entry_storage = self.storage().entry_storage();
         // TODO: check actual split index instead of commit index.
         entry_storage.applied_index() != entry_storage.commit_index()
+            // Wait for critical commands like split.
+            || self.has_pending_tombstone_tablets()
     }
 
     /// Start the destroy progress. It will write `Tombstone` state
@@ -295,33 +295,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// After destroy is finished, `finish_destroy` should be called to clean up
     /// memory states.
-    pub fn start_destroy(&mut self, write_task: &mut WriteTask<EK, ER>) {
-        let entry_storage = self.storage().entry_storage();
+    pub fn start_destroy<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        write_task: &mut WriteTask<EK, ER>,
+    ) {
         if self.postponed_destroy() {
             return;
-        }
-        let first_index = entry_storage.first_index();
-        let last_index = entry_storage.last_index();
-        if first_index <= last_index {
-            write_task.cut_logs = match write_task.cut_logs {
-                None => Some((first_index, last_index)),
-                Some((f, l)) => Some((cmp::min(first_index, f), cmp::max(last_index, l))),
-            };
         }
         let raft_engine = self.entry_storage().raft_engine();
         let mut region_state = self.storage().region_state().clone();
         let region_id = region_state.get_region().get_id();
+        // Use extra write to ensure these writes are the last writes to raft engine.
         let lb = write_task
             .extra_write
             .ensure_v2(|| raft_engine.log_batch(2));
-        // We only use raft-log-engine for v2, first index is not important.
+        // We only use raft-log-engine for v2, first index and state are not important.
         let raft_state = self.entry_storage().raft_state();
         raft_engine.clean(region_id, 0, raft_state, lb).unwrap();
-        // Write worker will do the clean up when meeting tombstone state.
         region_state.set_state(PeerState::Tombstone);
         let applied_index = self.entry_storage().applied_index();
         lb.put_region_state(region_id, applied_index, &region_state)
             .unwrap();
+        self.record_tombstone_tablet_for_destroy(ctx, write_task);
         self.destroy_progress_mut().start();
     }
 
@@ -330,7 +326,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// memory states.
     pub fn finish_destroy<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         info!(self.logger, "peer destroyed");
-        ctx.router.close(self.region_id());
+        let region_id = self.region_id();
+        ctx.router.close(region_id);
+        {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            meta.remove_region(region_id);
+            meta.readers.remove(&region_id);
+        }
         if let Some(msg) = self.destroy_progress_mut().finish() {
             // The message will be dispatched to store fsm, which will create a
             // new peer. Ignore error as it's just a best effort.

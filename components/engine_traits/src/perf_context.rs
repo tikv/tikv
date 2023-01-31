@@ -37,7 +37,7 @@ numeric_enum_serializing_mod! {perf_level_serde PerfLevel {
 pub trait PerfContextExt {
     type PerfContext: PerfContext;
 
-    fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext;
+    fn get_perf_context(level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext;
 }
 
 /// The subsystem the PerfContext is being created for.

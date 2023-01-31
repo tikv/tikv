@@ -711,19 +711,17 @@ fn test_mvcc_flashback() {
 }
 
 #[test]
-#[cfg(feature = "failpoints")]
 fn test_mvcc_flashback_block_rw() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
-    fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
-    // Flashback
-    must_flashback_to_version(&client, ctx.clone(), 0, 1, 2);
-    // Try to read.
+    // Prepare the flashback.
+    must_prepare_flashback(&client, ctx.clone(), 1, 2);
+    // Try to read version 3 (after flashback, FORBIDDEN).
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     // Get
     let mut get_req = GetRequest::default();
     get_req.set_context(ctx.clone());
     get_req.key = k.clone();
-    get_req.version = 1;
+    get_req.version = 3;
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(get_resp.get_region_error().has_flashback_in_progress());
     assert!(!get_resp.has_error());
@@ -733,28 +731,48 @@ fn test_mvcc_flashback_block_rw() {
     scan_req.set_context(ctx.clone());
     scan_req.start_key = k.clone();
     scan_req.limit = 1;
-    scan_req.version = 1;
+    scan_req.version = 3;
     let scan_resp = client.kv_scan(&scan_req).unwrap();
     assert!(scan_resp.get_region_error().has_flashback_in_progress());
+    assert!(!scan_resp.has_error());
     assert!(scan_resp.pairs.is_empty());
-    // Try to write.
+    // Try to read version 1 (before flashback, ALLOWED).
+    // Get
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k.clone();
+    get_req.version = 1;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(!get_resp.has_error());
+    assert!(get_resp.value.is_empty());
+    // Scan
+    let mut scan_req = ScanRequest::default();
+    scan_req.set_context(ctx.clone());
+    scan_req.start_key = k.clone();
+    scan_req.limit = 1;
+    scan_req.version = 1;
+    let scan_resp = client.kv_scan(&scan_req).unwrap();
+    assert!(!scan_resp.has_region_error());
+    assert!(!scan_resp.has_error());
+    assert!(scan_resp.pairs.is_empty());
+    // Try to write (FORBIDDEN).
     // Prewrite
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
     mutation.set_value(v);
-    let prewrite_resp = try_kv_prewrite(&client, ctx, vec![mutation], k, 1);
+    let prewrite_resp = try_kv_prewrite(&client, ctx.clone(), vec![mutation], k, 1);
     assert!(prewrite_resp.get_region_error().has_flashback_in_progress());
-    fail::remove("skip_finish_flashback_to_version");
+    // Finish the flashback.
+    must_finish_flashback(&client, ctx, 1, 2, 3);
 }
 
 #[test]
-#[cfg(feature = "failpoints")]
 fn test_mvcc_flashback_block_scheduling() {
     let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
-    fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
-    // Flashback
-    must_flashback_to_version(&client, ctx, 0, 1, 2);
+    // Prepare the flashback.
+    must_prepare_flashback(&client, ctx.clone(), 0, 1);
     // Try to transfer leader.
     let transfer_leader_resp = cluster.try_transfer_leader(1, new_peer(2, 2));
     assert!(
@@ -763,7 +781,8 @@ fn test_mvcc_flashback_block_scheduling() {
             .get_error()
             .has_flashback_in_progress()
     );
-    fail::remove("skip_finish_flashback_to_version");
+    // Finish the flashback.
+    must_finish_flashback(&client, ctx, 0, 1, 2);
 }
 
 #[test]
@@ -794,16 +813,7 @@ fn test_mvcc_flashback_unprepared() {
     assert!(!get_resp.has_error());
     assert_eq!(get_resp.value, b"".to_vec());
     // Mock the flashback retry.
-    let mut req = FlashbackToVersionRequest::default();
-    req.set_context(ctx);
-    req.set_start_ts(6);
-    req.set_commit_ts(7);
-    req.version = 0;
-    req.start_key = b"a".to_vec();
-    req.end_key = b"z".to_vec();
-    let resp = client.kv_flashback_to_version(&req).unwrap();
-    assert!(!resp.has_region_error());
-    assert!(resp.get_error().is_empty());
+    must_finish_flashback(&client, ctx.clone(), 0, 6, 7);
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(!get_resp.has_error());
@@ -811,7 +821,7 @@ fn test_mvcc_flashback_unprepared() {
 }
 
 #[test]
-fn test_mvcc_flashback_with_unlimit_range() {
+fn test_mvcc_flashback_with_unlimited_range() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     let mut ts = 0;
@@ -966,7 +976,7 @@ fn test_debug_raft_log() {
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42].into());
     let mut lb = engine.log_batch(0);
-    lb.append(region_id, vec![entry.clone()]).unwrap();
+    lb.append(region_id, None, vec![entry.clone()]).unwrap();
     engine.consume(&mut lb, false).unwrap();
     assert_eq!(
         engine.get_entry(region_id, log_index).unwrap().unwrap(),

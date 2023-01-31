@@ -1,4 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(slice_group_by)]
 
 #[macro_use]
 extern crate tikv_util;

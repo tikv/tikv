@@ -286,7 +286,7 @@ impl Drop for ReadDelegate {
 
 /// #[RaftstoreCommon]
 pub trait ReadExecutorProvider: Send + Clone + 'static {
-    type Executor: ReadExecutor;
+    type Executor;
     type StoreMeta;
 
     fn store_id(&self) -> Option<u64>;
@@ -412,6 +412,8 @@ pub struct ReadDelegate {
     pub txn_ext: Arc<TxnExt>,
     pub read_progress: Arc<RegionReadProgress>,
     pub pending_remove: bool,
+    /// Indicates whether the peer is waiting data. See more in `Peer`.
+    pub wait_data: bool,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
@@ -435,6 +437,7 @@ impl ReadDelegate {
             txn_ext: peer.txn_ext.clone(),
             read_progress: peer.read_progress.clone(),
             pending_remove: false,
+            wait_data: false,
             bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
             track_ver: TrackVer::new(),
         }
@@ -463,6 +466,7 @@ impl ReadDelegate {
             txn_ext,
             read_progress,
             pending_remove: false,
+            wait_data: false,
             bucket_meta,
             track_ver: TrackVer::new(),
         }
@@ -495,6 +499,9 @@ impl ReadDelegate {
             }
             Progress::RegionBuckets(bucket_meta) => {
                 self.bucket_meta = Some(bucket_meta);
+            }
+            Progress::WaitData(wait_data) => {
+                self.wait_data = wait_data;
             }
         }
     }
@@ -591,6 +598,7 @@ impl ReadDelegate {
             txn_ext: Default::default(),
             read_progress,
             pending_remove: false,
+            wait_data: false,
             track_ver: TrackVer::new(),
             bucket_meta: None,
         }
@@ -620,6 +628,7 @@ pub enum Progress {
     AppliedTerm(u64),
     LeaderLease(RemoteLease),
     RegionBuckets(Arc<BucketMeta>),
+    WaitData(bool),
 }
 
 impl Progress {
@@ -641,6 +650,10 @@ impl Progress {
 
     pub fn region_buckets(bucket_meta: Arc<BucketMeta>) -> Progress {
         Progress::RegionBuckets(bucket_meta)
+    }
+
+    pub fn wait_data(wait_data: bool) -> Progress {
+        Progress::WaitData(wait_data)
     }
 }
 
@@ -687,11 +700,7 @@ where
 /// #[RaftstoreCommon]: LocalReader is an entry point where local read requests are dipatch to the
 /// relevant regions by LocalReader so that these requests can be handled by the
 /// relevant ReadDelegate respectively.
-pub struct LocalReaderCore<D, S>
-where
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
-{
+pub struct LocalReaderCore<D, S> {
     pub store_id: Cell<Option<u64>>,
     store_meta: S,
     pub delegates: LruCache<u64, D>,
@@ -699,7 +708,7 @@ where
 
 impl<D, S> LocalReaderCore<D, S>
 where
-    D: ReadExecutor + Deref<Target = ReadDelegate> + Clone,
+    D: Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<Executor = D>,
 {
     pub fn new(store_meta: S) -> Self {
@@ -801,13 +810,22 @@ where
         // Check witness
         if find_peer_by_id(&delegate.region, delegate.peer_id).map_or(true, |p| p.is_witness) {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
-            return Err(Error::RecoveryInProgress(region_id));
+            return Err(Error::IsWitness(region_id));
+        }
+
+        // Check non-witness hasn't finish applying snapshot yet.
+        if delegate.wait_data {
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.wait_data.inc());
+            return Err(Error::IsWitness(region_id));
         }
 
         // Check whether the region is in the flashback state and the local read could
         // be performed.
         let is_in_flashback = delegate.region.is_in_flashback;
-        if let Err(e) = util::check_flashback_state(is_in_flashback, req, region_id, false) {
+        let flashback_start_ts = delegate.region.flashback_start_ts;
+        if let Err(e) =
+            util::check_flashback_state(is_in_flashback, flashback_start_ts, req, region_id, false)
+        {
             TLS_LOCAL_READ_METRICS.with(|m| match e {
                 Error::FlashbackNotPrepared(_) => {
                     m.borrow_mut().reject_reason.flashback_not_prepared.inc()
@@ -827,8 +845,7 @@ where
 
 impl<D, S> Clone for LocalReaderCore<D, S>
 where
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
+    S: Clone,
 {
     fn clone(&self) -> Self {
         LocalReaderCore {
@@ -1304,6 +1321,7 @@ mod tests {
                 txn_ext: Arc::new(TxnExt::default()),
                 read_progress: read_progress.clone(),
                 pending_remove: false,
+                wait_data: false,
                 track_ver: TrackVer::new(),
                 bucket_meta: None,
             };
@@ -1595,6 +1613,7 @@ mod tests {
                 track_ver: TrackVer::new(),
                 read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, 1)),
                 pending_remove: false,
+                wait_data: false,
                 bucket_meta: None,
             };
             meta.readers.insert(1, read_delegate);
@@ -1720,6 +1739,7 @@ mod tests {
                 txn_ext: Arc::new(TxnExt::default()),
                 read_progress,
                 pending_remove: false,
+                wait_data: false,
                 track_ver: TrackVer::new(),
                 bucket_meta: None,
             };

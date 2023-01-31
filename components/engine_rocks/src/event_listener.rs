@@ -261,7 +261,7 @@ mod tests {
         let (region_id, tablet_index) = (2, 3);
 
         let storage = Arc::new(MemStorage::default());
-        let state = Arc::new(FlushState::default());
+        let state = Arc::new(FlushState::new(0));
         let listener =
             PersistenceListener::new(region_id, tablet_index, state.clone(), storage.clone());
         let mut db_opt = RocksDbOptions::default();

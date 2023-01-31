@@ -5,11 +5,12 @@ mod life;
 mod pd;
 mod query;
 mod ready;
+mod txn_ext;
 
 pub use command::{
-    AdminCmdResult, CommittedEntries, ProposalControl, RequestSplit, SimpleWriteBinary,
-    SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder, SplitFlowControl,
-    SPLIT_PREFIX,
+    AdminCmdResult, ApplyFlowControl, CommittedEntries, CompactLogContext, ProposalControl,
+    RequestSplit, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
+    SimpleWriteReqEncoder, SplitFlowControl, SPLIT_PREFIX,
 };
 pub use life::DestroyProgress;
 pub use ready::{
@@ -17,4 +18,8 @@ pub use ready::{
     StateStorage,
 };
 
-pub(crate) use self::{command::SplitInit, query::LocalReader};
+pub(crate) use self::{
+    command::SplitInit,
+    query::{LocalReader, ReadDelegatePair, SharedReadTablet},
+    txn_ext::TxnContext,
+};

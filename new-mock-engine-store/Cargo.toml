@@ -45,6 +45,8 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 raftstore = { workspace = true, default-features = false }
 rand = "0.8"
 resolved_ts = { workspace = true }
+
+resource_control = { workspace = true }
 resource_metering = { workspace = true }
 security = { workspace = true, default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

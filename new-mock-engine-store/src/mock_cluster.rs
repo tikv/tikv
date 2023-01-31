@@ -44,6 +44,7 @@ use raftstore::{
     },
     Error, Result,
 };
+use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 pub use test_pd_client::TestPdClient;
 use test_raftstore::FilterFactory;
@@ -110,6 +111,7 @@ pub struct Cluster<T: Simulator<TiFlashEngine>> {
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
     pub test_data: TestData,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<T: Simulator<TiFlashEngine>> std::panic::UnwindSafe for Cluster<T> {}
@@ -154,6 +156,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 expected_leader_safe_ts: 0,
                 expected_self_safe_ts: 0,
             },
+            resource_manager: Some(Arc::new(ResourceGroupManager::default())),
         }
     }
 
@@ -412,7 +415,8 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             if !skip_set.is_empty() {
                 panic!("Error when start with skip set");
             }
-            let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+            let (router, system) =
+                create_raft_batch_system(&self.cfg.raft_store, &self.resource_manager);
             self.create_engine(Some(router.clone()));
 
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
@@ -810,7 +814,8 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         assert_ne!(engines.kv.engine_store_server_helper, 0);
 
         let key_mgr = self.key_managers_map[&node_id].clone();
-        let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+        let (router, system) =
+            create_raft_batch_system(&self.cfg.raft_store, &self.resource_manager);
 
         let mut cfg = self.cfg.clone();
         if let Some(labels) = self.labels.get(&node_id) {

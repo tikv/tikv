@@ -62,6 +62,9 @@ use raftstore::{
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
 };
+use resource_control::{
+    ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
+};
 use security::SecurityManager;
 use server::{memory::*, raft_engine_switch::*};
 use tikv::{
@@ -491,6 +494,7 @@ struct TiKvServer<ER: RaftEngine> {
     background_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
 }
 
@@ -540,13 +544,31 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
-        // Initialize raftstore channels.
-        let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
-
         let thread_count = config.server.background_thread_count;
         let background_worker = WorkerBuilder::new("background")
             .thread_count(thread_count)
             .create();
+
+        let resource_manager = if config.resource_control.enabled {
+            let mgr = Arc::new(ResourceGroupManager::default());
+            let mut resource_mgr_service =
+                ResourceManagerService::new(mgr.clone(), pd_client.clone());
+            // spawn a task to periodically update the minimal virtual time of all resource
+            // groups.
+            let resource_mgr = mgr.clone();
+            background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
+                resource_mgr.advance_min_virtual_time();
+            });
+            // spawn a task to watch all resource groups update.
+            background_worker.spawn_async_task(async move {
+                resource_mgr_service.watch_resource_groups().await;
+            });
+            Some(mgr)
+        } else {
+            None
+        };
+        // Initialize raftstore channels.
+        let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 
         let mut coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
@@ -598,6 +620,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             flow_info_receiver: None,
             sst_worker: None,
             quota_limiter,
+            resource_manager,
             tablet_registry: None,
         }
     }
@@ -902,10 +925,15 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
+            let resource_ctl = self
+                .resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("unified-read-pool".into(), true));
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
+                resource_ctl,
             ))
         } else {
             None
@@ -988,8 +1016,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
             None, // causal_ts_provider
+            self.resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
+
         cfg_controller.register(
             tikv::config::Module::Storage,
             Box::new(StorageConfigManger::new(

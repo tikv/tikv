@@ -426,6 +426,7 @@ impl ServerCluster {
             quota_limiter.clone(),
             self.pd_client.feature_gate().clone(),
             None,
+            None, // TODO resource_ctl
         )?;
         self.storages.insert(node_id, raft_engine);
 

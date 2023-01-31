@@ -16,7 +16,8 @@ use encryption_export::{
 use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_RAFT,
+    CfNamesExt, Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, CF_DEFAULT,
+    CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::executor::block_on;
@@ -101,7 +102,7 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
     assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
     let start_key = keys::data_key(region.get_start_key());
     let end_key = keys::data_key(region.get_end_key());
-    for cf in ALL_CFS {
+    for cf in engine.kv.cf_names() {
         engine
             .kv
             .scan(cf, &start_key, &end_key, false, |k, v| {
@@ -1245,15 +1246,9 @@ pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<V
     }
 }
 
-pub fn must_flashback_to_version(
-    client: &TikvClient,
-    ctx: Context,
-    version: u64,
-    start_ts: u64,
-    commit_ts: u64,
-) {
+pub fn must_prepare_flashback(client: &TikvClient, ctx: Context, version: u64, start_ts: u64) {
     let mut prepare_req = PrepareFlashbackToVersionRequest::default();
-    prepare_req.set_context(ctx.clone());
+    prepare_req.set_context(ctx);
     prepare_req.set_start_ts(start_ts);
     prepare_req.set_version(version);
     prepare_req.set_start_key(b"a".to_vec());
@@ -1261,6 +1256,15 @@ pub fn must_flashback_to_version(
     client
         .kv_prepare_flashback_to_version(&prepare_req)
         .unwrap();
+}
+
+pub fn must_finish_flashback(
+    client: &TikvClient,
+    ctx: Context,
+    version: u64,
+    start_ts: u64,
+    commit_ts: u64,
+) {
     let mut req = FlashbackToVersionRequest::default();
     req.set_context(ctx);
     req.set_start_ts(start_ts);
@@ -1271,6 +1275,17 @@ pub fn must_flashback_to_version(
     let resp = client.kv_flashback_to_version(&req).unwrap();
     assert!(!resp.has_region_error());
     assert!(resp.get_error().is_empty());
+}
+
+pub fn must_flashback_to_version(
+    client: &TikvClient,
+    ctx: Context,
+    version: u64,
+    start_ts: u64,
+    commit_ts: u64,
+) {
+    must_prepare_flashback(client, ctx.clone(), version, start_ts);
+    must_finish_flashback(client, ctx, version, start_ts, commit_ts);
 }
 
 // A helpful wrapper to make the test logic clear

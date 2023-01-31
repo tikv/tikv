@@ -1998,7 +1998,12 @@ impl TabletSnapManager {
             {
                 continue;
             }
-            for e in file_system::read_dir(path)? {
+            let entries = match file_system::read_dir(path) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
+            for e in entries {
                 match e.and_then(|e| e.metadata()) {
                     Ok(m) => total_size += m.len(),
                     Err(e) if e.kind() == ErrorKind::NotFound => continue,
@@ -2149,7 +2154,7 @@ pub mod tests {
             apply_entry.set_term(0);
             apply_state.mut_truncated_state().set_index(10);
             kv.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
-            lb.append(region_id, vec![apply_entry])?;
+            lb.append(region_id, None, vec![apply_entry])?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
