@@ -5582,7 +5582,7 @@ mod tests {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.validate(false);
         assert_eq!(
-            default_cfg.coprocessor.split_region_size(),
+            default_cfg.coprocessor.region_split_size(),
             Some(ReadableSize::mb(SPLIT_SIZE_MB))
         );
 
@@ -5590,15 +5590,28 @@ mod tests {
         default_cfg.coprocessor.enable_region_bucket = true;
         default_cfg.coprocessor.validate(false);
         assert_eq!(
-            default_cfg.coprocessor.split_region_size(),
+            default_cfg.coprocessor.region_split_size(),
             Some(ReadableSize::mb(LARGE_REGION_SPLIT_SIZE_MB))
         );
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.validate(false);
         assert_eq!(
-            default_cfg.coprocessor.split_region_size(),
+            default_cfg.coprocessor.region_split_size(),
             Some(ReadableSize::mb(MULTI_ROCKS_SPLIT_SIZE_MB))
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
+        default_cfg.coprocessor.validate(false);
+        assert_eq!(
+            default_cfg.coprocessor.region_split_size(),
+            Some(ReadableSize::mb(500))
+        );
+        default_cfg.coprocessor.validate(true);
+        assert_eq!(
+            default_cfg.coprocessor.region_split_size(),
+            Some(ReadableSize::mb(500))
         );
     }
 
