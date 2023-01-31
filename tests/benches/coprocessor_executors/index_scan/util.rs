@@ -2,6 +2,7 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
+use api_version::ApiV1;
 use criterion::black_box;
 use futures::executor::block_on;
 use kvproto::coprocessor::KeyRange;
@@ -33,7 +34,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
         store: &Store<RocksEngine>,
         unique: bool,
     ) -> Self::E {
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             black_box(TikvStorage::new(
                 ToTxnStore::<Self::T>::to_store(store),
                 false,

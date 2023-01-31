@@ -6,7 +6,7 @@ use std::{
 };
 
 use crossbeam::channel::TrySendError;
-use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
@@ -33,12 +33,12 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for StoreRouter<EK, ER> {
-    fn update_approximate_size(&self, _region_id: u64, _size: u64) {
-        // TODO
+    fn update_approximate_size(&self, region_id: u64, size: u64) {
+        let _ = self.send(region_id, PeerMsg::UpdateRegionSize { size });
     }
 
-    fn update_approximate_keys(&self, _region_id: u64, _keys: u64) {
-        // TODO
+    fn update_approximate_keys(&self, region_id: u64, keys: u64) {
+        let _ = self.send(region_id, PeerMsg::UpdateRegionKeys { keys });
     }
 
     fn ask_split(
@@ -115,13 +115,13 @@ where
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
-    pub fn new(store_id: u64, reg: TabletRegistry<EK>, router: StoreRouter<EK, ER>) -> Self {
+    pub fn new(store_id: u64, router: StoreRouter<EK, ER>) -> Self {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(store_id)));
 
         let logger = router.logger().clone();
         RaftRouter {
             router: router.clone(),
-            local_reader: LocalReader::new(store_meta, reg, router, logger),
+            local_reader: LocalReader::new(store_meta, router, logger),
         }
     }
 
@@ -138,7 +138,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
         self.router.check_send(addr, msg)
     }
 
-    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta>> {
+    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta<EK>>> {
         self.local_reader.store_meta()
     }
 

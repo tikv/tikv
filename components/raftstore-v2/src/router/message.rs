@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 
+use batch_system::ResourceMetered;
 use kvproto::{
     metapb,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
@@ -181,10 +182,23 @@ pub enum PeerMsg {
         request: RequestSplit,
         ch: CmdResChannel,
     },
+    UpdateRegionSize {
+        size: u64,
+    },
+    UpdateRegionKeys {
+        keys: u64,
+    },
+    ClearRegionSize,
+    ForceCompactLog,
+    TabletTrimmed {
+        tablet_index: u64,
+    },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
 }
+
+impl ResourceMetered for PeerMsg {}
 
 impl PeerMsg {
     pub fn raft_query(req: RaftCmdRequest) -> (Self, QueryResSubscriber) {
@@ -248,3 +262,5 @@ pub enum StoreMsg {
     Start,
     StoreUnreachable { to_store_id: u64 },
 }
+
+impl ResourceMetered for StoreMsg {}

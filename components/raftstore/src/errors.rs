@@ -140,6 +140,9 @@ pub enum Error {
         region_id: u64,
         local_state: raft_serverpb::RegionLocalState,
     },
+
+    #[error("peer is a witness of region {0}")]
+    IsWitness(u64),
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -263,6 +266,11 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_flashback_not_prepared(e);
             }
+            Error::IsWitness(region_id) => {
+                let mut e = errorpb::IsWitness::default();
+                e.set_region_id(region_id);
+                errorpb.set_is_witness(e);
+            }
             _ => {}
         };
 
@@ -319,6 +327,7 @@ impl ErrorCodeExt for Error {
             Error::DataIsNotReady { .. } => error_code::raftstore::DATA_IS_NOT_READY,
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
             Error::PendingPrepareMerge => error_code::raftstore::PENDING_PREPARE_MERGE,
+            Error::IsWitness(..) => error_code::raftstore::IS_WITNESS,
 
             Error::Other(_) | Error::RegionNotRegistered { .. } => error_code::raftstore::UNKNOWN,
         }

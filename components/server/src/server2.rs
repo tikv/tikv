@@ -47,7 +47,10 @@ use file_system::{
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
-use kvproto::{deadlock::create_deadlock, diagnosticspb::create_diagnostics, kvrpcpb::ApiVersion};
+use kvproto::{
+    deadlock::create_deadlock, diagnosticspb::create_diagnostics, kvrpcpb::ApiVersion,
+    resource_usage_agent::create_resource_metering_pub_sub,
+};
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
@@ -56,17 +59,21 @@ use raftstore::{
         RawConsistencyCheckObserver,
     },
     store::{
-        memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE, CheckLeaderRunner, SplitConfigManager,
-        TabletSnapManager,
+        memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE, AutoSplitController, CheckLeaderRunner,
+        SplitConfigManager, TabletSnapManager,
     },
     RegionInfoAccessor,
+};
+use raftstore_v2::{router::RaftRouter, StateStorage};
+use resource_control::{
+    ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    read_pool::{build_yatp_read_pool, ReadPool},
+    read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
         gc_worker::{AutoGcConfig, GcWorker},
@@ -136,8 +143,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.init_encryption();
     let fetcher = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
-    let (raft_engine, engines_info) = tikv.init_raw_engines(listener);
-    tikv.init_engines(raft_engine);
+    let engines_info = tikv.init_engines(listener);
     let server_config = tikv.init_servers::<F>();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
@@ -201,6 +207,7 @@ struct TikvServer<ER: RaftEngine> {
     pd_client: Arc<RpcClient>,
     flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
     flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
+    router: Option<RaftRouter<RocksEngine, ER>>,
     node: Option<NodeV2<RpcClient, RocksEngine, ER>>,
     resolver: Option<resolve::PdStoreAddrResolver>,
     store_path: PathBuf,
@@ -220,6 +227,7 @@ struct TikvServer<ER: RaftEngine> {
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
 }
@@ -232,6 +240,7 @@ struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
 struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
+    rsmeter_pubsub_service: resource_metering::PubSubService,
 }
 
 type LocalServer<EK, ER> = Server<resolve::PdStoreAddrResolver, RaftKv2<EK, ER>>;
@@ -285,6 +294,25 @@ where
             config.quota.enable_auto_tune,
         ));
 
+        let resource_manager = if config.resource_control.enabled {
+            let mgr = Arc::new(ResourceGroupManager::default());
+            let mut resource_mgr_service =
+                ResourceManagerService::new(mgr.clone(), pd_client.clone());
+            // spawn a task to periodically update the minimal virtual time of all resource
+            // groups.
+            let resource_mgr = mgr.clone();
+            background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
+                resource_mgr.advance_min_virtual_time();
+            });
+            // spawn a task to watch all resource groups update.
+            background_worker.spawn_async_task(async move {
+                resource_mgr_service.watch_resource_groups().await;
+            });
+            Some(mgr)
+        } else {
+            None
+        };
+
         let mut causal_ts_provider = None;
         if let ApiVersion::V2 = F::TAG {
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
@@ -310,6 +338,7 @@ where
             cfg_controller: Some(cfg_controller),
             security_mgr,
             pd_client,
+            router: None,
             node: None,
             resolver: None,
             store_path,
@@ -331,6 +360,7 @@ where
             flow_info_receiver: None,
             sst_worker: None,
             quota_limiter,
+            resource_manager,
             causal_ts_provider,
             tablet_registry: None,
         }
@@ -567,36 +597,6 @@ where
         engine_rocks::FlowListener::new(tx)
     }
 
-    fn init_engines(&mut self, raft_engine: ER) {
-        let tablet_registry = self.tablet_registry.clone().unwrap();
-        let mut node = NodeV2::new(
-            &self.config.server,
-            self.pd_client.clone(),
-            None,
-            tablet_registry,
-        );
-        node.try_bootstrap_store(&self.config.raft_store, &raft_engine)
-            .unwrap_or_else(|e| fatal!("failed to bootstrap store: {:?}", e));
-        assert_ne!(node.id(), 0);
-
-        let router = node.router();
-        let mut coprocessor_host: CoprocessorHost<RocksEngine> = CoprocessorHost::new(
-            router.store_router().clone(),
-            self.config.coprocessor.clone(),
-        );
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
-
-        let engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
-
-        self.engines = Some(TikvEngines {
-            raft_engine,
-            engine,
-        });
-        self.node = Some(node);
-        self.coprocessor_host = Some(coprocessor_host);
-        self.region_info_accessor = Some(region_info_accessor);
-    }
-
     fn init_gc_worker(&mut self) -> GcWorker<RaftKv2<RocksEngine, ER>> {
         let engines = self.engines.as_ref().unwrap();
         let gc_worker = GcWorker::new(
@@ -647,13 +647,21 @@ where
         let engines = self.engines.as_ref().unwrap();
 
         let pd_worker = LazyWorker::new("pd-worker");
-        let pd_sender = raftstore_v2::FlowReporter::new(pd_worker.scheduler());
+        let pd_sender = raftstore_v2::PdReporter::new(
+            pd_worker.scheduler(),
+            slog_global::borrow_global().new(slog::o!()),
+        );
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
+            let resource_ctl = self
+                .resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("unified-read-pool".into(), true));
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
+                resource_ctl,
             ))
         } else {
             None
@@ -681,15 +689,16 @@ where
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(
                 self.config.resource_metering.clone(),
-                collector_reg_handle,
+                collector_reg_handle.clone(),
             );
         self.to_stop.push(reporter_worker);
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
             self.config.resource_metering.receiver_address.clone(),
             self.env.clone(),
-            data_sink_reg_handle,
+            data_sink_reg_handle.clone(),
         );
         self.to_stop.push(single_target_worker);
+        let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
 
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
@@ -726,6 +735,9 @@ where
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
             self.causal_ts_provider.clone(),
+            self.resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -773,8 +785,24 @@ where
             cop_read_pools.handle()
         };
 
+        let mut unified_read_pool_scale_receiver = None;
+        if self.config.readpool.is_unified_pool_enabled() {
+            let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel(10);
+            cfg_controller.register(
+                tikv::config::Module::Readpool,
+                Box::new(ReadPoolConfigManager::new(
+                    unified_read_pool.as_ref().unwrap().handle(),
+                    unified_read_pool_scale_notifier,
+                    &self.background_worker,
+                    self.config.readpool.unified.max_thread_count,
+                    self.config.readpool.unified.auto_adjust_pool_size,
+                )),
+            );
+            unified_read_pool_scale_receiver = Some(rx);
+        }
+
         let check_leader_runner = CheckLeaderRunner::new(
-            self.node.as_ref().unwrap().router().store_meta().clone(),
+            self.router.as_ref().unwrap().store_meta().clone(),
             self.coprocessor_host.clone().unwrap(),
         );
         let check_leader_scheduler = self
@@ -832,7 +860,17 @@ where
 
         let split_config_manager =
             SplitConfigManager::new(Arc::new(VersionTrack::new(self.config.split.clone())));
-        cfg_controller.register(tikv::config::Module::Split, Box::new(split_config_manager));
+        cfg_controller.register(
+            tikv::config::Module::Split,
+            Box::new(split_config_manager.clone()),
+        );
+
+        let auto_split_controller = AutoSplitController::new(
+            split_config_manager,
+            self.config.server.grpc_concurrency,
+            self.config.readpool.unified.max_thread_count,
+            unified_read_pool_scale_receiver,
+        );
 
         // `ConsistencyCheckObserver` must be registered before `Node::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
@@ -855,11 +893,15 @@ where
             .unwrap()
             .start(
                 engines.raft_engine.clone(),
+                self.tablet_registry.clone().unwrap(),
+                self.router.as_ref().unwrap(),
                 server.transport(),
                 snap_mgr,
                 self.concurrency_manager.clone(),
                 self.causal_ts_provider.clone(),
                 self.coprocessor_host.clone().unwrap(),
+                auto_split_controller,
+                collector_reg_handle,
                 self.background_worker.clone(),
                 pd_worker,
                 raft_store,
@@ -884,7 +926,11 @@ where
 
         initial_metric(&self.config.metric);
 
-        self.servers = Some(Servers { lock_mgr, server });
+        self.servers = Some(Servers {
+            lock_mgr,
+            server,
+            rsmeter_pubsub_service,
+        });
 
         server_config
     }
@@ -925,6 +971,16 @@ where
                 &self.config.pessimistic_txn,
             )
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
+
+        if servers
+            .server
+            .register_service(create_resource_metering_pub_sub(
+                servers.rsmeter_pubsub_service.clone(),
+            ))
+            .is_some()
+        {
+            warn!("failed to register resource metering pubsub service");
+        }
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {
@@ -1392,10 +1448,10 @@ impl ConfiguredRaftEngine for RaftLogEngine {
 }
 
 impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
-    fn init_raw_engines(
+    fn init_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (CER, Arc<EnginesResourceInfo>) {
+    ) -> Arc<EnginesResourceInfo> {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
             .config
@@ -1415,6 +1471,19 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let builder = KvEngineFactoryBuilder::new(env, &self.config, block_cache)
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
+
+        let mut node = NodeV2::new(&self.config.server, self.pd_client.clone(), None);
+        node.try_bootstrap_store(&self.config.raft_store, &raft_engine)
+            .unwrap_or_else(|e| fatal!("failed to bootstrap store: {:?}", e));
+        assert_ne!(node.id(), 0);
+
+        let router = node.router().clone();
+
+        // Create kv engine.
+        let builder = builder.state_storage(Arc::new(StateStorage::new(
+            raft_engine.clone(),
+            router.clone(),
+        )));
         let factory = Box::new(builder.build());
         self.kv_statistics = Some(factory.rocks_statistics());
         let registry = TabletRegistry::new(factory, self.store_path.join("tablets"))
@@ -1433,7 +1502,25 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             180, // max_samples_to_preserve
         ));
 
-        (raft_engine, engines_info)
+        let router = RaftRouter::new(node.id(), router);
+        let mut coprocessor_host: CoprocessorHost<RocksEngine> = CoprocessorHost::new(
+            router.store_router().clone(),
+            self.config.coprocessor.clone(),
+        );
+        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+
+        let engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
+
+        self.engines = Some(TikvEngines {
+            raft_engine,
+            engine,
+        });
+        self.router = Some(router);
+        self.node = Some(node);
+        self.coprocessor_host = Some(coprocessor_host);
+        self.region_info_accessor = Some(region_info_accessor);
+
+        engines_info
     }
 }
 
