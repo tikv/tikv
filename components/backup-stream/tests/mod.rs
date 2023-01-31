@@ -33,7 +33,7 @@ use kvproto::{
 use pd_client::PdClient;
 use protobuf::parse_from_bytes;
 use tempdir::TempDir;
-use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
+use test_raftstore::{new_server_cluster, Cluster, FilterFactory, ServerCluster};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
@@ -337,6 +337,13 @@ impl Suite {
             raft_router,
             cluster.pd_client.clone(),
             cm,
+            Arc::clone(&self.env),
+            cluster.store_metas[&id]
+                .lock()
+                .unwrap()
+                .region_read_progress
+                .clone(),
+            Arc::clone(&sim.security_mgr),
         );
         worker.start(endpoint);
     }
@@ -802,7 +809,9 @@ mod test {
         RegionSet, Task,
     };
     use futures::{Stream, StreamExt};
+    use kvproto::raft_serverpb::RaftMessage;
     use pd_client::PdClient;
+    use test_raftstore::{IsolationFilterFactory, PartitionFilterFactory};
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use tokio::time::timeout;
     use txn_types::{Key, TimeStamp};
@@ -1285,5 +1294,49 @@ mod test {
             suite.flushed_files.path(),
             round1.union(&round2).map(|x| x.as_slice()),
         ));
+    }
+
+    #[test]
+    fn network_partition() {
+        let mut suite = super::SuiteBuilder::new_named("network_partition")
+            .nodes(3)
+            .build();
+        suite.must_register_task(1, "network_partition");
+        let leader = suite.cluster.leader_of_region(1).unwrap();
+        let others = {
+            let mut os = suite.cluster.get_node_ids();
+            os.remove(&leader.store_id);
+            os.into_iter().collect::<Vec<_>>()
+        };
+        let round1 = run_async_test(suite.write_records(0, 128, 1));
+        std::thread::sleep(std::time::Duration::from_secs(5));
+
+        println!("{:?} {:?}", leader.store_id, others);
+        suite
+            .cluster
+            .add_send_filter(IsolationFilterFactory::new(leader.store_id));
+        suite
+            .cluster
+            .add_recv_filter(IsolationFilterFactory::new(leader.store_id));
+        suite.must_shuffle_leader(1);
+        let leader = suite.cluster.leader_of_region(1).unwrap();
+        println!("leader is {:?} now", leader);
+        let ts = suite.tso();
+        suite.must_kv_prewrite(
+            1,
+            vec![mutation(make_record_key(1, 778), b"generator".to_vec())],
+            make_record_key(1, 778),
+            ts,
+        );
+        suite.sync();
+        suite.force_flush_files("network_partition");
+        suite.wait_for_flush();
+
+        let cp = suite.global_checkpoint();
+        assert!(cp <= ts.into_inner(), "cp={} ts={}", cp, ts);
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.iter().map(|k| k.as_slice()),
+        ))
     }
 }
