@@ -610,7 +610,7 @@ where
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
-                    if self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
+                    if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
                         continue;
                     }
                     if let Err(e) = self.on_raft_message(msg) {

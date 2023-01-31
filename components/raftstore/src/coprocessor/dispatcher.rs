@@ -792,11 +792,11 @@ impl<E: KvEngine> CoprocessorHost<E> {
     pub fn on_raft_message(&self, msg: &RaftMessage) -> bool {
         for observer in &self.registry.message_observers {
             let observer = observer.observer.inner();
-            if observer.on_raft_message(msg) {
-                return true;
+            if !observer.on_raft_message(msg) {
+                return false;
             }
         }
-        false
+        true
     }
 
     pub fn on_flush_applied_cmd_batch(
