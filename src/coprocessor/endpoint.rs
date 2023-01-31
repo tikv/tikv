@@ -11,7 +11,7 @@ use api_version::{dispatch_api_version, KvFormat};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
-use futures::{channel::mpsc, prelude::*};
+use futures::{channel::mpsc, future::Either, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
@@ -516,6 +516,16 @@ impl<E: Engine> Endpoint<E> {
         mut req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+        // Check the load of the read pool. If it's too busy, generate and return
+        // error in the gRPC thread to avoid waiting in the queue of the read pool.
+        if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
+            req.get_context().get_busy_threshold_ms() as u64,
+        )) {
+            let mut resp = coppb::Response::default();
+            resp.mut_region_error().set_server_is_busy(busy_err);
+            return Either::Left(async move { resp.into() });
+        }
+
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
             req.get_context(),
             RequestType::Unknown,
@@ -526,7 +536,7 @@ impl<E: Engine> Endpoint<E> {
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
-        async move {
+        let fut = async move {
             let res = match result_of_future {
                 Err(e) => {
                     let mut res = make_error_response(e);
@@ -546,7 +556,8 @@ impl<E: Engine> Endpoint<E> {
             };
             GLOBAL_TRACKERS.remove(tracker);
             res
-        }
+        };
+        Either::Right(fut)
     }
 
     // process_batch_tasks process the input batched coprocessor tasks if any,
