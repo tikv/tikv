@@ -24,7 +24,7 @@ use std::{
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
-    HandlerBuilder, PollHandler, Priority, ResourceMetered,
+    HandlerBuilder, PollHandler, Priority,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -51,7 +51,7 @@ use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
-use resource_control::ResourceController;
+use resource_control::{ResourceController, ResourceMetered};
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -4429,6 +4429,7 @@ pub enum ControlMsg {
 }
 
 impl ResourceMetered for ControlMsg {}
+
 pub struct ControlFsm {
     receiver: Receiver<ControlMsg>,
     stopped: bool,

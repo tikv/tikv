@@ -1,12 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod batch;
-mod channel;
 mod config;
 mod fsm;
 mod mailbox;
 mod metrics;
 mod router;
+mod scheduler;
 
 #[cfg(feature = "test-runner")]
 pub mod test_runner;
@@ -17,7 +17,7 @@ pub use self::{
         PollHandler, Poller, PoolState,
     },
     config::Config,
-    fsm::{Fsm, FsmScheduler, Priority, ResourceMetered},
+    fsm::{Fsm, FsmScheduler, Priority},
     mailbox::{BasicMailbox, Mailbox},
     router::Router,
 };

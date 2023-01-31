@@ -9,6 +9,8 @@ failpoints = ["fail/failpoints"]
 
 [dependencies]
 byteorder = "1.2"
+collections = { workspace = true }
+crossbeam = "0.8"
 crossbeam-skiplist = "0.1"
 dashmap = "5.1"
 fail = "0.5"
