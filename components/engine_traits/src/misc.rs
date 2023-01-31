@@ -37,6 +37,13 @@ pub enum DeleteStrategy {
     DeleteByWriter { sst_path: String },
 }
 
+#[derive(Clone, Debug)]
+pub enum PeriodicWorkKind {
+    FlushInfoLog,
+    DumpStats,
+    PersistStats,
+}
+
 /// `StatisticsReporter` can be used to report engine's private statistics to
 /// prometheus metrics. For one single engine, using it is equivalent to calling
 /// `KvEngine::flush_metrics("name")`. For multiple engines, it can aggregate
@@ -98,6 +105,8 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     fn sync_wal(&self) -> Result<()>;
 
     fn pause_background_work(&self) -> Result<()>;
+
+    fn do_periodic_work(&self, work: PeriodicWorkKind) -> Result<()>;
 
     /// Check whether a database exists at a given path
     fn exists(path: &str) -> bool;

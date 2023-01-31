@@ -37,7 +37,8 @@ use engine_rocks::{
 };
 use engine_traits::{
     CachedTablet, CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
-    RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    PeriodicWorkKind, RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -1036,6 +1037,33 @@ where
         if let Some(limiter) = get_io_rate_limiter() {
             limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info));
         }
+        let mut count = 0;
+        let tablet_registry = self.tablet_registry.clone().unwrap();
+        self.background_worker
+            .spawn_interval_task(Duration::from_secs(10), move || {
+                tablet_registry.for_each_opened_tablet(|_, cached| {
+                    if let Some(tablet) = cached.latest() {
+                        // rocksdb::kDefaultFlushInfoLogPeriodSec = 10.
+                        let _ = tablet
+                            .do_periodic_work(PeriodicWorkKind::FlushInfoLog)
+                            .map_err(
+                                |e| warn!("failed to run engine task (FlushInfoLog)"; "err" => %e),
+                            );
+                        // rocksdb::DBOptions::stats_dump_period_sec = 600.
+                        if count % 60 == 0 {
+                            let _ = tablet
+                                .do_periodic_work(PeriodicWorkKind::DumpStats)
+                                .map_err(
+                                    |e| warn!("failed to run engine task (DumpStats)"; "err" => %e),
+                                );
+                        }
+                        false
+                    } else {
+                        true
+                    }
+                });
+                count += 1;
+            });
 
         let mut mem_trace_metrics = MemoryTraceManager::default();
         mem_trace_metrics.register_provider(MEMTRACE_RAFTSTORE.clone());

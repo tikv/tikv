@@ -1264,7 +1264,7 @@ impl DbConfig {
         }
     }
 
-    pub fn build_opt(&self, shared: &DbResources) -> RocksDbOptions {
+    pub fn build_opt(&self, shared: &DbResources, for_engine: EngineType) -> RocksDbOptions {
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -1318,6 +1318,10 @@ impl DbConfig {
         }
         if let Some(r) = &shared.write_buffer_manager {
             opts.set_write_buffer_manager(r);
+        }
+        if for_engine == EngineType::RaftKv2 {
+            // Will be scheduled to TiKV's background worker in `init_metrics_flusher`.
+            opts.disable_periodic_work_scheduler(true);
         }
         opts
     }
@@ -4424,9 +4428,10 @@ mod tests {
     fn test_rocks_rate_limit_zero() {
         let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.rocksdb.rate_bytes_per_sec = ReadableSize(0);
-        tikv_cfg
-            .rocksdb
-            .build_opt(&tikv_cfg.rocksdb.build_resources(Arc::new(Env::default())));
+        tikv_cfg.rocksdb.build_opt(
+            &tikv_cfg.rocksdb.build_resources(Arc::new(Env::default())),
+            tikv_cfg.storage.engine,
+        );
     }
 
     #[test]
@@ -4589,10 +4594,10 @@ mod tests {
         assert_eq!(F::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
-            Some(
-                cfg.rocksdb
-                    .build_opt(&cfg.rocksdb.build_resources(Arc::new(Env::default()))),
-            ),
+            Some(cfg.rocksdb.build_opt(
+                &cfg.rocksdb.build_resources(Arc::new(Env::default())),
+                cfg.storage.engine,
+            )),
             cfg.rocksdb.build_cf_opts(
                 &cfg.rocksdb
                     .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),

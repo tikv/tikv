@@ -2,9 +2,9 @@
 
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
-    Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
+    PeriodicWorkKind, Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
 };
-use rocksdb::Range as RocksRange;
+use rocksdb::{DBPeriodicWorkType, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
@@ -276,6 +276,23 @@ impl MiscExt for RocksEngine {
     fn pause_background_work(&self) -> Result<()> {
         self.as_inner().pause_bg_work();
         Ok(())
+    }
+
+    fn do_periodic_work(&self, work: PeriodicWorkKind) -> Result<()> {
+        match work {
+            PeriodicWorkKind::FlushInfoLog => self
+                .as_inner()
+                .do_periodic_work(DBPeriodicWorkType::FlushInfoLog)
+                .map_err(r2e),
+            PeriodicWorkKind::DumpStats => self
+                .as_inner()
+                .do_periodic_work(DBPeriodicWorkType::DumpStats)
+                .map_err(r2e),
+            PeriodicWorkKind::PersistStats => self
+                .as_inner()
+                .do_periodic_work(DBPeriodicWorkType::PersistStats)
+                .map_err(r2e),
+        }
     }
 
     fn exists(path: &str) -> bool {

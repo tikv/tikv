@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DeleteStrategy, MiscExt, Range, Result, StatisticsReporter};
+use engine_traits::{DeleteStrategy, MiscExt, PeriodicWorkKind, Range, Result, StatisticsReporter};
 
 use crate::engine::PanicEngine;
 
@@ -65,6 +65,10 @@ impl MiscExt for PanicEngine {
     }
 
     fn pause_background_work(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn do_periodic_work(&self, work: PeriodicWorkKind) -> Result<()> {
         panic!()
     }
 
