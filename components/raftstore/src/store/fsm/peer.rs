@@ -5223,9 +5223,13 @@ where
         // the apply phase and because a read-only request doesn't need to be applied,
         // so it will be allowed during the flashback progress, for example, a snapshot
         // request.
-        if let Err(e) =
-            util::check_flashback_state(self.region().is_in_flashback, msg, region_id, true)
-        {
+        if let Err(e) = util::check_flashback_state(
+            self.region().is_in_flashback,
+            self.region().flashback_start_ts,
+            msg,
+            region_id,
+            true,
+        ) {
             match e {
                 Error::FlashbackInProgress(_) => self
                     .ctx

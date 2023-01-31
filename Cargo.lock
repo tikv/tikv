@@ -2724,12 +2724,13 @@ dependencies = [
  "panic_hook",
  "thiserror",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/busyjay/kvproto?branch=introduce-gc-peers#cb3d0e3ef8b07166e41a7e469c6b80feb8d44598"
+source = "git+https://github.com/pingcap/kvproto.git#1b2b4114103afb06796b7e44f45f7e55133673c0"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
