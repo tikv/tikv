@@ -786,8 +786,6 @@ impl<R: RegionInfoProvider> Progress<R> {
                     let peer = find_peer(region, store_id).unwrap().to_owned();
                     // Raft peer role has to match the replica read flag.
                     if (replica_read == BackupReplicaRead::Leader && info.role == StateRole::Leader)
-                        || (replica_read == BackupReplicaRead::Follower
-                            && info.role != StateRole::Leader)
                         || (replica_read == BackupReplicaRead::LeaderAndFollower)
                         || (replica_read == BackupReplicaRead::Learner
                             && peer.get_role() == PeerRole::Learner)
@@ -802,7 +800,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                             peer,
                             codec,
                             cf: cf_name,
-                            uses_replica_read: info.role == StateRole::Leader,
+                            uses_replica_read: info.role != StateRole::Leader,
                         };
                         tx.send(backup_range).unwrap();
                         count += 1;
@@ -1680,42 +1678,6 @@ pub mod tests {
         for a in &resps {
             assert_eq!(a.get_start_key(), b"");
             assert_eq!(a.get_end_key(), b"1");
-        }
-
-        let (tx, rx) = unbounded();
-        let read_follower_task = Task {
-            request: Request {
-                start_key: b"".to_vec(),
-                end_key: b"3".to_vec(),
-                sub_ranges: ranges.clone(),
-                start_ts: 1.into(),
-                end_ts: 1.into(),
-                backend: backend.clone(),
-                limiter: Limiter::new(f64::INFINITY),
-                cancel: Arc::default(),
-                is_raw_kv: false,
-                dst_api_ver: ApiVersion::V1,
-                cf: engine_traits::CF_DEFAULT,
-                compression_type: CompressionType::Unknown,
-                compression_level: 0,
-                cipher: CipherInfo::default(),
-                replica_read: BackupReplicaRead::Follower,
-            },
-            resp: tx,
-        };
-        endpoint.handle_backup_task(read_follower_task);
-        let resps: Vec<_> = block_on(rx.collect());
-        let expected = vec![(b"1", b"2"), (b"2", b"3")];
-        assert_eq!(resps.len(), 2);
-        for a in &resps {
-            assert!(
-                expected
-                    .iter()
-                    .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
-                "{:?} {:?}",
-                resps,
-                expected
-            );
         }
 
         let (tx, rx) = unbounded();
