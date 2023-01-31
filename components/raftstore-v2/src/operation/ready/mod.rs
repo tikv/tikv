@@ -471,7 +471,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.maybe_schedule_gen_snapshot();
             #[cfg(feature = "testexport")]
             self.async_writer.notify_flush();
-            return;
+            let persisted = self.storage().apply_trace().persisted_apply_index();
+            if self.remove_tombstone_tablets(persisted) {
+                let sched = ctx.schedulers.tablet_gc.clone();
+                let region_id = self.region_id();
+                let _ = sched.schedule(tablet_gc::Task::destroy(region_id, persisted));
+            } else {
+                return;
+            }
         }
 
         // Note even the group has no ready, we can still get an empty ready.

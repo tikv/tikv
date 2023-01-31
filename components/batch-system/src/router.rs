@@ -337,7 +337,7 @@ where
 
     /// Close the mailbox of address.
     pub fn close(&self, addr: u64) {
-        info!("[region {}] shutdown mailbox", addr);
+        info!("shutdown mailbox"; "region_id" => addr);
         unsafe { &mut *self.caches.as_ptr() }.remove(&addr);
         let mut mailboxes = self.normals.lock().unwrap();
         if let Some(mb) = mailboxes.map.remove(&addr) {

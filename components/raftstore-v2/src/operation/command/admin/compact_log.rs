@@ -275,6 +275,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         old_tablet: EK,
         new_tablet_index: u64,
     ) {
+        info!(self.logger,
+            "record tombstone tablet";
+            "new_tablet_index" => new_tablet_index
+        );
         let compact_log_context = self.compact_log_context_mut();
         compact_log_context
             .tombstone_tablets_wait_index
@@ -291,13 +295,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     /// Returns if there's any tombstone being removed.
     #[inline]
-    fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
+    pub fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
+        let size = self
+            .compact_log_context()
+            .tombstone_tablets_wait_index
+            .len()
+            .clone();
+        let logger = self.logger.clone();
         let compact_log_context = self.compact_log_context_mut();
         let removed = compact_log_context
             .tombstone_tablets_wait_index
             .iter()
             .take_while(|i| **i <= persisted)
             .count();
+        info!(logger,
+            "remove tombstone tablet";
+            "size" => size,
+            "removed" => removed,
+            "persisted_index" => persisted
+        );
         if removed > 0 {
             compact_log_context
                 .tombstone_tablets_wait_index
@@ -313,6 +329,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .compact_log_context()
             .tombstone_tablets_wait_index
             .is_empty()
+    }
+
+    pub fn pending_tombstone_tablets_size(&self) -> usize {
+        self.compact_log_context()
+            .tombstone_tablets_wait_index
+            .len()
     }
 
     #[inline]

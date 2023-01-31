@@ -158,6 +158,7 @@ impl Store {
             "region_id" => region_id,
             "msg_type" => %util::MsgType(&msg)
         );
+
         if to_peer.store_id != self.store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
             return;
@@ -271,9 +272,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Should set the message only when the target peer is supposed to be
     /// created afterward.
     pub fn mark_for_destroy(&mut self, triggered_msg: Option<Box<RaftMessage>>) {
+        info!(self.logger, "mark peer for destroy");
         if self.serving() {
             self.destroy_progress_mut().wait_with(triggered_msg);
             self.set_has_ready();
+        } else {
+            info!(
+                self.logger,
+                "mark peer for destroy failed, peer is not serving"
+            );
         }
     }
 
@@ -303,6 +310,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         write_task: &mut WriteTask<EK, ER>,
     ) {
+        info!(self.logger, "start destroy peer");
         if self.postponed_destroy() {
             return;
         }
@@ -328,7 +336,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Tombstone state is persisted. This method is only for cleaning up
     /// memory states.
     pub fn finish_destroy<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
-        info!(self.logger, "peer destroyed");
+        info!(self.logger, "peer destroye completely");
         let region_id = self.region_id();
         ctx.router.close(region_id);
         {
