@@ -783,7 +783,9 @@ where
                 cipher,
                 limiter,
                 engine,
-                DownloadExt::default().cache_key(req.get_storage_cache_id()),
+                DownloadExt::default()
+                    .cache_key(req.get_storage_cache_id())
+                    .req_type(req.get_request_type()),
             );
             let mut resp = DownloadResponse::default();
             match res.await {
