@@ -33,7 +33,7 @@ use kvproto::{
 use pd_client::PdClient;
 use protobuf::parse_from_bytes;
 use tempdir::TempDir;
-use test_raftstore::{new_server_cluster, Cluster, FilterFactory, ServerCluster};
+use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
@@ -809,9 +809,8 @@ mod test {
         RegionSet, Task,
     };
     use futures::{Stream, StreamExt};
-    use kvproto::raft_serverpb::RaftMessage;
     use pd_client::PdClient;
-    use test_raftstore::{IsolationFilterFactory, PartitionFilterFactory};
+    use test_raftstore::IsolationFilterFactory;
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use tokio::time::timeout;
     use txn_types::{Key, TimeStamp};
@@ -1240,6 +1239,17 @@ mod test {
         );
     }
 
+    async fn collect_all_current<T>(
+        mut s: impl Stream<Item = T> + Unpin,
+        max_gap: Duration,
+    ) -> Vec<T> {
+        let mut r = vec![];
+        while let Ok(Some(x)) = timeout(max_gap, s.next()).await {
+            r.push(x);
+        }
+        r
+    }
+
     async fn collect_current<T>(mut s: impl Stream<Item = T> + Unpin, goal: usize) -> Vec<T> {
         let mut r = vec![];
         while let Ok(Some(x)) = timeout(Duration::from_secs(10), s.next()).await {
@@ -1329,7 +1339,7 @@ mod test {
         suite.force_flush_files("network_partition");
         suite.wait_for_flush();
 
-        let cps = run_async_test(collect_current(stream, 2));
+        let cps = run_async_test(collect_all_current(stream, Duration::from_secs(2)));
         assert!(
             cps.iter()
                 .flat_map(|(_s, cp)| cp.events.iter().map(|resp| resp.checkpoint))
