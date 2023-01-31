@@ -89,6 +89,9 @@ pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
 /// By default, block cache size will be set to 45% of system memory.
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
+/// Because multi-rocksdb has 25% memory table quota, we have to reduce block
+/// cache a bit
+pub const MULTI_ROCKS_BLOCK_CACHE_RATE: f64 = 0.30;
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
 pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
 
@@ -3228,9 +3231,10 @@ impl TikvConfig {
         self.raft_engine.validate()?;
         self.server.validate()?;
         self.pd.validate()?;
-        self.coprocessor.validate()?;
+        self.coprocessor
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.raft_store.validate(
-            self.coprocessor.region_split_size,
+            self.coprocessor.region_split_size(),
             self.coprocessor.enable_region_bucket,
             self.coprocessor.region_bucket_size,
         )?;
@@ -3445,7 +3449,7 @@ impl TikvConfig {
                     "override coprocessor.region-split-size with raftstore.region-split-size, {:?}",
                     self.raft_store.region_split_size
                 );
-                self.coprocessor.region_split_size = self.raft_store.region_split_size;
+                self.coprocessor.region_split_size = Some(self.raft_store.region_split_size);
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
@@ -4165,7 +4169,10 @@ mod tests {
     use grpcio::ResourceQuota;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
-    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use raftstore::coprocessor::{
+        config::{LARGE_REGION_SPLIT_SIZE_MB, MULTI_ROCKS_SPLIT_SIZE_MB, SPLIT_SIZE_MB},
+        region_info_accessor::MockRegionInfoProvider,
+    };
     use slog::Level;
     use tempfile::Builder;
     use tikv_kv::RocksEngine as RocksDBEngine;
@@ -4595,7 +4602,7 @@ mod tests {
             ),
             cfg.rocksdb.build_cf_opts(
                 &cfg.rocksdb
-                    .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
+                    .build_cf_resources(cfg.storage.block_cache.build_shared_cache(false)),
                 None,
                 cfg.storage.api_version(),
                 cfg.storage.engine,
@@ -5528,11 +5535,11 @@ mod tests {
         default_cfg.coprocessor.region_split_keys =
             Some(default_cfg.coprocessor.region_split_keys());
         default_cfg.raft_store.raft_log_gc_size_limit =
-            Some(default_cfg.coprocessor.region_split_size * 3 / 4);
+            Some(default_cfg.coprocessor.region_split_size() * 3 / 4);
         default_cfg.raft_store.raft_log_gc_count_limit =
-            Some(default_cfg.coprocessor.region_split_size * 3 / 4 / ReadableSize::kb(1));
+            Some(default_cfg.coprocessor.region_split_size() * 3 / 4 / ReadableSize::kb(1));
         default_cfg.raft_store.region_split_check_diff =
-            Some(default_cfg.coprocessor.region_split_size / 16);
+            Some(default_cfg.coprocessor.region_split_size() / 16);
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
@@ -5568,6 +5575,31 @@ mod tests {
         cfg.raftdb.defaultcf.hard_pending_compaction_bytes_limit = None;
 
         assert_eq!(cfg, default_cfg);
+    }
+
+    #[test]
+    fn test_region_size_config() {
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.validate(false);
+        assert_eq!(
+            default_cfg.coprocessor.split_region_size(),
+            Some(ReadableSize::mb(SPLIT_SIZE_MB))
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.enable_region_bucket = true;
+        default_cfg.coprocessor.validate(false);
+        assert_eq!(
+            default_cfg.coprocessor.split_region_size(),
+            Some(ReadableSize::mb(LARGE_REGION_SPLIT_SIZE_MB))
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.validate(false);
+        assert_eq!(
+            default_cfg.coprocessor.split_region_size(),
+            Some(ReadableSize::mb(MULTI_ROCKS_SPLIT_SIZE_MB))
+        );
     }
 
     #[test]

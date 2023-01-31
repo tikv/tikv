@@ -255,7 +255,7 @@ mod tests {
                 e
             );
         });
-        let cache = cfg.storage.block_cache.build_shared_cache();
+        let cache = cfg.storage.block_cache.build_shared_cache(false);
         let dir = test_util::temp_dir("test-engine-factory", false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
