@@ -16,7 +16,7 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
-use protobuf::RepeatedField;
+use protobuf::{Message, RepeatedField};
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
@@ -645,6 +645,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut stream = stream.map_err(Error::from);
             while let Some(mut batch_msg) = stream.try_next().await? {
                 let len = batch_msg.get_msgs().len();
+                let size = batch_msg.compute_size();
+                GRPC_MSG_BYTES_COUNTER.batch_raft.inc_by(size as u64);
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                 let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
@@ -907,6 +909,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut request: CheckLeaderRequest,
         sink: UnarySink<CheckLeaderResponse>,
     ) {
+        let size = request.compute_size();
+        GRPC_MSG_BYTES_COUNTER.check_leader.inc_by(size as u64);
+        let begin_instant = Instant::now();
         let addr = ctx.peer();
         let ts = request.get_ts();
         let leaders = request.take_regions().into();
@@ -920,7 +925,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut resp = CheckLeaderResponse::default();
             resp.set_ts(ts);
             resp.set_regions(regions);
-            if let Err(e) = sink.success(resp).await {
+            let result = sink.success(resp).await;
+            let elapsed = begin_instant.saturating_elapsed();
+            GRPC_MSG_HISTOGRAM_STATIC
+                .check_leader
+                .observe(elapsed.as_secs_f64());
+            if let Err(e) = result {
                 // CheckLeader has a built-in fast-success mechanism, so `RemoteStopped`
                 // can be treated as a general situation.
                 if let GrpcError::RemoteStopped = e {
@@ -1083,6 +1093,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
+                    let size = req.compute_size();
+                    GRPC_MSG_BYTES_COUNTER.coprocessor.inc_by(size as u64);
                     let resource_group_name = req.get_context().get_resource_group_name();
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                             .with_label_values(&[resource_group_name])
@@ -1114,6 +1126,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
+                    let size = req.compute_size();
+                    GRPC_MSG_BYTES_COUNTER.$metric_name.inc_by(size as u64);
                     let resource_group_name = req.get_context().get_resource_group_name();
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                             .with_label_values(&[resource_group_name])
@@ -1900,6 +1914,10 @@ macro_rules! txn_command_future {
             )));
             set_tls_tracker_token($tracker);
             let (cb, f) = paired_future_callback();
+            let size = $req.compute_size();
+            GRPC_MSG_BYTES_COUNTER
+                .kv_prewrite
+                .inc_by(size as u64);
             let res = storage.sched_txn_command($req.into(), cb);
 
             async move {
