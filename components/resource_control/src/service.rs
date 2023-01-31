@@ -2,10 +2,10 @@
 
 use std::{sync::Arc, time::Duration};
 
-use futures::StreamExt;
+use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
 use pd_client::{Error as PdError, PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH};
-use tikv_util::error;
+use tikv_util::{error, timer::GLOBAL_TIMER_HANDLE};
 
 use crate::ResourceGroupManager;
 
@@ -30,6 +30,8 @@ impl ResourceManagerService {
         }
     }
 }
+
+const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
@@ -56,7 +58,7 @@ impl ResourceManagerService {
                                         EventType::Put => {
                                             if let Ok(group) =
                                                 protobuf::parse_from_bytes::<ResourceGroup>(
-                                                    item.get_value().as_bytes(),
+                                                    item.get_value_payload(),
                                                 )
                                             {
                                                 self.manager.add_resource_group(group);
@@ -69,7 +71,10 @@ impl ResourceManagerService {
                             }
                             Err(err) => {
                                 error!("failed to get stream"; "err" => ?err);
-                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                let _ = GLOBAL_TIMER_HANDLE
+                                    .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                                    .compat()
+                                    .await;
                             }
                         }
                     }
@@ -85,7 +90,10 @@ impl ResourceManagerService {
                 }
                 Err(err) => {
                     error!("failed to watch resource groups"; "err" => ?err);
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                        .compat()
+                        .await;
                 }
             }
         }
@@ -101,13 +109,16 @@ impl ResourceManagerService {
                 Ok((items, revision)) => {
                     let groups = items
                         .into_iter()
-                        .filter_map(|g| protobuf::parse_from_bytes(g.get_value().as_bytes()).ok())
+                        .filter_map(|g| protobuf::parse_from_bytes(g.get_value_payload()).ok())
                         .collect();
                     return (groups, revision);
                 }
                 Err(err) => {
                     error!("failed to load global config"; "err" => ?err);
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                        .compat()
+                        .await;
                 }
             }
         }
@@ -142,7 +153,7 @@ pub mod tests {
         item.set_name(group.get_name().to_string());
         let mut buf = Vec::new();
         group.write_to_vec(&mut buf).unwrap();
-        item.set_value(String::from_utf8(buf).unwrap());
+        item.set_value_payload(buf);
 
         futures::executor::block_on(async move {
             pd_client
