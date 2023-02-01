@@ -64,7 +64,7 @@ impl std::fmt::Debug for Diff {
 }
 
 impl TopologyUpdater {
-    fn init(&self, members: impl Iterator<Item = Member>) {
+    fn init(&mut self, members: impl Iterator<Item = Member>) {
         for mem in members {
             self.last_topology.insert(mem.id(), mem);
         }
@@ -139,44 +139,43 @@ impl EtcdStore {
                         }
                     }
                 }
+                break;
             }
-            loop {
-                while let Some(client) = weak_self.upgrade() {
-                    let update = async {
-                        let mut cli = client.lock().await;
-                        let cluster = cli.member_list().await?;
-                        let diffs = updater.diff(cluster.members().iter().cloned());
-                        if !diffs.is_empty() {
-                            info!("log backup updating store topology."; "diffs" => ?diffs);
-                        }
-                        for diff in diffs {
-                            for url in diff.member.client_urls() {
-                                match diff.diff_type {
-                                    DiffType::Add => {
-                                        cli.add_endpoint(url).await.map_err(|err| {
-                                            annotate!(err, "during adding the endpoint {}", url)
-                                        })?;
-                                    }
-                                    DiffType::Remove => {
-                                        cli.remove_endpoint(url).await.map_err(|err| {
-                                            annotate!(err, "during removing the endpoint {}", url)
-                                        })?;
-                                    }
+            while let Some(client) = weak_self.upgrade() {
+                let update = async {
+                    let mut cli = client.lock().await;
+                    let cluster = cli.member_list().await?;
+                    let diffs = updater.diff(cluster.members().iter().cloned());
+                    if !diffs.is_empty() {
+                        info!("log backup updating store topology."; "diffs" => ?diffs);
+                    }
+                    for diff in diffs {
+                        for url in diff.member.client_urls() {
+                            match diff.diff_type {
+                                DiffType::Add => {
+                                    cli.add_endpoint(url).await.map_err(|err| {
+                                        annotate!(err, "during adding the endpoint {}", url)
+                                    })?;
+                                }
+                                DiffType::Remove => {
+                                    cli.remove_endpoint(url).await.map_err(|err| {
+                                        annotate!(err, "during removing the endpoint {}", url)
+                                    })?;
                                 }
                             }
+                        }
 
-                            if let Some(warning) = updater.apply(diff) {
-                                warn!("log backup meet some wrong status when updating PD clients."; "warn" => %warning);
-                            }
+                        if let Some(warning) = updater.apply(diff) {
+                            warn!("log backup meet some wrong status when updating PD clients."; "warn" => %warning);
                         }
-                        Result::Ok(())
-                    };
-                    match update.await {
-                        Ok(_) => tokio::time::sleep(Duration::from_secs(60)).await,
-                        Err(err) => {
-                            err.report("during updating etcd topology");
-                            tokio::time::sleep(Duration::from_secs(10)).await;
-                        }
+                    }
+                    Result::Ok(())
+                };
+                match update.await {
+                    Ok(_) => tokio::time::sleep(Duration::from_secs(60)).await,
+                    Err(err) => {
+                        err.report("during updating etcd topology");
+                        tokio::time::sleep(Duration::from_secs(10)).await;
                     }
                 }
             }
