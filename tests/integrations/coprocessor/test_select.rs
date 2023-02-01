@@ -4,11 +4,10 @@ use std::{cmp, thread, time::Duration};
 
 use engine_traits::CF_LOCK;
 use kvproto::{
-    coprocessor::{Request, Response, StoreBatchTask},
-    errorpb,
-    kvrpcpb::{Context, IsolationLevel, LockInfo},
+    coprocessor::{Request, Response, StoreBatchTask, StoreBatchTaskResponse},
+    kvrpcpb::{Context, IsolationLevel},
 };
-use protobuf::{Message, SingularPtrField};
+use protobuf::Message;
 use raftstore::store::Bucket;
 use test_coprocessor::*;
 use test_raftstore::{Cluster, ServerCluster};
@@ -2151,11 +2150,14 @@ fn test_batch_request() {
             }
             req
         };
-    let verify_response = |result: &QueryResult,
-                           data: &[u8],
-                           region_err: &SingularPtrField<errorpb::Error>,
-                           locked: &SingularPtrField<LockInfo>,
-                           other_err: &String| {
+    let verify_response = |result: &QueryResult, resp: &Response| {
+        let (data, details, region_err, locked, other_err) = (
+            resp.get_data(),
+            resp.get_exec_details_v2(),
+            &resp.region_error,
+            &resp.locked,
+            &resp.other_error,
+        );
         match result {
             QueryResult::Valid(res) => {
                 let expected_len = res.len();
@@ -2179,6 +2181,12 @@ fn test_batch_request() {
                 assert!(region_err.is_none());
                 assert!(locked.is_none());
                 assert!(other_err.is_empty());
+                let scan_details = details.get_scan_detail_v2();
+                assert_eq!(scan_details.processed_versions, row_count as u64);
+                if row_count > 0 {
+                    assert!(scan_details.processed_versions_size > 0);
+                    assert!(scan_details.total_versions > 0);
+                }
             }
             QueryResult::ErrRegion => {
                 assert!(region_err.is_some());
@@ -2196,6 +2204,20 @@ fn test_batch_request() {
                 assert!(!other_err.is_empty())
             }
         }
+    };
+
+    let batch_resp_2_resp = |batch_resp: &mut StoreBatchTaskResponse| -> Response {
+        let mut response = Response::default();
+        response.set_data(batch_resp.take_data());
+        if let Some(err) = batch_resp.region_error.take() {
+            response.set_region_error(err);
+        }
+        if let Some(lock_info) = batch_resp.locked.take() {
+            response.set_locked(lock_info);
+        }
+        response.set_other_error(batch_resp.take_other_error());
+        response.set_exec_details_v2(batch_resp.take_exec_details_v2());
+        response
     };
 
     for (ranges, results, invalid_epoch, key_is_locked) in cases.iter() {
@@ -2229,25 +2251,13 @@ fn test_batch_request() {
             }
         }
         let mut resp = handle_request(&endpoint, req);
-        let batch_results = resp.take_batch_responses().to_vec();
+        let mut batch_results = resp.take_batch_responses().to_vec();
         for (i, result) in results.iter().enumerate() {
             if i == 0 {
-                verify_response(
-                    result,
-                    resp.get_data(),
-                    &resp.region_error,
-                    &resp.locked,
-                    &resp.other_error,
-                );
+                verify_response(result, &resp);
             } else {
-                let batch_resp = batch_results.get(i - 1).unwrap();
-                verify_response(
-                    result,
-                    batch_resp.get_data(),
-                    &batch_resp.region_error,
-                    &batch_resp.locked,
-                    &batch_resp.other_error,
-                );
+                let batch_resp = batch_results.get_mut(i - 1).unwrap();
+                verify_response(result, &batch_resp_2_resp(batch_resp));
             };
         }
         if *key_is_locked {
