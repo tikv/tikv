@@ -246,7 +246,7 @@ pub mod tests {
                 .get_r_u()
                 .get_settings()
                 .get_fill_rate(),
-            100
+            50
         );
         server.stop();
     }
