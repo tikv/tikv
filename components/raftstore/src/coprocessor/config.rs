@@ -219,39 +219,39 @@ mod tests {
     #[test]
     fn test_config_validate() {
         let mut cfg = Config::default();
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
 
         cfg = Config::default();
         cfg.region_max_size = Some(ReadableSize(10));
         cfg.region_split_size = Some(ReadableSize(20));
-        cfg.validate().unwrap_err();
+        cfg.validate(false).unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_size = None;
         cfg.region_split_size = Some(ReadableSize(20));
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
         assert_eq!(cfg.region_max_size, Some(ReadableSize(30)));
 
         cfg = Config::default();
         cfg.region_max_keys = Some(10);
         cfg.region_split_keys = Some(20);
-        cfg.validate().unwrap_err();
+        cfg.validate(false).unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_keys = None;
         cfg.region_split_keys = Some(20);
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
         assert_eq!(cfg.region_max_keys, Some(30));
 
         cfg = Config::default();
         cfg.enable_region_bucket = false;
         cfg.region_split_size = Some(ReadableSize(20));
         cfg.region_bucket_size = ReadableSize(30);
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
 
         cfg = Config::default();
         cfg.region_split_size = Some(ReadableSize::mb(20));
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
         assert_eq!(cfg.region_split_keys, Some(200000));
     }
 }
