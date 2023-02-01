@@ -29,6 +29,7 @@ mod fast_hash_aggr_executor;
 mod index_scan_executor;
 pub mod interface;
 mod limit_executor;
+mod partition_top_n_executor;
 mod projection_executor;
 pub mod runner;
 mod selection_executor;
