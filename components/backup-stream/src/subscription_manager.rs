@@ -401,6 +401,7 @@ where
                         .with_label_values(&["leader-changed"])
                         .inc();
                     crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_sub(1, Ordering::SeqCst);
+                    self.range_router.inc_new_region_cnt();
                 }
                 ObserveOp::Stop { ref region } => {
                     self.subs.deregister_region_if(region, |_, _| true);

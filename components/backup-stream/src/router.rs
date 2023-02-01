@@ -61,6 +61,9 @@ use crate::{
 };
 
 const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
+const NEW_REGION_LEADER_COUNT_MANY: usize =  128;
+const NEW_REGION_LEADER_COUNT_MIDDLE: usize = 32;
+const NEW_REGION_LEADER_COUNT_LESS: usize = 8;
 
 #[derive(Clone, Debug)]
 pub enum TaskSelector {
@@ -344,11 +347,7 @@ pub struct RouterInner {
     temp_file_size_limit: u64,
     /// The max duration the local data can be pending.
     max_flush_interval: Duration,
-
-    /// 
-    //elastic_flush_interval: Duration,
-
-    /// 
+    /// The count of new region-leader observed.
     increment_region_count: AtomicU64, 
 }
 
@@ -596,20 +595,43 @@ impl RouterInner {
             .await
     }
 
-    //
+    // update the flush-interval.
     fn update_elastic_flush_interval(&self) -> Duration {
-        let new_region_cnt = self.increment_region_count.swap(0, Ordering::SeqCst);
-        if new_region_cnt > 32 {
-            Duration::from_secs(60)
-        }else if new_region_cnt > 16 {
-            Duration::from_secs(180)
+        let new_region_cnt: usize = self.get_new_region_cnt() as _;
+
+        if new_region_cnt > NEW_REGION_LEADER_COUNT_MANY {
+            Duration::from_secs(30).min(self.max_flush_interval)
+        }else if new_region_cnt > NEW_REGION_LEADER_COUNT_MIDDLE {
+            Duration::from_secs(60).min(self.max_flush_interval)
+        }else if new_region_cnt > NEW_REGION_LEADER_COUNT_LESS {
+            Duration::from_secs(90).min(self.max_flush_interval)
         } else {
             self.max_flush_interval
         }
     }
 
+    pub fn inc_new_region_cnt(&self){
+        self.increment_region_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn get_new_region_cnt(&self) -> u64 {
+        self.increment_region_count.load(Ordering::SeqCst)
+    }
+
+    pub fn reset_new_region_cnt(&self){
+        let cnt = self.increment_region_count.swap(0, Ordering::SeqCst);
+        info!(
+            "backup stream reset incremental region cnt";
+            "increment region count" => cnt,
+        );
+    }
+
     /// tick aims to flush log/meta to extern storage periodically.
     pub async fn tick(&self) {
+        // update elastic interval of flushing according to new adding region leader.
+        let elastic_flush_interval = self.update_elastic_flush_interval();
+        let mut need_reset = true;
+
         for (name, task_info) in self.tasks.lock().await.iter() {
             if let Err(e) = self
                 .scheduler
@@ -617,9 +639,6 @@ impl RouterInner {
             {
                 error!("backup stream schedule task failed"; "error" => ?e);
             }
-
-            // update elastic interval of flushing according to new adding region leader.
-            let elastic_flush_interval = self.update_elastic_flush_interval();
 
             // if stream task need flush this time, schedule Task::Flush, or update time
             // justly.
@@ -632,8 +651,13 @@ impl RouterInner {
                 if let Err(e) = self.scheduler.schedule(Task::Flush(name.clone())) {
                     error!("backup stream schedule task failed"; "error" => ?e);
                     task_info.set_flushing_status(false);
+                    need_reset = false;
                 }
             }
+        }
+
+        if need_reset {
+            self.reset_new_region_cnt();
         }
     }
 }
@@ -1852,7 +1876,6 @@ mod tests {
         let task = StreamTaskInfo::new(
             tmp_dir.path().to_path_buf(),
             stream_task,
-            Duration::from_secs(300),
             vec![(vec![], vec![])],
             merged_file_size_limit,
             CompressionType::Zstd,
@@ -2211,7 +2234,6 @@ mod tests {
         let task = StreamTaskInfo::new(
             tmp_dir.path().to_path_buf(),
             stream_task,
-            Duration::from_secs(300),
             vec![(vec![], vec![])],
             0x100000,
             CompressionType::Zstd,

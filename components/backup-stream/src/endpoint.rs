@@ -259,10 +259,10 @@ where
 
     async fn starts_flush_ticks(router: Router) {
         loop {
-            // check every 5s.
+            // check every 3s.
             // TODO: maybe use global timer handle in the `tikv_utils::timer` (instead of
             // enabling timing in the current runtime)?
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
             debug!("backup stream trigger flush tick");
             router.tick().await;
         }
