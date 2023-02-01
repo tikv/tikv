@@ -24,7 +24,7 @@
 //!
 //! ## On Apply Result (`Peer::on_apply_res_prepare_merge`)
 //!
-//! Start the tick (`Peer::on_merge_check_tick`) to periodically check the
+//! Start the tick (`Peer::on_check_merge`) to periodically check the
 //! eligibility of merge.
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};

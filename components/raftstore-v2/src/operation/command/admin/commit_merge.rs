@@ -6,11 +6,10 @@
 //!
 //! The proposal is initiated by the source region. Each source peer
 //! periodically checks for the freshness of local target region peer
-//! (`Peer::on_merge_check_tick`). The source peer will send a `CommitMerge`
-//! command to the target peer once target is up-to-date. (For simplicity, we
-//! send this message regardless of whether the target peer is leader.) The
-//! command will also carry some source region logs that may not be committed by
-//! some peers.
+//! (`Peer::on_check_merge`). The source peer will send a `CommitMerge` command
+//! to the target peer once target is up-to-date. (For simplicity, we send this
+//! message regardless of whether the target peer is leader.) The command will
+//! also carry some source region logs that may not be committed by some peers.
 //!
 //! The source region cannot serve any writes until the merge is committed or
 //! rollback-ed. This is guaranteed by `MergeContext::pending`.
@@ -50,10 +49,11 @@ use std::{
     any::Any,
     cmp::{self, Ordering},
     fmt::{self, Debug},
+    path::PathBuf,
 };
 
 use collections::HashSet;
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry};
 use futures::channel::oneshot;
 use kvproto::{
     metapb::{self, Region},
@@ -66,7 +66,7 @@ use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
         fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, util, MergeResultKind,
-        ProposalContext, Transport, WriteTask,
+        ProposalContext, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
@@ -183,6 +183,13 @@ impl MergeContext {
     pub fn install_prepare_merge_fence(&mut self, index: u64, req: &RaftCmdRequest) {
         self.prepare_fence = Some((index, req.write_to_bytes().unwrap()));
     }
+}
+
+const MERGE_PREFIX: &str = "merge";
+
+fn temp_merge_path<EK>(registry: &TabletRegistry<EK>, region_id: u64) -> PathBuf {
+    let tablet_name = registry.tablet_name(MERGE_PREFIX, region_id, RAFT_INIT_LOG_INDEX);
+    registry.tablet_root().join(tablet_name)
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -505,7 +512,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.tablet().flush_cfs(&[], true).unwrap();
         // TODO: check both are trimmed.
         let reg = self.tablet_registry();
-        let tmp_path = reg.tablet_path(self.region_id(), index);
+        let tmp_path = temp_merge_path(reg, self.region_id());
         if tmp_path.exists() {
             std::fs::remove_dir_all(&tmp_path).unwrap();
         }
@@ -582,7 +589,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "source" => source_id,
                 );
             }
-            // Redirect to source id.
+            // Redirect to source peer.
             let _ = store_ctx
                 .router
                 .force_send(source_id, PeerMsg::CatchUpLogs(catch_up_logs));
