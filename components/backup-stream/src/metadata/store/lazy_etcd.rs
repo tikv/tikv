@@ -63,14 +63,14 @@ impl ConnectionConfig {
                     // TODO: Perhaps implement grpc-io based etcd client, fully remove the difference between gRPC TLS and our custom TLS?
                     .manually(|c| c.cert_store_mut().set_flags(X509VerifyFlags::PARTIAL_CHAIN))
                     .manually(|c| {
-                        let client_certs= X509::stack_from_pem(&tls.client_cert)?;
+                        let mut client_certs= X509::stack_from_pem(&tls.client_cert)?;
                         let client_key = PKey::private_key_from_pem(&tls.client_key.0)?;
                         if !client_certs.is_empty() {
-                            c.set_certificate(&client_certs[0].to_owned())?;
+                            c.set_certificate(&client_certs[0])?;
                         }
                         if client_certs.len() > 1 {
-                            for i in &client_certs[1..] {
-                                c.add_extra_chain_cert(i.to_owned())?;
+                            for i in client_certs.drain(1..) {
+                                c.add_extra_chain_cert(i)?;
                             }
                         }
                         c.set_private_key(&client_key)?;
