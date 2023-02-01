@@ -266,6 +266,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                     .fsm
                     .store
                     .on_store_unreachable(self.store_ctx, to_store_id),
+                #[cfg(feature = "testexport")]
+                StoreMsg::WaitFlush { region_id, ch } => {
+                    self.fsm.store.on_wait_flush(self.store_ctx, region_id, ch)
+                }
             }
         }
     }

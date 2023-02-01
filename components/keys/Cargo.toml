@@ -10,6 +10,7 @@ kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 thiserror = "1.0"
 tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
 
 [dev-dependencies]
 panic_hook = { workspace = true }
