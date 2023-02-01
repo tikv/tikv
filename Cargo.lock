@@ -1700,7 +1700,7 @@ dependencies = [
 [[package]]
 name = "etcd-client"
 version = "0.10.2"
-source = "git+https://github.com/pingcap/etcd-client?rev=14a6f8731f1890d5fd2f6e16a9f0d0a306b0599e#14a6f8731f1890d5fd2f6e16a9f0d0a306b0599e"
+source = "git+https://github.com/yujuncen/etcd-client?rev=76a911530996fc5c7d8f49a02e7a0f519128d47e#76a911530996fc5c7d8f49a02e7a0f519128d47e"
 dependencies = [
  "http",
  "hyper",

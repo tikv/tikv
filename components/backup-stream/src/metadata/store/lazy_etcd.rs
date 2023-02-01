@@ -162,6 +162,7 @@ impl LazyEtcdClientInner {
         .await
         .context("during connecting to the etcd")?;
         let store = EtcdStore::from(store);
+        tokio::spawn(store.clone().topology_updater());
         self.cli = Some(store);
         Ok(self.cli.as_ref().unwrap())
     }
