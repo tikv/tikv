@@ -299,8 +299,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let size = self
             .compact_log_context()
             .tombstone_tablets_wait_index
-            .len()
-            .clone();
+            .len();
         let logger = self.logger.clone();
         let compact_log_context = self.compact_log_context_mut();
         let removed = compact_log_context
@@ -329,12 +328,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .compact_log_context()
             .tombstone_tablets_wait_index
             .is_empty()
-    }
-
-    pub fn pending_tombstone_tablets_size(&self) -> usize {
-        self.compact_log_context()
-            .tombstone_tablets_wait_index
-            .len()
     }
 
     #[inline]

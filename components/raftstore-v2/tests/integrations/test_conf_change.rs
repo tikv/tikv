@@ -178,3 +178,89 @@ fn test_remove_by_conf_change() {
     assert_eq!(region_state.get_state(), PeerState::Tombstone);
     assert_eq!(raft_engine.get_raft_state(region_id).unwrap(), None);
 }
+
+#[test]
+fn test_tombstore() {
+    let mut cluster = Cluster::with_node_count(2, None);
+    let region_id = 2;
+    let peer_id = 10;
+    add_learner(&cluster, 1, region_id, peer_id);
+    // write one kv after snapshot
+    let (key, val) = (b"key", b"value");
+    write_kv(&cluster, region_id, key, val);
+    remove_peer(&cluster, 1, region_id, peer_id);
+    add_learner(&cluster, 1, region_id, peer_id + 1);
+    write_kv(&cluster, region_id, key, val);
+    remove_peer(&cluster, 1, region_id, peer_id + 1);
+    add_learner(&cluster, 1, region_id, peer_id + 2);
+    write_kv(&cluster, region_id, key, val);
+
+    let snap = cluster.routers[1].stale_snapshot(region_id);
+    assert_eq!(snap.get_value(key).unwrap().unwrap(), val);
+}
+
+fn add_learner(cluster: &Cluster, offset: usize, region_id: u64, peer_id: u64) {
+    let store_id = cluster.node(offset).id();
+    let mut req = cluster.routers[0].new_request_for(region_id);
+    let admin_req = req.mut_admin_request();
+    admin_req.set_cmd_type(AdminCmdType::ChangePeer);
+    admin_req
+        .mut_change_peer()
+        .set_change_type(ConfChangeType::AddLearnerNode);
+    let new_peer = new_learner_peer(store_id, peer_id);
+    admin_req.mut_change_peer().set_peer(new_peer.clone());
+    let resp = cluster.routers[0]
+        .admin_command(region_id, req.clone())
+        .unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+    // heartbeat will create a learner.
+    cluster.dispatch(region_id, vec![]);
+    // Trigger the raft tick to replica the log to the learner and execute the
+    // snapshot task.
+    cluster.routers[0]
+        .send(region_id, PeerMsg::Tick(PeerTick::Raft))
+        .unwrap();
+    cluster.dispatch(region_id, vec![]);
+}
+
+fn write_kv(cluster: &Cluster, region_id: u64, key: &[u8], val: &[u8]) {
+    let header = Box::new(cluster.routers[0].new_request_for(region_id).take_header());
+    let mut put = SimpleWriteEncoder::with_capacity(64);
+    put.put(CF_DEFAULT, key, val);
+    let (msg, _) = PeerMsg::simple_write(header, put.encode());
+    cluster.routers[0].send(region_id, msg).unwrap();
+    std::thread::sleep(Duration::from_millis(1000));
+    cluster.dispatch(region_id, vec![]);
+}
+
+fn remove_peer(cluster: &Cluster, offset: usize, region_id: u64, peer_id: u64) {
+    let store_id = cluster.node(offset).id();
+    let mut req = cluster.routers[0].new_request_for(region_id);
+    let admin_req = req.mut_admin_request();
+    admin_req.set_cmd_type(AdminCmdType::ChangePeer);
+    admin_req
+        .mut_change_peer()
+        .set_change_type(ConfChangeType::RemoveNode);
+    admin_req
+        .mut_change_peer()
+        .set_peer(new_learner_peer(store_id, peer_id));
+    let resp = cluster.routers[0]
+        .admin_command(region_id, req.clone())
+        .unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+    cluster.routers[offset]
+        .send(region_id, PeerMsg::Tick(PeerTick::Raft))
+        .unwrap();
+    cluster.dispatch(region_id, vec![]);
+    std::thread::sleep(Duration::from_millis(100));
+
+    let raft_engine = &cluster.node(offset).running_state().unwrap().raft_engine;
+    let region_state = raft_engine
+        .get_region_state(region_id, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state.get_state(), PeerState::Tombstone);
+    assert_eq!(raft_engine.get_raft_state(region_id).unwrap(), None);
+}

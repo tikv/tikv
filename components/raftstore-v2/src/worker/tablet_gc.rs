@@ -181,6 +181,7 @@ impl<EK: KvEngine> Runner<EK> {
                             "path" => path.display(),
                         )
                     });
+                registry.remove(region_id);
                 return true;
             }
             Ok(true) => {

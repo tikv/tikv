@@ -336,13 +336,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Tombstone state is persisted. This method is only for cleaning up
     /// memory states.
     pub fn finish_destroy<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
-        info!(self.logger, "peer destroye completely");
+        info!(self.logger, "peer destroy completely");
         let region_id = self.region_id();
         ctx.router.close(region_id);
         {
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.remove_region(region_id);
             meta.readers.remove(&region_id);
+            self.release_tablet();
         }
         if let Some(msg) = self.destroy_progress_mut().finish() {
             // The message will be dispatched to store fsm, which will create a

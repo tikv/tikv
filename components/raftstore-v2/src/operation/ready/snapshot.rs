@@ -49,6 +49,7 @@ use crate::{
     operation::{command::temp_split_path, SharedReadTablet},
     raft::{Apply, Peer, Storage},
     router::ApplyTask,
+    worker::tablet_gc,
     Result, StoreContext,
 };
 
@@ -274,6 +275,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.post_split_init(ctx, init);
             }
             self.schedule_apply_fsm(ctx);
+            if self.remove_tombstone_tablets(snapshot_index) {
+                let sched = ctx.schedulers.tablet_gc.clone();
+                let _ = sched.schedule(tablet_gc::Task::destroy(region_id, snapshot_index));
+            }
         }
     }
 }
