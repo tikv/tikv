@@ -64,6 +64,12 @@ impl std::fmt::Debug for Diff {
 }
 
 impl TopologyUpdater {
+    fn init(&self, members: impl Iterator<Item = Member>) {
+        for mem in members {
+            self.last_topology.insert(mem.id(), mem);
+        }
+    }
+
     fn diff(&self, incoming: impl Iterator<Item = Member>) -> Vec<Diff> {
         let newer = incoming
             .map(|mem| (mem.id(), mem))
@@ -117,6 +123,23 @@ impl EtcdStore {
         let weak_self = Arc::downgrade(&self.0);
         let mut updater = TopologyUpdater::default();
         async move {
+            'init: loop {
+                while let Some(client) = weak_self.upgrade() {
+                    let init = async {
+                        let mut cli = client.lock().await;
+                        let cluster = cli.member_list().await?;
+                        updater.init(cluster.members().iter().cloned());
+                        Result::Ok(())
+                    };
+                    match init.await {
+                        Ok(_) => break 'init,
+                        Err(err) => {
+                            err.report("during initializing updater");
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                        }
+                    }
+                }
+            }
             loop {
                 while let Some(client) = weak_self.upgrade() {
                     let update = async {
