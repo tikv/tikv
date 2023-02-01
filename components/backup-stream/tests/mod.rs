@@ -1314,20 +1314,17 @@ mod test {
         let stream = suite.flush_stream();
         suite.must_register_task(1, "network_partition");
         let leader = suite.cluster.leader_of_region(1).unwrap();
-        let others = {
-            let mut os = suite.cluster.get_node_ids();
-            os.remove(&leader.store_id);
-            os.into_iter().collect::<Vec<_>>()
-        };
         let round1 = run_async_test(suite.write_records(0, 64, 1));
 
-        println!("{:?} {:?}", leader.store_id, others);
         suite
             .cluster
             .add_send_filter(IsolationFilterFactory::new(leader.store_id));
-        suite.must_shuffle_leader(1);
-        let leader = suite.cluster.leader_of_region(1).unwrap();
-        println!("leader is {:?} now", leader);
+        suite.cluster.reset_leader_of_region(1);
+        suite
+            .cluster
+            .must_wait_for_leader_expire(leader.store_id, 1);
+        let leader2 = suite.cluster.leader_of_region(1).unwrap();
+        assert_ne!(leader.store_id, leader2.store_id, "leader not switched.");
         let ts = suite.tso();
         suite.must_kv_prewrite(
             1,
