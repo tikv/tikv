@@ -30,7 +30,7 @@ use openssl::hash::{Hasher, MessageDigest};
 use protobuf::Message;
 use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
-use tidb_query_datatype::codec::table::decode_table_id;
+use tidb_query_datatype::codec::{table::decode_table_id};
 use tikv_util::{
     box_err,
     codec::stream_event::EventEncoder,
@@ -344,6 +344,12 @@ pub struct RouterInner {
     temp_file_size_limit: u64,
     /// The max duration the local data can be pending.
     max_flush_interval: Duration,
+
+    /// 
+    //elastic_flush_interval: Duration,
+
+    /// 
+    increment_region_count: AtomicU64, 
 }
 
 impl std::fmt::Debug for RouterInner {
@@ -370,6 +376,7 @@ impl RouterInner {
             scheduler,
             temp_file_size_limit,
             max_flush_interval,
+            increment_region_count: AtomicU64::new(0),
         }
     }
 
@@ -430,7 +437,6 @@ impl RouterInner {
         let stream_task = StreamTaskInfo::new(
             prefix_path,
             task,
-            self.max_flush_interval,
             ranges.clone(),
             merged_file_size_limit,
             compression_type,
@@ -590,6 +596,18 @@ impl RouterInner {
             .await
     }
 
+    //
+    fn update_elastic_flush_interval(&self) -> Duration {
+        let new_region_cnt = self.increment_region_count.swap(0, Ordering::SeqCst);
+        if new_region_cnt > 32 {
+            Duration::from_secs(60)
+        }else if new_region_cnt > 16 {
+            Duration::from_secs(180)
+        } else {
+            self.max_flush_interval
+        }
+    }
+
     /// tick aims to flush log/meta to extern storage periodically.
     pub async fn tick(&self) {
         for (name, task_info) in self.tasks.lock().await.iter() {
@@ -600,9 +618,12 @@ impl RouterInner {
                 error!("backup stream schedule task failed"; "error" => ?e);
             }
 
+            // update elastic interval of flushing according to new adding region leader.
+            let elastic_flush_interval = self.update_elastic_flush_interval();
+
             // if stream task need flush this time, schedule Task::Flush, or update time
             // justly.
-            if task_info.should_flush() && task_info.set_flushing_status_cas(false, true).is_ok() {
+            if task_info.should_flush(elastic_flush_interval) && task_info.set_flushing_status_cas(false, true).is_ok() {
                 info!(
                     "backup stream trigger flush task by tick";
                     "task" => ?task_info,
@@ -763,8 +784,6 @@ pub struct StreamTaskInfo {
     flushing_meta_files: RwLock<Vec<(TempFileKey, DataFile, DataFileInfo)>>,
     /// last_flush_ts represents last time this task flushed to storage.
     last_flush_time: AtomicPtr<Instant>,
-    /// flush_interval represents the tick interval of flush, setting by users.
-    flush_interval: Duration,
     /// The min resolved TS of all regions involved.
     min_resolved_ts: TimeStamp,
     /// Total size of all temporary files in byte.
@@ -825,7 +844,6 @@ impl StreamTaskInfo {
     pub async fn new(
         temp_dir: PathBuf,
         task: StreamTask,
-        flush_interval: Duration,
         ranges: Vec<(Vec<u8>, Vec<u8>)>,
         merged_file_size_limit: u64,
         compression_type: CompressionType,
@@ -846,7 +864,6 @@ impl StreamTaskInfo {
             flushing_files: RwLock::default(),
             flushing_meta_files: RwLock::default(),
             last_flush_time: AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))),
-            flush_interval,
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
             flush_fail_count: AtomicUsize::new(0),
@@ -946,12 +963,12 @@ impl StreamTaskInfo {
         unsafe { Box::from_raw(ptr) };
     }
 
-    pub fn should_flush(&self) -> bool {
+    pub fn should_flush(&self, flush_interval: Duration) -> bool {
         // When it doesn't flush since 0.8x of auto-flush interval, we get ready to
         // start flushing. So that we will get a buffer for the cost of actual
         // flushing.
         self.get_last_flush_time().saturating_elapsed_secs()
-            >= self.flush_interval.as_secs_f64() * 0.8
+            >= flush_interval.as_secs_f64()
     }
 
     pub fn is_flushing(&self) -> bool {
