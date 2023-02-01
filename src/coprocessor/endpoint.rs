@@ -600,6 +600,8 @@ impl<E: Engine> Endpoint<E> {
                                     response.set_locked(lock_info);
                                 }
                                 response.set_other_error(resp.take_other_error());
+                                // keep the exec details already generated.
+                                response.set_exec_details_v2(resp.take_exec_details_v2());
                                 GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
                                     tracker.write_scan_detail(
                                         response.mut_exec_details_v2().mut_scan_detail_v2(),
