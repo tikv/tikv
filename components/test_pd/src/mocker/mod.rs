@@ -47,7 +47,7 @@ pub trait PdMocker {
             .map(|kv| {
                 let mut item = GlobalConfigItem::default();
                 item.set_name(String::from_utf8(kv.key().to_vec()).unwrap());
-                item.set_value_payload(kv.value().into());
+                item.set_payload(kv.value().into());
                 item
             })
             .collect();
@@ -68,10 +68,8 @@ pub trait PdMocker {
             block_on(async move {
                 match item.get_kind() {
                     EventType::Put => {
-                        let kv = KeyValue(
-                            MetaKey(item.get_name().into()),
-                            item.get_value_payload().into(),
-                        );
+                        let kv =
+                            KeyValue(MetaKey(item.get_name().into()), item.get_payload().into());
                         cli.lock().await.set(kv).await
                     }
                     EventType::Delete => {

@@ -41,14 +41,9 @@ pub struct ResourceGroupManager {
 impl ResourceGroupManager {
     fn get_ru_setting(rg: &ResourceGroup, is_read: bool) -> u64 {
         match (rg.get_mode(), is_read) {
-            (GroupMode::RuMode, true) => rg
+            (GroupMode::RuMode, _) => rg
                 .get_r_u_settings()
-                .get_r_r_u()
-                .get_settings()
-                .get_fill_rate(),
-            (GroupMode::RuMode, false) => rg
-                .get_r_u_settings()
-                .get_w_r_u()
+                .get_r_u()
                 .get_settings()
                 .get_fill_rate(),
             // TODO: currently we only consider the cpu usage in the read path, we may also take
@@ -311,12 +306,14 @@ pub(crate) mod tests {
 
     use super::*;
 
-    pub fn new_resource_group(
-        name: String,
-        is_ru_mode: bool,
-        read_tokens: u64,
-        write_tokens: u64,
-    ) -> ResourceGroup {
+    #[derive(Default, Clone)]
+    pub struct Tokens {
+        pub ru_tokens: u64,
+        pub cpu_tokens: u64,
+        pub io_tokens: u64,
+    }
+
+    pub fn new_resource_group(name: String, is_ru_mode: bool, tokens: Tokens) -> ResourceGroup {
         use kvproto::resource_manager::{GroupRawResourceSettings, GroupRequestUnitSettings};
 
         let mut group = ResourceGroup::new();
@@ -330,24 +327,20 @@ pub(crate) mod tests {
         if is_ru_mode {
             let mut ru_setting = GroupRequestUnitSettings::new();
             ru_setting
-                .mut_r_r_u()
+                .mut_r_u()
                 .mut_settings()
-                .set_fill_rate(read_tokens);
-            ru_setting
-                .mut_w_r_u()
-                .mut_settings()
-                .set_fill_rate(write_tokens);
+                .set_fill_rate(tokens.ru_tokens);
             group.set_r_u_settings(ru_setting);
         } else {
             let mut resource_setting = GroupRawResourceSettings::new();
             resource_setting
                 .mut_cpu()
                 .mut_settings()
-                .set_fill_rate(read_tokens);
+                .set_fill_rate(tokens.cpu_tokens);
             resource_setting
                 .mut_io_write()
                 .mut_settings()
-                .set_fill_rate(write_tokens);
+                .set_fill_rate(tokens.io_tokens);
             group.set_raw_resource_settings(resource_setting);
         }
         group
@@ -357,17 +350,18 @@ pub(crate) mod tests {
     fn test_resource_group() {
         let resource_manager = ResourceGroupManager::default();
 
-        let group1 = new_resource_group("TEST".into(), true, 100, 100);
+        let mut tokens = Tokens::default();
+        tokens.ru_tokens = 100;
+        let group1 = new_resource_group("TEST".into(), true, tokens.clone());
         resource_manager.add_resource_group(group1);
 
         assert!(resource_manager.get_resource_group("test1").is_none());
-
         let group = resource_manager.get_resource_group("test").unwrap();
         assert_eq!(
             group
                 .value()
                 .get_r_u_settings()
-                .get_r_r_u()
+                .get_r_u()
                 .get_settings()
                 .get_fill_rate(),
             100
@@ -375,14 +369,15 @@ pub(crate) mod tests {
         drop(group);
         assert_eq!(resource_manager.resource_groups.len(), 1);
 
-        let group1 = new_resource_group("Test".into(), true, 200, 100);
+        tokens.ru_tokens = 200;
+        let group1 = new_resource_group("Test".into(), true, tokens.clone());
         resource_manager.add_resource_group(group1);
         let group = resource_manager.get_resource_group("test").unwrap();
         assert_eq!(
             group
                 .value()
                 .get_r_u_settings()
-                .get_r_r_u()
+                .get_r_u()
                 .get_settings()
                 .get_fill_rate(),
             200
@@ -390,7 +385,8 @@ pub(crate) mod tests {
         drop(group);
         assert_eq!(resource_manager.resource_groups.len(), 1);
 
-        let group2 = new_resource_group("test2".into(), true, 400, 200);
+        tokens.ru_tokens = 400;
+        let group2 = new_resource_group("test2".into(), true, tokens.clone());
         resource_manager.add_resource_group(group2);
         assert_eq!(resource_manager.resource_groups.len(), 2);
 
@@ -451,7 +447,8 @@ pub(crate) mod tests {
         drop(group2);
 
         // test add 1 new resource group
-        let new_group = new_resource_group("new_group".into(), true, 500, 500);
+        tokens.ru_tokens = 500;
+        let new_group = new_resource_group("new_group".into(), true, tokens);
         resource_manager.add_resource_group(new_group);
 
         assert_eq!(resource_ctl.resource_consumptions.len(), 4);
@@ -466,7 +463,10 @@ pub(crate) mod tests {
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
 
-        let group1 = new_resource_group("test1".into(), true, 5000, 1000);
+        let mut tokens = Tokens::default();
+        tokens.cpu_tokens = 5000;
+        tokens.io_tokens = 1000;
+        let group1 = new_resource_group("test1".into(), false, tokens.clone());
         resource_manager.add_resource_group(group1);
         assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 20);
         assert_eq!(
@@ -474,8 +474,10 @@ pub(crate) mod tests {
             100
         );
 
-        // add a resource group with big ru
-        let group1 = new_resource_group("test2".into(), true, 50000, 2000);
+        // add a resource group with big tokens
+        tokens.cpu_tokens = 50000;
+        tokens.io_tokens = 2000;
+        let group1 = new_resource_group("test2".into(), false, tokens);
         resource_manager.add_resource_group(group1);
         assert_eq!(*resource_ctl.max_ru_quota.lock().unwrap(), 50000);
         assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 100);
