@@ -10,11 +10,11 @@ use std::{
 
 use async_trait::async_trait;
 use etcd_client::{
-    Client, Compare, CompareOp, DeleteOptions, EventType, GetOptions, PutOptions, SortOrder,
-    SortTarget, Txn, TxnOp, WatchOptions,
+    Client, Compare, CompareOp, DeleteOptions, EventType, GetOptions, Member, PutOptions,
+    SortOrder, SortTarget, Txn, TxnOp, WatchOptions,
 };
-use futures::StreamExt;
-use tikv_util::warn;
+use futures::{Future, StreamExt};
+use tikv_util::{info, warn};
 use tokio::sync::Mutex;
 use tokio_stream::Stream;
 
@@ -23,6 +23,7 @@ use super::{
     TransactionOp,
 };
 use crate::{
+    annotate,
     errors::Result,
     metadata::{
         keys::{KeyValue, MetaKey},
@@ -35,7 +36,130 @@ use crate::{
 #[derive(Clone)]
 pub struct EtcdStore(Arc<Mutex<etcd_client::Client>>);
 
+#[derive(Default)]
+struct TopologyUpdater {
+    last_topology: HashMap<u64, Member>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DiffType {
+    Add,
+    Remove,
+}
+
+#[derive(Clone)]
+struct Diff {
+    diff_type: DiffType,
+    member: Member,
+}
+
+impl std::fmt::Debug for Diff {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let syn = match self.diff_type {
+            DiffType::Add => "+",
+            DiffType::Remove => "-",
+        };
+        write!(f, "{}{:?}", syn, self.member.client_urls())
+    }
+}
+
+impl TopologyUpdater {
+    fn diff(&self, incoming: impl Iterator<Item = Member>) -> Vec<Diff> {
+        let newer = incoming
+            .map(|mem| (mem.id(), mem))
+            .collect::<HashMap<_, _>>();
+        let mut result = vec![];
+        for (id, mem) in &newer {
+            if !self.last_topology.contains_key(id) {
+                result.push(Diff {
+                    diff_type: DiffType::Add,
+                    member: mem.clone(),
+                })
+            }
+        }
+        for (id, mem) in &self.last_topology {
+            if !newer.contains_key(id) {
+                result.push(Diff {
+                    diff_type: DiffType::Remove,
+                    member: mem.clone(),
+                })
+            }
+        }
+        result
+    }
+
+    fn apply(&mut self, diff: Diff) -> Option<String> {
+        match diff.diff_type {
+            DiffType::Add => self
+                .last_topology
+                .insert(diff.member.id(), diff.member)
+                .map(|old| {
+                    format!(
+                        "the member with the same id {} has been added. member=({:?})",
+                        old.id(),
+                        old
+                    )
+                }),
+            DiffType::Remove => match self.last_topology.remove(&diff.member.id()) {
+                Some(_) => None,
+                None => Some(format!(
+                    "the member to remove with id {} hasn't been added. member=({:?})",
+                    diff.member.id(),
+                    diff.member
+                )),
+            },
+        }
+    }
+}
+
 impl EtcdStore {
+    pub fn topology_updater(&self) -> impl Future<Output = ()> + Send + 'static {
+        let weak_self = Arc::downgrade(&self.0);
+        let mut updater = TopologyUpdater::default();
+        async move {
+            loop {
+                while let Some(client) = weak_self.upgrade() {
+                    let update = async {
+                        let mut cli = client.lock().await;
+                        let cluster = cli.member_list().await?;
+                        let diffs = updater.diff(cluster.members().iter().cloned());
+                        if !diffs.is_empty() {
+                            info!("log backup updating store topology."; "diffs" => ?diffs);
+                        }
+                        for diff in diffs {
+                            for url in diff.member.client_urls() {
+                                match diff.diff_type {
+                                    DiffType::Add => {
+                                        cli.add_endpoint(url).await.map_err(|err| {
+                                            annotate!(err, "during adding the endpoint {}", url)
+                                        })?;
+                                    }
+                                    DiffType::Remove => {
+                                        cli.remove_endpoint(url).await.map_err(|err| {
+                                            annotate!(err, "during removing the endpoint {}", url)
+                                        })?;
+                                    }
+                                }
+                            }
+
+                            if let Some(warning) = updater.apply(diff) {
+                                warn!("log backup meet some wrong status when updating PD clients."; "warn" => %warning);
+                            }
+                        }
+                        Result::Ok(())
+                    };
+                    match update.await {
+                        Ok(_) => tokio::time::sleep(Duration::from_secs(60)).await,
+                        Err(err) => {
+                            err.report("during updating etcd topology");
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn connect<E: AsRef<str>, S: AsRef<[E]>>(endpoints: S) -> Self {
         // TODO remove block_on
         let cli =
