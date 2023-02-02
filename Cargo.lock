@@ -2730,7 +2730,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/sticnarf/kvproto?branch=read-pool-load#08466df196174d12951e51f4defd53b62b6f8074"
+source = "git+https://github.com/sticnarf/kvproto?branch=read-pool-load#2a4350ae76417ebf3670c503e5bdd6ecb359306d"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4697,7 +4697,6 @@ dependencies = [
  "test_pd",
  "test_pd_client",
  "tikv_util",
- "tokio",
  "yatp",
 ]
 
