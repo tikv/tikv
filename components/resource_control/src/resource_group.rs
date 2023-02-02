@@ -358,7 +358,6 @@ pub(crate) mod tests {
         resource_manager.add_resource_group(group1);
 
         assert!(resource_manager.get_resource_group("test1").is_none());
-
         let group = resource_manager.get_resource_group("test").unwrap();
         assert_eq!(
             group
