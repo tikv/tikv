@@ -1503,7 +1503,7 @@ pub mod tests {
                 let mut ranges = Vec::with_capacity(expect.len());
                 while ranges.len() != expect.len() {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = prs.forward(n, BackupReplicaRead::Leader);
+                    let mut r = prs.forward(n, false);
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
 
@@ -1555,7 +1555,7 @@ pub mod tests {
                         compression_type: CompressionType::Unknown,
                         compression_level: 0,
                         cipher: CipherInfo::default(),
-                        replica_read: BackupReplicaRead::Leader,
+                        replica_read: false,
                     },
                     resp: tx,
                 };
@@ -1677,7 +1677,7 @@ pub mod tests {
         }
 
         let (tx, rx) = unbounded();
-        let read_learner_task = Task {
+        let replica_read_task = Task {
             request: Request {
                 start_key: b"".to_vec(),
                 end_key: b"3".to_vec(),
@@ -1697,7 +1697,7 @@ pub mod tests {
             },
             resp: tx,
         };
-        endpoint.handle_backup_task(read_leader_follower_task);
+        endpoint.handle_backup_task(replica_read_task);
         let resps: Vec<_> = block_on(rx.collect());
         let expected: Vec<(&[u8], &[u8])> = vec![(b"", b"1"), (b"1", b"2"), (b"2", b"3")];
         assert_eq!(resps.len(), 3);
@@ -1744,7 +1744,7 @@ pub mod tests {
                 let mut ranges = Vec::with_capacity(expect.len());
                 while ranges.len() != expect.len() {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = prs.forward(n, BackupReplicaRead::Leader);
+                    let mut r = prs.forward(n, false);
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
 
@@ -1806,7 +1806,7 @@ pub mod tests {
                         compression_type: CompressionType::Unknown,
                         compression_level: 0,
                         cipher: CipherInfo::default(),
-                        replica_read: BackupReplicaRead::Leader,
+                        replica_read: false,
                     },
                     resp: tx,
                 };
