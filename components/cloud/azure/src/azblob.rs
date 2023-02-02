@@ -248,7 +248,6 @@ impl RetryError for RequestError {
     }
 }
 
-
 fn err_is_retryable(err_info: &str) -> bool {
     // HTTP Code 503: The server is busy
     // HTTP Code 500: Operation could not be completed within the specified time.
@@ -256,7 +255,7 @@ fn err_is_retryable(err_info: &str) -> bool {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"status: 5[0-9][0-9],").unwrap();
     }
-    
+
     RE.is_match(err_info)
 }
 
@@ -787,7 +786,8 @@ mod tests {
         assert!(err_is_retryable(err_info));
         let err_info = "HTTP error status (status: 500,... Operation could not be completed within the specified time.";
         assert!(err_is_retryable(err_info));
-        let err_info = "HTTP error status (status: 409,... The blob type is invalid for this operation.";
+        let err_info =
+            "HTTP error status (status: 409,... The blob type is invalid for this operation.";
         assert!(!err_is_retryable(err_info));
         let err_info = "HTTP error status (status: 50,... ";
         assert!(!err_is_retryable(err_info));
