@@ -274,6 +274,7 @@ impl MiscExt for RocksEngine {
     }
 
     fn pause_background_work(&self) -> Result<()> {
+        self.as_inner().disable_manual_compaction();
         self.as_inner().pause_bg_work();
         Ok(())
     }
