@@ -10,7 +10,10 @@ use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry};
 use kvproto::metapb::Region;
 use slog::{debug, error, info, warn, Logger};
-use tikv_util::worker::{Builder, Runnable, RunnableWithTimer, Worker};
+use tikv_util::{
+    worker::{Runnable, RunnableWithTimer},
+    yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
+};
 
 const DEFAULT_BACKGROUND_POOL_SIZE: usize = 6;
 
@@ -103,7 +106,7 @@ pub struct Runner<EK: KvEngine> {
 
     // An independent pool to run tasks that are time-consuming but doesn't take CPU resources,
     // such as waiting for RocksDB compaction.
-    background_pool: Worker,
+    background_pool: FuturePool,
 }
 
 impl<EK: KvEngine> Runner<EK> {
@@ -113,9 +116,14 @@ impl<EK: KvEngine> Runner<EK> {
             logger,
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
-            background_pool: Builder::new("tablet-gc-bg")
-                .thread_count(DEFAULT_BACKGROUND_POOL_SIZE)
-                .create(),
+            background_pool: YatpPoolBuilder::new(DefaultTicker::default())
+                .name_prefix("tablet-gc-bg")
+                .thread_count(
+                    0,
+                    DEFAULT_BACKGROUND_POOL_SIZE,
+                    DEFAULT_BACKGROUND_POOL_SIZE,
+                )
+                .build_future_pool(),
         }
     }
 
@@ -138,39 +146,44 @@ impl<EK: KvEngine> Runner<EK> {
                 "end_key" => log_wrappers::Value::key(&end_key),
                 "err" => %e,
             );
+            return;
         }
         let logger = self.logger.clone();
-        self.background_pool.remote().spawn(async move {
-            let start_key = keys::data_key(&start);
-            let end_key = keys::data_end_key(&end);
-            let range1 = Range::new(&[], &start_key);
-            let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
-            for r in [range1, range2] {
-                if let Err(e) = tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1) {
-                    if e.to_string().contains("Manual compaction paused") {
-                        info!(
-                            logger,
-                            "tablet manual compaction is paused, skip trim";
-                            "start_key" => log_wrappers::Value::key(&start_key),
-                            "end_key" => log_wrappers::Value::key(&end_key),
-                            "err" => %e,
-                        );
-                    } else {
-                        error!(
-                            logger,
-                            "failed to trim tablet";
-                            "start_key" => log_wrappers::Value::key(&start_key),
-                            "end_key" => log_wrappers::Value::key(&end_key),
-                            "err" => %e,
-                        );
+        self.background_pool
+            .spawn(async move {
+                let start_key = keys::data_key(&start);
+                let end_key = keys::data_end_key(&end);
+                let range1 = Range::new(&[], &start_key);
+                let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
+                for r in [range1, range2] {
+                    if let Err(e) =
+                        tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1)
+                    {
+                        if e.to_string().contains("Manual compaction paused") {
+                            info!(
+                                logger,
+                                "tablet manual compaction is paused, skip trim";
+                                "start_key" => log_wrappers::Value::key(&start_key),
+                                "end_key" => log_wrappers::Value::key(&end_key),
+                                "err" => %e,
+                            );
+                        } else {
+                            error!(
+                                logger,
+                                "failed to trim tablet";
+                                "start_key" => log_wrappers::Value::key(&start_key),
+                                "end_key" => log_wrappers::Value::key(&end_key),
+                                "err" => %e,
+                            );
+                        }
+                        return;
                     }
-                    return;
                 }
-            }
-            // drop before callback.
-            drop(tablet);
-            cb();
-        });
+                // drop before callback.
+                drop(tablet);
+                cb();
+            })
+            .unwrap();
     }
 
     fn prepare_destroy(&mut self, region_id: u64, tablet: EK, wait_for_persisted: u64) {
