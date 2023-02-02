@@ -250,9 +250,10 @@ fn test_decrease_async_ios() {
     }
 
     // Save current async-io tids after scaling down, and compared with the
-    // orginial one before shrinking, the thread num should be reduced by THREE.
+    // orginial one before shrinking. As the decreasing of async-ios won't
+    // release asynchronous writers, the thread num should not be updated.
     let cur_writers_tids = get_async_writers_tids();
-    assert_eq!(cur_writers_tids.len() + 3, org_writers_tids.len());
+    assert_eq!(cur_writers_tids.len(), org_writers_tids.len());
     // After shrinking, all the left tids must be there before
     for tid in cur_writers_tids {
         assert!(org_writers_tids.contains(&tid));

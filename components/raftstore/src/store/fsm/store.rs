@@ -800,12 +800,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::AwakenRegions { abnormal_stores } => {
                     self.on_wake_up_regions(abnormal_stores);
                 }
-                StoreMsg::UpdateStoreWriters { size, notifier } => {
-                    self.ctx.write_senders.update(size);
-                    if let Err(e) = notifier.send(0) {
-                        error!("failed to update store writers"; "err_msg" => ?e);
-                    }
-                }
             }
         }
         self.ctx
@@ -910,6 +904,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             self.poll_ctx.update_ticks_timeout();
             update_cfg(&incoming.store_batch_system);
         }
+        // update store writers if necessary
+        self.poll_ctx.write_senders.refresh();
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {

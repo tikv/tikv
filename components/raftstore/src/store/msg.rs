@@ -7,7 +7,6 @@ use std::{borrow::Cow, fmt};
 
 use batch_system::ResourceMetered;
 use collections::HashSet;
-use crossbeam::channel::Sender;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
@@ -869,12 +868,6 @@ where
     AwakenRegions {
         abnormal_stores: Vec<u64>,
     },
-
-    /// Message used for updating store writers.
-    UpdateStoreWriters {
-        size: i64,             // -1 => all
-        notifier: Sender<u64>, // one-shot mailbox
-    },
 }
 
 impl<EK: KvEngine> ResourceMetered for StoreMsg<EK> {}
@@ -911,7 +904,6 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
-            StoreMsg::UpdateStoreWriters { .. } => write!(fmt, "UpdateStoreWriters"),
         }
     }
 }
