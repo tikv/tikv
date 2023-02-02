@@ -504,7 +504,6 @@ impl Snapshot for EtcdSnapshot {
 mod test {
     use std::{
         collections::{HashMap, HashSet},
-        convert::TryInto,
         fmt::Display,
         sync::Arc,
         time::Duration,
@@ -604,18 +603,15 @@ mod test {
             let mut sc = sc.blocking_lock();
             sc.check_consistency("after init");
             sc.add_member();
-            assert!(rt.block_on(tu.do_update(&mut sc)).is_ok());
+            rt.block_on(tu.do_update(&mut sc)).unwrap();
             sc.check_consistency("adding nodes");
             assert!(sc.remove_member(0), "{:?}", sc);
-            assert!(rt.block_on(tu.do_update(&mut sc)).is_ok());
+            rt.block_on(tu.do_update(&mut sc)).unwrap();
             sc.check_consistency("removing nodes");
         }
 
         drop(sc);
-        assert!(
-            rt.block_on(async { timeout(Duration::from_secs(1), tu.update_topology_loop()).await })
-                .is_ok(),
-            "take too many time to exit main loop."
-        )
+        rt.block_on(async { timeout(Duration::from_secs(1), tu.update_topology_loop()).await })
+            .unwrap()
     }
 }
