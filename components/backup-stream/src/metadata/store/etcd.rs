@@ -4,7 +4,7 @@ use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, Weak},
     time::Duration,
 };
 
@@ -13,7 +13,7 @@ use etcd_client::{
     Client, Compare, CompareOp, DeleteOptions, EventType, GetOptions, Member, PutOptions,
     SortOrder, SortTarget, Txn, TxnOp, WatchOptions,
 };
-use futures::{Future, StreamExt};
+use futures::StreamExt;
 use tikv_util::{info, warn};
 use tokio::sync::Mutex;
 use tokio_stream::Stream;
@@ -37,8 +37,43 @@ use crate::{
 pub struct EtcdStore(Arc<Mutex<etcd_client::Client>>);
 
 #[derive(Default)]
-struct TopologyUpdater {
+pub(super) struct TopologyUpdater<C> {
     last_topology: HashMap<u64, Member>,
+    client: Weak<Mutex<C>>,
+
+    // back off configs
+    pub(super) loop_interval: Duration,
+    pub(super) loop_failure_back_off: Duration,
+    pub(super) init_failure_back_off: Duration,
+}
+
+#[async_trait]
+pub(super) trait ClusterInfoProvider {
+    async fn get_members(&mut self) -> Result<Vec<Member>>;
+    async fn add_endpoint(&mut self, endpoint: &str) -> Result<()>;
+    async fn remove_endpoint(&mut self, endpoint: &str) -> Result<()>;
+}
+
+#[async_trait]
+impl ClusterInfoProvider for Client {
+    async fn get_members(&mut self) -> Result<Vec<Member>> {
+        let result = self.member_list().await?;
+        Ok(result.members().to_vec())
+    }
+
+    async fn add_endpoint(&mut self, endpoint: &str) -> Result<()> {
+        self.add_endpoint(endpoint)
+            .await
+            .map_err(|err| annotate!(err, "during adding the endpoint {}", endpoint))?;
+        Ok(())
+    }
+
+    async fn remove_endpoint(&mut self, endpoint: &str) -> Result<()> {
+        self.remove_endpoint(endpoint)
+            .await
+            .map_err(|err| annotate!(err, "during removing the endpoint {}", endpoint))?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,7 +98,23 @@ impl std::fmt::Debug for Diff {
     }
 }
 
-impl TopologyUpdater {
+impl<C: ClusterInfoProvider> TopologyUpdater<C> {
+    // Note: we may require the initial endpoints from the arguments directly.
+    // So the internal map won't get inconsistent when the cluster config changed
+    // during initializing.
+    // But that is impossible for now because we cannot query the node ID before
+    // connecting.
+    pub fn new(cluster_ref: Weak<Mutex<C>>) -> Self {
+        Self {
+            last_topology: Default::default(),
+            client: cluster_ref,
+
+            loop_interval: Duration::from_secs(60),
+            loop_failure_back_off: Duration::from_secs(10),
+            init_failure_back_off: Duration::from_secs(30),
+        }
+    }
+
     fn init(&mut self, members: impl Iterator<Item = Member>) {
         for mem in members {
             self.last_topology.insert(mem.id(), mem);
@@ -116,77 +167,78 @@ impl TopologyUpdater {
             },
         }
     }
-}
 
-impl EtcdStore {
-    pub fn topology_updater(&self) -> impl Future<Output = ()> + Send + 'static {
-        let weak_self = Arc::downgrade(&self.0);
-        let mut updater = TopologyUpdater::default();
-        async move {
-            'init: loop {
-                while let Some(client) = weak_self.upgrade() {
-                    let init = async {
-                        let mut cli = client.lock().await;
-                        let cluster = cli.member_list().await?;
-                        updater.init(cluster.members().iter().cloned());
-                        Result::Ok(())
-                    };
-                    match init.await {
-                        Ok(_) => break 'init,
-                        Err(err) => {
-                            err.report("during initializing updater");
-                            tokio::time::sleep(Duration::from_secs(10)).await;
-                        }
-                    }
-                }
-                break;
+    async fn do_init(&mut self, cli: &mut C) -> Result<()> {
+        let cluster = cli.get_members().await?;
+        self.init(cluster.into_iter());
+        Result::Ok(())
+    }
+
+    async fn try_until_init(&mut self) -> bool {
+        while let Some(client) = self.client.upgrade() {
+            if self.do_init(&mut *client.lock().await).await.is_ok() {
+                return true;
             }
-            while let Some(client) = weak_self.upgrade() {
-                let update = async {
-                    let mut cli = client.lock().await;
-                    let cluster = cli.member_list().await?;
-                    let diffs = updater.diff(cluster.members().iter().cloned());
-                    if !diffs.is_empty() {
-                        info!("log backup updating store topology."; "diffs" => ?diffs);
-                    }
-                    for diff in diffs {
-                        for url in diff.member.client_urls() {
-                            match diff.diff_type {
-                                DiffType::Add => {
-                                    cli.add_endpoint(url).await.map_err(|err| {
-                                        annotate!(err, "during adding the endpoint {}", url)
-                                    })?;
-                                }
-                                DiffType::Remove => {
-                                    cli.remove_endpoint(url).await.map_err(|err| {
-                                        annotate!(err, "during removing the endpoint {}", url)
-                                    })?;
-                                }
-                            }
-                        }
+            tokio::time::sleep(self.init_failure_back_off).await;
+        }
+        false
+    }
 
-                        if let Some(warning) = updater.apply(diff) {
-                            warn!("log backup meet some wrong status when updating PD clients."; "warn" => %warning);
-                        }
-                    }
-                    Result::Ok(())
-                };
-                match update.await {
-                    Ok(_) => tokio::time::sleep(Duration::from_secs(60)).await,
-                    Err(err) => {
-                        err.report("during updating etcd topology");
-                        tokio::time::sleep(Duration::from_secs(10)).await;
-                    }
+    async fn update_topology_by(&mut self, cli: &mut C, diff: &Diff) -> Result<()> {
+        for url in diff.member.client_urls() {
+            match diff.diff_type {
+                DiffType::Add => cli.add_endpoint(url).await?,
+                DiffType::Remove => cli.remove_endpoint(url).await?,
+            }
+        }
+        Ok(())
+    }
+
+    async fn do_update(&mut self, cli: &mut C) -> Result<()> {
+        let cluster = cli.get_members().await?;
+        let diffs = self.diff(cluster.into_iter());
+        if !diffs.is_empty() {
+            info!("log backup updating store topology."; "diffs" => ?diffs);
+        }
+        for diff in diffs {
+            self.update_topology_by(cli, &diff).await?;
+            if let Some(warning) = self.apply(diff) {
+                warn!("log backup meet some wrong status when updating PD clients."; "warn" => %warning);
+            }
+        }
+        Result::Ok(())
+    }
+
+    pub(super) async fn update_topology_loop(&mut self) {
+        while let Some(cli) = self.client.upgrade() {
+            match self.do_update(&mut *cli.lock().await).await {
+                Ok(_) => tokio::time::sleep(self.loop_interval).await,
+                Err(err) => {
+                    err.report("during updating etcd topology");
+                    tokio::time::sleep(self.loop_failure_back_off).await;
                 }
             }
         }
     }
 
+    pub async fn main_loop(mut self) {
+        if !self.try_until_init().await {
+            return;
+        }
+        self.update_topology_loop().await
+    }
+}
+
+impl EtcdStore {
     pub fn connect<E: AsRef<str>, S: AsRef<[E]>>(endpoints: S) -> Self {
         // TODO remove block_on
         let cli =
             futures::executor::block_on(etcd_client::Client::connect(&endpoints, None)).unwrap();
         Self(Arc::new(Mutex::new(cli)))
+    }
+
+    pub fn inner(&self) -> &Arc<Mutex<Client>> {
+        &self.0
     }
 }
 
@@ -445,5 +497,125 @@ impl Snapshot for EtcdSnapshot {
 
     fn revision(&self) -> i64 {
         self.revision
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{
+        collections::{HashMap, HashSet},
+        convert::TryInto,
+        fmt::Display,
+        sync::Arc,
+        time::Duration,
+    };
+
+    use async_trait::async_trait;
+    use etcd_client::{proto::PbMember, Member};
+    use tokio::{sync::Mutex, time::timeout};
+
+    use super::{ClusterInfoProvider, TopologyUpdater};
+    use crate::errors::Result;
+
+    #[derive(Default, Debug)]
+    struct FakeCluster {
+        id_alloc: u64,
+        members: HashMap<u64, Member>,
+        endpoints: HashSet<String>,
+    }
+
+    #[async_trait]
+    impl ClusterInfoProvider for FakeCluster {
+        async fn get_members(&mut self) -> Result<Vec<Member>> {
+            let members = self.members.values().cloned().collect();
+            Ok(members)
+        }
+
+        async fn add_endpoint(&mut self, endpoint: &str) -> Result<()> {
+            self.endpoints.insert(endpoint.to_owned());
+            Ok(())
+        }
+
+        async fn remove_endpoint(&mut self, endpoint: &str) -> Result<()> {
+            self.endpoints.remove(endpoint);
+            Ok(())
+        }
+    }
+
+    impl FakeCluster {
+        fn new_id(&mut self) -> u64 {
+            let i = self.id_alloc;
+            self.id_alloc += 1;
+            i
+        }
+
+        fn init_with_member(&mut self, n: usize) {
+            for _ in 0..n {
+                let mem = self.add_member();
+                self.endpoints.insert(format!("fakestore://{}", mem));
+            }
+        }
+
+        fn add_member(&mut self) -> u64 {
+            let id = self.new_id();
+            let mut mem = PbMember::default();
+            mem.id = id;
+            mem.client_ur_ls = vec![format!("fakestore://{}", id)];
+            // Safety: `Member` is #[repr(transparent)].
+            self.members.insert(id, unsafe { std::mem::transmute(mem) });
+            id
+        }
+
+        fn remove_member(&mut self, id: u64) -> bool {
+            self.members.remove(&id).is_some()
+        }
+
+        fn check_consistency(&self, message: impl Display) {
+            let urls = self
+                .members
+                .values()
+                .flat_map(|mem| mem.client_urls().iter().cloned())
+                .collect::<HashSet<_>>();
+            assert_eq!(
+                urls, self.endpoints,
+                "{}: consistency check not passed.",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn test_topology_updater() {
+        let mut c = FakeCluster::default();
+        c.init_with_member(3);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let sc = Arc::new(Mutex::new(c));
+        let mut tu = TopologyUpdater::new(Arc::downgrade(&sc));
+        tu.init_failure_back_off = Duration::ZERO;
+        tu.loop_failure_back_off = Duration::ZERO;
+        tu.loop_interval = Duration::from_millis(100);
+
+        assert!(rt.block_on(tu.try_until_init()));
+        {
+            let mut sc = sc.blocking_lock();
+            sc.check_consistency("after init");
+            sc.add_member();
+            assert!(rt.block_on(tu.do_update(&mut sc)).is_ok());
+            sc.check_consistency("adding nodes");
+            assert!(sc.remove_member(0), "{:?}", sc);
+            assert!(rt.block_on(tu.do_update(&mut sc)).is_ok());
+            sc.check_consistency("removing nodes");
+        }
+
+        drop(sc);
+        assert!(
+            rt.block_on(async { timeout(Duration::from_secs(1), tu.update_topology_loop()).await })
+                .is_ok(),
+            "take too many time to exit main loop."
+        )
     }
 }

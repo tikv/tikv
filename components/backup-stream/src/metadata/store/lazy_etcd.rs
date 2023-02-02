@@ -16,7 +16,10 @@ use tikv_util::{
 };
 use tokio::sync::Mutex as AsyncMutex;
 
-use super::{etcd::EtcdSnapshot, EtcdStore, MetaStore};
+use super::{
+    etcd::{EtcdSnapshot, TopologyUpdater},
+    EtcdStore, MetaStore,
+};
 use crate::errors::{ContextualResultExt, Result};
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
@@ -162,8 +165,9 @@ impl LazyEtcdClientInner {
         .await
         .context("during connecting to the etcd")?;
         let store = EtcdStore::from(store);
-        tokio::spawn(store.clone().topology_updater());
+        let updater = TopologyUpdater::new(Arc::downgrade(store.inner()));
         self.cli = Some(store);
+        tokio::task::spawn(updater.main_loop());
         Ok(self.cli.as_ref().unwrap())
     }
 
