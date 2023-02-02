@@ -283,7 +283,7 @@ impl ReadPoolHandle {
 
     pub fn get_estimated_wait_duration(&self) -> Option<Duration> {
         self.get_ewma_time_slice()
-            .map(|s| s.mul_f64(self.get_queue_size_per_worker() as f64))
+            .map(|s| s * (self.get_queue_size_per_worker() as u32))
     }
 
     pub fn check_busy_threshold(
@@ -358,7 +358,7 @@ impl TimeSliceInspector {
         if time_diff < MIN_TIME_DIFF {
             return;
         }
-        let new_val = time_diff.div_f64((new_count - inner.last_count) as f64);
+        let new_val = time_diff / ((new_count - inner.last_count) as u32);
         let new_ewma = new_val.mul_f64(WEIGHT) + inner.ewma.mul_f64(1.0 - WEIGHT);
         inner.ewma = new_ewma;
         inner.last_sum = new_sum;
