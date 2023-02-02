@@ -1320,8 +1320,8 @@ impl DbConfig {
             opts.set_write_buffer_manager(r);
         }
         if for_engine == EngineType::RaftKv2 {
-            // Will be scheduled to TiKV's background worker in `init_metrics_flusher`.
-            opts.disable_periodic_work_scheduler(true);
+            // Historical stats are not used.
+            opts.set_stats_persist_period_sec(0);
         }
         opts
     }
