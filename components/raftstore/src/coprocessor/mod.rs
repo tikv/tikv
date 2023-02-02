@@ -339,7 +339,7 @@ pub trait RegionChangeObserver: Coprocessor {
 }
 
 pub trait MessageObserver: Coprocessor {
-    /// Return false if this message should be skipped.
+    /// Returns false if the message should not be stepped later.
     fn on_raft_message(&self, _: &RaftMessage) -> bool {
         true
     }
