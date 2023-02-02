@@ -47,6 +47,14 @@ pub(super) struct TopologyUpdater<C> {
     pub(super) init_failure_back_off: Duration,
 }
 
+impl<C> std::fmt::Debug for TopologyUpdater<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TopologyUpdater")
+            .field("last_topology", &self.last_topology)
+            .finish()
+    }
+}
+
 #[async_trait]
 pub(super) trait ClusterInfoProvider {
     async fn get_members(&mut self) -> Result<Vec<Member>>;
@@ -198,7 +206,7 @@ impl<C: ClusterInfoProvider> TopologyUpdater<C> {
         let cluster = cli.get_members().await?;
         let diffs = self.diff(cluster.into_iter());
         if !diffs.is_empty() {
-            info!("log backup updating store topology."; "diffs" => ?diffs);
+            info!("log backup updating store topology."; "diffs" => ?diffs, "current_state" => ?self);
         }
         for diff in diffs {
             self.update_topology_by(cli, &diff).await?;
@@ -223,8 +231,10 @@ impl<C: ClusterInfoProvider> TopologyUpdater<C> {
 
     pub async fn main_loop(mut self) {
         if !self.try_until_init().await {
+            warn!("log backup topology updater canceled during init.");
             return;
         }
+        info!("log backup topology updater finish initialization."; "current_state" => ?self);
         self.update_topology_loop().await
     }
 }
@@ -605,6 +615,10 @@ mod test {
             sc.add_member();
             rt.block_on(tu.do_update(&mut sc)).unwrap();
             sc.check_consistency("adding nodes");
+            sc.add_member();
+            sc.add_member();
+            rt.block_on(tu.do_update(&mut sc)).unwrap();
+            sc.check_consistency("adding more nodes");
             assert!(sc.remove_member(0), "{:?}", sc);
             rt.block_on(tu.do_update(&mut sc)).unwrap();
             sc.check_consistency("removing nodes");
