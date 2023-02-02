@@ -36,8 +36,8 @@ use engine_rocks::{
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
     RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
     RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics,
-    RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RocksTitanDbOptions, TtlPropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
     CfOptions as _, DbOptions as _, MiscExt, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT,
@@ -1306,7 +1306,6 @@ impl DbConfig {
         if let Some(b) = self.paranoid_checks {
             opts.set_paranoid_checks(b);
         }
-        opts.set_info_log(RocksdbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());

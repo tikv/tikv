@@ -6,6 +6,7 @@ use engine_rocks::{
     raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
+    RocksdbLogger, TabletLogger,
 };
 use engine_traits::{
     CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
@@ -171,6 +172,7 @@ impl KvEngineFactory {
     pub fn create_shared_db(&self, path: impl AsRef<Path>) -> Result<RocksEngine> {
         let path = path.as_ref();
         let mut db_opts = self.db_opts();
+        db_opts.set_info_log(RocksdbLogger::default());
         let cf_opts = self.cf_opts(EngineType::RaftKv);
         if let Some(listener) = &self.inner.flow_listener {
             db_opts.add_event_listener(listener.clone());
@@ -188,6 +190,8 @@ impl KvEngineFactory {
 impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<RocksEngine> {
         let mut db_opts = self.db_opts();
+        let tablet_name = path.file_name().unwrap().to_str().unwrap().to_string();
+        db_opts.set_info_log(TabletLogger::new(tablet_name));
         let cf_opts = self.cf_opts(EngineType::RaftKv2);
         if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
             db_opts.add_event_listener(listener.clone_with(ctx.id, suffix));
