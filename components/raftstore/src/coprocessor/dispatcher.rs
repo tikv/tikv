@@ -788,7 +788,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         true
     }
 
-    /// Ignore the message if one of the observers returns false.
+    /// Returns false if the message should not be stepped later.
     pub fn on_raft_message(&self, msg: &RaftMessage) -> bool {
         for observer in &self.registry.message_observers {
             let observer = observer.observer.inner();
