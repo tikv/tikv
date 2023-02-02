@@ -6,7 +6,7 @@ use engine_rocks::{
     raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
-    RocksdbLogger, TabletLogger,
+    TabletLogger,
 };
 use engine_traits::{
     CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
@@ -135,12 +135,12 @@ impl KvEngineFactory {
         self.inner.db_resources.statistics.clone()
     }
 
-    fn db_opts(&self) -> RocksDbOptions {
+    fn db_opts(&self, for_engine: EngineType) -> RocksDbOptions {
         // Create kv engine.
         let mut db_opts = self
             .inner
             .rocksdb_config
-            .build_opt(&self.inner.db_resources);
+            .build_opt(&self.inner.db_resources, for_engine);
         if !self.inner.lite {
             db_opts.add_event_listener(RocksEventListener::new(
                 "kv",
@@ -171,8 +171,7 @@ impl KvEngineFactory {
     /// It will always create in path/DEFAULT_DB_SUB_DIR.
     pub fn create_shared_db(&self, path: impl AsRef<Path>) -> Result<RocksEngine> {
         let path = path.as_ref();
-        let mut db_opts = self.db_opts();
-        db_opts.set_info_log(RocksdbLogger::default());
+        let mut db_opts = self.db_opts(EngineType::RaftKv);
         let cf_opts = self.cf_opts(EngineType::RaftKv);
         if let Some(listener) = &self.inner.flow_listener {
             db_opts.add_event_listener(listener.clone());
@@ -189,7 +188,7 @@ impl KvEngineFactory {
 
 impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<RocksEngine> {
-        let mut db_opts = self.db_opts();
+        let mut db_opts = self.db_opts(EngineType::RaftKv2);
         let tablet_name = path.file_name().unwrap().to_str().unwrap().to_string();
         db_opts.set_info_log(TabletLogger::new(tablet_name));
         let cf_opts = self.cf_opts(EngineType::RaftKv2);
@@ -219,7 +218,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn destroy_tablet(&self, ctx: TabletContext, path: &Path) -> Result<()> {
         info!("destroy tablet"; "path" => %path.display(), "id" => ctx.id, "suffix" => ?ctx.suffix);
         // Create kv engine.
-        let _db_opts = self.db_opts();
+        let _db_opts = self.db_opts(EngineType::RaftKv2);
         let _cf_opts = self.cf_opts(EngineType::RaftKv2);
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
         // engine_rocks::util::destroy_engine(
