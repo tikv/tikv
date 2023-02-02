@@ -167,6 +167,8 @@ impl<EK: KvEngine> Runner<EK> {
                     return;
                 }
             }
+            // drop before callback.
+            drop(tablet);
             cb();
         });
     }
@@ -270,5 +272,69 @@ where
 
     fn get_interval(&self) -> Duration {
         Duration::from_secs(10)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use engine_test::{
+        ctor::{CfOptions, DbOptions},
+        kv::TestTabletFactory,
+    };
+    use engine_traits::{MiscExt, TabletContext, TabletRegistry};
+    use tempfile::Builder;
+
+    use super::*;
+
+    #[test]
+    fn test_race_between_destroy_and_trim() {
+        let dir = Builder::new()
+            .prefix("test_race_between_destroy_and_trim")
+            .tempdir()
+            .unwrap();
+        let factory = Box::new(TestTabletFactory::new(
+            DbOptions::default(),
+            vec![("default", CfOptions::default())],
+        ));
+        let registry = TabletRegistry::new(factory, dir.path()).unwrap();
+        let logger = slog_global::borrow_global().new(slog::o!());
+        let mut runner = Runner::new(registry.clone(), logger);
+
+        let mut region = Region::default();
+        let rid = 1;
+        region.set_id(rid);
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"b".to_vec());
+        let tablet = registry
+            .load(TabletContext::new(&region, Some(1)), true)
+            .unwrap()
+            .latest()
+            .unwrap()
+            .clone();
+        runner.run(Task::prepare_destroy(tablet.clone(), rid, 10));
+        let (tx, rx) = std::sync::mpsc::channel();
+        runner.run(Task::trim(tablet, &region, move || tx.send(()).unwrap()));
+        rx.recv().unwrap();
+
+        let rid = 2;
+        region.set_id(rid);
+        region.set_start_key(b"c".to_vec());
+        region.set_end_key(b"d".to_vec());
+        let tablet = registry
+            .load(TabletContext::new(&region, Some(1)), true)
+            .unwrap()
+            .latest()
+            .unwrap()
+            .clone();
+        registry.remove(rid);
+        runner.run(Task::prepare_destroy(tablet.clone(), rid, 10));
+        runner.run(Task::destroy(rid, 100));
+        let path = PathBuf::from(tablet.path());
+        assert!(path.exists());
+        let (tx, rx) = std::sync::mpsc::channel();
+        runner.run(Task::trim(tablet, &region, move || tx.send(()).unwrap()));
+        rx.recv().unwrap();
+        runner.on_timeout();
+        assert!(!path.exists());
     }
 }
