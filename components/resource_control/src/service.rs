@@ -125,7 +125,7 @@ pub mod tests {
     use test_pd::{mocker::Service, util::*, Server as MockServer};
     use tikv_util::{config::ReadableDuration, worker::Builder};
 
-    use crate::resource_group::tests::new_resource_group;
+    use crate::resource_group::tests::{new_resource_group, new_resource_group_ru};
 
     fn new_test_server_and_client(
         update_interval: ReadableDuration,
@@ -202,12 +202,12 @@ pub mod tests {
             s_clone.watch_resource_groups().await;
         });
         // Mock add
-        let group1 = new_resource_group("TEST1".into(), true, 100, 100);
+        let group1 = new_resource_group_ru("TEST1".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
-        let group2 = new_resource_group("TEST2".into(), true, 100, 100);
+        let group2 = new_resource_group_ru("TEST2".into(), 100);
         add_resource_group(s.pd_client.clone(), group2);
         // Mock modify
-        let group2 = new_resource_group("TEST2".into(), true, 50, 50);
+        let group2 = new_resource_group_ru("TEST2".into(), 50);
         add_resource_group(s.pd_client.clone(), group2);
         let (res, revision) = block_on(s.list_resource_groups());
         assert_eq!(res.len(), 2);
@@ -227,7 +227,7 @@ pub mod tests {
             group
                 .value()
                 .get_r_u_settings()
-                .get_r_r_u()
+                .get_r_u()
                 .get_settings()
                 .get_fill_rate(),
             50
@@ -247,7 +247,7 @@ pub mod tests {
             s_clone.watch_resource_groups().await;
         });
         // Mock add
-        let group1 = new_resource_group("TEST1".into(), true, 100, 100);
+        let group1 = new_resource_group_ru("TEST1".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
         // Mock reboot watch server
         let watch_global_config_fp = "watch_global_config_return";
@@ -255,7 +255,7 @@ pub mod tests {
         std::thread::sleep(Duration::from_millis(100));
         fail::remove(watch_global_config_fp);
         // Mock add after rebooting will success
-        let group1 = new_resource_group("TEST2".into(), true, 100, 100);
+        let group1 = new_resource_group_ru("TEST2".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
         // Wait watcher update
         std::thread::sleep(Duration::from_secs(1));

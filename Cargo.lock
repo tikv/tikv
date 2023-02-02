@@ -2724,12 +2724,13 @@ dependencies = [
  "panic_hook",
  "thiserror",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#009f31598ac3200dc8b32e18f96fc4deb7b32e48"
+source = "git+https://github.com/pingcap/kvproto.git#a7c51106dfe70ebf59221018b50d1ec6ad25da74"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3696,6 +3697,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "prometheus",
+ "prometheus-static-metric",
  "security",
  "semver 0.10.0",
  "serde",
