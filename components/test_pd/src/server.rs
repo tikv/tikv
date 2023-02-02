@@ -242,7 +242,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                     KvEventType::Delete => EventType::Delete,
                 });
                 change.set_name(from_utf8(event.pair.key()).unwrap().to_string());
-                change.set_value(from_utf8(event.pair.value()).unwrap().to_string());
+                change.set_payload(event.pair.value().into());
                 let mut wc = WatchGlobalConfigResponse::default();
                 wc.set_changes(vec![change].into());
                 let _ = sink.send((wc, WriteFlags::default())).await;
