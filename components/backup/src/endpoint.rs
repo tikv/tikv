@@ -71,7 +71,7 @@ struct Request {
     compression_type: CompressionType,
     compression_level: i32,
     cipher: CipherInfo,
-    replica_read: BackupReplicaRead,
+    replica_read: bool,
 }
 
 /// Backup Task.
@@ -753,7 +753,7 @@ impl<R: RegionInfoProvider> Progress<R> {
     /// Forward the progress by `ranges` BackupRanges
     ///
     /// The size of the returned BackupRanges should <= `ranges`
-    fn forward(&mut self, limit: usize, replica_read: BackupReplicaRead) -> Vec<BackupRange> {
+    fn forward(&mut self, limit: usize, replica_read: bool) -> Vec<BackupRange> {
         if self.finished {
             return Vec::new();
         }
@@ -785,11 +785,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                     }
                     let peer = find_peer(region, store_id).unwrap().to_owned();
                     // Raft peer role has to match the replica read flag.
-                    if (replica_read == BackupReplicaRead::Leader && info.role == StateRole::Leader)
-                        || (replica_read == BackupReplicaRead::LeaderAndFollower)
-                        || (replica_read == BackupReplicaRead::Learner
-                            && peer.get_role() == PeerRole::Learner)
-                    {
+                    if replica_read || info.role == StateRole::Leader {
                         let ekey = get_min_end_key(end_key.as_ref(), region);
                         let skey = get_max_start_key(start_key.as_ref(), region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
@@ -1668,7 +1664,7 @@ pub mod tests {
                 compression_type: CompressionType::Unknown,
                 compression_level: 0,
                 cipher: CipherInfo::default(),
-                replica_read: BackupReplicaRead::Leader,
+                replica_read: false,
             },
             resp: tx,
         };
@@ -1697,36 +1693,7 @@ pub mod tests {
                 compression_type: CompressionType::Unknown,
                 compression_level: 0,
                 cipher: CipherInfo::default(),
-                replica_read: BackupReplicaRead::Learner,
-            },
-            resp: tx,
-        };
-        endpoint.handle_backup_task(read_learner_task);
-        let resps: Vec<_> = block_on(rx.collect());
-        assert_eq!(resps.len(), 1);
-        for a in &resps {
-            assert_eq!(a.get_start_key(), b"2");
-            assert_eq!(a.get_end_key(), b"3");
-        }
-
-        let (tx, rx) = unbounded();
-        let read_leader_follower_task = Task {
-            request: Request {
-                start_key: b"".to_vec(),
-                end_key: b"3".to_vec(),
-                sub_ranges: ranges.clone(),
-                start_ts: 1.into(),
-                end_ts: 1.into(),
-                backend: backend.clone(),
-                limiter: Limiter::new(f64::INFINITY),
-                cancel: Arc::default(),
-                is_raw_kv: false,
-                dst_api_ver: ApiVersion::V1,
-                cf: engine_traits::CF_DEFAULT,
-                compression_type: CompressionType::Unknown,
-                compression_level: 0,
-                cipher: CipherInfo::default(),
-                replica_read: BackupReplicaRead::LeaderAndFollower,
+                replica_read: true,
             },
             resp: tx,
         };
