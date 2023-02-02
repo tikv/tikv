@@ -1452,7 +1452,11 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> Arc<EnginesResourceInfo> {
-        let block_cache = self.config.storage.block_cache.build_shared_cache(true);
+        let block_cache = self
+            .config
+            .storage
+            .block_cache
+            .build_shared_cache(self.config.storage.engine);
         let env = self
             .config
             .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
@@ -1799,7 +1803,10 @@ mod test {
         config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
-        let cache = config.storage.block_cache.build_shared_cache(true);
+        let cache = config
+            .storage
+            .block_cache
+            .build_shared_cache(config.storage.engine);
 
         let factory = KvEngineFactoryBuilder::new(env, &config, cache).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();

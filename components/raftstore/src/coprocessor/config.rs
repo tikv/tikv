@@ -72,7 +72,7 @@ pub enum ConsistencyCheckMethod {
 /// Default region split size.
 pub const SPLIT_SIZE_MB: u64 = 96;
 pub const LARGE_REGION_SPLIT_SIZE_MB: u64 = 1024;
-pub const MULTI_ROCKS_SPLIT_SIZE_MB: u64 = 10240;
+pub const RAFTSTORE_V2_SPLIT_SIZE_MB: u64 = 10240;
 
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
@@ -104,7 +104,7 @@ impl Default for Config {
 impl Config {
     pub fn region_split_size(&self) -> ReadableSize {
         self.region_split_size
-            .unwrap_or(if self.enable_region_bucket {
+            .unwrap_or(/* v1 only */ if self.enable_region_bucket {
                 ReadableSize::mb(LARGE_REGION_SPLIT_SIZE_MB)
             } else {
                 ReadableSize::mb(SPLIT_SIZE_MB)
@@ -128,11 +128,16 @@ impl Config {
             .unwrap_or((self.region_split_size().as_mb_f64() * 10000.0) as u64)
     }
 
-    pub fn validate(&mut self, use_multi_rocks: bool) -> Result<()> {
+    pub fn optimize_for(&mut self, use_multi_rocks: bool) {
         // overwrite the default region_split_size when it's multi-rocksdb
-        if use_multi_rocks && self.region_split_size.is_none() {
-            self.region_split_size = Some(ReadableSize::mb(MULTI_ROCKS_SPLIT_SIZE_MB));
+        if use_multi_rocks {
+            if self.region_split_size.is_none() {
+                self.region_split_size = Some(ReadableSize::mb(RAFTSTORE_V2_SPLIT_SIZE_MB));
+            }
         }
+    }
+
+    pub fn validate(&mut self) -> Result<()> {
         if self.region_split_keys.is_none() {
             self.region_split_keys = Some((self.region_split_size().as_mb_f64() * 10000.0) as u64);
         }
@@ -219,39 +224,39 @@ mod tests {
     #[test]
     fn test_config_validate() {
         let mut cfg = Config::default();
-        cfg.validate(false).unwrap();
+        cfg.validate().unwrap();
 
         cfg = Config::default();
         cfg.region_max_size = Some(ReadableSize(10));
         cfg.region_split_size = Some(ReadableSize(20));
-        cfg.validate(false).unwrap_err();
+        cfg.validate().unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_size = None;
         cfg.region_split_size = Some(ReadableSize(20));
-        cfg.validate(false).unwrap();
+        cfg.validate().unwrap();
         assert_eq!(cfg.region_max_size, Some(ReadableSize(30)));
 
         cfg = Config::default();
         cfg.region_max_keys = Some(10);
         cfg.region_split_keys = Some(20);
-        cfg.validate(false).unwrap_err();
+        cfg.validate().unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_keys = None;
         cfg.region_split_keys = Some(20);
-        cfg.validate(false).unwrap();
+        cfg.validate().unwrap();
         assert_eq!(cfg.region_max_keys, Some(30));
 
         cfg = Config::default();
         cfg.enable_region_bucket = false;
         cfg.region_split_size = Some(ReadableSize(20));
         cfg.region_bucket_size = ReadableSize(30);
-        cfg.validate(false).unwrap();
+        cfg.validate().unwrap();
 
         cfg = Config::default();
         cfg.region_split_size = Some(ReadableSize::mb(20));
-        cfg.validate(false).unwrap();
+        cfg.validate().unwrap();
         assert_eq!(cfg.region_split_keys, Some(200000));
     }
 }

@@ -91,7 +91,7 @@ pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
 /// Because multi-rocksdb has 25% memory table quota, we have to reduce block
 /// cache a bit
-pub const MULTI_ROCKS_BLOCK_CACHE_RATE: f64 = 0.30;
+pub const RAFTSTORE_V2_BLOCK_CACHE_RATE: f64 = 0.30;
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
 pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
 
@@ -3231,8 +3231,12 @@ impl TikvConfig {
         self.raft_engine.validate()?;
         self.server.validate()?;
         self.pd.validate()?;
+
+        // cannot pass EngineType directly as component raftstore cannot have dependency
+        // on tikv
         self.coprocessor
-            .validate(self.storage.engine == EngineType::RaftKv2)?;
+            .optimize_for(self.storage.engine == EngineType::RaftKv2);
+        self.coprocessor.validate()?;
         self.raft_store.validate(
             self.coprocessor.region_split_size(),
             self.coprocessor.enable_region_bucket,
@@ -4170,7 +4174,7 @@ mod tests {
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::{
-        config::{LARGE_REGION_SPLIT_SIZE_MB, MULTI_ROCKS_SPLIT_SIZE_MB, SPLIT_SIZE_MB},
+        config::{LARGE_REGION_SPLIT_SIZE_MB, RAFTSTORE_V2_SPLIT_SIZE_MB, SPLIT_SIZE_MB},
         region_info_accessor::MockRegionInfoProvider,
     };
     use slog::Level;
@@ -4601,8 +4605,11 @@ mod tests {
                     .build_opt(&cfg.rocksdb.build_resources(Arc::new(Env::default()))),
             ),
             cfg.rocksdb.build_cf_opts(
-                &cfg.rocksdb
-                    .build_cf_resources(cfg.storage.block_cache.build_shared_cache(false)),
+                &cfg.rocksdb.build_cf_resources(
+                    cfg.storage
+                        .block_cache
+                        .build_shared_cache(cfg.storage.engine),
+                ),
                 None,
                 cfg.storage.api_version(),
                 cfg.storage.engine,
@@ -5580,38 +5587,46 @@ mod tests {
     #[test]
     fn test_region_size_config() {
         let mut default_cfg = TikvConfig::default();
-        default_cfg.coprocessor.validate(false);
+        default_cfg.coprocessor.optimize_for(false);
+        default_cfg.coprocessor.validate();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
-            Some(ReadableSize::mb(SPLIT_SIZE_MB))
+            ReadableSize::mb(SPLIT_SIZE_MB)
         );
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.enable_region_bucket = true;
-        default_cfg.coprocessor.validate(false);
+        default_cfg.coprocessor.optimize_for(false);
+        default_cfg.coprocessor.validate();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
-            Some(ReadableSize::mb(LARGE_REGION_SPLIT_SIZE_MB))
+            ReadableSize::mb(LARGE_REGION_SPLIT_SIZE_MB)
         );
 
         let mut default_cfg = TikvConfig::default();
-        default_cfg.coprocessor.validate(false);
+        default_cfg.coprocessor.optimize_for(true);
+        default_cfg.coprocessor.validate();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
-            Some(ReadableSize::mb(MULTI_ROCKS_SPLIT_SIZE_MB))
+            ReadableSize::mb(RAFTSTORE_V2_SPLIT_SIZE_MB)
         );
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
-        default_cfg.coprocessor.validate(false);
+        default_cfg.coprocessor.optimize_for(false);
+        default_cfg.coprocessor.validate();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
-            Some(ReadableSize::mb(500))
+            ReadableSize::mb(500)
         );
-        default_cfg.coprocessor.validate(true);
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
+        default_cfg.coprocessor.optimize_for(true);
+        default_cfg.coprocessor.validate();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
-            Some(ReadableSize::mb(500))
+            ReadableSize::mb(500)
         );
     }
 
