@@ -25,10 +25,10 @@ pub struct BatchPartitionTopNExecutor<Src: BatchExecutor> {
     #[allow(clippy::box_collection)]
     eval_columns_buffer_unsafe: Box<Vec<RpnStackNode<'static>>>,
 
-    /// must be prefix of source's property.
     partition_exprs: Box<[RpnExpression]>,
+    partition_exprs_field_type: Box<[FieldType]>,
 
-    last_logic_row_index: Option<usize>,
+    last_partition_key: Option<HeapItemUnsafe>,
 
     order_exprs: Box<[RpnExpression]>,
     /// This field stores the field type of the results evaluated by the exprs
@@ -39,8 +39,6 @@ pub struct BatchPartitionTopNExecutor<Src: BatchExecutor> {
     order_is_desc: Box<[bool]>,
 
     n: usize,
-
-    recommended_part_num: usize,
 
     context: EvalContext,
     src: Src,
@@ -54,7 +52,6 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
         order_exprs_def: Vec<Expr>,
         order_is_desc: Vec<bool>,
         n: usize,
-        recommended_part_num: usize,
     ) -> Result<Self> {
         assert_eq!(order_exprs_def.len(), order_is_desc.len());
 
@@ -82,24 +79,38 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
             )?);
         }
 
+        let partition_exprs_field_type: Vec<FieldType> = partition_exprs
+            .iter()
+            .map(|expr| expr.ret_field_type(src.schema()).clone())
+            .collect();
+
         Ok(Self {
             // Simply large enough to avoid repeated allocations
             heap: TopNHeap::new(n),
             eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
             partition_exprs: partition_exprs.into_boxed_slice(),
+            partition_exprs_field_type: partition_exprs_field_type.into_boxed_slice(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
             n,
-            recommended_part_num,
             context: EvalContext::new(config),
             src,
-            last_logic_row_index: None,
+            last_partition_key: None,
         })
     }
 
-    fn has_same_partition_with(&self, logical_row_index: usize) -> bool {
-        todo!()
+    // Check whether the partition key of the this row is equal to the saved
+    // partition key. If yes, return true. Else, update saved partition key,
+    // and return false.
+    fn check_partition_equal_or_update(&mut self, current: HeapItemUnsafe) -> Result<bool> {
+        if let Some(last_partition_key) = &self.last_partition_key {
+            if last_partition_key == &current {
+                return Ok(true);
+            }
+        }
+        self.last_partition_key = Some(current);
+        Ok(false)
     }
 
     #[inline]
@@ -126,7 +137,7 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
                 logical_rows,
             });
 
-            let eval_offset = self.eval_columns_buffer_unsafe.len();
+            let order_eval_offset = self.eval_columns_buffer_unsafe.len();
             unsafe {
                 eval_exprs_decoded_no_lifetime(
                     &mut self.context,
@@ -137,19 +148,41 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
                     &mut self.eval_columns_buffer_unsafe,
                 )?;
             }
+            let partition_eval_offset = self.eval_columns_buffer_unsafe.len();
+            unsafe {
+                eval_exprs_decoded_no_lifetime(
+                    &mut self.context,
+                    &self.partition_exprs,
+                    self.src.schema(),
+                    &pinned_source_data.physical_columns,
+                    &pinned_source_data.logical_rows,
+                    &mut self.eval_columns_buffer_unsafe,
+                )?;
+            }
 
             for logical_row_index in 0..pinned_source_data.logical_rows.len() {
-                if !self.has_same_partition_with(logical_row_index) {
-                    self.last_logic_row_index = Some(logical_row_index);
+                let partition_key = HeapItemUnsafe {
+                    order_is_desc_ptr: (*vec![false; self.partition_exprs.len()]
+                        .into_boxed_slice())
+                    .into(),
+                    order_exprs_field_type_ptr: (*self.partition_exprs_field_type).into(),
+                    source_data: pinned_source_data.clone(),
+                    eval_columns_buffer_ptr: self.eval_columns_buffer_unsafe.as_ref().into(),
+                    eval_columns_offset: partition_eval_offset,
+                    logical_row_index,
+                };
+
+                if !self.check_partition_equal_or_update(partition_key)? {
                     self.heap.take_all_append_to(&mut result);
                     self.heap = TopNHeap::new(self.n);
                 }
+
                 let row = HeapItemUnsafe {
                     order_is_desc_ptr: (*self.order_is_desc).into(),
                     order_exprs_field_type_ptr: (*self.order_exprs_field_type).into(),
                     source_data: pinned_source_data.clone(),
                     eval_columns_buffer_ptr: self.eval_columns_buffer_unsafe.as_ref().into(),
-                    eval_columns_offset: eval_offset,
+                    eval_columns_offset: order_eval_offset,
                     logical_row_index,
                 };
                 self.heap.add_row(row)?;
@@ -163,10 +196,11 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
     }
 }
 
-/// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the
-/// struct and `BatchTopNExecutor` doesn't leak the pointers to other threads.
-/// Therefore, with those `NonNull` pointers, BatchTopNExecutor still remains
-/// `Send`.
+/// todo: review this.
+/// All `NonNull` pointers in `BatchPartitionTopNExecutor` cannot be accessed
+/// out of the struct and `BatchPartitionTopNExecutor` doesn't leak the pointers
+/// to other threads. Therefore, with those `NonNull` pointers,
+/// BatchPartitionTopNExecutor still remains `Send`.
 unsafe impl<Src: BatchExecutor> Send for BatchPartitionTopNExecutor<Src> {}
 
 #[async_trait]
@@ -189,7 +223,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
     /// partition with the first two. So heap will be flushed again.
     /// In this case, there can be 2*n-2 rows in the result, which may be larger
     /// than paging_size.
-    /// todo: find a solution to limit it up to paging_size.
+    /// todo: find a solution to limit it up to paging_size. baseline: limit n
+    /// up to paging_size/2
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         if self.n == 0 {
             return BatchExecuteResult {

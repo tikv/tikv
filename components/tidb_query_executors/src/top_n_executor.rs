@@ -38,7 +38,7 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// 1. `BatchTopNExecutor` is valid (i.e. not dropped).
     ///
     /// 2. The referenced `LazyBatchColumnVec` of the element must be valid,
-    /// which only happens    when at least one of the row is in the `heap`.
+    /// which only happens when at least one of the row is in the `heap`.
     /// Note that rows may be swapped out from    `heap` at any time.
     ///
     /// This field is placed before `order_exprs` and `src` because it relies on
