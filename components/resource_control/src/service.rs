@@ -136,7 +136,7 @@ pub mod tests {
     use test_pd::{mocker::Service, util::*, Server as MockServer};
     use tikv_util::{config::ReadableDuration, worker::Builder};
 
-    use crate::resource_group::tests::{new_resource_group, Tokens};
+    use crate::resource_group::tests::{new_resource_group, new_resource_group_ru};
 
     fn new_test_server_and_client(
         update_interval: ReadableDuration,
@@ -183,9 +183,7 @@ pub mod tests {
         let resource_manager = ResourceGroupManager::default();
 
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
-        let mut tokens = Tokens::default();
-        tokens.ru_tokens = 100;
-        let group = new_resource_group("TEST".into(), true, tokens);
+        let group = new_resource_group("TEST".into(), true, 100, 100);
         add_resource_group(s.pd_client.clone(), group);
         let (res, revision) = block_on(s.list_resource_groups());
         assert_eq!(res.len(), 1);
@@ -215,15 +213,12 @@ pub mod tests {
             s_clone.watch_resource_groups().await;
         });
         // Mock add
-        let mut tokens = Tokens::default();
-        tokens.ru_tokens = 100;
-        let group1 = new_resource_group("TEST1".into(), true, tokens.clone());
+        let group1 = new_resource_group_ru("TEST1".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
-        let group2 = new_resource_group("TEST2".into(), true, tokens.clone());
+        let group2 = new_resource_group_ru("TEST2".into(), 100);
         add_resource_group(s.pd_client.clone(), group2);
         // Mock modify
-        tokens.ru_tokens = 50;
-        let group2 = new_resource_group("TEST2".into(), true, tokens);
+        let group2 = new_resource_group_ru("TEST2".into(), 50);
         add_resource_group(s.pd_client.clone(), group2);
         let (res, revision) = block_on(s.list_resource_groups());
         assert_eq!(res.len(), 2);
@@ -263,9 +258,7 @@ pub mod tests {
             s_clone.watch_resource_groups().await;
         });
         // Mock add
-        let mut tokens = Tokens::default();
-        tokens.ru_tokens = 100;
-        let group1 = new_resource_group("TEST1".into(), true, tokens.clone());
+        let group1 = new_resource_group_ru("TEST1".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
         // Mock reboot watch server
         let watch_global_config_fp = "watch_global_config_return";
@@ -273,7 +266,7 @@ pub mod tests {
         std::thread::sleep(Duration::from_millis(100));
         fail::remove(watch_global_config_fp);
         // Mock add after rebooting will success
-        let group1 = new_resource_group("TEST2".into(), true, tokens);
+        let group1 = new_resource_group_ru("TEST2".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
         // Wait watcher update
         std::thread::sleep(Duration::from_secs(1));
