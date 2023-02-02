@@ -13,7 +13,10 @@ use tipb::{Expr, FieldType};
 
 use crate::{
     interface::*,
-    util::top_n_heap::{HeapItemSourceData, HeapItemUnsafe, TopNHeap},
+    util::{
+        ensure_columns_decoded, eval_exprs_decoded_no_lifetime,
+        top_n_heap::{HeapItemSourceData, HeapItemUnsafe, TopNHeap},
+    },
 };
 
 pub struct BatchPartitionTopNExecutor<Src: BatchExecutor> {
@@ -41,6 +44,8 @@ pub struct BatchPartitionTopNExecutor<Src: BatchExecutor> {
 
     context: EvalContext,
     src: Src,
+
+    /// Whether this operator has been ended.
     is_ended: bool,
 }
 
@@ -100,6 +105,66 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
     fn has_same_partition_with(&self, logical_row_index: usize) -> bool {
         todo!()
     }
+
+    #[inline]
+    async fn handle_next_batch(&mut self) -> Result<(LazyBatchColumnVec, bool)> {
+        let mut result = LazyBatchColumnVec::empty();
+        let src_result = self.src.next_batch(BATCH_MAX_SIZE).await;
+        self.context.warnings = src_result.warnings;
+        let src_is_drained = src_result.is_drained?;
+
+        let (mut physical_columns, logical_rows) =
+            (src_result.physical_columns, src_result.logical_rows);
+
+        if !logical_rows.is_empty() {
+            ensure_columns_decoded(
+                &mut self.context,
+                &self.order_exprs,
+                self.src.schema(),
+                &mut physical_columns,
+                &logical_rows,
+            )?;
+
+            let pinned_source_data = Arc::new(HeapItemSourceData {
+                physical_columns,
+                logical_rows,
+            });
+
+            let eval_offset = self.eval_columns_buffer_unsafe.len();
+            unsafe {
+                eval_exprs_decoded_no_lifetime(
+                    &mut self.context,
+                    &self.order_exprs,
+                    self.src.schema(),
+                    &pinned_source_data.physical_columns,
+                    &pinned_source_data.logical_rows,
+                    &mut self.eval_columns_buffer_unsafe,
+                )?;
+            }
+
+            for logical_row_index in 0..pinned_source_data.logical_rows.len() {
+                if !self.has_same_partition_with(logical_row_index) {
+                    self.last_logic_row_index = Some(logical_row_index);
+                    self.heap.take_all_append_to(&mut result);
+                    self.heap = TopNHeap::new(self.n);
+                }
+                let row = HeapItemUnsafe {
+                    order_is_desc_ptr: (*self.order_is_desc).into(),
+                    order_exprs_field_type_ptr: (*self.order_exprs_field_type).into(),
+                    source_data: pinned_source_data.clone(),
+                    eval_columns_buffer_ptr: self.eval_columns_buffer_unsafe.as_ref().into(),
+                    eval_columns_offset: eval_offset,
+                    logical_row_index,
+                };
+                self.heap.add_row(row)?;
+            }
+        }
+        if src_is_drained {
+            self.heap.take_all_append_to(&mut result);
+        }
+
+        Ok((result, src_is_drained))
+    }
 }
 
 /// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the
@@ -118,7 +183,18 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
     }
 
     #[inline]
-    async fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+    /// Memory Control Analysis:
+    /// 1. if n > paging_size(1024), this operator won't do anything and just
+    /// return data to upstream. So we can think n is less than or equal to
+    /// paging_size.
+    /// 2. The worst case is that there is already n rows in heap, and first
+    /// row of src_result has different partition with rows in heap. So heap
+    /// will be flushed. And the last row of src_result has another different
+    /// partition with the first two. So heap will be flushed again.
+    /// In this case, there can be 2*n-2 rows in the result, which may be larger
+    /// than paging_size.
+    /// todo: find a solution to limit it up to paging_size.
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
         if self.n == 0 {
@@ -131,49 +207,35 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
             };
         }
 
-        // Use max batch size from the beginning because top N
-        // always needs to calculate over all data.
-        let src_result = self.src.next_batch(BATCH_MAX_SIZE).await;
-        let pinned_source_data = Arc::new(HeapItemSourceData {
-            physical_columns: src_result.physical_columns,
-            logical_rows: src_result.logical_rows,
-        });
-
-        for logical_row_index in 0..pinned_source_data.logical_rows.len() {
-            if self.has_same_partition_with(logical_row_index) {
-                self.last_logic_row_index = Some(logical_row_index);
+        // limit middle memory by paging_size.
+        if let Some(paging_size) = self.context.cfg.paging_size {
+            if self.n > paging_size as usize {
+                return self.src.next_batch(scan_rows).await;
             }
-            // let row = HeapItemUnsafe {
-            //     order_is_desc_ptr: (*self.order_is_desc).into(),
-            //     order_exprs_field_type_ptr:
-            // (*self.order_exprs_field_type).into(),
-            //     source_data: pinned_source_data.clone(),
-            //     eval_columns_buffer_ptr:
-            // self.eval_columns_buffer_unsafe.as_ref().into(),
-            //     eval_columns_offset: todo!(),
-            //     logical_row_index,
-            // };
-            // self.heap.add_row(row)?;
         }
-        todo!();
 
-        // Eval and compare whether partition key is equal
-        // let real_scan_rows = if self.is_src_scan_executor {
-        //     std::cmp::min(scan_rows, self.remaining_rows)
-        // } else {
-        //     scan_rows
-        // };
-        // let mut result = self.src.next_batch(real_scan_rows).await;
-        // if result.logical_rows.len() < self.remaining_rows {
-        //     self.remaining_rows -= result.logical_rows.len();
-        // } else {
-        //     // We don't need to touch the physical data.
-        //     result.logical_rows.truncate(self.remaining_rows);
-        //     result.is_drained = Ok(true);
-        //     self.remaining_rows = 0;
-        // }
-        //
-        // result
+        let result = self.handle_next_batch().await;
+
+        match result {
+            Err(e) => {
+                self.is_ended = true;
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
+                    warnings: self.context.take_warnings(),
+                    is_drained: Err(e),
+                }
+            }
+            Ok((logical_columns, is_drained)) => {
+                let logical_rows = (0..logical_columns.rows_len()).collect();
+                BatchExecuteResult {
+                    physical_columns: logical_columns,
+                    logical_rows,
+                    warnings: self.context.take_warnings(),
+                    is_drained: Ok(is_drained),
+                }
+            }
+        }
     }
 
     #[inline]

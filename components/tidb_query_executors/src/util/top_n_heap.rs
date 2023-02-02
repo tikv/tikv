@@ -58,14 +58,14 @@ impl TopNHeap {
             return;
         }
 
-        // A pure empty LazyBatchColumnVec, we need create columns on it first.
+        // If it is a pure empty LazyBatchColumnVec, we need create columns on it first.
         if result.columns_len() == 0 {
             *result = sorted_items[0]
                 .source_data
                 .physical_columns
                 .clone_empty(self.heap.len());
         }
-        // todo: check schema is equal?
+        // todo: check schema is equal
         assert_eq!(
             result.columns_len(),
             sorted_items[0].source_data.physical_columns.columns_len(),
