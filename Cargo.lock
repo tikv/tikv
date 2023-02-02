@@ -2730,7 +2730,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#1b2b4114103afb06796b7e44f45f7e55133673c0"
+source = "git+https://github.com/pingcap/kvproto.git#2b853bed812556901846f42820b63d8a0d9c8d24"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4697,7 +4697,6 @@ dependencies = [
  "test_pd",
  "test_pd_client",
  "tikv_util",
- "tokio",
  "yatp",
 ]
 

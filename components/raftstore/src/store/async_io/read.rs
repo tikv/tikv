@@ -227,10 +227,10 @@ where
                     error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
                     SNAP_COUNTER.generate.fail.inc();
                 } else {
+                    let elapsed = start.saturating_elapsed_secs();
                     SNAP_COUNTER.generate.success.inc();
-                    SNAP_HISTOGRAM
-                        .generate
-                        .observe(start.saturating_elapsed_secs());
+                    SNAP_HISTOGRAM.generate.observe(elapsed);
+                    info!("snapshot generated"; "region_id" => region_id, "elapsed" => elapsed, "key" => ?snap_key, "for_balance" => for_balance);
                     res = Some(Box::new((snapshot, to_peer)))
                 }
 
