@@ -44,9 +44,6 @@ pub struct BatchPartitionTopNExecutor<Src: BatchExecutor> {
 
     context: EvalContext,
     src: Src,
-
-    /// Whether this operator has been ended.
-    is_ended: bool,
 }
 
 impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
@@ -97,7 +94,6 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
             recommended_part_num,
             context: EvalContext::new(config),
             src,
-            is_ended: false,
             last_logic_row_index: None,
         })
     }
@@ -195,10 +191,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
     /// than paging_size.
     /// todo: find a solution to limit it up to paging_size.
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        assert!(!self.is_ended);
-
         if self.n == 0 {
-            self.is_ended = true;
             return BatchExecuteResult {
                 physical_columns: LazyBatchColumnVec::empty(),
                 logical_rows: Vec::new(),
@@ -217,15 +210,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
         let result = self.handle_next_batch().await;
 
         match result {
-            Err(e) => {
-                self.is_ended = true;
-                BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::empty(),
-                    logical_rows: Vec::new(),
-                    warnings: self.context.take_warnings(),
-                    is_drained: Err(e),
-                }
-            }
+            Err(e) => BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::empty(),
+                logical_rows: Vec::new(),
+                warnings: self.context.take_warnings(),
+                is_drained: Err(e),
+            },
             Ok((logical_columns, is_drained)) => {
                 let logical_rows = (0..logical_columns.rows_len()).collect();
                 BatchExecuteResult {
