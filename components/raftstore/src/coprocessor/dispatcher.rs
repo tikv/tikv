@@ -1157,18 +1157,17 @@ mod tests {
         host.registry
             .register_query_observer(1, BoxQueryObserver::new(ob.clone()));
         host.registry
-            .register_apply_snapshot_observer(1,
-    BoxApplySnapshotObserver::new(ob.clone()));     host.registry
+            .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(ob.clone()));
+        host.registry
             .register_pd_task_observer(1, BoxPdTaskObserver::new(ob.clone()));
         host.registry
             .register_role_observer(1, BoxRoleObserver::new(ob.clone()));
         host.registry
-            .register_region_change_observer(1,
-    BoxRegionChangeObserver::new(ob.clone()));     host.registry
+            .register_region_change_observer(1, BoxRegionChangeObserver::new(ob.clone()));
+        host.registry
             .register_cmd_observer(1, BoxCmdObserver::new(ob.clone()));
         host.registry
-            .register_update_safe_ts_observer(1,
-    BoxUpdateSafeTsObserver::new(ob.clone()));
+            .register_update_safe_ts_observer(1, BoxUpdateSafeTsObserver::new(ob.clone()));
 
         let mut index: usize = 0;
         let region = Region::default();
@@ -1203,9 +1202,9 @@ mod tests {
         index += ObserverIndex::OnRoleChange as usize;
         assert_all!([&ob.called], &[index]);
 
-        host.on_region_changed(&region, RegionChangeEvent::Create,
-    StateRole::Follower);     index += ObserverIndex::OnRegionChanged as
-    usize;     assert_all!([&ob.called], &[index]);
+        host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
+        index += ObserverIndex::OnRegionChanged as usize;
+        assert_all!([&ob.called], &[index]);
 
         host.post_apply_plain_kvs_from_snapshot(&region, "default", &[]);
         index += ObserverIndex::ApplyPlainKvs as usize;
