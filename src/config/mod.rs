@@ -2742,7 +2742,7 @@ impl Default for ResolvedTsConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            advance_ts_interval: ReadableDuration::secs(1),
+            advance_ts_interval: ReadableDuration::secs(20),
             scan_lock_pool_size: 2,
         }
     }
@@ -4716,7 +4716,7 @@ mod tests {
         // Default value
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
-            ReadableDuration::secs(1)
+            ReadableDuration::secs(20)
         );
 
         // Update `advance-ts-interval` to 100ms
