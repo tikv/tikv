@@ -19,14 +19,13 @@ test-engines-panic = [
   "raftstore/test-engines-panic",
 ]
 
-
 [lib]
 proc-macro = true
 
 [dependencies]
-quote = "1"
+engine_test = { workspace = true }
 proc-macro2 = "1.0"
+quote = "1"
+raftstore = { workspace = true, features = ["testexport"] }
 syn = { version = "1", features = ["full", "extra-traits"] }
 test_raftstore = { workspace = true }
-raftstore = { workspace = true, features = ["testexport"] }
-engine_test = { workspace = true }

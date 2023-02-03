@@ -1,7 +1,5 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-extern crate proc_macro;
-
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as TokenStream2, TokenTree};
 use quote::{quote, ToTokens};
@@ -117,7 +115,7 @@ fn render_test_cases(test_cases: Vec<TokenStream2>, fn_item: ItemFn) -> TokenStr
 
         // Parse test case to get the package name and the method name
         let (package, method) = parse_test_case(case);
-        let test_name = format!("{}_{}", package.to_string(), method.to_string());
+        let test_name = format!("{}_{}", package, method);
         // Insert a use statment at the beginning of the test, ex: use
         // test_raftstore::new_node_cluster as new_cluster, so we use new_cluster in
         // each test case code.
@@ -138,7 +136,7 @@ fn render_test_cases(test_cases: Vec<TokenStream2>, fn_item: ItemFn) -> TokenStr
         rendered_test_cases.push(item.to_token_stream());
     }
 
-    let mod_name = fn_item.sig.ident.clone();
+    let mod_name = fn_item.sig.ident;
     let output = quote! {
         #[cfg(test)]
         mod #mod_name {
