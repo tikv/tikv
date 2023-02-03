@@ -1043,6 +1043,14 @@ where
                 self.router.clone(),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
+                Arc::clone(&self.env),
+                engines
+                    .store_meta
+                    .lock()
+                    .unwrap()
+                    .region_read_progress
+                    .clone(),
+                Arc::clone(&self.security_mgr),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.to_stop.push(backup_stream_worker);
