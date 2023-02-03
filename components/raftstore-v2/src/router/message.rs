@@ -260,7 +260,15 @@ pub enum StoreMsg {
     SplitInit(Box<SplitInit>),
     Tick(StoreTick),
     Start,
-    StoreUnreachable { to_store_id: u64 },
+    StoreUnreachable {
+        to_store_id: u64,
+    },
+    /// A message that used to check if a flush is happened.
+    #[cfg(feature = "testexport")]
+    WaitFlush {
+        region_id: u64,
+        ch: super::FlushChannel,
+    },
 }
 
 impl ResourceMetered for StoreMsg {}

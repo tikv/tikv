@@ -1649,7 +1649,8 @@ where
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_req_region_epoch(req, &self.region, include_region)?;
         check_flashback_state(
-            self.region.get_is_in_flashback(),
+            self.region.is_in_flashback,
+            self.region.flashback_start_ts,
             req,
             self.region_id(),
             false,
@@ -2975,6 +2976,7 @@ where
         // Modify the region meta in memory.
         let mut region = self.region.clone();
         region.set_is_in_flashback(is_in_flashback);
+        region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
         // Modify the `RegionLocalState` persisted in disk.
         write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(

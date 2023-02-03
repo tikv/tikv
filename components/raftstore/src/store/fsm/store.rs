@@ -753,6 +753,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
+                    if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
+                        continue;
+                    }
                     if let Err(e) = self.on_raft_message(msg) {
                         if matches!(&e, Error::RegionNotRegistered { .. }) {
                             // This may happen in normal cases when add-peer runs slowly
@@ -806,7 +809,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .raft_metrics
             .event_time
             .store_msg
-            .observe(duration_to_sec(timer.saturating_elapsed()));
+            .observe(timer.saturating_elapsed_secs());
     }
 
     fn start(&mut self, store: metapb::Store) {

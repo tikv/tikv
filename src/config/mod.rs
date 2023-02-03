@@ -631,7 +631,7 @@ impl Default for DefaultCfConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
 
         DefaultCfConfig {
-            block_size: ReadableSize::kb(64),
+            block_size: ReadableSize::kb(16),
             block_cache_size: memory_limit_for_cf(false, CF_DEFAULT, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
@@ -756,7 +756,7 @@ impl Default for WriteCfConfig {
         };
 
         WriteCfConfig {
-            block_size: ReadableSize::kb(64),
+            block_size: ReadableSize::kb(16),
             block_cache_size: memory_limit_for_cf(false, CF_WRITE, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
@@ -1264,7 +1264,7 @@ impl DbConfig {
         }
     }
 
-    pub fn build_opt(&self, shared: &DbResources) -> RocksDbOptions {
+    pub fn build_opt(&self, shared: &DbResources, for_engine: EngineType) -> RocksDbOptions {
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -1306,7 +1306,9 @@ impl DbConfig {
         if let Some(b) = self.paranoid_checks {
             opts.set_paranoid_checks(b);
         }
-        opts.set_info_log(RocksdbLogger::default());
+        if for_engine == EngineType::RaftKv {
+            opts.set_info_log(RocksdbLogger::default());
+        }
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
@@ -1396,7 +1398,7 @@ impl DbConfig {
         // prevent mistakenly inputting too large values, the max limit is made
         // according to the cpu quota * 10. Notice 10 is only an estimate, not an
         // empirical value.
-        let limit = SysQuota::cpu_cores_quota() as i32 * 10;
+        let limit = (SysQuota::cpu_cores_quota() * 10.0) as i32;
         if self.max_background_jobs <= 0 || self.max_background_jobs > limit {
             return Err(format!(
                 "max_background_jobs should be greater than 0 and less than or equal to {:?}",
@@ -2653,7 +2655,7 @@ pub struct CdcConfig {
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
-            min_ts_interval: ReadableDuration::millis(200),
+            min_ts_interval: ReadableDuration::secs(1),
             hibernate_regions_compatible: true,
             // 4 threads for incremental scan.
             incremental_scan_threads: 4,
@@ -3135,7 +3137,7 @@ impl TikvConfig {
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
             if !self.raft_engine.enable {
-                panic!("raft-kv2 only supports raft log engine.");
+                panic!("partitioned-raft-kv only supports raft log engine.");
             }
         }
 
@@ -4424,9 +4426,10 @@ mod tests {
     fn test_rocks_rate_limit_zero() {
         let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.rocksdb.rate_bytes_per_sec = ReadableSize(0);
+        let resource = tikv_cfg.rocksdb.build_resources(Arc::new(Env::default()));
         tikv_cfg
             .rocksdb
-            .build_opt(&tikv_cfg.rocksdb.build_resources(Arc::new(Env::default())));
+            .build_opt(&resource, tikv_cfg.storage.engine);
     }
 
     #[test]
@@ -4587,12 +4590,10 @@ mod tests {
         Arc<FlowController>,
     ) {
         assert_eq!(F::TAG, cfg.storage.api_version());
+        let resource = cfg.rocksdb.build_resources(Arc::default());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
-            Some(
-                cfg.rocksdb
-                    .build_opt(&cfg.rocksdb.build_resources(Arc::new(Env::default()))),
-            ),
+            Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
             cfg.rocksdb.build_cf_opts(
                 &cfg.rocksdb
                     .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
