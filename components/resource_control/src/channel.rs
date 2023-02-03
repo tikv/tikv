@@ -83,6 +83,10 @@ impl<T: Send + 'static> Clone for Sender<T> {
 }
 
 impl<T: Send + 'static> Sender<T> {
+    // `low_bound` represents the lowest priority that the message can be sent with.
+    // It's used to make sure messages from one peer are sent in order.
+    // The returned value is the priority that the message sent with. It is
+    // calculated by resource controller and compared with `low_bound`.
     pub fn send(&self, m: T, low_bound: u64) -> Result<u64, SendError<T>> {
         match self {
             Sender::Vanilla(sender) => sender.send(m).map(|_| 0),
@@ -92,11 +96,12 @@ impl<T: Send + 'static> Sender<T> {
                 last_msg_group,
             } => {
                 // TODO: pass different command priority
-                let priority = resource_ctl
-                    .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
-                sender
-                    .send(m, priority)
-                    .map(|_| std::cmp::max(priority, low_bound))
+                let priority = std::cmp::max(
+                    resource_ctl
+                        .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal),
+                    low_bound,
+                );
+                sender.send(m, priority).map(|_| priority)
             }
         }
     }
@@ -109,11 +114,12 @@ impl<T: Send + 'static> Sender<T> {
                 sender,
                 last_msg_group,
             } => {
-                let priority = resource_ctl
-                    .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
-                sender
-                    .try_send(m, priority)
-                    .map(|_| std::cmp::max(priority, low_bound))
+                let priority = std::cmp::max(
+                    resource_ctl
+                        .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal),
+                    low_bound,
+                );
+                sender.try_send(m, priority).map(|_| priority)
             }
         }
     }
