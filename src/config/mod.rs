@@ -5542,6 +5542,8 @@ mod tests {
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
+        default_cfg.coprocessor.region_split_size =
+            Some(default_cfg.coprocessor.region_split_size());
         default_cfg.coprocessor.region_split_keys =
             Some(default_cfg.coprocessor.region_split_keys());
         default_cfg.raft_store.raft_log_gc_size_limit =
@@ -5583,6 +5585,8 @@ mod tests {
         cfg.raftdb.defaultcf.level0_stop_writes_trigger = None;
         cfg.raftdb.defaultcf.soft_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.hard_pending_compaction_bytes_limit = None;
+        cfg.coprocessor
+            .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
 
         assert_eq!(cfg, default_cfg);
     }
