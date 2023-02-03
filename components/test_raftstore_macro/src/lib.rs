@@ -58,6 +58,48 @@ pub fn test_case(arg: TokenStream, input: TokenStream) -> TokenStream {
     render_test_cases(test_cases, fn_item.clone())
 }
 
+fn render_test_cases(test_cases: Vec<TokenStream2>, fn_item: ItemFn) -> TokenStream {
+    let mut rendered_test_cases: Vec<TokenStream2> = vec![];
+    for case in test_cases {
+        let mut item = fn_item.clone();
+
+        // Parse test case to get the package name and the method name
+        let (package, method) = parse_test_case(case);
+        let test_name = format!("{}_{}", package, method);
+        // Insert a use statment at the beginning of the test,
+        // ex: " use test_raftstore::new_node_cluster as new_cluster ", so we can use
+        // new_cluster in all situations.
+        item.block.stmts.insert(
+            0,
+            syn::parse(
+                quote! {
+                    use #package::#method as new_cluster;
+                }
+                .into(),
+            )
+            .unwrap(),
+        );
+        item.attrs.insert(0, parse_quote! { #[test] });
+        let method_name = Ident::new(&test_name, item.sig.ident.span());
+        item.sig.ident = method_name;
+
+        rendered_test_cases.push(item.to_token_stream());
+    }
+
+    let mod_name = fn_item.sig.ident;
+    let output = quote! {
+        #[cfg(test)]
+        mod #mod_name {
+            #[allow(unused_imports)]
+            use super::*;
+
+            #(#rendered_test_cases)*
+        }
+    };
+
+    output.into()
+}
+
 // Parsing test case to get package name and method name.
 // There are two cases that need to be considered
 // 1. the first token is Ident type
@@ -106,46 +148,4 @@ fn parse_test_case(test_case: TokenStream2) -> (Ident, Ident) {
         _ => unreachable!(),
     };
     (package, method)
-}
-
-fn render_test_cases(test_cases: Vec<TokenStream2>, fn_item: ItemFn) -> TokenStream {
-    let mut rendered_test_cases: Vec<TokenStream2> = vec![];
-    for case in test_cases {
-        let mut item = fn_item.clone();
-
-        // Parse test case to get the package name and the method name
-        let (package, method) = parse_test_case(case);
-        let test_name = format!("{}_{}", package, method);
-        // Insert a use statment at the beginning of the test, ex: use
-        // test_raftstore::new_node_cluster as new_cluster, so we use new_cluster in
-        // each test case code.
-        item.block.stmts.insert(
-            0,
-            syn::parse(
-                quote! {
-                    use #package::#method as new_cluster;
-                }
-                .into(),
-            )
-            .unwrap(),
-        );
-        item.attrs.insert(0, parse_quote! { #[test] });
-        let method_name = Ident::new(&test_name, item.sig.ident.span());
-        item.sig.ident = method_name;
-
-        rendered_test_cases.push(item.to_token_stream());
-    }
-
-    let mod_name = fn_item.sig.ident;
-    let output = quote! {
-        #[cfg(test)]
-        mod #mod_name {
-            #[allow(unused_imports)]
-            use super::*;
-
-            #(#rendered_test_cases)*
-        }
-    };
-
-    output.into()
 }
