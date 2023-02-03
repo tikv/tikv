@@ -5902,12 +5902,9 @@ dependencies = [
 name = "test_raftstore_macro"
 version = "0.0.1"
 dependencies = [
- "engine_test",
  "proc-macro2",
  "quote",
- "raftstore",
  "syn",
- "test_raftstore",
 ]
 
 [[package]]
