@@ -21,7 +21,7 @@ mod apply_trace;
 mod async_writer;
 mod snapshot;
 
-use std::{borrow::Cow, cmp, time::Instant};
+use std::{cmp, time::Instant};
 
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
