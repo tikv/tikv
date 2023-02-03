@@ -477,7 +477,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
             async_read: Worker::new("async-read-worker"),
             pd,
             tablet_gc: Worker::new("tablet-gc-worker"),
-            async_write: StoreWriters::default(),
+            async_write: StoreWriters::new(None),
             purge,
             background,
         }

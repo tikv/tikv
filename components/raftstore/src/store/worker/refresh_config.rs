@@ -41,7 +41,7 @@ where
 {
     pub fn decrease_by(&mut self, size: usize) {
         for _ in 0..size {
-            if let Err(e) = self.state.fsm_sender.send(FsmTypes::Empty) {
+            if let Err(e) = self.state.fsm_sender.send(FsmTypes::Empty, 0) {
                 error!(
                     "failed to decrease thread pool";
                     "decrease to" => size,

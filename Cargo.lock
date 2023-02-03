@@ -4691,6 +4691,8 @@ name = "resource_control"
 version = "0.0.1"
 dependencies = [
  "byteorder",
+ "collections",
+ "crossbeam",
  "crossbeam-skiplist",
  "dashmap",
  "fail",
