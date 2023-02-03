@@ -13,9 +13,10 @@ use std::{
 
 use collections::HashMap;
 use derive_more::{Add, AddAssign};
+use resource_control::ResourceMetered;
 use tikv_util::mpsc;
 
-use crate::{fsm::ResourceMetered, *};
+use crate::*;
 
 /// Message `Runner` can accepts.
 pub enum Message {
