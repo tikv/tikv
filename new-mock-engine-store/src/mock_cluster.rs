@@ -522,9 +522,10 @@ pub fn create_tiflash_test_engine(
     let kv_path = dir.path().join(tikv::config::DEFAULT_ROCKSDB_SUB_DIR);
     let kv_path_str = kv_path.to_str().unwrap();
 
-    let kv_db_opt = cfg
-        .rocksdb
-        .build_opt(&cfg.rocksdb.build_resources(env.clone()));
+    let kv_db_opt = cfg.rocksdb.build_opt(
+        &cfg.rocksdb.build_resources(env.clone()),
+        cfg.storage.engine,
+    );
 
     let cache = cfg.storage.block_cache.build_shared_cache();
     let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
