@@ -359,7 +359,9 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "kvproto",
+ "lazy_static",
  "oauth2",
+ "regex",
  "slog",
  "slog-global",
  "tikv_util",
@@ -4689,6 +4691,8 @@ name = "resource_control"
 version = "0.0.1"
 dependencies = [
  "byteorder",
+ "collections",
+ "crossbeam",
  "crossbeam-skiplist",
  "dashmap",
  "fail",

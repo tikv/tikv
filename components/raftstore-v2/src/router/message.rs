@@ -2,13 +2,13 @@
 
 // #[PerformanceCriticalPath]
 
-use batch_system::ResourceMetered;
 use kvproto::{
     metapb,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
 use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
+use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
 
 use super::{
