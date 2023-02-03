@@ -2,10 +2,10 @@
 
 use std::{sync::Arc, time::Duration};
 
-use futures::StreamExt;
+use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
 use pd_client::{Error as PdError, PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH};
-use tikv_util::error;
+use tikv_util::{error, timer::GLOBAL_TIMER_HANDLE};
 
 use crate::ResourceGroupManager;
 
@@ -30,6 +30,8 @@ impl ResourceManagerService {
         }
     }
 }
+
+const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
@@ -56,7 +58,7 @@ impl ResourceManagerService {
                                         EventType::Put => {
                                             if let Ok(group) =
                                                 protobuf::parse_from_bytes::<ResourceGroup>(
-                                                    item.get_value().as_bytes(),
+                                                    item.get_payload(),
                                                 )
                                             {
                                                 self.manager.add_resource_group(group);
@@ -69,7 +71,10 @@ impl ResourceManagerService {
                             }
                             Err(err) => {
                                 error!("failed to get stream"; "err" => ?err);
-                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                let _ = GLOBAL_TIMER_HANDLE
+                                    .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                                    .compat()
+                                    .await;
                             }
                         }
                     }
@@ -85,7 +90,10 @@ impl ResourceManagerService {
                 }
                 Err(err) => {
                     error!("failed to watch resource groups"; "err" => ?err);
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                        .compat()
+                        .await;
                 }
             }
         }
@@ -101,13 +109,16 @@ impl ResourceManagerService {
                 Ok((items, revision)) => {
                     let groups = items
                         .into_iter()
-                        .filter_map(|g| protobuf::parse_from_bytes(g.get_value().as_bytes()).ok())
+                        .filter_map(|g| protobuf::parse_from_bytes(g.get_payload()).ok())
                         .collect();
                     return (groups, revision);
                 }
                 Err(err) => {
                     error!("failed to load global config"; "err" => ?err);
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                        .compat()
+                        .await;
                 }
             }
         }
@@ -125,7 +136,7 @@ pub mod tests {
     use test_pd::{mocker::Service, util::*, Server as MockServer};
     use tikv_util::{config::ReadableDuration, worker::Builder};
 
-    use crate::resource_group::tests::new_resource_group;
+    use crate::resource_group::tests::{new_resource_group, new_resource_group_ru};
 
     fn new_test_server_and_client(
         update_interval: ReadableDuration,
@@ -142,7 +153,7 @@ pub mod tests {
         item.set_name(group.get_name().to_string());
         let mut buf = Vec::new();
         group.write_to_vec(&mut buf).unwrap();
-        item.set_value(String::from_utf8(buf).unwrap());
+        item.set_payload(buf);
 
         futures::executor::block_on(async move {
             pd_client
@@ -202,12 +213,12 @@ pub mod tests {
             s_clone.watch_resource_groups().await;
         });
         // Mock add
-        let group1 = new_resource_group("TEST1".into(), true, 100, 100);
+        let group1 = new_resource_group_ru("TEST1".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
-        let group2 = new_resource_group("TEST2".into(), true, 100, 100);
+        let group2 = new_resource_group_ru("TEST2".into(), 100);
         add_resource_group(s.pd_client.clone(), group2);
         // Mock modify
-        let group2 = new_resource_group("TEST2".into(), true, 50, 50);
+        let group2 = new_resource_group_ru("TEST2".into(), 50);
         add_resource_group(s.pd_client.clone(), group2);
         let (res, revision) = block_on(s.list_resource_groups());
         assert_eq!(res.len(), 2);
@@ -227,7 +238,7 @@ pub mod tests {
             group
                 .value()
                 .get_r_u_settings()
-                .get_r_r_u()
+                .get_r_u()
                 .get_settings()
                 .get_fill_rate(),
             50
@@ -247,7 +258,7 @@ pub mod tests {
             s_clone.watch_resource_groups().await;
         });
         // Mock add
-        let group1 = new_resource_group("TEST1".into(), true, 100, 100);
+        let group1 = new_resource_group_ru("TEST1".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
         // Mock reboot watch server
         let watch_global_config_fp = "watch_global_config_return";
@@ -255,7 +266,7 @@ pub mod tests {
         std::thread::sleep(Duration::from_millis(100));
         fail::remove(watch_global_config_fp);
         // Mock add after rebooting will success
-        let group1 = new_resource_group("TEST2".into(), true, 100, 100);
+        let group1 = new_resource_group_ru("TEST2".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
         // Wait watcher update
         std::thread::sleep(Duration::from_secs(1));
