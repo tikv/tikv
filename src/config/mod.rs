@@ -5547,6 +5547,9 @@ mod tests {
             Some(default_cfg.coprocessor.region_split_size() * 3 / 4 / ReadableSize::kb(1));
         default_cfg.raft_store.region_split_check_diff =
             Some(default_cfg.coprocessor.region_split_size() / 16);
+        default_cfg
+            .coprocessor
+            .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
