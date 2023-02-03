@@ -909,6 +909,7 @@ mod tests {
         OnUpdateSafeTs = 23,
         PrePersist = 24,
         PreWriteApplyState = 25,
+        OnRaftMessage = 26,
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -1300,6 +1301,11 @@ mod tests {
 
         host.pre_write_apply_state(&region);
         index += ObserverIndex::PreWriteApplyState as usize;
+        assert_all!([&ob.called], &[index]);
+
+        let msg = RaftMessage::default();
+        host.on_raft_message(&msg);
+        index += ObserverIndex::OnRaftMessage as usize;
         assert_all!([&ob.called], &[index]);
     }
 
