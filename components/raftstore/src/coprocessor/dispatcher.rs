@@ -1152,6 +1152,15 @@ mod tests {
         }
     }
 
+    impl MessageObserver for TestCoprocessor {
+        fn on_raft_message(&self, ctx: &mut ObserverContext<'_>, msg: &RaftMessage) -> bool {
+            self.called
+                .fetch_add(ObserverIndex::OnRaftMessage as usize, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            true
+        }
+    }
+
     macro_rules! assert_all {
         ($target:expr, $expect:expr) => {{
             for (c, e) in ($target).iter().zip($expect) {
