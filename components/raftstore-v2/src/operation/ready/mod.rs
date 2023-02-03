@@ -570,21 +570,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if !self.serving() {
             self.start_destroy(ctx, &mut write_task);
-            let region = if self.storage().is_initialized() {
-                Cow::Borrowed(self.region())
-            } else {
-                // Hack: In v1, it expects epoch empty to work correct.
-                // TODO: maybe we need to check uninitialized correctly in coprocessor.
-                let mut region = self.region().clone();
-                region.take_peers();
-                region.take_region_epoch();
-                Cow::Owned(region)
-            };
-            ctx.coprocessor_host.on_region_changed(
-                &region,
-                RegionChangeEvent::Destroy,
-                self.raft_group().raft.state,
-            );
+            if self.persisted_index() != 0 {
+                ctx.coprocessor_host.on_region_changed(
+                    self.region(),
+                    RegionChangeEvent::Destroy,
+                    self.raft_group().raft.state,
+                );
+            }
         }
         // Ready number should increase monotonically.
         assert!(self.async_writer.known_largest_number() < ready.number());
