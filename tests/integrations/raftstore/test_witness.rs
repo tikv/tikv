@@ -452,6 +452,9 @@ fn test_witness_replica_read() {
         vec![true],
     );
 
+    // make sure the peer_on_store3 has completed applied to witness
+    std::thread::sleep(Duration::from_millis(200));
+
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),

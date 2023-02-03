@@ -1264,7 +1264,7 @@ impl DbConfig {
         }
     }
 
-    pub fn build_opt(&self, shared: &DbResources) -> RocksDbOptions {
+    pub fn build_opt(&self, shared: &DbResources, for_engine: EngineType) -> RocksDbOptions {
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -1306,7 +1306,9 @@ impl DbConfig {
         if let Some(b) = self.paranoid_checks {
             opts.set_paranoid_checks(b);
         }
-        opts.set_info_log(RocksdbLogger::default());
+        if for_engine == EngineType::RaftKv {
+            opts.set_info_log(RocksdbLogger::default());
+        }
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
@@ -4424,9 +4426,10 @@ mod tests {
     fn test_rocks_rate_limit_zero() {
         let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.rocksdb.rate_bytes_per_sec = ReadableSize(0);
+        let resource = tikv_cfg.rocksdb.build_resources(Arc::new(Env::default()));
         tikv_cfg
             .rocksdb
-            .build_opt(&tikv_cfg.rocksdb.build_resources(Arc::new(Env::default())));
+            .build_opt(&resource, tikv_cfg.storage.engine);
     }
 
     #[test]
@@ -4587,12 +4590,10 @@ mod tests {
         Arc<FlowController>,
     ) {
         assert_eq!(F::TAG, cfg.storage.api_version());
+        let resource = cfg.rocksdb.build_resources(Arc::default());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
-            Some(
-                cfg.rocksdb
-                    .build_opt(&cfg.rocksdb.build_resources(Arc::new(Env::default()))),
-            ),
+            Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
             cfg.rocksdb.build_cf_opts(
                 &cfg.rocksdb
                     .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),

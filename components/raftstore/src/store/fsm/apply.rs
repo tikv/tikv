@@ -24,7 +24,7 @@ use std::{
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
-    HandlerBuilder, PollHandler, Priority, ResourceMetered,
+    HandlerBuilder, PollHandler, Priority,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -51,7 +51,7 @@ use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
-use resource_control::ResourceController;
+use resource_control::{ResourceController, ResourceMetered};
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -1695,9 +1695,9 @@ where
             AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                 self.exec_flashback(ctx, request)
             }
+            AdminCmdType::UpdateGcPeer => Err(box_err!("v2 only command and it's safe to skip")),
             AdminCmdType::BatchSwitchWitness => self.exec_batch_switch_witness(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
-            AdminCmdType::UpdateGcPeer => unimplemented!(),
         }?;
         response.set_cmd_type(cmd_type);
 
@@ -4431,6 +4431,7 @@ pub enum ControlMsg {
 }
 
 impl ResourceMetered for ControlMsg {}
+
 pub struct ControlFsm {
     receiver: Receiver<ControlMsg>,
     stopped: bool,
