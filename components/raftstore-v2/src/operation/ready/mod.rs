@@ -52,7 +52,7 @@ use crate::{
     batch::StoreContext,
     fsm::{PeerFsmDelegate, Store},
     raft::{Peer, Storage},
-    router::{ApplyTask, PeerMsg, PeerTick},
+    router::{PeerMsg, PeerTick},
     worker::tablet_gc,
 };
 
@@ -69,6 +69,19 @@ impl Store {
     {
         ctx.router
             .broadcast_normal(|| PeerMsg::StoreUnreachable { to_store_id });
+    }
+
+    #[cfg(feature = "testexport")]
+    pub fn on_wait_flush<EK, ER, T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        region_id: u64,
+        ch: crate::router::FlushChannel,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        let _ = ctx.router.send(region_id, PeerMsg::WaitFlush(ch));
     }
 }
 
@@ -455,6 +468,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             && !self.raft_group().has_ready()
             && (self.serving() || self.postponed_destroy())
         {
+            self.maybe_schedule_gen_snapshot();
             #[cfg(feature = "testexport")]
             self.async_writer.notify_flush();
             return;
@@ -501,15 +515,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
         }
 
-        // Check whether there is a pending generate snapshot task, the task
-        // needs to be sent to the apply system.
-        // Always sending snapshot task after apply task, so it gets latest
-        // snapshot.
-        if let Some(gen_task) = self.storage_mut().take_gen_snap_task() {
-            self.apply_scheduler()
-                .unwrap()
-                .send(ApplyTask::Snapshot(gen_task));
-        }
+        self.maybe_schedule_gen_snapshot();
 
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
