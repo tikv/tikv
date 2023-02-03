@@ -1,3 +1,5 @@
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
+
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
@@ -5,46 +7,45 @@ use proc_macro2::{TokenStream as TokenStream2, TokenTree};
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, parse_quote, Ident, ItemFn, Path};
 
-// Ex: parse test_raftstore::new_node_cluster(1, 3) to
-// (test_raftstore, new_node_cluster, 1, 3)
-fn parse_attr(attr: TokenStream2) -> (Ident, Ident) {
-    let mut iter = attr.into_iter();
-    let package = match iter.next().unwrap() {
-        // ex: test_raftstore::new_node_cluster
-        TokenTree::Ident(package) => package,
-        // ex: #[test_raftstore::new_node_cluster]
-        TokenTree::Punct(_) => match iter.next().unwrap() {
-            TokenTree::Group(group) => {
-                let mut iter = group.stream().into_iter();
-                iter.next();
-                match iter.next().unwrap() {
-                    TokenTree::Group(group) => {
-                        let stream = group.stream();
-                        return parse_attr(stream);
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            _ => unreachable!(),
-        },
-        _ => unreachable!(),
-    };
-    iter.next();
-    iter.next();
-    let method = match iter.next().unwrap() {
-        TokenTree::Ident(method) => method,
-        _ => unreachable!(),
-    };
-    (package, method)
-}
-
+/// test_case generate test cases using cluster creation method provided.
+///
+/// ex:
+/// #[test_case(test_raftstore::new_node_cluster)]
+/// #[test_case(test_raftstore::new_server_cluster)]
+/// #[test_case(test_raftstore_v2::new_node_cluster)]
+/// fn test_something() {
+///     let cluster = new_cluster(...)
+/// }
+///
+/// It generates three test cases as following:
+///
+/// #[cfg(test)]
+/// mod test_something {
+///     #[test]
+///     fn test_raftstore_new_node_cluster() {
+///         use test_raftstore::new_node_cluster as new_cluster;
+///         let mut cluster = new_cluster(0, 1);
+///     }
+///
+///     #[test]
+///     fn test_raftstore_new_server_cluster() {
+///         use test_raftstore::new_server_cluster as new_cluster;
+///         let mut cluster = new_cluster(0, 1);
+///     }
+///
+///     #[test]
+///     fn test_raftstore_v2_new_server_cluster() {
+///         use test_raftstore::test_raftstore_v2 as new_cluster;
+///         let mut cluster = new_cluster(0, 1);
+///     }
+/// }
 #[proc_macro_attribute]
-pub fn test_test(attr: TokenStream, input: TokenStream) -> TokenStream {
+pub fn test_case(arg: TokenStream, input: TokenStream) -> TokenStream {
     let mut fn_item = parse_macro_input!(input as ItemFn);
-    let mut test_cases = vec![TokenStream2::from(attr)];
+    let mut test_cases = vec![TokenStream2::from(arg)];
     let mut attrs_to_remove = vec![];
 
-    let legal_test_case_name: Path = parse_quote!(test_test);
+    let legal_test_case_name: Path = parse_quote!(test_case);
     for (idx, attr) in fn_item.attrs.iter().enumerate() {
         if legal_test_case_name == attr.path {
             test_cases.push(attr.into_token_stream());
@@ -59,20 +60,71 @@ pub fn test_test(attr: TokenStream, input: TokenStream) -> TokenStream {
     render_test_cases(test_cases, fn_item.clone())
 }
 
-fn render_test_cases(test_cases: Vec<TokenStream2>, mut fn_item: ItemFn) -> TokenStream {
+// Parsing test case to get package name and method name.
+// There are two cases that need to be considered
+// 1. the first token is Ident type
+// 2. the first token is Punct type
+//
+// use the following case as an example
+// #[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore::new_server_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
+// fn test_something() {}
+//
+// The first case ( #[test_case(test_raftstore::new_node_cluster)] )
+// will be passed to the proc-macro "test_case" as the first argument and the
+// #[test_case()] has been stripped off. So the first token is the Ident type,
+// namely "test_raftstore".
+//
+// The other two cases are in the `attr` fileds of ItemFn, and
+// #[test_case()] are untouched. So the first token is Punct type.
+fn parse_test_case(test_case: TokenStream2) -> (Ident, Ident) {
+    let mut iter = test_case.into_iter();
+    let package = match iter.next().unwrap() {
+        // ex: test_raftstore::new_node_cluster
+        TokenTree::Ident(package) => package,
+        // ex: #[test_raftstore::new_node_cluster]
+        TokenTree::Punct(_) => match iter.next().unwrap() {
+            TokenTree::Group(group) => {
+                let mut iter = group.stream().into_iter();
+                iter.next();
+                match iter.next().unwrap() {
+                    TokenTree::Group(group) => {
+                        let stream = group.stream();
+                        return parse_test_case(stream);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => unreachable!(),
+        },
+        _ => unreachable!(),
+    };
+    // Skip two ':'
+    iter.next();
+    iter.next();
+    let method = match iter.next().unwrap() {
+        TokenTree::Ident(method) => method,
+        _ => unreachable!(),
+    };
+    (package, method)
+}
+
+fn render_test_cases(test_cases: Vec<TokenStream2>, fn_item: ItemFn) -> TokenStream {
     let mut rendered_test_cases: Vec<TokenStream2> = vec![];
     for case in test_cases {
         let mut item = fn_item.clone();
-        let mut attrs = vec![];
-        attrs.append(&mut item.attrs);
 
-        let (package, method) = parse_attr(case);
+        // Parse test case to get the package name and the method name
+        let (package, method) = parse_test_case(case);
         let test_name = format!("{}_{}", package.to_string(), method.to_string());
+        // Insert a use statment at the beginning of the test, ex: use
+        // test_raftstore::new_node_cluster as new_cluster, so we use new_cluster in
+        // each test case code.
         item.block.stmts.insert(
             0,
             syn::parse(
                 quote! {
-                    // let mut cluster = #package::#method(#id, #count);
                     use #package::#method as new_cluster;
                 }
                 .into(),
@@ -87,8 +139,6 @@ fn render_test_cases(test_cases: Vec<TokenStream2>, mut fn_item: ItemFn) -> Toke
     }
 
     let mod_name = fn_item.sig.ident.clone();
-    fn_item.attrs.clear();
-
     let output = quote! {
         #[cfg(test)]
         mod #mod_name {

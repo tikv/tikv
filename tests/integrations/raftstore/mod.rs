@@ -21,7 +21,6 @@ mod test_replica_read;
 mod test_replication_mode;
 mod test_scale_pool;
 mod test_single;
-mod test_single2;
 mod test_snap;
 mod test_snap_recovery;
 mod test_split_region;
