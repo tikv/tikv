@@ -1051,7 +1051,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
         } else {
-            let writer_id = rand::random::<usize>() % self.poll_ctx.write_senders.capacity();
+            // Use the valid size of async-ios for generating `writer_id` when the local
+            // senders haven't been updated by `poller.begin().
+            let writer_id = rand::random::<usize>()
+                % std::cmp::min(
+                    self.poll_ctx.cfg.store_io_pool_size,
+                    self.poll_ctx.write_senders.size(),
+                );
             if let Err(err) = self.poll_ctx.write_senders.try_send(
                 writer_id,
                 WriteMsg::LatencyInspect {

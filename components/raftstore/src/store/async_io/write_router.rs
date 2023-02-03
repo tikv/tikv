@@ -5,7 +5,6 @@
 
 use std::{
     mem,
-    ops::Index,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -162,7 +161,11 @@ where
         if self.last_unpersisted.is_some() {
             return false;
         }
-        let async_io_pool_size = ctx.write_senders().capacity();
+        // Local senders may not be updated when `store_io_pool_size()` has been
+        // increased by the `ctx.config().update()`, keep the real size until it's
+        // updated by `poller.begin()`.
+        let async_io_pool_size =
+            std::cmp::min(ctx.write_senders().size(), ctx.config().store_io_pool_size);
         if last_unpersisted.is_none() {
             // If no previous pending ready, we can randomly select a new writer worker.
             self.writer_id = rand::random::<usize>() % async_io_pool_size;
@@ -250,70 +253,14 @@ pub type SenderVec<EK, ER> = Vec<Sender<WriteMsg<EK, ER>>>;
 #[derive(Clone)]
 /// Senders for asynchronous writes. There can be multiple senders, generally
 /// you should use `WriteRouter` to decide which sender to be used.
-pub struct WriteSenderVec<EK: KvEngine, ER: RaftEngine> {
-    senders: SenderVec<EK, ER>,
-    /// Valid capacity of senders
-    valid_capacity: usize,
-}
-
-impl<EK: KvEngine, ER: RaftEngine> WriteSenderVec<EK, ER> {
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.senders.is_empty()
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.senders.len()
-    }
-
-    #[inline]
-    /// Updates the valid capacity of async senders.
-    pub fn upd_capacity(&mut self, capacity: usize) {
-        self.valid_capacity = capacity;
-    }
-
-    #[inline]
-    /// Returns the valid capacity of async senders.
-    pub fn capacity(&self) -> usize {
-        self.valid_capacity
-    }
-
-    #[inline]
-    pub fn push(&mut self, sender: Sender<WriteMsg<EK, ER>>) {
-        self.senders.push(sender)
-    }
-}
-
-impl<EK: KvEngine, ER: RaftEngine> Default for WriteSenderVec<EK, ER> {
-    #[inline]
-    fn default() -> Self {
-        Self {
-            senders: vec![],
-            valid_capacity: 0,
-        }
-    }
-}
-
-impl<EK: KvEngine, ER: RaftEngine> Index<usize> for WriteSenderVec<EK, ER> {
-    type Output = Sender<WriteMsg<EK, ER>>;
-
-    #[inline]
-    fn index(&self, index: usize) -> &Sender<WriteMsg<EK, ER>> {
-        &self.senders[index]
-    }
-}
-
-#[derive(Clone)]
-/// Operating entrance for `PollContext`.
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
-    senders: Tracker<WriteSenderVec<EK, ER>>,
-    cached_senders: WriteSenderVec<EK, ER>,
+    senders: Tracker<SenderVec<EK, ER>>,
+    cached_senders: SenderVec<EK, ER>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
-    pub fn new(senders: Arc<VersionTrack<WriteSenderVec<EK, ER>>>) -> Self {
+    pub fn new(senders: Arc<VersionTrack<SenderVec<EK, ER>>>) -> Self {
         let cached_senders = senders.value().clone();
         WriteSenders {
             senders: senders.tracker("async writers' tracker".to_owned()),
@@ -328,8 +275,8 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
     }
 
     #[inline]
-    pub fn capacity(&self) -> usize {
-        self.cached_senders.capacity()
+    pub fn size(&self) -> usize {
+        self.cached_senders.len()
     }
 }
 
@@ -387,13 +334,9 @@ mod tests {
                 receivers.push(rx);
                 senders.push(tx);
             }
-            let capacity = senders.len();
             Self {
                 receivers,
-                senders: WriteSenders::new(Arc::new(VersionTrack::new(WriteSenderVec {
-                    senders,
-                    valid_capacity: capacity,
-                }))),
+                senders: WriteSenders::new(Arc::new(VersionTrack::new(senders))),
                 config,
                 raft_metrics: RaftMetrics::new(true),
             }

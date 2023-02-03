@@ -124,6 +124,7 @@ where
 {
     writer_meta: StoreWritersContext<EK, ER, T, N>,
     store_writers: StoreWriters<EK, ER>,
+    expected_writers_size: usize,
 }
 
 impl<EK, ER, T, N> WriterContoller<EK, ER, T, N>
@@ -137,9 +138,11 @@ where
         writer_meta: StoreWritersContext<EK, ER, T, N>,
         store_writers: StoreWriters<EK, ER>,
     ) -> Self {
-        WriterContoller {
+        let writers_size = store_writers.size();
+        Self {
             writer_meta,
             store_writers,
+            expected_writers_size: writers_size,
         }
     }
 }
@@ -263,14 +266,12 @@ where
         // The resizing of store writers will not directly update the local cached
         // store writers in each poller. Each poller will timely correct its local
         // cached in its next `poller.begin()` after the resize operation completed.
-        let current_size = self.writer_ctrl.store_writers.size();
+        let current_size = self.writer_ctrl.expected_writers_size;
+        self.writer_ctrl.expected_writers_size = size;
         match current_size.cmp(&size) {
             std::cmp::Ordering::Greater => {
                 if let Err(e) = self.writer_ctrl.store_writers.decrease_to(size) {
-                    {
-                        error!("failed to decrease store writers size";
-                                    "err_msg" => ?e);
-                    }
+                    error!("failed to decrease store writers size"; "err_msg" => ?e);
                 }
             }
             std::cmp::Ordering::Less => {
@@ -280,8 +281,7 @@ where
                     .store_writers
                     .increase_to(size, writer_meta)
                 {
-                    error!("failed to increase store writers size";
-                            "err_msg" => ?e);
+                    error!("failed to increase store writers size"; "err_msg" => ?e);
                 }
             }
             std::cmp::Ordering::Equal => return,

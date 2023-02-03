@@ -34,7 +34,7 @@ use tikv_util::{
     warn,
 };
 
-use super::write_router::{WriteSenderVec, WriteSenders};
+use super::write_router::{SenderVec, WriteSenders};
 use crate::{
     store::{
         config::Config,
@@ -864,7 +864,7 @@ where
     ER: RaftEngine,
 {
     /// Mailboxes for sending raft messages to async ios.
-    writers: Arc<VersionTrack<WriteSenderVec<EK, ER>>>,
+    writers: Arc<VersionTrack<SenderVec<EK, ER>>>,
     /// Background threads for handling asynchronous messages.
     handlers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
@@ -930,23 +930,21 @@ where
 
     /// Returns the valid size of store writers.
     pub fn size(&self) -> usize {
-        self.writers.value().capacity()
+        self.writers.value().len()
     }
 
     pub fn decrease_to(&mut self, size: usize) -> Result<()> {
-        // Considering that if we released other writers directly, the consistency
-        // of dumping messages by writers will be destroyed when previous writes
-        // haven't been persisted on the waited to be released threads.
-        // So, we just update the capacity of writers to make the concurrent processing
-        // of new messages can be redirected to reserved mailboxes correctly.
+        // Only update logical version of writers but not destroying the workers, so
+        // that peers that are still using the writer_id (because there're
+        // unpersisted tasks) can proceed to finish their tasks. After the peer
+        // gets rescheduled, it will use a new writer_id within the new
+        // capacity, specified by refreshed `store-io-pool-size`.
         //
-        // TODO: find an elegant way to release decreased thread.
+        // TODO: find an elegant way to effectively free workers.
         assert_eq!(self.writers.value().len(), self.handlers.lock().len());
         self.writers
-            .update(move |writers: &mut WriteSenderVec<EK, ER>| -> Result<()> {
-                let current_capacity = writers.capacity();
-                debug_assert!(current_capacity > size);
-                writers.upd_capacity(size);
+            .update(move |writers: &mut SenderVec<EK, ER>| -> Result<()> {
+                assert!(writers.len() > size);
                 Ok(())
             })?;
         Ok(())
@@ -961,9 +959,7 @@ where
         let current_size = self.writers.value().len();
         assert_eq!(current_size, handlers.len());
         self.writers
-            .update(move |writers: &mut WriteSenderVec<EK, ER>| -> Result<()> {
-                let current_capacity = writers.capacity();
-                debug_assert!(current_capacity < size);
+            .update(move |writers: &mut SenderVec<EK, ER>| -> Result<()> {
                 for i in current_size..size {
                     let tag = format!("store-writer-{}", i);
                     let (tx, rx) = bounded(writer_meta.cfg.value().store_io_notify_capacity);
@@ -987,7 +983,6 @@ where
                     writers.push(tx);
                     handlers.push(t);
                 }
-                writers.upd_capacity(size);
                 Ok(())
             })?;
         Ok(())
