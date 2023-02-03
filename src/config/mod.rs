@@ -5588,7 +5588,7 @@ mod tests {
     fn test_region_size_config() {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.optimize_for(false);
-        default_cfg.coprocessor.validate();
+        default_cfg.coprocessor.validate().unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(SPLIT_SIZE_MB)
@@ -5597,7 +5597,7 @@ mod tests {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.enable_region_bucket = true;
         default_cfg.coprocessor.optimize_for(false);
-        default_cfg.coprocessor.validate();
+        default_cfg.coprocessor.validate().unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(LARGE_REGION_SPLIT_SIZE_MB)
@@ -5605,7 +5605,7 @@ mod tests {
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.optimize_for(true);
-        default_cfg.coprocessor.validate();
+        default_cfg.coprocessor.validate().unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(RAFTSTORE_V2_SPLIT_SIZE_MB)
@@ -5614,7 +5614,7 @@ mod tests {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
         default_cfg.coprocessor.optimize_for(false);
-        default_cfg.coprocessor.validate();
+        default_cfg.coprocessor.validate().unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
@@ -5623,7 +5623,7 @@ mod tests {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
         default_cfg.coprocessor.optimize_for(true);
-        default_cfg.coprocessor.validate();
+        default_cfg.coprocessor.validate().unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
