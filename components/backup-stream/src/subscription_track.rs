@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use dashmap::{mapref::one::RefMut, DashMap};
 use kvproto::metapb::Region;
@@ -146,12 +146,27 @@ impl SubscriptionTracer {
         }
     }
 
+    pub fn current_regions(&self) -> Vec<u64> {
+        self.0.iter().map(|s| *s.key()).collect()
+    }
+
     /// try advance the resolved ts with the min ts of in-memory locks.
     /// returns the regions and theirs resolved ts.
-    pub fn resolve_with(&self, min_ts: TimeStamp) -> Vec<ResolveResult> {
+    pub fn resolve_with(
+        &self,
+        min_ts: TimeStamp,
+        regions: impl IntoIterator<Item = u64>,
+    ) -> Vec<ResolveResult> {
+        let rs = regions.into_iter().collect::<HashSet<_>>();
         self.0
             .iter_mut()
-            // Don't advance the checkpoint ts of removed region.
+            .filter(|s| {
+                let contains = rs.contains(s.key());
+                if !contains {
+                    crate::metrics::LOST_LEADER_REGION.inc();
+                }
+                contains
+            })
             .map(|mut s| ResolveResult::resolve(s.value_mut(), min_ts))
             .collect()
     }
@@ -499,7 +514,7 @@ mod test {
         drop(region4_sub);
 
         let mut rs = subs
-            .resolve_with(TimeStamp::new(1000))
+            .resolve_with(TimeStamp::new(1000), vec![1, 2, 3, 4])
             .into_iter()
             .map(|r| (r.region, r.checkpoint, r.checkpoint_type))
             .collect::<Vec<_>>();
