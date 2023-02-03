@@ -218,6 +218,8 @@ where
                 snap_data.set_region(region_state.get_region().clone());
                 snap_data.set_version(TABLET_SNAPSHOT_VERSION);
                 snap_data.mut_meta().set_for_balance(for_balance);
+                snap_data.set_removed_records(region_state.get_removed_records().into());
+                snap_data.set_merged_records(region_state.get_merged_records().into());
                 snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
 
                 // create checkpointer.

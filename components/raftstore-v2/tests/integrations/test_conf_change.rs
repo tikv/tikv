@@ -38,7 +38,7 @@ fn test_simple_change() {
     let match_index = meta.raft_apply.applied_index;
     assert_eq!(meta.region_state.epoch.version, epoch.get_version());
     assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
-    assert_eq!(meta.region_state.peers, vec![leader_peer, new_peer]);
+    assert_eq!(meta.region_state.peers, vec![leader_peer, new_peer.clone()]);
 
     // So heartbeat will create a learner.
     cluster.dispatch(2, vec![]);
@@ -96,6 +96,42 @@ fn test_simple_change() {
     assert_eq!(meta.region_state.epoch.version, epoch.get_version());
     assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
     assert_eq!(meta.region_state.peers, vec![leader_peer]);
+    cluster.routers[0].wait_flush(region_id, Duration::from_millis(300));
+    let raft_engine = &cluster.node(0).running_state().unwrap().raft_engine;
+    let region_state = raft_engine
+        .get_region_state(region_id, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert!(
+        region_state.get_removed_records().contains(&new_peer),
+        "{:?}",
+        region_state
+    );
+
+    // If adding a peer on the same store, removed_records should be cleaned.
+    req.mut_header()
+        .mut_region_epoch()
+        .set_conf_ver(new_conf_ver);
+    req.mut_admin_request()
+        .mut_change_peer()
+        .set_change_type(ConfChangeType::AddLearnerNode);
+    req.mut_admin_request()
+        .mut_change_peer()
+        .mut_peer()
+        .set_id(11);
+    let resp = cluster.routers[0].admin_command(2, req.clone()).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    cluster.routers[0].wait_flush(region_id, Duration::from_millis(300));
+    let region_state = raft_engine
+        .get_region_state(region_id, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert!(
+        region_state.get_removed_records().is_empty(),
+        "{:?}",
+        region_state
+    );
+
     // TODO: check if the peer is removed once life trace is implemented or
     // snapshot is implemented.
 
