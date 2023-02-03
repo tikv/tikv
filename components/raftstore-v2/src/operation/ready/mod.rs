@@ -768,6 +768,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     prev_lead_transferee: target,
                     vote: self.raft_group().raft.vote,
                     initialized: self.storage().is_initialized(),
+                    peer_id: self.peer().get_id(),
                 },
             );
             self.proposal_control_mut().maybe_update_term(term);
