@@ -1153,10 +1153,9 @@ mod tests {
     }
 
     impl MessageObserver for TestCoprocessor {
-        fn on_raft_message(&self, ctx: &mut ObserverContext<'_>, msg: &RaftMessage) -> bool {
+        fn on_raft_message(&self, _: &RaftMessage) -> bool {
             self.called
                 .fetch_add(ObserverIndex::OnRaftMessage as usize, Ordering::SeqCst);
-            ctx.bypass = self.bypass.load(Ordering::SeqCst);
             true
         }
     }
@@ -1197,6 +1196,8 @@ mod tests {
             .register_cmd_observer(1, BoxCmdObserver::new(ob.clone()));
         host.registry
             .register_update_safe_ts_observer(1, BoxUpdateSafeTsObserver::new(ob.clone()));
+        host.registry
+            .register_message_observer(1, BoxMessageObserver::new(ob.clone()));
 
         let mut index: usize = 0;
         let region = Region::default();
