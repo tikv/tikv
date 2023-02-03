@@ -276,8 +276,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.schedule_apply_fsm(ctx);
             if self.remove_tombstone_tablets(snapshot_index) {
-                let sched = ctx.schedulers.tablet_gc.clone();
-                let _ = sched.schedule(tablet_gc::Task::destroy(region_id, snapshot_index));
+                let _ = ctx.schedulers.tablet_gc.schedule(tablet_gc::Task::destroy(region_id, snapshot_index));
             }
         }
     }

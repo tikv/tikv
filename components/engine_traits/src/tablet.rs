@@ -32,7 +32,7 @@ pub struct CachedTablet<EK> {
 }
 
 impl<EK> CachedTablet<EK> {
-    pub fn release(&mut self) {
+    fn release(&mut self) {
         self.cache = None;
         self.version = 0;
     }

@@ -278,7 +278,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             "current region" => ?new_region,
         );
         let my_id = self.peer().get_id();
-        let logger = self.logger.clone();
         let state = self.region_state_mut();
         state.set_region(new_region.clone());
         let new_peer = new_region
@@ -301,7 +300,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             region_state: state.clone(),
         };
         if state.get_state() == PeerState::Tombstone {
-            info!(logger, "stat mark tombstone");
             self.mark_tombstone();
         }
         if let Some(peer) = new_peer {

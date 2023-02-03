@@ -208,7 +208,7 @@ fn add_learner(cluster: &Cluster, offset: usize, region_id: u64, peer_id: u64) {
         .mut_change_peer()
         .set_change_type(ConfChangeType::AddLearnerNode);
     let new_peer = new_learner_peer(store_id, peer_id);
-    admin_req.mut_change_peer().set_peer(new_peer.clone());
+    admin_req.mut_change_peer().set_peer(new_peer);
     let resp = cluster.routers[0]
         .admin_command(region_id, req.clone())
         .unwrap();
