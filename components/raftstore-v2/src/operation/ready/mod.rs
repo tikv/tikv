@@ -535,11 +535,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if !self.serving() {
             self.start_destroy(ctx, &mut write_task);
-            ctx.coprocessor_host.on_region_changed(
-                self.region(),
-                RegionChangeEvent::Destroy,
-                self.raft_group().raft.state,
-            );
+            if self.persisted_index() != 0 {
+                ctx.coprocessor_host.on_region_changed(
+                    self.region(),
+                    RegionChangeEvent::Destroy,
+                    self.raft_group().raft.state,
+                );
+            }
         }
         // Ready number should increase monotonically.
         assert!(self.async_writer.known_largest_number() < ready.number());
