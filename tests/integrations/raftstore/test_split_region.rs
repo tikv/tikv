@@ -152,7 +152,7 @@ fn test_server_split_region_twice() {
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(REGION_MAX_SIZE));
-    cluster.cfg.coprocessor.region_split_size = ReadableSize(REGION_SPLIT_SIZE);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(REGION_SPLIT_SIZE));
 
     let check_size_diff = cluster.cfg.raft_store.region_split_check_diff().0;
     let mut range = 1..;
@@ -564,7 +564,7 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(20);
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
-    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
 
     let mut range = 1..;
 
@@ -630,7 +630,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(20);
     cluster.cfg.coprocessor.enable_region_bucket = true;
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
-    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(region_split_size);
 
     cluster.run();
@@ -646,7 +646,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
 
     // change the config to make the region splittable
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size / 3));
-    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size / 3);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size / 3));
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(region_split_size / 3);
     cluster.stop_node(1);
     cluster.run_node(1).unwrap();

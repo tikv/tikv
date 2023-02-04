@@ -588,7 +588,10 @@ pub fn create_test_engine(
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
-    let cache = cfg.storage.block_cache.build_shared_cache();
+    let cache = cfg
+        .storage
+        .block_cache
+        .build_shared_cache(cfg.storage.engine);
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();
