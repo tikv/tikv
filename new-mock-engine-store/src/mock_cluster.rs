@@ -94,7 +94,7 @@ pub struct TestData {
 pub struct Cluster<T: Simulator<TiFlashEngine>> {
     // Helper to set ffi_helper_set.
     pub ffi_helper_lst: Vec<FFIHelperSet>,
-    ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
+    pub ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
 
     pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,
@@ -238,14 +238,14 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
     pub fn iter_ffi_helpers(
         &self,
         store_ids: Option<Vec<u64>>,
-        f: &mut dyn FnMut(u64, &engine_rocks::RocksEngine, &mut FFIHelperSet),
+        f: &mut dyn FnMut(u64, &engine_store_ffi::TiFlashEngine, &mut FFIHelperSet),
     ) {
         let ids = match store_ids {
             Some(ids) => ids,
             None => self.engines.keys().copied().collect::<Vec<_>>(),
         };
         for id in ids {
-            let engine = self.get_engine(id);
+            let engine = self.get_tiflash_engine(id);
             let lock = self.ffi_helper_set.lock();
             match lock {
                 Ok(mut l) => {
@@ -254,6 +254,16 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 }
                 Err(_) => std::process::exit(1),
             }
+        }
+    }
+
+    pub fn access_ffi_helpers(&self, f: &mut dyn FnMut(&mut HashMap<u64, FFIHelperSet>)) {
+        let lock = self.ffi_helper_set.lock();
+        match lock {
+            Ok(mut l) => {
+                f(&mut l);
+            }
+            Err(_) => std::process::exit(1),
         }
     }
 
@@ -272,14 +282,12 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
     pub fn run(&mut self) {
         self.create_engines();
         self.bootstrap_region().unwrap();
-        self.bootstrap_ffi_helper_set();
         self.start().unwrap();
     }
 
     pub fn run_conf_change(&mut self) -> u64 {
         self.create_engines();
         let region_id = self.bootstrap_conf_change();
-        self.bootstrap_ffi_helper_set();
         // Will not start new nodes in `start`
         self.start().unwrap();
         region_id
@@ -287,9 +295,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
 
     pub fn run_conf_change_no_start(&mut self) -> u64 {
         self.create_engines();
-        let region_id = self.bootstrap_conf_change();
-        self.bootstrap_ffi_helper_set();
-        region_id
+        self.bootstrap_conf_change()
     }
 
     /// We need to create FFIHelperSet while we create engine.
@@ -300,6 +306,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         key_manager: &Option<Arc<DataKeyManager>>,
         router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     ) {
+        init_global_ffi_helper_set();
         let (mut ffi_helper_set, _node_cfg) =
             self.make_ffi_helper_set(0, engines, key_manager, router);
 
@@ -315,17 +322,20 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 .engine_store_server_helper;
 
             let helper = engine_store_ffi::gen_engine_store_server_helper(helper_ptr);
-            let ffi_hub = Arc::new(engine_store_ffi::observer::TiFlashFFIHub {
+            let ffi_hub = Arc::new(engine_store_ffi::TiFlashFFIHub {
                 engine_store_server_helper: helper,
             });
             (helper_ptr, ffi_hub)
         };
         let engines = ffi_helper_set.engine_store_server.engines.as_mut().unwrap();
-
+        let proxy_config_set = Arc::new(engine_tiflash::ProxyConfigSet {
+            engine_store: self.cfg.proxy_cfg.engine_store.clone(),
+        });
         engines.kv.init(
             helper_ptr,
             self.cfg.proxy_cfg.raft_store.snap_handle_pool_size,
             Some(ffi_hub),
+            Some(proxy_config_set),
         );
 
         assert_ne!(engines.kv.engine_store_server_helper, 0);
@@ -341,6 +351,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         } else {
             self.ffi_helper_lst.pop().unwrap()
         };
+        debug!("set up ffi helper set for {}", node_id);
         ffi_helper_set.engine_store_server.id = node_id;
         self.ffi_helper_set
             .lock()
@@ -348,6 +359,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             .insert(node_id, ffi_helper_set);
     }
 
+    // Need self.engines be filled.
     pub fn bootstrap_ffi_helper_set(&mut self) {
         let mut node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
         // We force iterate engines in sorted order.
@@ -381,8 +393,6 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
     }
 
     pub fn start_with(&mut self, skip_set: HashSet<usize>) -> ServerResult<()> {
-        init_global_ffi_helper_set();
-
         // Try recover from last shutdown.
         // `self.engines` is inited in bootstrap_region or bootstrap_conf_change.
         let mut node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
@@ -490,6 +500,7 @@ pub fn make_global_ffi_helper_set_no_bind() -> (EngineHelperSet, *const u8) {
 pub fn init_global_ffi_helper_set() {
     unsafe {
         START.call_once(|| {
+            debug!("init_global_ffi_helper_set");
             assert_eq!(engine_store_ffi::get_engine_store_server_helper_ptr(), 0);
             let (set, ptr) = make_global_ffi_helper_set_no_bind();
             engine_store_ffi::init_engine_store_server_helper(ptr);
@@ -885,6 +896,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 .insert(id, self.key_managers[i].clone());
         }
 
+        self.bootstrap_ffi_helper_set();
         let mut region = metapb::Region::default();
         region.set_id(1);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
@@ -903,6 +915,9 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 "node_id" => id,
             );
             prepare_bootstrap_cluster(engines, &region)?;
+            tikv_util::debug!("prepare_bootstrap_cluster finish";
+                "node_id" => id,
+            );
         }
 
         self.bootstrap_cluster(region);
@@ -921,6 +936,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 .insert(id, self.key_managers[i].clone());
         }
 
+        self.bootstrap_ffi_helper_set();
         for (&id, engines) in &self.engines {
             bootstrap_store(engines, self.id(), id).unwrap();
         }

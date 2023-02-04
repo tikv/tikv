@@ -27,8 +27,8 @@ use engine_rocks::{
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_store_ffi::{
-    self, EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus, RaftStoreProxy,
-    RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient, TiFlashEngine,
+    self, ps_engine::PSEngine, EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus,
+    RaftStoreProxy, RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient, TiFlashEngine,
 };
 use engine_traits::{
     CachedTablet, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
@@ -337,7 +337,9 @@ pub unsafe fn run_tikv_proxy(
                 engine_store_server_helper,
             )
         } else {
-            run_impl::<RaftLogEngine, API>(config, proxy_config, engine_store_server_helper)
+            run_impl::<PSEngine, API>(config, proxy_config, engine_store_server_helper)
+            // run_impl::<RaftLogEngine, API>(config, proxy_config,
+            // engine_store_server_helper)
         }
     })
 }
@@ -396,13 +398,20 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             .unwrap();
 
         // Create raft engine
-        let (raft_engine, raft_statistics) = CER::build(
+        let (mut raft_engine, raft_statistics) = CER::build(
             &self.config,
             &env,
             &self.encryption_key_manager,
             &block_cache,
         );
         self.raft_statistics = raft_statistics;
+
+        match raft_engine.as_ps_engine() {
+            None => {}
+            Some(ps_engine) => {
+                ps_engine.init(engine_store_server_helper);
+            }
+        }
 
         // Create kv engine.
         let builder = KvEngineFactoryBuilder::new(env, &self.config, block_cache)
@@ -419,15 +428,19 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         self.kv_statistics = Some(factory.rocks_statistics());
 
         let helper = engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper);
-        let ffi_hub = Arc::new(engine_store_ffi::observer::TiFlashFFIHub {
+        let ffi_hub = Arc::new(engine_store_ffi::TiFlashFFIHub {
             engine_store_server_helper: helper,
         });
         // engine_tiflash::RocksEngine has engine_rocks::RocksEngine inside
         let mut kv_engine = TiFlashEngine::from_rocks(kv_engine);
+        let proxy_config_set = Arc::new(engine_tiflash::ProxyConfigSet {
+            engine_store: self.proxy_config.engine_store.clone(),
+        });
         kv_engine.init(
             engine_store_server_helper,
             self.proxy_config.raft_store.snap_handle_pool_size,
             Some(ffi_hub),
+            Some(proxy_config_set),
         );
 
         let engines = Engines::new(kv_engine.clone(), raft_engine);
@@ -539,6 +552,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         // Initialize and check config
         info!("using proxy config"; "config" => ?proxy_config);
+
         let cfg_controller = Self::init_config(config, &proxy_config);
         let config = cfg_controller.get_current();
 
@@ -1212,14 +1226,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
         let importer = Arc::new(importer);
 
-        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
-            node.id(),
-            self.engines.as_ref().unwrap().engines.kv.clone(),
-            importer.clone(),
-            self.proxy_config.raft_store.snap_handle_pool_size,
-        );
-        tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-
         let check_leader_runner = CheckLeaderRunner::new(
             engines.store_meta.clone(),
             self.coprocessor_host.clone().unwrap(),
@@ -1253,6 +1259,23 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             health_service,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
+
+        let packed_envs = engine_store_ffi::observer::PackedEnvs {
+            engine_store_cfg: self.proxy_config.engine_store.clone(),
+            pd_endpoints: self.config.pd.endpoints.clone(),
+        };
+        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
+            node.id(),
+            self.engines.as_ref().unwrap().engines.kv.clone(),
+            self.engines.as_ref().unwrap().engines.raft.clone(),
+            importer.clone(),
+            self.proxy_config.raft_store.snap_handle_pool_size,
+            server.transport().clone(),
+            snap_mgr.clone(),
+            packed_envs,
+        );
+        tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+
         cfg_controller.register(
             tikv::config::Module::Server,
             Box::new(ServerConfigManager::new(
@@ -1655,7 +1678,12 @@ pub trait ConfiguredRaftEngine: RaftEngine {
     fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         None
     }
+
     fn register_config(&self, _cfg_controller: &mut ConfigController) {}
+
+    fn as_ps_engine(&mut self) -> Option<&mut PSEngine> {
+        None
+    }
 }
 
 impl ConfiguredRaftEngine for engine_rocks::RocksEngine {
@@ -1739,6 +1767,21 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             raft_data_state_machine.after_dump_data();
         }
         (raft_engine, None)
+    }
+}
+
+impl ConfiguredRaftEngine for PSEngine {
+    fn build(
+        _config: &TikvConfig,
+        _env: &Arc<Env>,
+        _key_manager: &Option<Arc<DataKeyManager>>,
+        _block_cache: &Cache,
+    ) -> (Self, Option<Arc<RocksStatistics>>) {
+        (PSEngine::new(), None)
+    }
+
+    fn as_ps_engine(&mut self) -> Option<&mut PSEngine> {
+        Some(self)
     }
 }
 

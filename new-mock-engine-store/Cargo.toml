@@ -17,6 +17,7 @@ protobuf-codec = [
 
 [dependencies]
 api_version = { workspace = true, default-features = false }
+assert-type-eq = "0.1.0"
 causal_ts = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true, default-features = false }
@@ -33,6 +34,7 @@ file_system = { workspace = true, default-features = false }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
+int-enum = "0.5"
 keys = { workspace = true, default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 

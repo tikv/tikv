@@ -1,8 +1,9 @@
 set -uxeo pipefail
 if [[ $M == "fmt" ]]; then
     make gen_proxy_ffi
+    git status -s
     GIT_STATUS=$(git status -s) && if [[ ${GIT_STATUS} ]]; then echo "Error: found illegal git status"; echo ${GIT_STATUS}; [[ -z ${GIT_STATUS} ]]; fi
-    cargo fmt -- --check >/dev/null
+    cargo fmt -- --check
 elif [[ $M == "testold" ]]; then
     export ENGINE_LABEL_VALUE=tiflash
     export RUST_BACKTRACE=full
@@ -43,6 +44,9 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package proxy_tests --test proxy region
     cargo test --package proxy_tests --test proxy flashback
     cargo test --package proxy_tests --test proxy server_cluster_test
+    cargo test --package proxy_tests --test proxy fast_add_peer
+    cargo test --package proxy_tests --test proxy ffi -- --test-threads 1
+    cargo test --package proxy_tests --test proxy write --features="proxy_tests/enable-pagestorage"
 elif [[ $M == "debug" ]]; then
     # export RUSTC_WRAPPER=~/.cargo/bin/sccache
     export ENGINE_LABEL_VALUE=tiflash

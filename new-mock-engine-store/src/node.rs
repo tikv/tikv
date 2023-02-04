@@ -82,16 +82,27 @@ impl Default for ChannelTransport {
 
 impl Transport for ChannelTransport {
     #[allow(clippy::significant_drop_in_scrutinee)]
+    #[allow(clippy::redundant_closure_call)]
     fn send(&mut self, msg: RaftMessage) -> Result<()> {
-        let from_store = msg.get_from_peer().get_store_id();
+        let mut from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
         let to_peer_id = msg.get_to_peer().get_id();
         let region_id = msg.get_region_id();
         let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
         if is_snapshot {
+            let fake_self_snapshot = (|| {
+                fail::fail_point!("fast_add_peer_fake_snapshot", |t| {
+                    let t = t.unwrap().parse::<u64>().unwrap();
+                    t
+                });
+                0
+            })();
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
+            if fake_self_snapshot == 1 {
+                from_store = to_store;
+            }
             let from = match self.core.lock().unwrap().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.register(key.clone(), SnapEntry::Sending);
@@ -99,6 +110,9 @@ impl Transport for ChannelTransport {
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
+            if fake_self_snapshot == 1 && !from.exists() {
+                panic!("non-exist snapshot");
+            }
             let to = match self.core.lock().unwrap().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.register(key.clone(), SnapEntry::Receiving);
@@ -138,11 +152,14 @@ impl Transport for ChannelTransport {
                 h.send_raft_msg(msg)?;
                 if is_snapshot {
                     // should report snapshot finish.
-                    let _ = core.routers[&from_store].report_snapshot_status(
-                        region_id,
-                        to_peer_id,
-                        SnapshotStatus::Finish,
-                    );
+                    match core.routers.get(&from_store) {
+                        Some(router) => router.report_snapshot_status(
+                            region_id,
+                            to_peer_id,
+                            SnapshotStatus::Finish,
+                        ),
+                        None => return Err(box_err!("Find no from_store {}", from_store)),
+                    }?;
                 }
                 Ok(())
             }
@@ -299,6 +316,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
+        debug!("snapshot_mgr path of {} is {:?}", node_id, snap_mgr_path);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         let importer = {
@@ -314,11 +332,19 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             f(node_id, &mut coprocessor_host);
         }
 
+        let packed_envs = engine_store_ffi::observer::PackedEnvs {
+            engine_store_cfg: cfg.proxy_cfg.engine_store.clone(),
+            pd_endpoints: cfg.pd.endpoints.clone(),
+        };
         let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
             node_id,
             engines.kv.clone(),
+            engines.raft.clone(),
             importer.clone(),
             cfg.proxy_cfg.raft_store.snap_handle_pool_size,
+            simulate_trans.clone(),
+            snap_mgr.clone(),
+            packed_envs,
         );
         tiflash_ob.register_to(&mut coprocessor_host);
 

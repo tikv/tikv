@@ -51,6 +51,13 @@ pub mod root {
         }
         #[repr(u32)]
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub enum SpecialCppPtrType {
+            None = 0,
+            TupleOfRawCppPtr = 1,
+            ArrayOfRawCppPtr = 2,
+        }
+        #[repr(u32)]
+        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
         pub enum EngineStoreApplyRes {
             None = 0,
             Persist = 1,
@@ -135,6 +142,34 @@ pub mod root {
         pub struct CppStrWithView {
             pub inner: root::DB::RawCppPtr,
             pub view: root::DB::BaseBuffView,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct PageAndCppStrWithView {
+            pub page: root::DB::RawCppPtr,
+            pub key: root::DB::RawCppPtr,
+            pub page_view: root::DB::BaseBuffView,
+            pub key_view: root::DB::BaseBuffView,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct RawCppPtrCarr {
+            pub inner: root::DB::RawVoidPtr,
+            pub len: u64,
+            pub type_: root::DB::RawCppPtrType,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct RawCppPtrTuple {
+            pub inner: *mut root::DB::RawCppPtr,
+            pub len: u64,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct RawCppPtrArr {
+            pub inner: *mut root::DB::RawVoidPtr,
+            pub len: u64,
+            pub type_: root::DB::RawCppPtrType,
         }
         #[repr(u8)]
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -229,6 +264,23 @@ pub mod root {
             Ok = 0,
             Error = 1,
             NotFound = 2,
+        }
+        #[repr(u32)]
+        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub enum FastAddPeerStatus {
+            Ok = 0,
+            WaitForData = 1,
+            OtherError = 2,
+            NoSuitable = 3,
+            BadData = 4,
+            FailedInject = 5,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct FastAddPeerRes {
+            pub status: root::DB::FastAddPeerStatus,
+            pub apply_state: root::DB::CppStrWithView,
+            pub region: root::DB::CppStrWithView,
         }
         #[repr(C)]
         #[derive(Debug)]
@@ -368,6 +420,61 @@ pub mod root {
                     arg5: u64,
                 ) -> u8,
             >,
+            pub fn_create_write_batch: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *const root::DB::EngineStoreServerWrap,
+                ) -> root::DB::RawCppPtr,
+            >,
+            pub fn_write_batch_put_page: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::RawVoidPtr,
+                    arg2: root::DB::BaseBuffView,
+                    arg3: root::DB::BaseBuffView,
+                ),
+            >,
+            pub fn_write_batch_del_page: ::std::option::Option<
+                unsafe extern "C" fn(arg1: root::DB::RawVoidPtr, arg2: root::DB::BaseBuffView),
+            >,
+            pub fn_write_batch_size:
+                ::std::option::Option<unsafe extern "C" fn(arg1: root::DB::RawVoidPtr) -> u64>,
+            pub fn_write_batch_is_empty:
+                ::std::option::Option<unsafe extern "C" fn(arg1: root::DB::RawVoidPtr) -> u8>,
+            pub fn_write_batch_merge: ::std::option::Option<
+                unsafe extern "C" fn(arg1: root::DB::RawVoidPtr, arg2: root::DB::RawVoidPtr),
+            >,
+            pub fn_write_batch_clear:
+                ::std::option::Option<unsafe extern "C" fn(arg1: root::DB::RawVoidPtr)>,
+            pub fn_consume_write_batch: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *const root::DB::EngineStoreServerWrap,
+                    arg2: root::DB::RawVoidPtr,
+                ),
+            >,
+            pub fn_handle_read_page: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *const root::DB::EngineStoreServerWrap,
+                    arg2: root::DB::BaseBuffView,
+                ) -> root::DB::CppStrWithView,
+            >,
+            pub fn_handle_scan_page: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *const root::DB::EngineStoreServerWrap,
+                    arg2: root::DB::BaseBuffView,
+                    arg3: root::DB::BaseBuffView,
+                ) -> root::DB::RawCppPtrCarr,
+            >,
+            pub fn_handle_purge_pagestorage: ::std::option::Option<
+                unsafe extern "C" fn(arg1: *const root::DB::EngineStoreServerWrap),
+            >,
+            pub fn_handle_seek_ps_key: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *const root::DB::EngineStoreServerWrap,
+                    arg2: root::DB::BaseBuffView,
+                ) -> root::DB::CppStrWithView,
+            >,
+            pub fn_ps_is_empty: ::std::option::Option<
+                unsafe extern "C" fn(arg1: *const root::DB::EngineStoreServerWrap) -> u8,
+            >,
             pub fn_atomic_update_proxy: ::std::option::Option<
                 unsafe extern "C" fn(
                     arg1: *mut root::DB::EngineStoreServerWrap,
@@ -424,6 +531,20 @@ pub mod root {
             pub fn_gc_raw_cpp_ptr: ::std::option::Option<
                 unsafe extern "C" fn(arg1: root::DB::RawVoidPtr, arg2: root::DB::RawCppPtrType),
             >,
+            pub fn_gc_raw_cpp_ptr_carr: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::RawVoidPtr,
+                    arg2: root::DB::RawCppPtrType,
+                    arg3: u64,
+                ),
+            >,
+            pub fn_gc_special_raw_cpp_ptr: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::RawVoidPtr,
+                    arg2: u64,
+                    arg3: root::DB::SpecialCppPtrType,
+                ),
+            >,
             pub fn_get_config: ::std::option::Option<
                 unsafe extern "C" fn(
                     arg1: *mut root::DB::EngineStoreServerWrap,
@@ -451,8 +572,15 @@ pub mod root {
                     leader_safe_ts: u64,
                 ),
             >,
+            pub fn_fast_add_peer: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    region_id: u64,
+                    new_peer_id: u64,
+                ) -> root::DB::FastAddPeerRes,
+            >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 15776819379826780689;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 17394545035928865111;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

@@ -1,8 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-
+#![feature(vec_into_raw_parts)]
 #![feature(slice_take)]
 pub mod config;
 pub mod mock_cluster;
+pub mod mock_page_storage;
 pub mod mock_store;
 pub mod node;
 pub mod server;
@@ -74,6 +75,7 @@ pub fn copy_data_from(
     // kv data in memory
     for cf in 0..3 {
         for (k, v) in &source.data[cf] {
+            // debug!("copy_data_from region {} {:?} {:?}", region_id, k, v);
             write_kv_in_mem(target, cf, k.as_slice(), v.as_slice());
         }
     }

@@ -37,6 +37,8 @@ mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
+enable-pagestorage = ["engine_tiflash/enable-pagestorage", "engine_store_ffi/enable-pagestorage"]
+
 [dependencies]
 api_version = { workspace = true }
 async-trait = "0.1"

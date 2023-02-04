@@ -14,6 +14,7 @@ portable = ["proxy_server/portable"]
 sse = ["proxy_server/sse"]
 mem-profiling = ["proxy_server/mem-profiling"]
 failpoints = ["proxy_server/failpoints"]
+enable-pagestorage = ["proxy_server/enable-pagestorage"]
 
 cloud-aws = ["proxy_server/cloud-aws"]
 cloud-gcp = ["proxy_server/cloud-gcp"]

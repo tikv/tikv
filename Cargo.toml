@@ -197,6 +197,7 @@ prometheus = { git = "https://github.com/solotzg/rust-prometheus.git", rev = "b4
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
+
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 

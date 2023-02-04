@@ -6,6 +6,12 @@ namespace DB {
 
 struct EngineStoreServerWrap;
 
+enum class SpecialCppPtrType : uint32_t {
+  None = 0,
+  TupleOfRawCppPtr = 1,
+  ArrayOfRawCppPtr = 2,
+};
+
 enum class EngineStoreApplyRes : uint32_t {
   None = 0,
   Persist,
@@ -86,6 +92,34 @@ struct CppStrWithView {
   BaseBuffView view;
 };
 
+struct PageAndCppStrWithView {
+  RawCppPtr page;
+  RawCppPtr key;
+  BaseBuffView page_view;
+  BaseBuffView key_view;
+};
+
+struct RawCppPtrCarr {
+  RawVoidPtr inner;
+  const uint64_t len;
+  RawCppPtrType type;
+};
+
+// An tuple of pointers, like `void **`,
+// Can be used to represent structures.
+struct RawCppPtrTuple {
+  RawCppPtr *inner;
+  const uint64_t len;
+};
+
+// An array of pointers(same type), like `T **`,
+// Can be used to represent arrays.
+struct RawCppPtrArr {
+  RawVoidPtr *inner;
+  const uint64_t len;
+  RawCppPtrType type;
+};
+
 enum class HttpRequestStatus : uint8_t {
   Ok = 0,
   ErrorParam,
@@ -143,6 +177,21 @@ enum class KVGetStatus : uint32_t {
   NotFound,
 };
 
+enum class FastAddPeerStatus : uint32_t {
+  Ok = 0,
+  WaitForData,
+  OtherError,
+  NoSuitable,
+  BadData,
+  FailedInject,
+};
+
+struct FastAddPeerRes {
+  FastAddPeerStatus status;
+  CppStrWithView apply_state;
+  CppStrWithView region;
+};
+
 struct RaftStoreProxyFFIHelper {
   RaftStoreProxyPtr proxy_ptr;
   RaftProxyStatus (*fn_handle_get_proxy_status)(RaftStoreProxyPtr);
@@ -190,6 +239,22 @@ struct EngineStoreServerHelper {
   uint8_t (*fn_need_flush_data)(EngineStoreServerWrap *, uint64_t);
   uint8_t (*fn_try_flush_data)(EngineStoreServerWrap *, uint64_t, uint8_t,
                                uint64_t, uint64_t);
+  RawCppPtr (*fn_create_write_batch)(const EngineStoreServerWrap *);
+  void (*fn_write_batch_put_page)(RawVoidPtr, BaseBuffView, BaseBuffView);
+  void (*fn_write_batch_del_page)(RawVoidPtr, BaseBuffView);
+  uint64_t (*fn_write_batch_size)(RawVoidPtr);
+  uint8_t (*fn_write_batch_is_empty)(RawVoidPtr);
+  void (*fn_write_batch_merge)(RawVoidPtr, RawVoidPtr);
+  void (*fn_write_batch_clear)(RawVoidPtr);
+  void (*fn_consume_write_batch)(const EngineStoreServerWrap *, RawVoidPtr);
+  CppStrWithView (*fn_handle_read_page)(const EngineStoreServerWrap *,
+                                        BaseBuffView);
+  RawCppPtrCarr (*fn_handle_scan_page)(const EngineStoreServerWrap *,
+                                       BaseBuffView, BaseBuffView);
+  void (*fn_handle_purge_pagestorage)(const EngineStoreServerWrap *);
+  CppStrWithView (*fn_handle_seek_ps_key)(const EngineStoreServerWrap *,
+                                          BaseBuffView);
+  uint8_t (*fn_ps_is_empty)(const EngineStoreServerWrap *);
   void (*fn_atomic_update_proxy)(EngineStoreServerWrap *,
                                  RaftStoreProxyFFIHelper *);
   void (*fn_handle_destroy)(EngineStoreServerWrap *, uint64_t);
@@ -208,6 +273,8 @@ struct EngineStoreServerHelper {
                                            BaseBuffView body);
   uint8_t (*fn_check_http_uri_available)(BaseBuffView);
   void (*fn_gc_raw_cpp_ptr)(RawVoidPtr, RawCppPtrType);
+  void (*fn_gc_raw_cpp_ptr_carr)(RawVoidPtr, RawCppPtrType, uint64_t);
+  void (*fn_gc_special_raw_cpp_ptr)(RawVoidPtr, uint64_t, SpecialCppPtrType);
   CppStrWithView (*fn_get_config)(EngineStoreServerWrap *, uint8_t full);
   void (*fn_set_store)(EngineStoreServerWrap *, BaseBuffView);
   void (*fn_set_pb_msg_by_bytes)(MsgPBType type, RawVoidPtr ptr,
@@ -215,5 +282,7 @@ struct EngineStoreServerHelper {
   void (*fn_handle_safe_ts_update)(EngineStoreServerWrap *, uint64_t region_id,
                                    uint64_t self_safe_ts,
                                    uint64_t leader_safe_ts);
+  FastAddPeerRes (*fn_fast_add_peer)(EngineStoreServerWrap *,
+                                     uint64_t region_id, uint64_t new_peer_id);
 };
 }  // namespace DB

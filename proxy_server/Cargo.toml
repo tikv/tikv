@@ -34,6 +34,7 @@ nortcheck = ["engine_rocks/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
 pprof-fp = ["tikv/pprof-fp"]
+enable-pagestorage = ["engine_tiflash/enable-pagestorage", "engine_store_ffi/enable-pagestorage"]
 
 [dependencies]
 api_version = { workspace = true }
@@ -51,6 +52,7 @@ encryption_export = { workspace = true, default-features = false }
 engine_rocks = { workspace = true, default-features = false }
 engine_rocks_helper = { workspace = true }
 engine_store_ffi = { workspace = true, default-features = false }
+engine_tiflash = { workspace = true, default-features = false }
 engine_traits = { workspace = true, default-features = false }
 error_code = { workspace = true, default-features = false }
 fail = "0.5"

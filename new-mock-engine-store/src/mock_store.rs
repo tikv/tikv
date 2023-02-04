@@ -2,7 +2,7 @@
 
 pub use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::BTreeMap,
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -11,27 +11,34 @@ pub use std::{
     time::Duration,
 };
 
+use assert_type_eq;
+use collections::{HashMap, HashSet};
 pub use engine_store_ffi::{
     interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper, RaftStoreProxyFFIHelper,
-    RawCppPtr, UnwrapExternCFunc,
+    RawCppPtr, RawVoidPtr, UnwrapExternCFunc,
 };
+use engine_traits::RaftEngineReadOnly;
 pub use engine_traits::{
     Engines, Iterable, KvEngine, Mutable, Peekable, RaftEngine, RaftLogBatch, SyncMutable,
     WriteBatch, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
+use int_enum::IntEnum;
 pub use kvproto::{
     raft_cmdpb::AdminCmdType,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState},
+    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
 pub use protobuf::Message;
 pub use tikv_util::{box_err, box_try, debug, error, info, warn};
 
+use crate::node::NodeCluster;
 pub use crate::{
     config::MockConfig,
-    mock_cluster,
+    copy_data_from, copy_meta_from, general_get_apply_state, general_get_region_local_state,
+    get_apply_state, get_raft_local_state, get_region_local_state, mock_cluster,
     mock_cluster::{
         must_get_equal, must_get_none, Cluster, ProxyConfig, Simulator, TestPdClient, TiFlashEngine,
     },
+    mock_page_storage::*,
     server::ServerCluster,
 };
 
@@ -73,6 +80,7 @@ impl Region {
 #[derive(Default)]
 pub struct RegionStats {
     pub pre_handle_count: AtomicU64,
+    pub fast_add_peer_count: AtomicU64,
 }
 
 pub struct EngineStoreServer {
@@ -82,6 +90,7 @@ pub struct EngineStoreServer {
     pub proxy_compat: bool,
     pub mock_cfg: MockConfig,
     pub region_states: RefCell<HashMap<RegionId, RegionStats>>,
+    pub page_storage: MockPageStorage,
 }
 
 impl EngineStoreServer {
@@ -96,6 +105,7 @@ impl EngineStoreServer {
             proxy_compat: false,
             mock_cfg: MockConfig::default(),
             region_states: RefCell::new(Default::default()),
+            page_storage: Default::default(),
         }
     }
 
@@ -152,6 +162,12 @@ impl EngineStoreServer {
                 load_from_db(self, region_id);
             }
         }
+    }
+
+    pub unsafe fn write_to_db_by_region_id(&mut self, region_id: u64, reason: String) {
+        let kv = &mut self.engines.as_mut().unwrap().kv;
+        let region = self.kvstore.get_mut(&region_id).unwrap();
+        write_to_db_data_by_engine(self.id, kv, region, reason)
     }
 }
 
@@ -217,23 +233,10 @@ fn delete_kv_in_mem(region: &mut Region, cf_index: usize, k: &[u8]) {
     data.remove(k);
 }
 
-unsafe fn load_from_db(store: &mut EngineStoreServer, region_id: u64) {
+unsafe fn load_data_from_db(store: &mut EngineStoreServer, region_id: u64) {
     let store_id = store.id;
     let engine = &mut store.engines.as_mut().unwrap().kv;
-    let apply_state: RaftApplyState = engine
-        .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
-        .unwrap()
-        .unwrap();
-    let region_state: RegionLocalState = engine
-        .get_msg_cf(CF_RAFT, &keys::region_state_key(region_id))
-        .unwrap()
-        .unwrap();
-
     let region = store.kvstore.get_mut(&region_id).unwrap();
-    region.apply_state = apply_state;
-    region.region = region_state.get_region().clone();
-    set_new_region_peer(region, store.id);
-
     for cf in 0..3 {
         let cf_name = cf_to_name(cf.into());
         region.data[cf].clear();
@@ -262,17 +265,39 @@ unsafe fn load_from_db(store: &mut EngineStoreServer, region_id: u64) {
     }
 }
 
+unsafe fn load_from_db(store: &mut EngineStoreServer, region_id: u64) {
+    let engine = &mut store.engines.as_mut().unwrap().kv;
+    let apply_state: RaftApplyState = general_get_apply_state(engine, region_id).unwrap();
+    let region_state: RegionLocalState = general_get_region_local_state(engine, region_id).unwrap();
+
+    let region = store.kvstore.get_mut(&region_id).unwrap();
+    region.apply_state = apply_state;
+    region.region = region_state.get_region().clone();
+    set_new_region_peer(region, store.id);
+
+    load_data_from_db(store, region_id);
+}
+
 unsafe fn write_to_db_data(
     store: &mut EngineStoreServer,
     region: &mut Box<Region>,
     reason: String,
 ) {
+    let kv = &mut store.engines.as_mut().unwrap().kv;
+    write_to_db_data_by_engine(store.id, kv, region, reason)
+}
+
+unsafe fn write_to_db_data_by_engine(
+    store_id: u64,
+    kv: &TiFlashEngine,
+    region: &mut Box<Region>,
+    reason: String,
+) {
     info!("mock flush to engine";
         "region" => ?region.region,
-        "store_id" => store.id,
+        "store_id" => store_id,
         "reason" => reason
     );
-    let kv = &mut store.engines.as_mut().unwrap().kv;
     for cf in 0..3 {
         let pending_write = std::mem::take(region.pending_write.as_mut().get_mut(cf).unwrap());
         let mut pending_remove =
@@ -405,6 +430,7 @@ impl EngineStoreServerWrap {
                                     .insert(region_meta.id, Box::new(new_region));
                             }
                         }
+
                         {
                             // Move data
                             let region_ids =
@@ -447,6 +473,7 @@ impl EngineStoreServerWrap {
                         {
                             let target_region =
                                 &mut (engine_store_server.kvstore.get_mut(&region_id).unwrap());
+
                             let target_region_meta = &mut target_region.region;
                             let target_version =
                                 target_region_meta.get_region_epoch().get_version();
@@ -696,14 +723,30 @@ pub fn gen_engine_store_server_helper(
         fn_handle_http_request: None,
         fn_check_http_uri_available: None,
         fn_gc_raw_cpp_ptr: Some(ffi_gc_raw_cpp_ptr),
+        fn_gc_raw_cpp_ptr_carr: Some(ffi_gc_raw_cpp_ptr_carr),
+        fn_gc_special_raw_cpp_ptr: Some(ffi_gc_special_raw_cpp_ptr),
         fn_get_config: None,
         fn_set_store: None,
         fn_set_pb_msg_by_bytes: Some(ffi_set_pb_msg_by_bytes),
         fn_handle_safe_ts_update: Some(ffi_handle_safe_ts_update),
+        fn_fast_add_peer: Some(ffi_fast_add_peer),
+        fn_create_write_batch: Some(ffi_mockps_create_write_batch),
+        fn_write_batch_put_page: Some(ffi_mockps_write_batch_put_page),
+        fn_write_batch_del_page: Some(ffi_mockps_write_batch_del_page),
+        fn_write_batch_size: Some(ffi_mockps_write_batch_size),
+        fn_write_batch_is_empty: Some(ffi_mockps_write_batch_is_empty),
+        fn_write_batch_merge: Some(ffi_mockps_write_batch_merge),
+        fn_write_batch_clear: Some(ffi_mockps_write_batch_clear),
+        fn_consume_write_batch: Some(ffi_mockps_consume_write_batch),
+        fn_handle_read_page: Some(ffi_mockps_handle_read_page),
+        fn_handle_purge_pagestorage: Some(ffi_mockps_handle_purge_pagestorage),
+        fn_handle_scan_page: Some(ffi_mockps_handle_scan_page),
+        fn_handle_seek_ps_key: Some(ffi_mockps_handle_seek_ps_key),
+        fn_ps_is_empty: Some(ffi_mockps_ps_is_empty),
     }
 }
 
-unsafe fn into_engine_store_server_wrap(
+pub unsafe fn into_engine_store_server_wrap(
     arg1: *const ffi_interfaces::EngineStoreServerWrap,
 ) -> &'static mut EngineStoreServerWrap {
     &mut *(arg1 as *mut EngineStoreServerWrap)
@@ -732,36 +775,31 @@ unsafe extern "C" fn ffi_handle_write_raft_cmd(
     store.handle_write_raft_cmd(arg2, arg3)
 }
 
-enum RawCppPtrTypeImpl {
+#[repr(u32)]
+#[derive(IntEnum, Copy, Clone)]
+pub enum RawCppPtrTypeImpl {
     None = 0,
-    String,
-    PreHandledSnapshotWithBlock,
-    WakerNotifier,
+    String = 1,
+    PreHandledSnapshotWithBlock = 11,
+    WakerNotifier = 12,
+    PSWriteBatch = 13,
+    PSUniversalPage = 14,
+    PSPageAndCppStr = 15,
 }
 
-// TODO
-#[allow(clippy::from_over_into)]
-impl From<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
-    fn from(o: ffi_interfaces::RawCppPtrType) -> Self {
-        match o {
-            0 => RawCppPtrTypeImpl::None,
-            1 => RawCppPtrTypeImpl::String,
-            2 => RawCppPtrTypeImpl::PreHandledSnapshotWithBlock,
-            3 => RawCppPtrTypeImpl::WakerNotifier,
-            _ => unreachable!(),
-        }
+impl From<RawCppPtrTypeImpl> for ffi_interfaces::RawCppPtrType {
+    fn from(value: RawCppPtrTypeImpl) -> Self {
+        assert_type_eq::assert_type_eq!(ffi_interfaces::RawCppPtrType, u32);
+        value.int_value()
     }
 }
 
-// TODO remove this warn.
-#[allow(clippy::from_over_into)]
-impl Into<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
-    fn into(self) -> ffi_interfaces::RawCppPtrType {
-        match self {
-            RawCppPtrTypeImpl::None => 0,
-            RawCppPtrTypeImpl::String => 1,
-            RawCppPtrTypeImpl::PreHandledSnapshotWithBlock => 2,
-            RawCppPtrTypeImpl::WakerNotifier => 3,
+impl From<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
+    fn from(value: ffi_interfaces::RawCppPtrType) -> Self {
+        if let Ok(s) = RawCppPtrTypeImpl::from_int(value) {
+            s
+        } else {
+            panic!("unknown RawCppPtrType {:?}", value);
         }
     }
 }
@@ -917,11 +955,35 @@ impl ProxyNotifier {
     }
 }
 
+extern "C" fn ffi_gc_special_raw_cpp_ptr(
+    ptr: ffi_interfaces::RawVoidPtr,
+    hint_len: u64,
+    tp: ffi_interfaces::SpecialCppPtrType,
+) {
+    match tp {
+        ffi_interfaces::SpecialCppPtrType::None => (),
+        ffi_interfaces::SpecialCppPtrType::TupleOfRawCppPtr => unsafe {
+            let p = Box::from_raw(std::slice::from_raw_parts_mut(
+                ptr as *mut RawCppPtr,
+                hint_len as usize,
+            ));
+            drop(p);
+        },
+        ffi_interfaces::SpecialCppPtrType::ArrayOfRawCppPtr => unsafe {
+            let p = Box::from_raw(std::slice::from_raw_parts_mut(
+                ptr as *mut RawVoidPtr,
+                hint_len as usize,
+            ));
+            drop(p);
+        },
+    }
+}
+
 extern "C" fn ffi_gc_raw_cpp_ptr(
     ptr: ffi_interfaces::RawVoidPtr,
     tp: ffi_interfaces::RawCppPtrType,
 ) {
-    match RawCppPtrTypeImpl::from(tp) {
+    match tp.into() {
         RawCppPtrTypeImpl::None => {}
         RawCppPtrTypeImpl::String => unsafe {
             drop(Box::<Vec<u8>>::from_raw(ptr as *mut _));
@@ -932,6 +994,43 @@ extern "C" fn ffi_gc_raw_cpp_ptr(
         RawCppPtrTypeImpl::WakerNotifier => unsafe {
             drop(Box::from_raw(ptr as *mut ProxyNotifier));
         },
+        RawCppPtrTypeImpl::PSWriteBatch => unsafe {
+            drop(Box::from_raw(ptr as *mut MockPSWriteBatch));
+        },
+        RawCppPtrTypeImpl::PSUniversalPage => unsafe {
+            drop(Box::from_raw(ptr as *mut MockPSUniversalPage));
+        },
+        _ => todo!(),
+    }
+}
+
+extern "C" fn ffi_gc_raw_cpp_ptr_carr(
+    ptr: ffi_interfaces::RawVoidPtr,
+    tp: ffi_interfaces::RawCppPtrType,
+    len: u64,
+) {
+    match tp.into() {
+        RawCppPtrTypeImpl::String => unsafe {
+            let p = Box::from_raw(std::slice::from_raw_parts_mut(
+                ptr as *mut RawVoidPtr,
+                len as usize,
+            ));
+            for i in 0..len {
+                let i = i as usize;
+                if !p[i].is_null() {
+                    ffi_gc_raw_cpp_ptr(p[i], RawCppPtrTypeImpl::String.into());
+                }
+            }
+            drop(p);
+        },
+        RawCppPtrTypeImpl::PSPageAndCppStr => unsafe {
+            let p = Box::from_raw(std::slice::from_raw_parts_mut(
+                ptr as *mut PageAndCppStrWithView,
+                len as usize,
+            ));
+            drop(p)
+        },
+        _ => todo!(),
     }
 }
 
@@ -1231,6 +1330,252 @@ unsafe extern "C" fn ffi_handle_compute_store_stats(
         engine_bytes_read: 0,
         engine_keys_read: 0,
     }
+}
+
+pub unsafe fn create_cpp_str_parts(
+    s: Option<Vec<u8>>,
+) -> (ffi_interfaces::RawCppPtr, ffi_interfaces::BaseBuffView) {
+    match s {
+        Some(s) => {
+            let len = s.len() as u64;
+            let ptr = Box::into_raw(Box::new(s)); // leak
+            (
+                ffi_interfaces::RawCppPtr {
+                    ptr: ptr as RawVoidPtr,
+                    type_: RawCppPtrTypeImpl::String.into(),
+                },
+                ffi_interfaces::BaseBuffView {
+                    data: (*ptr).as_ptr() as *const _,
+                    len,
+                },
+            )
+        }
+        None => (
+            ffi_interfaces::RawCppPtr {
+                ptr: std::ptr::null_mut(),
+                type_: RawCppPtrTypeImpl::None.into(),
+            },
+            ffi_interfaces::BaseBuffView {
+                data: std::ptr::null(),
+                len: 0,
+            },
+        ),
+    }
+}
+
+pub unsafe fn create_cpp_str(s: Option<Vec<u8>>) -> ffi_interfaces::CppStrWithView {
+    let (p, v) = create_cpp_str_parts(s);
+    ffi_interfaces::CppStrWithView { inner: p, view: v }
+}
+
+#[allow(clippy::redundant_closure_call)]
+unsafe extern "C" fn ffi_fast_add_peer(
+    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
+    region_id: u64,
+    new_peer_id: u64,
+) -> ffi_interfaces::FastAddPeerRes {
+    let store = into_engine_store_server_wrap(arg1);
+    let cluster = &*(store.cluster_ptr as *const mock_cluster::Cluster<NodeCluster>);
+    let store_id = (*store.engine_store_server).id;
+    (*store.engine_store_server).mutate_region_states(region_id, |e: &mut RegionStats| {
+        e.fast_add_peer_count.fetch_add(1, Ordering::SeqCst);
+    });
+
+    let failed_add_peer_res =
+        |status: ffi_interfaces::FastAddPeerStatus| ffi_interfaces::FastAddPeerRes {
+            status,
+            apply_state: create_cpp_str(None),
+            region: create_cpp_str(None),
+        };
+    let from_store = (|| {
+        fail::fail_point!("ffi_fast_add_peer_from_id", |t| {
+            let t = t.unwrap().parse::<u64>().unwrap();
+            t
+        });
+        1
+    })();
+    let block_wait: bool = (|| {
+        fail::fail_point!("ffi_fast_add_peer_block_wait", |t| {
+            let t = t.unwrap().parse::<u64>().unwrap();
+            t
+        });
+        0
+    })() != 0;
+    let fail_after_write: bool = (|| {
+        fail::fail_point!("ffi_fast_add_peer_fail_after_write", |t| {
+            let t = t.unwrap().parse::<u64>().unwrap();
+            t
+        });
+        0
+    })() != 0;
+    debug!("recover from remote peer: enter from {} to {}", from_store, store_id; "region_id" => region_id);
+
+    for retry in 0..300 {
+        let mut ret: Option<ffi_interfaces::FastAddPeerRes> = None;
+        if retry > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        cluster.access_ffi_helpers(&mut |guard: &mut HashMap<u64, crate::mock_cluster::FFIHelperSet>| {
+            debug!("recover from remote peer: preparing from {} to {}, persist and check source", from_store, store_id; "region_id" => region_id);
+            let source_server = match guard.get_mut(&from_store) {
+                Some(s) => &mut s.engine_store_server,
+                None => {
+                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::NoSuitable));
+                    return;
+                }
+            };
+            let source_engines = match source_server.engines.clone() {
+                Some(s) => s,
+                None => {
+                    error!("recover from remote peer: failed get source engine"; "region_id" => region_id);
+                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData));
+                    return
+                }
+            };
+            // TODO We must ask the remote peer to persist before get a snapshot.
+            let source_region = match source_server.kvstore.get(&region_id) {
+                Some(s) => s,
+                None => {
+                    error!("recover from remote peer: failed read source region info"; "region_id" => region_id);
+                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData));
+                    return;
+                }
+            };
+            let region_local_state: RegionLocalState = match general_get_region_local_state(
+                &source_engines.kv,
+                region_id,
+            ) {
+                Some(x) => x,
+                None => {
+                    debug!("recover from remote peer: preparing from {} to {}:{}, not region state", from_store, store_id, new_peer_id; "region_id" => region_id);
+                    // We don't return BadData here, since the data may not be persisted.
+                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::WaitForData));
+                    return;
+                }
+            };
+            let new_region_meta = region_local_state.get_region();
+            let peer_state = region_local_state.get_state();
+            // Validation
+            match peer_state {
+                PeerState::Tombstone | PeerState::Applying => {
+                    // Note in real implementation, we will avoid selecting this peer.
+                    error!("recover from remote peer: preparing from {} to {}:{}, error peer state {:?}", from_store, store_id, new_peer_id, peer_state; "region_id" => region_id);
+                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData));
+                    return;
+                }
+                _ => {
+                    info!("recover from remote peer: preparing from {} to {}:{}, ok peer state {:?}", from_store, store_id, new_peer_id, peer_state; "region_id" => region_id);
+                }
+            };
+            if !engine_store_ffi::observer::validate_remote_peer_region(
+                new_region_meta,
+                store_id,
+                new_peer_id,
+            ) {
+                debug!("recover from remote peer: preparing from {} to {}, not applied conf change {}", from_store, store_id, new_peer_id; "region_id" => region_id);
+                ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::WaitForData));
+                return;
+            }
+            // TODO check commit_index and applied_index here
+            debug!("recover from remote peer: preparing from {} to {}, check target", from_store, store_id; "region_id" => region_id);
+            let new_region = make_new_region(
+                Some(new_region_meta.clone()),
+                Some((*store.engine_store_server).id),
+            );
+            (*store.engine_store_server)
+                .kvstore
+                .insert(region_id, Box::new(new_region));
+            let target_engines = match (*store.engine_store_server).engines.clone() {
+                Some(s) => s,
+                None => {
+                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::OtherError));
+                    return;
+                }
+            };
+            let target_region = match (*store.engine_store_server).kvstore.get_mut(&region_id) {
+                Some(s) => s,
+                None => {
+                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData));
+                    return;
+                }
+            };
+            debug!("recover from remote peer: meta from {} to {}", from_store, store_id; "region_id" => region_id);
+            // Must first dump meta then data, otherwise data may lag behind.
+            // We can see a raft log hole at applied_index otherwise.
+            let apply_state: RaftApplyState = match general_get_apply_state(
+                &source_engines.kv,
+                region_id,
+            ) {
+                Some(x) => x,
+                None => {
+                    error!("recover from remote peer: failed read apply state"; "region_id" => region_id);
+                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData));
+                    return;
+                }
+            };
+            debug!("recover from remote peer: begin data from {} to {}", from_store, store_id; 
+                "region_id" => region_id,
+                "apply_state" => ?apply_state,
+            );
+            // TODO In TiFlash we should take care of write batch size
+            if let Err(e) = copy_data_from(
+                &source_engines,
+                &target_engines,
+                &source_region,
+                target_region,
+            ) {
+                error!("recover from remote peer: inject error {:?}", e; "region_id" => region_id);
+                ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::FailedInject));
+                return;
+            }
+            if fail_after_write {
+                let mut raft_wb = target_engines.raft.log_batch(1024);
+                let mut entries: Vec<raft::eraftpb::Entry> = Default::default();
+                target_engines
+                    .raft
+                    .get_all_entries_to(region_id, &mut entries)
+                    .unwrap();
+                let l = entries.len();
+                // Manually delete one raft log
+                // let from = entries.get(l - 2).unwrap().get_index();
+                let from = 7;
+                let to = entries.get(l - 1).unwrap().get_index() + 1;
+                debug!("recover from remote peer: simulate error from {} to {}", from_store, store_id;
+                    "region_id" => region_id,
+                    "from" => from,
+                    "to" => to,
+                );
+                // raft_wb.cut_logs(region_id, from, to);
+                target_engines.raft.gc(region_id, from, to, &mut raft_wb).unwrap();
+                target_engines.raft.consume(&mut raft_wb, true).unwrap();
+            }
+            let apply_state_bytes = apply_state.write_to_bytes().unwrap();
+            let region_bytes = region_local_state.get_region().write_to_bytes().unwrap();
+            let apply_state_ptr = create_cpp_str(Some(apply_state_bytes));
+            let region_ptr = create_cpp_str(Some(region_bytes));
+            // Check if we have commit_index.
+            debug!("recover from remote peer: ok from {} to {}", from_store, store_id; "region_id" => region_id);
+            ret = Some(ffi_interfaces::FastAddPeerRes {
+                status: ffi_interfaces::FastAddPeerStatus::Ok,
+                apply_state: apply_state_ptr,
+                region: region_ptr,
+            });
+        });
+        if let Some(r) = ret {
+            match r.status {
+                ffi_interfaces::FastAddPeerStatus::WaitForData => {
+                    if block_wait {
+                        continue;
+                    } else {
+                        return r;
+                    }
+                }
+                _ => return r,
+            }
+        }
+    }
+    error!("recover from remote peer: failed after retry"; "region_id" => region_id);
+    failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData)
 }
 
 #[allow(clippy::single_element_loop)]

@@ -201,3 +201,25 @@ apply-low-priority-pool-size = 41
         config.raft_store.apply_batch_system.low_priority_pool_size
     );
 }
+
+#[test]
+fn test_config_proxy_owned_config() {
+    test_util::init_log_for_test();
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    write!(
+        file,
+        "
+[engine-store]
+enable-fast-add-peer = true
+    "
+    )
+    .unwrap();
+    let path = file.path();
+
+    let mut v: Vec<String> = vec![];
+    let cpath = Some(path.as_os_str());
+    let proxy_config = gen_proxy_config(&cpath, false, &mut v);
+
+    info!("using proxy config"; "config" => ?proxy_config);
+    assert_eq!(true, proxy_config.engine_store.enable_fast_add_peer);
+}

@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(drain_filter)]
+#![feature(let_chains)]
 
 #[allow(dead_code)]
 pub mod interfaces;
@@ -7,8 +8,10 @@ pub mod interfaces;
 pub mod basic_ffi_impls;
 pub mod domain_impls;
 pub mod encryption_impls;
+pub mod ffihub_impl;
 mod lock_cf_reader;
 pub mod observer;
+pub mod ps_engine;
 mod read_index_helper;
 pub mod sst_reader_impls;
 mod utils;
@@ -26,7 +29,9 @@ pub use basic_ffi_impls::*;
 pub use domain_impls::*;
 use encryption::DataKeyManager;
 pub use encryption_impls::*;
+pub use engine_tiflash::EngineStoreConfig;
 use engine_traits::{Peekable, CF_LOCK};
+pub use ffihub_impl::TiFlashFFIHub;
 use kvproto::{kvrpcpb, metapb, raft_cmdpb};
 use lazy_static::lazy_static;
 use protobuf::Message;
@@ -34,10 +39,12 @@ pub use read_index_helper::ReadIndexClient;
 pub use sst_reader_impls::*;
 
 pub use self::interfaces::root::DB::{
-    BaseBuffView, ColumnFamilyType, CppStrVecView, EngineStoreApplyRes, EngineStoreServerHelper,
-    EngineStoreServerStatus, FileEncryptionRes, FsStats, HttpRequestRes, HttpRequestStatus,
-    KVGetStatus, RaftCmdHeader, RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr,
-    RawCppStringPtr, RawVoidPtr, SSTReaderPtr, StoreStats, WriteCmdType, WriteCmdsView,
+    BaseBuffView, ColumnFamilyType, CppStrVecView, CppStrWithView, EngineStoreApplyRes,
+    EngineStoreServerHelper, EngineStoreServerStatus, FastAddPeerRes, FastAddPeerStatus,
+    FileEncryptionRes, FsStats, HttpRequestRes, HttpRequestStatus, KVGetStatus,
+    PageAndCppStrWithView, RaftCmdHeader, RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr,
+    RawCppPtrArr, RawCppPtrCarr, RawCppPtrTuple, RawCppStringPtr, RawVoidPtr, SSTReaderPtr,
+    SpecialCppPtrType, StoreStats, WriteCmdType, WriteCmdsView,
 };
 use self::interfaces::root::DB::{
     ConstRawVoidPtr, RaftStoreProxyPtr, RawCppPtrType, RawRustPtr, SSTReaderInterfaces, SSTView,
@@ -350,7 +357,7 @@ impl RaftStoreProxyFFIHelper {
 }
 
 impl RawCppPtr {
-    fn into_raw(mut self) -> RawVoidPtr {
+    pub fn into_raw(mut self) -> RawVoidPtr {
         let ptr = self.ptr;
         self.ptr = std::ptr::null_mut();
         ptr
@@ -375,13 +382,111 @@ impl Drop for RawCppPtr {
     }
 }
 
+impl RawCppPtrTuple {
+    pub fn is_null(&self) -> bool {
+        unsafe { (*self.inner).ptr.is_null() }
+    }
+}
+
+unsafe impl Send for RawCppPtrTuple {}
+
+impl Drop for RawCppPtrTuple {
+    fn drop(&mut self) {
+        // Note the layout is:
+        // [0] RawCppPtr to T
+        // [1] RawCppPtr to R
+        // ...
+        // [len-1] RawCppPtr to S
+        unsafe {
+            if !self.is_null() {
+                let helper = get_engine_store_server_helper();
+                let len = self.len;
+                // Delete all `void *`.
+                for i in 0..len {
+                    let i = i as usize;
+                    let inner_i = self.inner.add(i);
+                    // Will not fire even without the if in tests,
+                    // since type must be 0 which is None.
+                    if !inner_i.is_null() {
+                        helper.gc_raw_cpp_ptr((*inner_i).ptr, (*inner_i).type_);
+                        // We still set to nullptr, even though we will immediately delete it.
+                        (*inner_i).ptr = std::ptr::null_mut();
+                    }
+                }
+                // Delete `void **`.
+                helper.gc_special_raw_cpp_ptr(
+                    self.inner as RawVoidPtr,
+                    self.len,
+                    SpecialCppPtrType::TupleOfRawCppPtr,
+                );
+                self.inner = std::ptr::null_mut();
+                self.len = 0;
+            }
+        }
+    }
+}
+
+impl RawCppPtrArr {
+    pub fn is_null(&self) -> bool {
+        self.inner.is_null()
+    }
+}
+
+unsafe impl Send for RawCppPtrArr {}
+
+impl Drop for RawCppPtrArr {
+    fn drop(&mut self) {
+        // Note the layout is:
+        // [0] RawVoidPtr to T
+        // [1] RawVoidPtr
+        // ...
+        // [len-1] RawVoidPtr
+        unsafe {
+            if !self.is_null() {
+                let helper = get_engine_store_server_helper();
+                let len = self.len;
+                // Delete all `T *`
+                for i in 0..len {
+                    let i = i as usize;
+                    let inner_i = self.inner.add(i);
+                    // Will fire even without the if in tests, since type is not 0.
+                    if !(*inner_i).is_null() {
+                        helper.gc_raw_cpp_ptr(*inner_i, self.type_);
+                        // We still set to nullptr, even though we will immediately delete it.
+                        *inner_i = std::ptr::null_mut();
+                    }
+                }
+                // Delete `T **`
+                helper.gc_special_raw_cpp_ptr(
+                    self.inner as RawVoidPtr,
+                    self.len,
+                    SpecialCppPtrType::ArrayOfRawCppPtr,
+                );
+                self.inner = std::ptr::null_mut();
+                self.len = 0;
+            }
+        }
+    }
+}
+
+impl Drop for RawCppPtrCarr {
+    fn drop(&mut self) {
+        if !self.inner.is_null() {
+            let helper = get_engine_store_server_helper();
+            helper.gc_raw_cpp_ptr_carr(self.inner as RawVoidPtr, self.type_, self.len);
+            self.inner = std::ptr::null_mut();
+            self.len = 0;
+        }
+    }
+}
+
 static mut ENGINE_STORE_SERVER_HELPER_PTR: isize = 0;
 
 pub fn get_engine_store_server_helper_ptr() -> isize {
     unsafe { ENGINE_STORE_SERVER_HELPER_PTR }
 }
 
-fn get_engine_store_server_helper() -> &'static EngineStoreServerHelper {
+pub fn get_engine_store_server_helper() -> &'static EngineStoreServerHelper {
     gen_engine_store_server_helper(unsafe { ENGINE_STORE_SERVER_HELPER_PTR })
 }
 
@@ -411,6 +516,25 @@ impl EngineStoreServerHelper {
         debug_assert!(self.fn_gc_raw_cpp_ptr.is_some());
         unsafe {
             (self.fn_gc_raw_cpp_ptr.into_inner())(ptr, tp);
+        }
+    }
+
+    fn gc_raw_cpp_ptr_carr(&self, ptr: *mut ::std::os::raw::c_void, tp: RawCppPtrType, len: u64) {
+        debug_assert!(self.fn_gc_raw_cpp_ptr_carr.is_some());
+        unsafe {
+            (self.fn_gc_raw_cpp_ptr_carr.into_inner())(ptr, tp, len);
+        }
+    }
+
+    fn gc_special_raw_cpp_ptr(
+        &self,
+        ptr: *mut ::std::os::raw::c_void,
+        hint_len: u64,
+        tp: SpecialCppPtrType,
+    ) {
+        debug_assert!(self.fn_gc_special_raw_cpp_ptr.is_some());
+        unsafe {
+            (self.fn_gc_special_raw_cpp_ptr.into_inner())(ptr, hint_len, tp);
         }
     }
 
@@ -508,6 +632,75 @@ impl EngineStoreServerHelper {
         }
     }
 
+    pub fn create_write_batch(&self) -> RawCppPtr {
+        debug_assert!(self.fn_create_write_batch.is_some());
+        unsafe { (self.fn_create_write_batch.into_inner())(self.inner) }
+    }
+
+    pub fn write_batch_put_page(&self, wb: RawVoidPtr, page_id: BaseBuffView, page: BaseBuffView) {
+        debug_assert!(self.fn_write_batch_put_page.is_some());
+        unsafe { (self.fn_write_batch_put_page.into_inner())(wb, page_id, page) }
+    }
+
+    pub fn write_batch_del_page(&self, wb: RawVoidPtr, page_id: BaseBuffView) {
+        debug_assert!(self.fn_write_batch_del_page.is_some());
+        unsafe { (self.fn_write_batch_del_page.into_inner())(wb, page_id) }
+    }
+
+    pub fn write_batch_size(&self, wb: RawVoidPtr) -> u64 {
+        debug_assert!(self.fn_write_batch_size.is_some());
+        unsafe { (self.fn_write_batch_size.into_inner())(wb) }
+    }
+
+    pub fn write_batch_is_empty(&self, wb: RawVoidPtr) -> u8 {
+        debug_assert!(self.fn_write_batch_is_empty.is_some());
+        unsafe { (self.fn_write_batch_is_empty.into_inner())(wb) }
+    }
+
+    pub fn write_batch_merge(&self, lwb: RawVoidPtr, rwb: RawVoidPtr) {
+        debug_assert!(self.fn_write_batch_merge.is_some());
+        unsafe { (self.fn_write_batch_merge.into_inner())(lwb, rwb) }
+    }
+
+    pub fn write_batch_clear(&self, wb: RawVoidPtr) {
+        debug_assert!(self.fn_write_batch_clear.is_some());
+        unsafe { (self.fn_write_batch_clear.into_inner())(wb) }
+    }
+
+    pub fn consume_write_batch(&self, wb: RawVoidPtr) {
+        debug_assert!(self.fn_consume_write_batch.is_some());
+        unsafe { (self.fn_consume_write_batch.into_inner())(self.inner, wb) }
+    }
+
+    pub fn read_page(&self, page_id: BaseBuffView) -> CppStrWithView {
+        debug_assert!(self.fn_handle_read_page.is_some());
+        unsafe { (self.fn_handle_read_page.into_inner())(self.inner, page_id) }
+    }
+
+    pub fn scan_page(
+        &self,
+        start_page_id: BaseBuffView,
+        end_page_id: BaseBuffView,
+    ) -> RawCppPtrCarr {
+        debug_assert!(self.fn_handle_scan_page.is_some());
+        unsafe { (self.fn_handle_scan_page.into_inner())(self.inner, start_page_id, end_page_id) }
+    }
+
+    pub fn purge_pagestorage(&self) {
+        debug_assert!(self.fn_handle_purge_pagestorage.is_some());
+        unsafe { (self.fn_handle_purge_pagestorage.into_inner())(self.inner) }
+    }
+
+    pub fn seek_ps_key(&self, page_id: BaseBuffView) -> CppStrWithView {
+        debug_assert!(self.fn_handle_seek_ps_key.is_some());
+        unsafe { (self.fn_handle_seek_ps_key.into_inner())(self.inner, page_id) }
+    }
+
+    pub fn is_ps_empty(&self) -> u8 {
+        debug_assert!(self.fn_ps_is_empty.is_some());
+        unsafe { (self.fn_ps_is_empty.into_inner())(self.inner) }
+    }
+
     pub fn pre_handle_snapshot(
         &self,
         region: &metapb::Region,
@@ -565,7 +758,10 @@ impl EngineStoreServerHelper {
         }
     }
 
-    fn gen_cpp_string(&self, buff: &[u8]) -> RawCppStringPtr {
+    // Generate a cpp string, so the other side can read.
+    // The string is owned by the otherside, and will be deleted by
+    // `gc_raw_cpp_ptr`.
+    pub fn gen_cpp_string(&self, buff: &[u8]) -> RawCppStringPtr {
         debug_assert!(self.fn_gen_cpp_string.is_some());
         unsafe { (self.fn_gen_cpp_string.into_inner())(buff.into()).into_raw() as RawCppStringPtr }
     }
@@ -656,6 +852,11 @@ impl EngineStoreServerHelper {
                 leader_safe_ts,
             )
         }
+    }
+
+    pub fn fast_add_peer(&self, region_id: u64, new_peer_id: u64) -> FastAddPeerRes {
+        debug_assert!(self.fn_fast_add_peer.is_some());
+        unsafe { (self.fn_fast_add_peer.into_inner())(self.inner, region_id, new_peer_id) }
     }
 }
 

@@ -10,6 +10,7 @@ portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 failpoints = ["fail/failpoints"]
 testexport = []
+enable-pagestorage = []
 
 # Disables runtime checks of invariants required by RocksDB that are redundant
 # with assertions inside RocksDB itself. This makes it possible to test those
@@ -41,6 +42,7 @@ libc = "0.2"
 log_wrappers = { workspace = true }
 num_cpus = "1"
 online_config = { workspace = true }
+portable-atomic = "0.3"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2"

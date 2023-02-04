@@ -22,6 +22,7 @@ test-engines-rocksdb = [
 test-engines-panic = [
   "engine_test/test-engines-panic",
 ]
+enable-pagestorage = []
 
 cloud-aws = ["sst_importer/cloud-aws"]
 cloud-gcp = ["sst_importer/cloud-gcp"]
@@ -62,6 +63,7 @@ online_config = { workspace = true }
 ordered-float = "2.6"
 parking_lot = "0.12"
 pd_client = { workspace = true, default-features = false }
+portable-atomic = "0.3"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }

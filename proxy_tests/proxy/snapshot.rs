@@ -292,6 +292,7 @@ fn test_prehandle_fail() {
 #[test]
 fn test_split_merge() {
     let (mut cluster, pd_client) = new_mock_cluster_snap(0, 3);
+    pd_client.disable_default_operator();
     assert_eq!(cluster.cfg.proxy_cfg.raft_store.snap_handle_pool_size, 2);
 
     // Can always apply snapshot immediately
@@ -331,7 +332,7 @@ fn test_split_merge() {
         assert_eq!(server.kvstore.get(&r1_new.get_id()).unwrap().region, r1_new);
         assert_eq!(server.kvstore.get(&r3_new.get_id()).unwrap().region, r3_new);
 
-        // Can get from disk
+        // Can get from disk, note in old version, we don't support migrate memory data
         check_key(&cluster, b"k1", b"v1", None, Some(true), None);
         check_key(&cluster, b"k3", b"v3", None, Some(true), None);
         // TODO Region in memory data must not contradict, but now we do not
@@ -358,7 +359,7 @@ fn test_split_merge() {
             r3_new2
         );
 
-        // Can get from disk
+        // Can get from disk, note in old version, we don't support migrate memory data
         check_key(&cluster, b"k1", b"v1", None, Some(true), None);
         check_key(&cluster, b"k3", b"v3", None, Some(true), None);
         // TODO Region in memory data must not contradict, but now we do not delete data

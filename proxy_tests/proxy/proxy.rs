@@ -26,7 +26,7 @@ pub use kvproto::{
 };
 pub use new_mock_engine_store::{
     config::Config,
-    get_apply_state, get_raft_local_state, get_region_local_state, make_new_region,
+    general_get_apply_state, general_get_region_local_state, get_raft_local_state, make_new_region,
     mock_cluster::{new_put_cmd, new_request, FFIHelperSet},
     must_get_equal, must_get_none,
     node::NodeCluster,
@@ -42,7 +42,7 @@ pub use test_raftstore::{new_learner_peer, new_peer};
 pub use tikv_util::{
     box_err, box_try,
     config::{ReadableDuration, ReadableSize},
-    store::find_peer,
+    store::{find_peer, find_peer_by_id},
     time::Duration,
     HandyRwLock,
 };
@@ -76,7 +76,7 @@ pub struct States {
 pub fn iter_ffi_helpers<C: Simulator<engine_store_ffi::TiFlashEngine>>(
     cluster: &Cluster<C>,
     store_ids: Option<Vec<u64>>,
-    f: &mut dyn FnMut(u64, &engine_rocks::RocksEngine, &mut FFIHelperSet) -> (),
+    f: &mut dyn FnMut(u64, &engine_store_ffi::TiFlashEngine, &mut FFIHelperSet) -> (),
 ) {
     cluster.iter_ffi_helpers(store_ids, f);
 }
@@ -90,7 +90,7 @@ pub fn maybe_collect_states(
     iter_ffi_helpers(
         cluster,
         store_ids,
-        &mut |id: u64, engine: &engine_rocks::RocksEngine, ffi: &mut FFIHelperSet| {
+        &mut |id: u64, engine: &engine_store_ffi::TiFlashEngine, ffi: &mut FFIHelperSet| {
             let server = &ffi.engine_store_server;
             let raft_engine = &cluster.get_engines(id).raft;
             if let Some(region) = server.kvstore.get(&region_id) {
@@ -98,8 +98,8 @@ pub fn maybe_collect_states(
                     Ok(Some(i)) => i,
                     _ => unreachable!(),
                 };
-                let apply_state = get_apply_state(&engine, region_id);
-                let region_state = get_region_local_state(&engine, region_id);
+                let apply_state = general_get_apply_state(engine, region_id);
+                let region_state = general_get_region_local_state(engine, region_id);
                 let raft_state = get_raft_local_state(raft_engine, region_id);
                 if apply_state.is_none() {
                     return;
@@ -134,6 +134,7 @@ pub fn collect_all_states(cluster: &Cluster<NodeCluster>, region_id: u64) -> Has
 }
 
 pub fn new_mock_cluster(id: u64, count: usize) -> (Cluster<NodeCluster>, Arc<TestPdClient>) {
+    tikv_util::set_panic_hook(true, "./");
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     let mut cluster = Cluster::new(id, count, sim, pd_client.clone(), ProxyConfig::default());
@@ -192,7 +193,7 @@ pub fn must_get_mem(
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     let s = std::str::from_utf8(key).unwrap_or("");
-    panic!(
+    let e = format!(
         "can't get mem value {:?} for key {}({}) in store {} cf {:?}, actual {:?}",
         value.map(tikv_util::escape),
         log_wrappers::hex_encode_upper(key),
@@ -200,7 +201,9 @@ pub fn must_get_mem(
         node_id,
         cf,
         last_res,
-    )
+    );
+    error!("{}", e);
+    panic!("{}", e);
 }
 
 pub fn must_put_and_check_key_with_generator<F: Fn(u64) -> (String, String)>(
@@ -606,8 +609,32 @@ pub fn must_wait_until_cond_node(
                         break;
                     }
                 }
+            } else {
+                // If region not exists in some store.
+                ok = false;
             }
         }
+        if ok {
+            break new_states;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        retry += 1;
+        if retry >= 30 {
+            panic!("states not as expect after timeout")
+        }
+    }
+}
+
+pub fn must_wait_until_cond_generic(
+    cluster: &Cluster<NodeCluster>,
+    region_id: u64,
+    store_ids: Option<Vec<u64>>,
+    pred: &dyn Fn(&HashMap<u64, States>) -> bool,
+) -> HashMap<u64, States> {
+    let mut retry = 0;
+    loop {
+        let new_states = maybe_collect_states(&cluster, region_id, store_ids.clone());
+        let ok = pred(&new_states);
         if ok {
             break new_states;
         }
@@ -673,13 +700,13 @@ pub fn must_not_merged(pd_client: Arc<TestPdClient>, from: u64, duration: Durati
     let timer = tikv_util::time::Instant::now();
     loop {
         let region = futures::executor::block_on(pd_client.get_region_by_id(from)).unwrap();
-        if let Some(r) = region {
+        if let Some(_) = region {
             if timer.saturating_elapsed() > duration {
                 return;
             }
         } else {
             panic!("region {} is merged.", from);
         }
-        std::thread::sleep_ms(10);
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
