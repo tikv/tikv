@@ -5,6 +5,7 @@
 
 use std::{
     mem,
+    ops::Index,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -12,8 +13,9 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::channel::{SendError, Sender, TrySendError};
+use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
+use resource_control::channel::Sender;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     error, info, safe_panic,
@@ -25,7 +27,7 @@ use crate::store::{
     metrics::*,
 };
 
-const RETRY_SCHEDULE_MILLISECONS: u64 = 10;
+const RETRY_SCHEDULE_MILLISECONDS: u64 = 10;
 
 pub trait WriteRouterContext<EK, ER>
 where
@@ -71,6 +73,9 @@ where
     last_unpersisted: Option<u64>,
     /// Pending write msgs since rescheduling.
     pending_write_msgs: Vec<WriteMsg<EK, ER>>,
+    /// The scheduling priority of the last msg, only valid when priority
+    /// scheduling is enabled
+    last_msg_priority: u64,
 }
 
 impl<EK, ER> WriteRouter<EK, ER>
@@ -86,6 +91,7 @@ where
             next_writer_id: None,
             last_unpersisted: None,
             pending_write_msgs: vec![],
+            last_msg_priority: 0,
         }
     }
 
@@ -221,18 +227,21 @@ where
         } else {
             // Rescheduling fails at this time. Retry 10ms later.
             // The task should be sent to the original write worker.
-            self.next_retry_time = now + Duration::from_millis(RETRY_SCHEDULE_MILLISECONS);
+            self.next_retry_time = now + Duration::from_millis(RETRY_SCHEDULE_MILLISECONDS);
             true
         }
     }
 
-    fn send<C: WriteRouterContext<EK, ER>>(&self, ctx: &mut C, msg: WriteMsg<EK, ER>) {
-        let write_senders = ctx.write_senders();
-        match write_senders.try_send(self.writer_id, msg) {
-            Ok(()) => (),
+    fn send<C: WriteRouterContext<EK, ER>>(&mut self, ctx: &mut C, msg: WriteMsg<EK, ER>) {
+        let sender = &ctx.write_senders()[self.writer_id];
+        sender.consume_msg_resource(&msg);
+        // pass the priority of last msg as low bound to make sure all messages of one
+        // peer are handled sequentially.
+        match sender.try_send(msg, self.last_msg_priority) {
+            Ok(priority) => self.last_msg_priority = priority,
             Err(TrySendError::Full(msg)) => {
                 let now = Instant::now();
-                if write_senders.send(self.writer_id, msg).is_err() {
+                if sender.send(msg, self.last_msg_priority).is_err() {
                     // Write threads are destroyed after store threads during shutdown.
                     safe_panic!("{} failed to send write msg, err: disconnected", self.tag);
                 }
@@ -278,67 +287,74 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
     pub fn size(&self) -> usize {
         self.cached_senders.len()
     }
-}
 
-impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
     #[inline]
     pub fn refresh(&mut self) {
         if let Some(senders) = self.senders.any_new() {
             self.cached_senders = senders.clone();
         }
     }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> Index<usize> for WriteSenders<EK, ER> {
+    type Output = Sender<WriteMsg<EK, ER>>;
 
     #[inline]
-    pub fn send(
-        &self,
-        idx: usize,
-        msg: WriteMsg<EK, ER>,
-    ) -> Result<(), SendError<WriteMsg<EK, ER>>> {
-        debug_assert!(!self.is_empty());
-        self.cached_senders[idx].send(msg)
-    }
-
-    #[inline]
-    pub fn try_send(
-        &self,
-        idx: usize,
-        msg: WriteMsg<EK, ER>,
-    ) -> Result<(), TrySendError<WriteMsg<EK, ER>>> {
-        debug_assert!(!self.is_empty());
-        self.cached_senders[idx].try_send(msg)
+    fn index(&self, index: usize) -> &Sender<WriteMsg<EK, ER>> {
+        &self.cached_senders[index]
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::thread;
 
-    use crossbeam::channel::{bounded, Receiver};
-    use engine_test::kv::KvTestEngine;
+    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
+    use resource_control::channel::{bounded, Receiver};
     use tikv_util::config::ReadableDuration;
 
     use super::*;
 
+    pub struct TestContext {
+        pub senders: WriteSenders<KvTestEngine, RaftTestEngine>,
+        pub config: Config,
+        pub raft_metrics: RaftMetrics,
+    }
+
+    impl WriteRouterContext<KvTestEngine, RaftTestEngine> for TestContext {
+        fn write_senders(&self) -> &WriteSenders<KvTestEngine, RaftTestEngine> {
+            &self.senders
+        }
+
+        fn config(&self) -> &Config {
+            &self.config
+        }
+
+        fn raft_metrics(&self) -> &RaftMetrics {
+            &self.raft_metrics
+        }
+    }
+
     struct TestWriteRouter {
-        receivers: Vec<Receiver<WriteMsg<KvTestEngine, KvTestEngine>>>,
-        senders: WriteSenders<KvTestEngine, KvTestEngine>,
-        config: Config,
-        raft_metrics: RaftMetrics,
+        receivers: Vec<Receiver<WriteMsg<KvTestEngine, RaftTestEngine>>>,
+        ctx: TestContext,
     }
 
     impl TestWriteRouter {
         fn new(config: Config) -> Self {
             let (mut receivers, mut senders) = (vec![], vec![]);
             for _ in 0..config.store_io_pool_size {
-                let (tx, rx) = bounded(config.store_io_notify_capacity);
+                let (tx, rx) = bounded(None, config.store_io_notify_capacity);
                 receivers.push(rx);
                 senders.push(tx);
             }
             Self {
                 receivers,
-                senders: WriteSenders::new(Arc::new(VersionTrack::new(senders))),
-                config,
-                raft_metrics: RaftMetrics::new(true),
+                ctx: TestContext {
+                    senders: WriteSenders::new(Arc::new(VersionTrack::new(senders))),
+                    config,
+                    raft_metrics: RaftMetrics::new(true),
+                },
             }
         }
 
@@ -356,26 +372,13 @@ mod tests {
 
         fn must_same_reschedule_count(&self, count: usize) {
             let cnt = self
+                .ctx
                 .senders
                 .io_reschedule_concurrent_count
                 .load(Ordering::Relaxed);
             if cnt != count {
                 panic!("reschedule count not same, {} != {}", cnt, count);
             }
-        }
-    }
-
-    impl WriteRouterContext<KvTestEngine, KvTestEngine> for TestWriteRouter {
-        fn write_senders(&self) -> &WriteSenders<KvTestEngine, KvTestEngine> {
-            &self.senders
-        }
-
-        fn config(&self) -> &Config {
-            &self.config
-        }
-
-        fn raft_metrics(&self) -> &RaftMetrics {
-            &self.raft_metrics
         }
     }
 
@@ -387,10 +390,10 @@ mod tests {
         config.store_io_pool_size = 4;
         let mut t = TestWriteRouter::new(config);
         let mut r = WriteRouter::new("1".to_string());
-        r.send_write_msg(&mut t, None, WriteMsg::Shutdown);
+        r.send_write_msg(&mut t.ctx, None, WriteMsg::Shutdown);
         let writer_id = r.writer_id;
         for _ in 1..10 {
-            r.send_write_msg(&mut t, Some(10), WriteMsg::Shutdown);
+            r.send_write_msg(&mut t.ctx, Some(10), WriteMsg::Shutdown);
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(writer_id, r.writer_id);
@@ -410,7 +413,7 @@ mod tests {
         let last_time = r.next_retry_time;
         thread::sleep(Duration::from_millis(10));
         // `writer_id` will be chosen randomly due to `last_unpersisted` is None
-        r.send_write_msg(&mut t, None, WriteMsg::Shutdown);
+        r.send_write_msg(&mut t.ctx, None, WriteMsg::Shutdown);
         assert!(r.next_retry_time > last_time);
         assert_eq!(r.next_writer_id, None);
         assert_eq!(r.last_unpersisted, None);
@@ -425,7 +428,7 @@ mod tests {
         let writer_id = r.writer_id;
         let timer = Instant::now();
         loop {
-            r.send_write_msg(&mut t, Some(10), WriteMsg::Shutdown);
+            r.send_write_msg(&mut t.ctx, Some(10), WriteMsg::Shutdown);
             if let Some(id) = r.next_writer_id {
                 assert!(writer_id != id);
                 assert_eq!(r.last_unpersisted, Some(10));
@@ -443,7 +446,7 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
 
-        r.send_write_msg(&mut t, Some(20), WriteMsg::Shutdown);
+        r.send_write_msg(&mut t.ctx, Some(20), WriteMsg::Shutdown);
         assert!(r.next_writer_id.is_some());
         // `last_unpersisted` should not change
         assert_eq!(r.last_unpersisted, Some(10));
@@ -452,7 +455,7 @@ mod tests {
         t.must_same_reschedule_count(1);
 
         // No effect due to 9 < `last_unpersisted`(10)
-        r.check_new_persisted(&mut t, 9);
+        r.check_new_persisted(&mut t.ctx, 9);
         assert!(r.next_writer_id.is_some());
         assert_eq!(r.last_unpersisted, Some(10));
         assert_eq!(r.pending_write_msgs.len(), 2);
@@ -460,7 +463,7 @@ mod tests {
         t.must_same_reschedule_count(1);
 
         // Should reschedule and send msg
-        r.check_new_persisted(&mut t, 10);
+        r.check_new_persisted(&mut t.ctx, 10);
         assert_eq!(r.next_writer_id, None);
         assert_eq!(r.last_unpersisted, None);
         assert!(r.pending_write_msgs.is_empty());
@@ -468,7 +471,8 @@ mod tests {
         t.must_same_reschedule_count(0);
 
         thread::sleep(Duration::from_millis(10));
-        t.senders
+        t.ctx
+            .senders
             .io_reschedule_concurrent_count
             .store(4, Ordering::Relaxed);
         // Should retry reschedule next time because the limitation of concurrent count.
@@ -476,7 +480,7 @@ mod tests {
         // so using loop here.
         let timer = Instant::now();
         loop {
-            r.send_write_msg(&mut t, Some(30), WriteMsg::Shutdown);
+            r.send_write_msg(&mut t.ctx, Some(30), WriteMsg::Shutdown);
             t.must_same_msg_count(r.writer_id, 1);
             if r.next_writer_id.is_some() {
                 assert_eq!(r.last_unpersisted, None);
@@ -491,12 +495,13 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
 
-        t.senders
+        t.ctx
+            .senders
             .io_reschedule_concurrent_count
             .store(3, Ordering::Relaxed);
-        thread::sleep(Duration::from_millis(RETRY_SCHEDULE_MILLISECONS + 2));
+        thread::sleep(Duration::from_millis(RETRY_SCHEDULE_MILLISECONDS + 2));
         // Should reschedule now
-        r.send_write_msg(&mut t, Some(40), WriteMsg::Shutdown);
+        r.send_write_msg(&mut t.ctx, Some(40), WriteMsg::Shutdown);
         assert!(r.next_writer_id.is_some());
         assert_eq!(r.last_unpersisted, Some(40));
         t.must_same_msg_count(r.writer_id, 0);

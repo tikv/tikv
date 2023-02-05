@@ -14,7 +14,7 @@ use std::{
 };
 
 use collections::HashMap;
-use crossbeam::channel::{bounded, Receiver, TryRecvError};
+use crossbeam::channel::TryRecvError;
 use engine_traits::{
     KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
 };
@@ -24,6 +24,10 @@ use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use parking_lot::Mutex;
 use protobuf::Message;
 use raft::eraftpb::Entry;
+use resource_control::{
+    channel::{bounded, Receiver},
+    ResourceController, ResourceMetered,
+};
 use tikv_util::{
     box_err,
     config::{ReadableSize, Tracker, VersionTrack},
@@ -42,6 +46,7 @@ use crate::{
         local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics, TimeTracker},
         metrics::*,
         transport::Transport,
+        util,
         util::LatencyInspector,
         PeerMsg,
     },
@@ -269,6 +274,29 @@ where
         inspector: Vec<LatencyInspector>,
     },
     Shutdown,
+    #[cfg(test)]
+    Pause(std::sync::mpsc::Receiver<()>),
+}
+
+impl<EK, ER> ResourceMetered for WriteMsg<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+        match self {
+            WriteMsg::WriteTask(t) => {
+                let mut map = HashMap::default();
+                for entry in &t.entries {
+                    let header = util::get_entry_header(entry);
+                    let group_name = header.get_resource_group_name().to_owned();
+                    *map.entry(group_name).or_default() += entry.compute_size() as u64;
+                }
+                Some(map)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl<EK, ER> fmt::Debug for WriteMsg<EK, ER>
@@ -285,6 +313,8 @@ where
             ),
             WriteMsg::Shutdown => write!(fmt, "WriteMsg::Shutdown"),
             WriteMsg::LatencyInspect { .. } => write!(fmt, "WriteMsg::LatencyInspect"),
+            #[cfg(test)]
+            WriteMsg::Pause(_) => write!(fmt, "WriteMsg::Pause"),
         }
     }
 }
@@ -642,6 +672,10 @@ where
             } => {
                 self.pending_latency_inspect.push((send_time, inspector));
             }
+            #[cfg(test)]
+            WriteMsg::Pause(rx) => {
+                let _ = rx.recv();
+            }
         }
         false
     }
@@ -863,19 +897,17 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    resource_ctl: Option<Arc<ResourceController>>,
     /// Mailboxes for sending raft messages to async ios.
     writers: Arc<VersionTrack<SenderVec<EK, ER>>>,
     /// Background threads for handling asynchronous messages.
     handlers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-impl<EK, ER> Default for StoreWriters<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn default() -> Self {
+impl<EK: KvEngine, ER: RaftEngine> StoreWriters<EK, ER> {
+    pub fn new(resource_ctl: Option<Arc<ResourceController>>) -> Self {
         Self {
+            resource_ctl,
             writers: Arc::new(VersionTrack::default()),
             handlers: Arc::new(Mutex::new(vec![])),
         }
@@ -923,7 +955,7 @@ where
         assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
-            writers[i].send(WriteMsg::Shutdown).unwrap();
+            writers[i].send(WriteMsg::Shutdown, 0).unwrap();
             handler.join().unwrap();
         }
     }
@@ -958,11 +990,15 @@ where
         let mut handlers = self.handlers.lock();
         let current_size = self.writers.value().len();
         assert_eq!(current_size, handlers.len());
+        let resource_ctl = self.resource_ctl.clone();
         self.writers
             .update(move |writers: &mut SenderVec<EK, ER>| -> Result<()> {
                 for i in current_size..size {
                     let tag = format!("store-writer-{}", i);
-                    let (tx, rx) = bounded(writer_meta.cfg.value().store_io_notify_capacity);
+                    let (tx, rx) = bounded(
+                        resource_ctl.clone(),
+                        writer_meta.cfg.value().store_io_notify_capacity,
+                    );
                     let mut worker = Worker::new(
                         writer_meta.store_id,
                         tag.clone(),
