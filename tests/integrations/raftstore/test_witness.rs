@@ -12,7 +12,7 @@ use kvproto::{
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
-use tikv_util::{store::find_peer, config::ReadableDuration};
+use tikv_util::{config::ReadableDuration, store::find_peer};
 
 // Test the case that region split or merge with witness peer
 #[test]
