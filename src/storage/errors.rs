@@ -255,6 +255,15 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
             err.set_max_timestamp_not_synced(Default::default());
             Some(err)
         }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::FlashbackNotPrepared(
+            region_id,
+        )))) => {
+            let mut err = errorpb::Error::default();
+            let mut flashback_not_prepared_err = errorpb::FlashbackNotPrepared::default();
+            flashback_not_prepared_err.set_region_id(*region_id);
+            err.set_flashback_not_prepared(flashback_not_prepared_err);
+            Some(err)
+        }
         Error(box ErrorInner::SchedTooBusy) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
