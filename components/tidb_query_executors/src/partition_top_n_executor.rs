@@ -216,7 +216,6 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
                 logical_rows,
             });
 
-            dbg!(&self.eval_columns_buffer_unsafe);
             let order_eval_offset = self.eval_columns_buffer_unsafe.len();
             unsafe {
                 eval_exprs_decoded_no_lifetime(
@@ -228,8 +227,7 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
                     &mut self.eval_columns_buffer_unsafe,
                 )?;
             }
-            dbg!(&self.eval_columns_buffer_unsafe);
-            // todo: optimize memory usage of this.
+            // todo: optimize memory use of this.
             let partition_eval_offset = self.eval_columns_buffer_unsafe.len();
             unsafe {
                 eval_exprs_decoded_no_lifetime(
@@ -295,6 +293,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
     }
 
     #[inline]
+    /// Implementation of BatchExecutor::next_batch
     /// Memory Control Analysis:
     /// 1. if n > paging_size(1024), this operator won't do anything and just
     /// return data to upstream. So we can think n is less than or equal to
@@ -380,7 +379,557 @@ mod tests {
     use super::*;
     use crate::util::mock_executor::MockExecutor;
 
-    /// The first several tests are copied from `batch_top_n_executor.rs` to
+    #[test]
+    fn test_top_0() {
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::Double.into(), FieldTypeTp::Double.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![
+                    VectorValue::Real(vec![None, Real::new(7.0).ok(), None, None].into()),
+                    VectorValue::Real(vec![None, Real::new(7.0).ok(), None, None].into()),
+                ]),
+                logical_rows: (0..1).collect(),
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(true),
+            }],
+        );
+
+        let mut exec = BatchPartitionTopNExecutor::new_for_test(
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_constant_for_test(1)
+                    .build_for_test(),
+            ],
+            vec![false],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_constant_for_test(1)
+                    .build_for_test(),
+            ],
+            0,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(r.is_drained.unwrap());
+    }
+
+    #[test]
+    fn test_constant_partition() {
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::Double.into(), FieldTypeTp::Double.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![
+                    VectorValue::Real(
+                        vec![
+                            Real::new(1.0).ok(),
+                            Real::new(2.0).ok(),
+                            Real::new(3.0).ok(),
+                            Real::new(4.0).ok(),
+                        ]
+                        .into(),
+                    ),
+                    VectorValue::Real(
+                        vec![
+                            Real::new(5.0).ok(),
+                            Real::new(6.0).ok(),
+                            Real::new(7.0).ok(),
+                            Real::new(8.0).ok(),
+                        ]
+                        .into(),
+                    ),
+                ]),
+                logical_rows: (0..4).collect(),
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(true),
+            }],
+        );
+
+        let mut exec = BatchPartitionTopNExecutor::new_for_test(
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_constant_for_test(1)
+                    .build_for_test(),
+            ],
+            vec![false],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_constant_for_test(1)
+                    .build_for_test(),
+            ],
+            2,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0, 1]);
+        assert_eq!(r.physical_columns.rows_len(), 2);
+        assert_eq!(r.physical_columns.columns_len(), 2);
+        assert_eq!(
+            r.physical_columns[0].decoded().to_real_vec(),
+            &[Real::new(2.0).ok(), Real::new(1.0).ok(),]
+        );
+        assert_eq!(
+            r.physical_columns[1].decoded().to_real_vec(),
+            &[Real::new(6.0).ok(), Real::new(5.0).ok(),]
+        );
+        assert!(r.is_drained.unwrap());
+    }
+
+    #[test]
+    fn test_multiple_and_null_part_key() {
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::Long.into(), FieldTypeTp::Long.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![
+                    VectorValue::Int(
+                        vec![
+                            Some(1),
+                            Some(1),
+                            Some(1),
+                            None,
+                            None,
+                            None,
+                            Some(2),
+                            Some(2),
+                            Some(2),
+                        ]
+                        .into(),
+                    ),
+                    VectorValue::Int(
+                        vec![
+                            Some(1),
+                            Some(1),
+                            None,
+                            None,
+                            None,
+                            Some(2),
+                            Some(1),
+                            Some(1),
+                            None,
+                        ]
+                        .into(),
+                    ),
+                ]),
+                logical_rows: (0..9).collect(),
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(true),
+            }],
+        );
+
+        let mut exec = BatchPartitionTopNExecutor::new_for_test(
+            src_exec,
+            vec![],
+            vec![],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
+            ],
+            1,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        // dbg!(r.physical_columns);
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5]);
+        assert_eq!(r.physical_columns.rows_len(), 6);
+        assert_eq!(r.physical_columns.columns_len(), 2);
+        assert_eq!(
+            r.physical_columns[0].decoded().to_int_vec(),
+            &[Some(1), Some(1), None, None, Some(2), Some(2)]
+        );
+        assert_eq!(
+            r.physical_columns[1].decoded().to_int_vec(),
+            &[Some(1), None, None, Some(2), Some(1), None]
+        );
+        assert!(r.is_drained.unwrap());
+    }
+
+    #[test]
+    fn test_unordered_key() {
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::Long.into(), FieldTypeTp::Double.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![
+                    VectorValue::Int(vec![Some(1), Some(1), Some(2), Some(1)].into()),
+                    VectorValue::Real(
+                        vec![
+                            Real::new(5.0).ok(),
+                            None,
+                            Real::new(7.0).ok(),
+                            Real::new(4.0).ok(),
+                        ]
+                        .into(),
+                    ),
+                ]),
+                logical_rows: (0..4).collect(),
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(true),
+            }],
+        );
+
+        let mut exec = BatchPartitionTopNExecutor::new_for_test(
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
+            ],
+            vec![false],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+            ],
+            1,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        // dbg!(r.physical_columns);
+        assert_eq!(&r.logical_rows, &[0, 1, 2]);
+        assert_eq!(r.physical_columns.rows_len(), 3);
+        assert_eq!(r.physical_columns.columns_len(), 2);
+        assert_eq!(
+            r.physical_columns[0].decoded().to_int_vec(),
+            &[Some(1), Some(2), Some(1)]
+        );
+        assert_eq!(
+            r.physical_columns[1].decoded().to_real_vec(),
+            &[None, Real::new(7.0).ok(), Real::new(4.0).ok()]
+        );
+        assert!(r.is_drained.unwrap());
+    }
+
+    /// Builds an executor that will return these data:
+    ///
+    /// ```text
+    /// == Schema ==
+    /// Col0 (LongLong(Unsigned))      Col1(LongLong[UnSigned])       Col2(LongLong[Signed])
+    /// == Call #1 ==
+    /// 1                              18,446,744,073,709,551,615     -3
+    /// 1                              NULL                           NULL
+    /// 1                              18,446,744,073,709,551,613     -1
+    /// 1                              2023                           2024
+    /// 1                              2000                           2000
+    /// == Call #2 ==
+    /// == Call #3 ==
+    /// 2                              9,223,372,036,854,775,807      9,223,372,036,854,775,807
+    /// 2                              300                            300
+    /// 2                              9,223,372,036,854,775,808      -9,223,372,036,854,775,808
+    /// 2                              NULL                           NULL                    
+    /// 3                              NULL                           NULL    
+    /// == Call #4 ==
+    /// (drained)                      (drained)                    (drained)
+    fn make_full_batch() -> MockExecutor {
+        MockExecutor::new(
+            vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::LongLong)
+                    .flag(FieldTypeFlag::UNSIGNED)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::LongLong)
+                    .flag(FieldTypeFlag::UNSIGNED)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            vec![
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Int(
+                            vec![
+                                Some(1 as i64),
+                                Some(1 as i64),
+                                Some(1 as i64),
+                                Some(1 as i64),
+                                Some(1 as i64),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Int(
+                            vec![
+                                Some(18_446_744_073_709_551_615_u64 as i64),
+                                None,
+                                Some(18_446_744_073_709_551_613_u64 as i64),
+                                Some(2023),
+                                Some(2000),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Int(
+                            vec![Some(-3), None, Some(-1), Some(2024), Some(2000)].into(),
+                        ),
+                    ]),
+                    logical_rows: vec![0, 1, 2, 3, 4],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Int(
+                            vec![
+                                Some(2 as i64),
+                                Some(2 as i64),
+                                Some(2 as i64),
+                                Some(2 as i64),
+                                Some(3 as i64),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Int(
+                            vec![
+                                Some(9_223_372_036_854_775_807_u64 as i64),
+                                Some(300),
+                                Some(9_223_372_036_854_775_808_u64 as i64),
+                                None,
+                                None,
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Int(
+                            vec![
+                                Some(9_223_372_036_854_775_807_u64 as i64),
+                                Some(300),
+                                Some(-9_223_372_036_854_775_808),
+                                None,
+                                None,
+                            ]
+                            .into(),
+                        ),
+                    ]),
+                    logical_rows: vec![0, 1, 2, 3, 4],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn test_small_n() {
+        let mut config = EvalConfig::default();
+        config.paging_size = Some(10);
+        let config = Arc::new(config);
+        let src_exec = make_full_batch();
+        let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
+            config,
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
+            ],
+            vec![false],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+            ],
+            2,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3]);
+        assert_eq!(r.physical_columns.rows_len(), 4);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert!(!r.is_drained.unwrap());
+        assert_eq!(
+            r.physical_columns[0].decoded().to_int_vec(),
+            &[
+                Some(1 as i64),
+                Some(1 as i64),
+                Some(2 as i64),
+                Some(2 as i64)
+            ]
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0]);
+        assert_eq!(r.physical_columns.rows_len(), 1);
+        assert!(r.is_drained.unwrap());
+        assert_eq!(
+            r.physical_columns[0].decoded().to_int_vec(),
+            &[Some(3 as i64)]
+        );
+    }
+
+    #[test]
+    fn test_no_order_key() {
+        let mut config = EvalConfig::default();
+        config.paging_size = Some(10);
+        let config = Arc::new(config);
+        let src_exec = make_full_batch();
+        let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
+            config,
+            src_exec,
+            vec![],
+            vec![],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+            ],
+            2,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3]);
+        assert_eq!(r.physical_columns.rows_len(), 4);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert!(!r.is_drained.unwrap());
+        assert_eq!(
+            r.physical_columns[0].decoded().to_int_vec(),
+            &[
+                Some(1 as i64),
+                Some(1 as i64),
+                Some(2 as i64),
+                Some(2 as i64)
+            ]
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0]);
+        assert_eq!(r.physical_columns.rows_len(), 1);
+        assert!(r.is_drained.unwrap());
+        assert_eq!(
+            r.physical_columns[0].decoded().to_int_vec(),
+            &[Some(3 as i64)]
+        );
+    }
+
+    #[test]
+    fn test_paging_limit_normal_n() {
+        let mut config = EvalConfig::default();
+        config.paging_size = Some(10);
+        let config = Arc::new(config);
+        let src_exec = make_full_batch();
+        let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
+            config,
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
+            ],
+            vec![false],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+            ],
+            5,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(r.physical_columns.rows_len(), 9);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert!(!r.is_drained.unwrap());
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0]);
+        assert_eq!(r.physical_columns.rows_len(), 1);
+        assert!(r.is_drained.unwrap());
+    }
+
+    #[test]
+    fn test_paging_limit_oversize_n() {
+        let mut config = EvalConfig::default();
+        config.paging_size = Some(9);
+        let config = Arc::new(config);
+        let src_exec = make_full_batch();
+        let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
+            config,
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
+            ],
+            vec![false],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+            ],
+            5,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+        assert_eq!(r.physical_columns.rows_len(), 5);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert!(!r.is_drained.unwrap());
+
+        let r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+        assert_eq!(r.physical_columns.rows_len(), 5);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert!(!r.is_drained.unwrap());
+
+        let r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(r.is_drained.unwrap());
+    }
+
+    // #[test]
+    // fn test_null_pk() {
+    //     todo!()
+    // }
+
+    /// The following tests are copied from `batch_top_n_executor.rs` to
     /// verify when partition_item is null.
     #[test]
     fn test_no_partition_top_0() {
