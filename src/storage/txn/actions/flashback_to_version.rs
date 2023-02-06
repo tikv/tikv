@@ -266,11 +266,10 @@ pub fn check_flashback_commit(
             );
         }
     }
-    Err(txn::Error::from_mvcc(mvcc::ErrorInner::TxnLockNotFound {
-        start_ts: flashback_start_ts,
-        commit_ts: flashback_commit_ts,
-        key: key_to_commit.to_raw()?,
-    }))
+    // If both the lock and flashback commit record don't exist, it means that the
+    // current region is not in the flashback state. We could just let the check
+    // pass here and wait for the later raftstore to reject the request.
+    Ok(false)
 }
 
 pub fn get_first_user_key(

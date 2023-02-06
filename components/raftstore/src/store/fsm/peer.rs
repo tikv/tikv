@@ -5234,7 +5234,7 @@ where
             true,
         ) {
             match e {
-                Error::FlashbackInProgress(_) => self
+                Error::FlashbackInProgress(..) => self
                     .ctx
                     .raft_metrics
                     .invalid_proposal
