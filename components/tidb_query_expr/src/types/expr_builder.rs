@@ -63,7 +63,8 @@ impl RpnExpressionBuilder {
             | ExprType::MysqlTime
             | ExprType::MysqlDuration
             | ExprType::MysqlDecimal
-            | ExprType::MysqlJson => Ok(true),
+            | ExprType::MysqlJson
+            | ExprType::MysqlEnum => Ok(true),
             ExprType::ScalarFunc => Ok(false),
             ExprType::ColumnRef => Ok(false),
             _ => Err(other_err!("Unsupported expression type {:?}", c.get_tp())),
