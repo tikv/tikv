@@ -73,7 +73,7 @@ impl SampleWindow {
     #[inline]
     pub fn avg(&self) -> f64 {
         if !self.values.is_empty() {
-            (self.sum as f64 / self.values.len() as f64) as f64
+            self.sum as f64 / self.values.len() as f64
         } else {
             0.0
         }
@@ -91,8 +91,7 @@ impl SampleWindow {
             delta_sq_sum += delta * delta;
         }
         // We use `self.values.len()` rather than `self.values.len() - 1`
-        let std_ev = f64::sqrt(delta_sq_sum / self.values.len() as f64);
-        std_ev
+        f64::sqrt(delta_sq_sum / self.values.len() as f64)
     }
 
     #[inline]
@@ -132,7 +131,7 @@ impl SampleWindows {
                 return false;
             }
         }
-        return true;
+        true
     }
 }
 
