@@ -267,14 +267,14 @@ impl<EK: KvEngine, ER: RaftEngine> Default for SharedSenders<EK, ER> {
     }
 }
 
-/// All `Sender`s in `SharedSenders` just shared by the global controller thread
-/// and raftstore threads. There won't exist concurrent `Sender.send()` calling
-/// scenarios among threads on a same `Sender`. On the one hand, the controller
-/// thread will not call `Sender.send()` to consume resources to send messages,
-/// just updating the size of `Sender`s if `store-io-pool-size` is resized. On
-/// the other hand, each raftstore thread just use its local cloned `Sender`s
-/// for sending messages and update it in `begin()`, the first
-/// stage for processing.
+/// All `Sender`s in `SharedSenders` are shared by the global controller
+/// thread and raftstore threads. There won't exist concurrent `Sender.send()`
+/// calling scenarios among threads on a same `Sender`.
+/// On the one hand, th controller thread will not call `Sender.send()` to
+/// consume resources to send messages, just updating the size of `Sender`s if
+/// `store-io-pool-size` is resized. On the other hand, each raftstore thread
+/// just use its local cloned `Sender`s for sending messages and update it at
+/// `begin()`, the first stage for processing messages.
 /// Therefore, it's safe to manually remain `Send` trait for
 /// `SharedSenders`.
 unsafe impl<EK: KvEngine, ER: RaftEngine> Sync for SharedSenders<EK, ER> {}
