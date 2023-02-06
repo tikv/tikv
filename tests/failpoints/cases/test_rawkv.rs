@@ -276,7 +276,7 @@ fn test_region_merge() {
     suite.stop();
 }
 
-// Verify the raw key guard correctness in API v2.
+// Verify the raw key guard correctness in APIv2.
 #[test]
 fn test_raw_put_key_guard() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
