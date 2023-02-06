@@ -113,11 +113,11 @@ fn render_test_cases(test_cases: Vec<TokenStream2>, fn_item: ItemFn) -> TokenStr
 //
 // The first case ( #[test_case(test_raftstore::new_node_cluster)] )
 // will be passed to the proc-macro "test_case" as the first argument and the
-// #[test_case()] has been stripped off. So the first token is the Ident type,
-// namely "test_raftstore".
+// #[test_case(...)] will be stripped off automatically. So the first token is
+// the Ident type, namely "test_raftstore".
 //
 // The other two cases are in the `attr` fileds of ItemFn, and
-// #[test_case()] are untouched. So the first token is Punct type.
+// #[test_case(...)] are untouched. So the first token is Punct type.
 fn parse_test_case(test_case: TokenStream2) -> (Ident, Ident) {
     let mut iter = test_case.into_iter();
     let package = match iter.next().unwrap() {
