@@ -3197,16 +3197,20 @@ where
         let resp = AdminResponse::default();
         Ok((
             resp,
-            ApplyResult::Res(ExecResult::ComputeHash {
-                region: self.region.clone(),
-                index: ctx.exec_log_index,
-                context: req.get_compute_hash().get_context().to_vec(),
-                // This snapshot may be held for a long time, which may cause too many
-                // open files in rocksdb.
-                // TODO: figure out another way to do consistency check without snapshot
-                // or short life snapshot.
-                snap: ctx.engine.snapshot(),
-            }),
+            if self.peer.is_witness {
+                ApplyResult::None
+            } else {
+                ApplyResult::Res(ExecResult::ComputeHash {
+                    region: self.region.clone(),
+                    index: ctx.exec_log_index,
+                    context: req.get_compute_hash().get_context().to_vec(),
+                    // This snapshot may be held for a long time, which may cause too many
+                    // open files in rocksdb.
+                    // TODO: figure out another way to do consistency check without snapshot
+                    // or short life snapshot.
+                    snap: ctx.engine.snapshot(),
+                })
+            },
         ))
     }
 
@@ -3215,11 +3219,14 @@ where
         _: &ApplyContext<EK>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        let resp = AdminResponse::default();
+        if self.peer.is_witness {
+            return Ok((resp, ApplyResult::None));
+        }
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let context = verify_req.get_context().to_vec();
         let hash = verify_req.get_hash().to_vec();
-        let resp = AdminResponse::default();
         Ok((
             resp,
             ApplyResult::Res(ExecResult::VerifyHash {
