@@ -230,20 +230,4 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
         }
     }
-
-    #[inline]
-    pub fn update_max_timestamp_pd<T>(&self, ctx: &StoreContext<EK, ER, T>, initial_status: u64) {
-        let task = pd::Task::UpdateMaxTimestamp {
-            region_id: self.region_id(),
-            initial_status,
-            txn_ext: self.txn_ext().clone(),
-        };
-        if let Err(e) = ctx.schedulers.pd.schedule(task) {
-            error!(
-                self.logger,
-                "failed to notify pd with UpdateMaxTimestamp";
-                "err" => %e,
-            );
-        }
-    }
 }

@@ -7,6 +7,7 @@ use std::{
 use ::tracker::{
     set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
 };
+use api_version::{dispatch_api_version, KvFormat};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -148,6 +149,21 @@ impl<E: Engine> Endpoint<E> {
     /// It also checks if there are locks in memory blocking this read request.
     fn parse_request_and_check_memory_locks(
         &self,
+        req: coppb::Request,
+        peer: Option<String>,
+        is_streaming: bool,
+    ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
+        dispatch_api_version!(req.get_context().get_api_version(), {
+            self.parse_request_and_check_memory_locks_impl::<API>(req, peer, is_streaming)
+        })
+    }
+
+    /// Parse the raw `Request` to create `RequestHandlerBuilder` and
+    /// `ReqContext`. Returns `Err` if fails.
+    ///
+    /// It also checks if there are locks in memory blocking this read request.
+    fn parse_request_and_check_memory_locks_impl<F: KvFormat>(
+        &self,
         mut req: coppb::Request,
         peer: Option<String>,
         is_streaming: bool,
@@ -232,7 +248,7 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
-                    dag::DagHandlerBuilder::new(
+                    dag::DagHandlerBuilder::<_, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
                         store,
@@ -281,7 +297,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
-                    statistics::analyze::AnalyzeContext::new(
+                    statistics::analyze::AnalyzeContext::<_, F>::new(
                         analyze,
                         req_ctx.ranges.clone(),
                         start_ts,
@@ -470,6 +486,11 @@ impl<E: Engine> Endpoint<E> {
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
+        let group_name = req_ctx
+            .context
+            .get_resource_group_name()
+            .as_bytes()
+            .to_owned();
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -480,6 +501,7 @@ impl<E: Engine> Endpoint<E> {
                     .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
+                group_name,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded);
         async move { res.await? }
@@ -578,6 +600,8 @@ impl<E: Engine> Endpoint<E> {
                                     response.set_locked(lock_info);
                                 }
                                 response.set_other_error(resp.take_other_error());
+                                // keep the exec details already generated.
+                                response.set_exec_details_v2(resp.take_exec_details_v2());
                                 GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
                                     tracker.write_scan_detail(
                                         response.mut_exec_details_v2().mut_scan_detail_v2(),
@@ -690,6 +714,11 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
+        let group_name = req_ctx
+            .context
+            .get_resource_group_name()
+            .as_bytes()
+            .to_owned();
         let key_ranges = req_ctx
             .ranges
             .iter()
@@ -712,6 +741,7 @@ impl<E: Engine> Endpoint<E> {
                     }),
                 priority,
                 task_id,
+                group_name,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx)

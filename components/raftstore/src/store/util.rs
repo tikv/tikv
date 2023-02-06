@@ -24,14 +24,16 @@ use kvproto::{
     },
     raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
-use protobuf::{self, Message};
+use protobuf::{self, CodedInputStream, Message};
 use raft::{
-    eraftpb::{self, ConfChangeType, ConfState, MessageType, Snapshot},
+    eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
     Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
 use tikv_util::{
-    box_err, debug, info,
+    box_err,
+    codec::number::{decode_u64, NumberEncoder},
+    debug, info,
     store::{find_peer_by_id, region},
     time::monotonic_raw_now,
     Either,
@@ -228,7 +230,8 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
             AdminCmdEpochState::new(true, true, false, false)
         }
-        AdminCmdType::BatchSwitchWitness => unimplemented!(),
+        AdminCmdType::BatchSwitchWitness => AdminCmdEpochState::new(false, true, false, true),
+        AdminCmdType::UpdateGcPeer => AdminCmdEpochState::new(false, false, false, false),
     }
 }
 
@@ -335,6 +338,7 @@ pub fn compare_region_epoch(
 // flashback.
 pub fn check_flashback_state(
     is_in_flashback: bool,
+    flashback_start_ts: u64,
     req: &RaftCmdRequest,
     region_id: u64,
     skip_not_prepared: bool,
@@ -346,11 +350,20 @@ pub fn check_flashback_state(
     {
         return Ok(());
     }
+    // TODO: only use `flashback_start_ts` to check flashback state.
+    let is_in_flashback = is_in_flashback || flashback_start_ts > 0;
     let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
         .contains(WriteBatchFlags::FLASHBACK);
-    // If the region is in the flashback state, the only allowed request is the
-    // flashback request itself.
+    // If the region is in the flashback state:
+    //   - A request with flashback flag will be allowed.
+    //   - A read request whose `read_ts` is smaller than `flashback_start_ts` will
+    //     be allowed.
     if is_in_flashback && !is_flashback_request {
+        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+            if read_ts != 0 && read_ts < flashback_start_ts {
+                return Ok(());
+            }
+        }
         return Err(Error::FlashbackInProgress(region_id));
     }
     // If the region is not in the flashback state, the flashback request itself
@@ -359,6 +372,12 @@ pub fn check_flashback_state(
         return Err(Error::FlashbackNotPrepared(region_id));
     }
     Ok(())
+}
+
+pub fn encode_start_ts_into_flag_data(header: &mut RaftRequestHeader, start_ts: u64) {
+    let mut data = [0u8; 8];
+    (&mut data[..]).encode_u64(start_ts).unwrap();
+    header.set_flag_data(data.into());
 }
 
 pub fn is_region_epoch_equal(
@@ -723,6 +742,24 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
     let sec = u >> TIMESPEC_SEC_SHIFT;
     let nsec = (u & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
     Timespec::new(sec as i64, nsec as i32)
+}
+
+pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
+    if entry.get_entry_type() != EntryType::EntryNormal {
+        return RaftRequestHeader::default();
+    }
+    // request header is encoded into data
+    let mut is = CodedInputStream::from_bytes(entry.get_data());
+    if is.eof().unwrap() {
+        return RaftRequestHeader::default();
+    }
+    let (field_number, _) = is.read_tag_unpack().unwrap();
+    let t = is.read_message().unwrap();
+    // Header field is of number 1
+    if field_number != 1 {
+        panic!("unexpected field number: {} {:?}", field_number, t);
+    }
+    t
 }
 
 /// Parse data of entry `index`.
@@ -1671,6 +1708,7 @@ mod tests {
         metapb::{self, RegionEpoch},
         raft_cmdpb::AdminRequest,
     };
+    use protobuf::Message as _;
     use raft::eraftpb::{ConfChangeType, Entry, Message, MessageType};
     use tikv_util::store::new_peer;
     use time::Duration as TimeDuration;
@@ -1747,6 +1785,20 @@ mod tests {
         // A new remote lease.
         let m1 = lease.maybe_new_remote_lease(1).unwrap();
         assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
+    }
+
+    #[test]
+    fn test_get_entry_header() {
+        let mut req = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_resource_group_name("test".to_owned());
+        req.set_header(header);
+        let mut entry = Entry::new();
+        entry.set_term(1);
+        entry.set_index(2);
+        entry.set_data(req.write_to_bytes().unwrap().into());
+        let header = get_entry_header(&entry);
+        assert_eq!(header.get_resource_group_name(), "test");
     }
 
     #[test]

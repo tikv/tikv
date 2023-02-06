@@ -1,17 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    str::from_utf8,
     sync::{mpsc, Arc},
     thread,
     time::Duration,
 };
 
 use grpcio::EnvBuilder;
-use kvproto::metapb::*;
+use kvproto::{metapb::*, pdpb::GlobalConfigItem};
 use pd_client::{PdClient, RegionInfo, RegionStat, RpcClient};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
-use tikv_util::config::ReadableDuration;
+use tikv_util::{config::ReadableDuration, worker::Builder};
 
 fn new_test_server_and_client(
     update_interval: ReadableDuration,
@@ -73,7 +74,7 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(get_store_stats_async(0))),
         request!(client => get_operator(0)),
         request!(client => block_on(get_tso())),
-        request!(client => load_global_config(vec![])),
+        request!(client => load_global_config(String::default())),
     ];
 
     for (name, func) in test_funcs {
@@ -108,63 +109,93 @@ fn test_pd_client_deadlock() {
 #[test]
 fn test_load_global_config() {
     let (mut _server, client) = new_test_server_and_client(ReadableDuration::millis(100));
-    let res = futures::executor::block_on(async move {
-        client
-            .load_global_config(
-                ["abc", "123", "xyz"]
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>(),
-            )
-            .await
-    });
-    for (k, v) in res.unwrap() {
-        assert_eq!(k, format!("/global/config/{}", v))
+    let global_items = vec![("test1", "val1"), ("test2", "val2"), ("test3", "val3")];
+    let check_items = global_items.clone();
+    if let Err(err) = futures::executor::block_on(
+        client.store_global_config(
+            String::from("global"),
+            global_items
+                .iter()
+                .map(|(name, value)| {
+                    let mut item = GlobalConfigItem::default();
+                    item.set_name(name.to_string());
+                    item.set_payload(value.as_bytes().into());
+                    item
+                })
+                .collect::<Vec<GlobalConfigItem>>(),
+        ),
+    ) {
+        panic!("error occur {:?}", err);
     }
+
+    let (res, revision) =
+        futures::executor::block_on(client.load_global_config(String::from("global"))).unwrap();
+    assert!(
+        res.iter()
+            .zip(check_items)
+            .all(|(item1, item2)| item1.name == item2.0 && item1.payload == item2.1.as_bytes())
+    );
+    assert_eq!(revision, 3);
 }
 
 #[test]
 fn test_watch_global_config_on_closed_server() {
     let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
+    let global_items = vec![("test1", "val1"), ("test2", "val2"), ("test3", "val3")];
+    let items_clone = global_items.clone();
+
     let client = Arc::new(client);
+    let cli_clone = client.clone();
     use futures::StreamExt;
-    let j = std::thread::spawn(move || {
-        futures::executor::block_on(async move {
-            let mut r = client.watch_global_config().unwrap();
-            let mut i: usize = 0;
-            while let Some(r) = r.next().await {
-                match r {
-                    Ok(res) => {
-                        let change = &res.get_changes()[0];
-                        assert_eq!(
-                            change
-                                .get_name()
-                                .split('/')
-                                .collect::<Vec<_>>()
-                                .last()
-                                .unwrap()
-                                .to_owned(),
-                            format!("{:?}", i)
-                        );
-                        assert_eq!(change.get_value().to_owned(), format!("{:?}", i));
-                        i += 1;
-                    }
-                    Err(e) => {
-                        if let grpcio::Error::RpcFailure(e) = e {
-                            // 14-UNAVAILABLE
-                            assert_eq!(e.code(), grpcio::RpcStatusCode::from(14));
-                            break;
-                        } else {
-                            panic!("other error occur {:?}", e)
+    let background_worker = Builder::new("background").thread_count(1).create();
+    background_worker.spawn_async_task(async move {
+        match cli_clone.watch_global_config("global".into(), 0) {
+            Ok(mut stream) => {
+                let mut i: usize = 0;
+                while let Some(grpc_response) = stream.next().await {
+                    match grpc_response {
+                        Ok(r) => {
+                            for item in r.get_changes() {
+                                assert_eq!(item.get_name(), items_clone[i].0);
+                                assert_eq!(
+                                    from_utf8(item.get_payload()).unwrap(),
+                                    items_clone[i].1
+                                );
+                                i += 1;
+                            }
                         }
+                        Err(err) => panic!("failed to get stream, err: {:?}", err),
                     }
                 }
             }
-        });
+            Err(err) => {
+                if !err.to_string().contains("UNAVAILABLE") {
+                    // Not 14-UNAVAILABLE
+                    panic!("other error occur {:?}", err)
+                }
+            }
+        }
     });
-    thread::sleep(Duration::from_millis(200));
+
+    if let Err(err) = futures::executor::block_on(
+        client.store_global_config(
+            "global".into(),
+            global_items
+                .iter()
+                .map(|(name, value)| {
+                    let mut item = GlobalConfigItem::default();
+                    item.set_name(name.to_string());
+                    item.set_payload(value.as_bytes().into());
+                    item
+                })
+                .collect::<Vec<GlobalConfigItem>>(),
+        ),
+    ) {
+        panic!("error occur {:?}", err);
+    }
+
+    thread::sleep(Duration::from_millis(100));
     server.stop();
-    j.join().unwrap();
 }
 
 // Updating pd leader may be slow, we need to make sure it does not block other

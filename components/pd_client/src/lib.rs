@@ -14,15 +14,14 @@ mod util;
 
 mod config;
 pub mod errors;
-use std::{cmp::Ordering, collections::HashMap, ops::Deref, sync::Arc, time::Duration};
+use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
-use grpcio::ClientSStreamReceiver;
 use kvproto::{
     metapb, pdpb,
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
-use pdpb::{QueryStats, WatchGlobalConfigResponse};
+use pdpb::QueryStats;
 use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
 
@@ -201,6 +200,8 @@ impl BucketStat {
 }
 
 pub const INVALID_ID: u64 = 0;
+// TODO: Implementation of config registration for each module
+pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
 
 /// PdClient communicates with Placement Driver (PD).
 /// Because now one PD only supports one cluster, so it is no need to pass
@@ -209,17 +210,28 @@ pub const INVALID_ID: u64 = 0;
 /// all the time.
 pub trait PdClient: Send + Sync {
     /// Load a list of GlobalConfig
-    fn load_global_config(&self, _list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+    fn load_global_config(
+        &self,
+        _config_path: String,
+    ) -> PdFuture<(Vec<pdpb::GlobalConfigItem>, i64)> {
         unimplemented!();
     }
 
     /// Store a list of GlobalConfig
-    fn store_global_config(&self, _list: HashMap<String, String>) -> PdFuture<()> {
+    fn store_global_config(
+        &self,
+        _config_path: String,
+        _items: Vec<pdpb::GlobalConfigItem>,
+    ) -> PdFuture<()> {
         unimplemented!();
     }
 
     /// Watching change of GlobalConfig
-    fn watch_global_config(&self) -> Result<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
+    fn watch_global_config(
+        &self,
+        _config_path: String,
+        _revision: i64,
+    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
         unimplemented!();
     }
 

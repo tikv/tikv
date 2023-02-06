@@ -26,10 +26,11 @@ use raftstore::{
     store::{
         fsm::store::{PeerTickBatch, ENTRY_CACHE_EVICT_TICK_DURATION},
         local_metrics::RaftMetrics,
-        Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask, StoreWriters,
-        TabletSnapManager, Transport, WriteSenders,
+        AutoSplitController, Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask,
+        StoreWriters, TabletSnapManager, Transport, WriteSenders,
     },
 };
+use resource_metering::CollectorRegHandle;
 use slog::{warn, Logger};
 use tikv_util::{
     box_err,
@@ -74,6 +75,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub schedulers: Schedulers<EK, ER>,
     /// store meta
     pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    pub shutdown: Arc<AtomicBool>,
     pub engine: ER,
     pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
@@ -107,6 +109,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
             self.cfg.report_region_buckets_tick_interval.0;
         self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
+        self.tick_batch[PeerTick::GcPeer as usize].wait_duration = Duration::from_secs(60);
     }
 }
 
@@ -188,6 +191,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
             self.poll_ctx.update_ticks_timeout();
         }
         self.poll_ctx.has_ready = false;
+        self.poll_ctx.current_time = None;
         self.timer = tikv_util::time::Instant::now();
     }
 
@@ -271,6 +275,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     apply_pool: FuturePool,
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    shutdown: Arc<AtomicBool>,
     snap_mgr: TabletSnapManager,
 }
 
@@ -285,6 +290,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         schedulers: Schedulers<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        shutdown: Arc<AtomicBool>,
         snap_mgr: TabletSnapManager,
         coprocessor_host: CoprocessorHost<EK>,
     ) -> Self {
@@ -310,6 +316,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             schedulers,
             store_meta,
             snap_mgr,
+            shutdown,
             coprocessor_host,
         }
     }
@@ -416,6 +423,7 @@ where
             timer: SteadyTimer::default(),
             schedulers: self.schedulers.clone(),
             store_meta: self.store_meta.clone(),
+            shutdown: self.shutdown.clone(),
             engine: self.engine.clone(),
             tablet_registry: self.tablet_registry.clone(),
             apply_pool: self.apply_pool.clone(),
@@ -469,7 +477,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
             async_read: Worker::new("async-read-worker"),
             pd,
             tablet_gc: Worker::new("tablet-gc-worker"),
-            async_write: StoreWriters::default(),
+            async_write: StoreWriters::new(None),
             purge,
             background,
         }
@@ -510,6 +518,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
+        auto_split_controller: AutoSplitController,
+        collector_reg_handle: CollectorRegHandle,
         background: Worker,
         pd_worker: LazyWorker<pd::Task>,
     ) -> Result<()>
@@ -525,7 +535,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
         });
 
-        let purge_worker = if raft_engine.need_manual_purge() {
+        let purge_worker = if raft_engine.need_manual_purge()
+            && !cfg.value().raft_engine_purge_interval.0.is_zero()
+        {
             let worker = Worker::new("purge-worker");
             let raft_clone = raft_engine.clone();
             let logger = self.logger.clone();
@@ -566,10 +578,14 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             workers.pd.remote(),
             concurrency_manager,
             causal_ts_provider,
+            workers.pd.scheduler(),
+            auto_split_controller,
+            store_meta.lock().unwrap().region_read_progress.clone(),
+            collector_reg_handle,
             self.logger.clone(),
             self.shutdown.clone(),
             cfg.clone(),
-        ));
+        )?);
 
         let split_check_scheduler = workers.background.start(
             "split-check",
@@ -603,6 +619,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             schedulers.clone(),
             self.logger.clone(),
             store_meta.clone(),
+            self.shutdown.clone(),
             snap_mgr,
             coprocessor_host,
         );
@@ -739,7 +756,7 @@ where
 {
     let (store_tx, store_fsm) = StoreFsm::new(cfg, store_id, logger.clone());
     let (router, system) =
-        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
+        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm, None);
     let system = StoreSystem {
         system,
         workers: None,
