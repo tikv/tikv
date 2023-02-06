@@ -800,7 +800,7 @@ fn test_mvcc_flashback_unprepared() {
     req.set_start_key(b"a".to_vec());
     req.set_end_key(b"z".to_vec());
     let resp = client.kv_flashback_to_version(&req).unwrap();
-    assert!(!resp.has_region_error());
+    assert!(resp.get_region_error().has_flashback_not_prepared());
     assert!(resp.get_error().is_empty());
     must_kv_read_equal(&client, ctx.clone(), k.clone(), v, 6);
     // Flashback with preparing.

@@ -233,6 +233,7 @@ pub fn check_flashback_commit(
     key_to_commit: &Key,
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
+    region_id: u64,
 ) -> TxnResult<bool> {
     match reader.load_lock(key_to_commit)? {
         // If the lock exists, it means the flashback hasn't been finished.
@@ -266,10 +267,11 @@ pub fn check_flashback_commit(
             );
         }
     }
-    // If both the flashback lock and commit records are mismatched, it means the
-    // current region is not in the flashback state. In this case, we can just
-    // return true to stop the flashback and do nothing.
-    Ok(true)
+    // If both the flashback lock and commit records are mismatched, it means
+    // the current region is not in the flashback state.
+    Err(txn::Error::from(txn::ErrorInner::FlashbackNotPrepared(
+        region_id,
+    )))
 }
 
 pub fn get_first_user_key(
