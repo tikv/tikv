@@ -484,7 +484,7 @@ fn test_basic_flow() {
     let engines = new_temp_engine(&path);
     let mut cfg = Config::default();
     cfg.store_io_pool_size = 2;
-    let t = TestWriters::new(cfg, &engines, None);
+    let mut t = TestWriters::new(cfg, &engines, None);
 
     let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
     init_write_batch(&engines, &mut task_1);
@@ -577,7 +577,7 @@ fn test_basic_flow_with_states() {
     let engines = new_temp_engine(&path);
     let mut cfg = Config::default();
     cfg.store_io_pool_size = 2;
-    let t = TestWriters::new(cfg, &engines, None);
+    let mut t = TestWriters::new(cfg, &engines, None);
 
     let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
     task_1.raft_wb = Some(engines.raft.log_batch(0));

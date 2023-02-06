@@ -949,9 +949,9 @@ where
         Ok(())
     }
 
-    pub fn shutdown(&self) {
+    pub fn shutdown(&mut self) {
         let mut handlers = self.handlers.lock();
-        let writers = self.writers.value().senders();
+        let writers = self.writers.value().get();
         assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
@@ -960,9 +960,10 @@ where
         }
     }
 
+    #[inline]
     /// Returns the valid size of store writers.
     pub fn size(&self) -> usize {
-        self.writers.value().senders().len()
+        self.writers.value().get().len()
     }
 
     pub fn decrease_to(&mut self, size: usize) -> Result<()> {
@@ -973,13 +974,10 @@ where
         // capacity, specified by refreshed `store-io-pool-size`.
         //
         // TODO: find an elegant way to effectively free workers.
-        assert_eq!(
-            self.writers.value().senders().len(),
-            self.handlers.lock().len()
-        );
+        assert_eq!(self.writers.value().get().len(), self.handlers.lock().len());
         self.writers
             .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
-                assert!(writers.senders().len() > size);
+                assert!(writers.get().len() > size);
                 Ok(())
             })?;
         Ok(())
@@ -991,12 +989,12 @@ where
         writer_meta: StoreWritersContext<EK, ER, T, N>,
     ) -> Result<()> {
         let mut handlers = self.handlers.lock();
-        let current_size = self.writers.value().senders().len();
+        let current_size = self.writers.value().get().len();
         assert_eq!(current_size, handlers.len());
         let resource_ctl = self.resource_ctl.clone();
         self.writers
             .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
-                let mut cached_senders = writers.senders();
+                let mut cached_senders = writers.get();
                 for i in current_size..size {
                     let tag = format!("store-writer-{}", i);
                     let (tx, rx) = bounded(
@@ -1023,7 +1021,7 @@ where
                     cached_senders.push(tx);
                     handlers.push(t);
                 }
-                writers.update(cached_senders);
+                writers.set(cached_senders);
                 Ok(())
             })?;
         Ok(())
