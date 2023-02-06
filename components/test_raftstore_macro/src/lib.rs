@@ -133,19 +133,19 @@ fn parse_test_case(test_case: TokenStream2) -> (Ident, Ident) {
                         let stream = group.stream();
                         return parse_test_case(stream);
                     }
-                    _ => unreachable!(),
+                    _ => panic!("Invalid token stream"),
                 }
             }
-            _ => unreachable!(),
+            _ => panic!("Invalid token stream"),
         },
-        _ => unreachable!(),
+        _ => panic!("Invalid token stream"),
     };
     // Skip two ':'
     iter.next();
     iter.next();
     let method = match iter.next().unwrap() {
         TokenTree::Ident(method) => method,
-        _ => unreachable!(),
+        _ => panic!("Invalid token stream"),
     };
     (package, method)
 }
