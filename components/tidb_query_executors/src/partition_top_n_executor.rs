@@ -25,6 +25,8 @@ pub struct BatchPartitionTopNExecutor<Src: BatchExecutor> {
     #[allow(clippy::box_collection)]
     eval_columns_buffer_unsafe: Box<Vec<RpnStackNode<'static>>>,
 
+    /// The data should be sorted by the partition expression.
+    /// But if not, the result is still correct after the second-stage topn.
     partition_exprs: Box<[RpnExpression]>,
     partition_exprs_field_type: Box<[FieldType]>,
 
@@ -234,9 +236,7 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
 
             for logical_row_index in 0..pinned_source_data.logical_rows.len() {
                 let partition_key = HeapItemUnsafe {
-                    order_is_desc_ptr: (*vec![false; self.partition_exprs.len()]
-                        .into_boxed_slice())
-                    .into(),
+                    order_is_desc_ptr: (*self.order_is_desc).into(), // just a dummy value
                     order_exprs_field_type_ptr: (*self.partition_exprs_field_type).into(),
                     source_data: pinned_source_data.clone(),
                     eval_columns_buffer_ptr: self.eval_columns_buffer_unsafe.as_ref().into(),
@@ -293,7 +293,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
     /// row of src_result has different partition with rows in heap. So heap
     /// will be flushed. And the last row of src_result has another different
     /// partition with the first two. So heap will be flushed again.
-    /// In this case, there can be 2*n-2 rows in the result, which may be larger
+    /// In this case, there can be 2*n-1 rows in the result, which may be larger
     /// than paging_size.
     /// todo: find a solution to limit it up to paging_size. baseline: limit n
     /// up to paging_size/2
@@ -309,7 +309,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
 
         // limit middle memory by paging_size.
         if let Some(paging_size) = self.context.cfg.paging_size {
-            if self.n > paging_size as usize {
+            if self.n * 2 > paging_size as usize {
                 return self.src.next_batch(scan_rows).await;
             }
         }
@@ -1219,10 +1219,10 @@ mod tests {
 
     #[test]
     fn test_no_partition_top_paging() {
-        // Top N = 5 and PagingSize = 6, same with no-paging.
+        // Top N = 5 and PagingSize = 10, same with no-paging.
         let test_top5_paging6 = |col_index: usize, is_desc: bool, expected: &[Option<i64>]| {
             let mut config = EvalConfig::default();
-            config.paging_size = Some(6);
+            config.paging_size = Some(10);
             let config = Arc::new(config);
             let src_exec = make_src_executor_unsigned();
             let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
@@ -1331,10 +1331,10 @@ mod tests {
             ],
         );
 
-        // Top N = 5 and PagingSize = 4, return all data and do nothing.
+        // Top N = 5 and PagingSize = 8, return all data and do nothing.
         let test_top5_paging4 = |build_src_executor: fn() -> MockExecutor| {
             let mut config = EvalConfig::default();
-            config.paging_size = Some(4);
+            config.paging_size = Some(8);
             let config = Arc::new(config);
             let src_exec = build_src_executor();
             let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
