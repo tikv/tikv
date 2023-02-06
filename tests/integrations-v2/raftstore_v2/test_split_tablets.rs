@@ -153,7 +153,7 @@ fn test_server_split_region_twice() {
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(REGION_MAX_SIZE));
-    cluster.cfg.coprocessor.region_split_size = ReadableSize(REGION_SPLIT_SIZE);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(REGION_SPLIT_SIZE));
 
     let check_size_diff = cluster.cfg.raft_store.region_split_check_diff().0;
     let mut range = 1..;
@@ -223,7 +223,6 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
         .call_command_on_leader(get, Duration::from_secs(500))
         .unwrap();
 
-    println!("resp {:?}", resp);
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
 }

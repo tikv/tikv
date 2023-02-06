@@ -82,7 +82,9 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use resource_control::{ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL};
+use resource_control::{
+    ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
+};
 use security::SecurityManager;
 use snap_recovery::RecoveryService;
 use tikv::{
@@ -245,7 +247,7 @@ struct TikvServer<ER: RaftEngine> {
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
-    resource_manager: Arc<ResourceGroupManager>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
@@ -322,23 +324,33 @@ where
         let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
-        let resource_manager = Arc::new(ResourceGroupManager::default());
-
-        // Initialize raftstore channels.
-        let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
 
         let thread_count = config.server.background_thread_count;
         let background_worker = WorkerBuilder::new("background")
             .thread_count(thread_count)
             .create();
-        // spawn a task to periodically update the minimal virtual time of all resource
-        // group.
-        if config.resource_control.enabled {
-            let resource_mgr1 = resource_manager.clone();
+
+        let resource_manager = if config.resource_control.enabled {
+            let mgr = Arc::new(ResourceGroupManager::default());
+            let mut resource_mgr_service =
+                ResourceManagerService::new(mgr.clone(), pd_client.clone());
+            // spawn a task to periodically update the minimal virtual time of all resource
+            // groups.
+            let resource_mgr = mgr.clone();
             background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
-                resource_mgr1.advance_min_virtual_time();
+                resource_mgr.advance_min_virtual_time();
             });
-        }
+            // spawn a task to watch all resource groups update.
+            background_worker.spawn_async_task(async move {
+                resource_mgr_service.watch_resource_groups().await;
+            });
+            Some(mgr)
+        } else {
+            None
+        };
+
+        // Initialize raftstore channels.
+        let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 
         let mut coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
@@ -745,19 +757,15 @@ where
         }
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
-            let priority_mgr = if self.config.resource_control.enabled {
-                Some(
-                    self.resource_manager
-                        .derive_controller("unified-read-pool".into(), true),
-                )
-            } else {
-                None
-            };
+            let resource_ctl = self
+                .resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("unified-read-pool".into(), true));
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                priority_mgr,
+                resource_ctl,
             ))
         } else {
             None
@@ -831,6 +839,9 @@ where
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
             self.causal_ts_provider.clone(),
+            self.resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -944,7 +955,7 @@ where
         self.config
             .raft_store
             .validate(
-                self.config.coprocessor.region_split_size,
+                self.config.coprocessor.region_split_size(),
                 self.config.coprocessor.enable_region_bucket,
                 self.config.coprocessor.region_bucket_size,
             )
@@ -1019,13 +1030,7 @@ where
                 ConnectionConfig {
                     keep_alive_interval: self.config.server.grpc_keepalive_time.0,
                     keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
-                    tls: self
-                        .security_mgr
-                        .client_suite()
-                        .map_err(|err| {
-                            warn!("Failed to load client TLS suite, ignoring TLS config."; "err" => %err);
-                        })
-                        .ok(),
+                    tls: Arc::clone(&self.security_mgr),
                 },
             );
             let backup_stream_endpoint = backup_stream::Endpoint::new(
@@ -1038,6 +1043,14 @@ where
                 self.router.clone(),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
+                Arc::clone(&self.env),
+                engines
+                    .store_meta
+                    .lock()
+                    .unwrap()
+                    .region_read_progress
+                    .clone(),
+                Arc::clone(&self.security_mgr),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.to_stop.push(backup_stream_worker);
@@ -1825,7 +1838,11 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
-        let block_cache = self.config.storage.block_cache.build_shared_cache();
+        let block_cache = self
+            .config
+            .storage
+            .block_cache
+            .build_shared_cache(self.config.storage.engine);
         let env = self
             .config
             .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
@@ -2180,7 +2197,10 @@ mod test {
         config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
-        let cache = config.storage.block_cache.build_shared_cache();
+        let cache = config
+            .storage
+            .block_cache
+            .build_shared_cache(config.storage.engine);
 
         let factory = KvEngineFactoryBuilder::new(env, &config, cache).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();

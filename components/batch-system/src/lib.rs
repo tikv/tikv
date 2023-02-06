@@ -6,6 +6,7 @@ mod fsm;
 mod mailbox;
 mod metrics;
 mod router;
+mod scheduler;
 
 #[cfg(feature = "test-runner")]
 pub mod test_runner;

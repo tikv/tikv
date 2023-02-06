@@ -41,6 +41,7 @@ use raftstore_v2::{
     router::{PeerMsg, QueryResult},
     write_initial_states, SimpleWriteEncoder, StoreMeta, StoreRouter,
 };
+use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
@@ -75,6 +76,7 @@ pub trait Simulator {
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64>;
 
     fn stop_node(&mut self, node_id: u64);
@@ -258,6 +260,7 @@ pub struct Cluster<T: Simulator> {
     pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -288,6 +291,7 @@ impl<T: Simulator> Cluster<T> {
             engines: vec![],
             key_managers: vec![],
             io_rate_limiter: None,
+            resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             sim,
             pd_client,
         }
@@ -369,6 +373,7 @@ impl<T: Simulator> Cluster<T> {
                 store_meta.clone(),
                 raft_engine.clone(),
                 tablet_registry.clone(),
+                &self.resource_manager,
             )?;
             assert_eq!(id, node_id);
             self.group_props.insert(node_id, props);
@@ -407,9 +412,14 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
 
         debug!("calling run node"; "node_id" => node_id);
-        self.sim
-            .wl()
-            .run_node(node_id, cfg, store_meta, raft_engine, tablet_registry)?;
+        self.sim.wl().run_node(
+            node_id,
+            cfg,
+            store_meta,
+            raft_engine,
+            tablet_registry,
+            &self.resource_manager,
+        )?;
         debug!("node {} started", node_id);
         Ok(())
     }

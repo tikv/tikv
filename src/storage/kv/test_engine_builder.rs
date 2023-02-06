@@ -96,7 +96,8 @@ impl TestEngineBuilder {
         if !enable_block_cache {
             cache_opt.capacity = Some(ReadableSize::kb(0));
         }
-        let shared = cfg_rocksdb.build_cf_resources(cache_opt.build_shared_cache());
+        let shared =
+            cfg_rocksdb.build_cf_resources(cache_opt.build_shared_cache(EngineType::RaftKv));
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {

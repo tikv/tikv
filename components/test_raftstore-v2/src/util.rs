@@ -11,7 +11,7 @@ use rand::RngCore;
 use server::server2::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_raftstore::{new_put_cf_cmd, Config};
-use tikv::server::KvEngineFactoryBuilder;
+use tikv::{server::KvEngineFactoryBuilder, storage::config::EngineType};
 use tikv_util::{config::ReadableDuration, worker::LazyWorker};
 
 use crate::{bootstrap_store, cluster::Cluster, Simulator};
@@ -39,7 +39,10 @@ pub fn create_test_engine(
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
-    let cache = cfg.storage.block_cache.build_shared_cache();
+    let cache = cfg
+        .storage
+        .block_cache
+        .build_shared_cache(EngineType::RaftKv2);
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();

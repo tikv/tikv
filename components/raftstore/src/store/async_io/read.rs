@@ -218,6 +218,8 @@ where
                 snap_data.set_region(region_state.get_region().clone());
                 snap_data.set_version(TABLET_SNAPSHOT_VERSION);
                 snap_data.mut_meta().set_for_balance(for_balance);
+                snap_data.set_removed_records(region_state.get_removed_records().into());
+                snap_data.set_merged_records(region_state.get_merged_records().into());
                 snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
 
                 // create checkpointer.
@@ -227,10 +229,10 @@ where
                     error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
                     SNAP_COUNTER.generate.fail.inc();
                 } else {
+                    let elapsed = start.saturating_elapsed_secs();
                     SNAP_COUNTER.generate.success.inc();
-                    SNAP_HISTOGRAM
-                        .generate
-                        .observe(start.saturating_elapsed_secs());
+                    SNAP_HISTOGRAM.generate.observe(elapsed);
+                    info!("snapshot generated"; "region_id" => region_id, "elapsed" => elapsed, "key" => ?snap_key, "for_balance" => for_balance);
                     res = Some(Box::new((snapshot, to_peer)))
                 }
 

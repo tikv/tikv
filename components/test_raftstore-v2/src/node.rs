@@ -19,19 +19,27 @@ use raft::prelude::MessageType;
 use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
-    store::{GlobalReplicationState, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport},
+    store::{
+        AutoSplitController, GlobalReplicationState, RegionSnapshot, SplitConfigManager,
+        TabletSnapKey, TabletSnapManager, Transport,
+    },
     Result,
 };
 use raftstore_v2::{
     router::{PeerMsg, RaftRouter},
     StateStorage, StoreMeta, StoreRouter,
 };
+use resource_control::ResourceGroupManager;
+use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{Config, Filter};
-use tikv::server::{
-    raftkv::ReplicaReadLockChecker, tablet_snap::copy_tablet_snapshot, NodeV2,
-    Result as ServerResult,
+use tikv::{
+    config::{ConfigController, Module},
+    server::{
+        raftkv::ReplicaReadLockChecker, tablet_snap::copy_tablet_snapshot, NodeV2,
+        Result as ServerResult,
+    },
 };
 use tikv_util::{
     box_err,
@@ -173,6 +181,7 @@ impl Simulator for NodeCluster {
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
+        _resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64> {
         assert!(!self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -181,7 +190,7 @@ impl Simulator for NodeCluster {
         let mut raft_store = cfg.raft_store.clone();
         raft_store
             .validate(
-                cfg.coprocessor.region_split_size,
+                cfg.coprocessor.region_split_size.unwrap(),
                 cfg.coprocessor.enable_region_bucket,
                 cfg.coprocessor.region_bucket_size,
             )
@@ -231,11 +240,23 @@ impl Simulator for NodeCluster {
 
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
 
-        // let cfg_controller = ConfigController::new(cfg.tikv.clone());
+        let cfg_controller = ConfigController::new(cfg.tikv.clone());
         // cfg_controller.register(
         //     Module::Coprocessor,
         //     Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         // );
+
+        let split_config_manager =
+            SplitConfigManager::new(Arc::new(VersionTrack::new(cfg.tikv.split.clone())));
+        cfg_controller.register(Module::Split, Box::new(split_config_manager.clone()));
+
+        let auto_split_controller = AutoSplitController::new(
+            split_config_manager,
+            cfg.tikv.server.grpc_concurrency,
+            cfg.tikv.readpool.unified.max_thread_count,
+            // todo: Is None sufficient for test?
+            None,
+        );
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
@@ -248,6 +269,8 @@ impl Simulator for NodeCluster {
             cm,
             None,
             coprocessor_host,
+            auto_split_controller,
+            CollectorRegHandle::new_for_test(),
             bg_worker,
             pd_worker,
             Arc::new(VersionTrack::new(raft_store)),
@@ -267,7 +290,11 @@ impl Simulator for NodeCluster {
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg
-            .validate(region_split_size, enable_region_bucket, region_bucket_size)
+            .validate(
+                region_split_size.unwrap(),
+                enable_region_bucket,
+                region_bucket_size,
+            )
             .unwrap();
 
         // let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));

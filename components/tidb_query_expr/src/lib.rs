@@ -732,6 +732,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::UnaryNotInt => unary_not_int_fn_meta(),
         ScalarFuncSig::UnaryNotReal => unary_not_real_fn_meta(),
         ScalarFuncSig::UnaryNotDecimal => unary_not_decimal_fn_meta(),
+        ScalarFuncSig::UnaryNotJson => unary_not_json_fn_meta(),
         ScalarFuncSig::UnaryMinusInt => map_unary_minus_int_func(value, children)?,
         ScalarFuncSig::UnaryMinusReal => unary_minus_real_fn_meta(),
         ScalarFuncSig::UnaryMinusDecimal => unary_minus_decimal_fn_meta(),

@@ -41,13 +41,14 @@ use raftstore::{
         RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
 };
-use slog::{error, info, warn};
+use slog::{debug, error, info, warn};
 use tikv_util::{box_err, log::SlogFormat, slog_panic};
 
 use crate::{
     fsm::ApplyResReporter,
     operation::{command::temp_split_path, SharedReadTablet},
     raft::{Apply, Peer, Storage},
+    router::ApplyTask,
     Result, StoreContext,
 };
 
@@ -161,6 +162,19 @@ pub fn install_tablet<EK: KvEngine>(
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    /// Check whether there is a pending generate snapshot task, the task
+    /// needs to be sent to the apply system.
+    /// Always sending snapshot task after apply task, so it gets latest
+    /// snapshot.
+    #[inline]
+    pub fn maybe_schedule_gen_snapshot(&mut self) {
+        if let Some(gen_task) = self.storage_mut().take_gen_snap_task() {
+            self.apply_scheduler()
+                .unwrap()
+                .send(ApplyTask::Snapshot(gen_task));
+        }
+    }
+
     pub fn on_snapshot_generated(&mut self, snapshot: GenSnapRes) {
         if self.storage_mut().on_snapshot_generated(snapshot) {
             self.raft_group_mut().ping();
@@ -270,6 +284,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     /// Will schedule a task to read worker and then generate a snapshot
     /// asynchronously.
     pub fn schedule_gen_snapshot(&mut self, snap_task: GenSnapTask) {
+        debug!(self.logger, "scheduling snapshot"; "task" => ?snap_task);
         // Do not generate, the peer is removed.
         if self.tombstone() {
             snap_task.canceled.store(true, Ordering::SeqCst);
@@ -531,6 +546,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap.get_data())?;
         let region = snap_data.take_region();
+        let removed_records = snap_data.take_removed_records();
+        let merged_records = snap_data.take_merged_records();
         if region.get_id() != region_id {
             return Err(box_err!(
                 "mismatch region id {}!={}",
@@ -571,6 +588,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let region_state = self.region_state_mut();
         region_state.set_state(PeerState::Normal);
         region_state.set_region(region);
+        region_state.set_removed_records(removed_records);
+        region_state.set_merged_records(merged_records);
         region_state.set_tablet_index(last_index);
         let entry_storage = self.entry_storage_mut();
         entry_storage.raft_state_mut().set_last_index(last_index);

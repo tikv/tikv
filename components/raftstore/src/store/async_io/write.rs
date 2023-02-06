@@ -14,7 +14,7 @@ use std::{
 };
 
 use collections::HashMap;
-use crossbeam::channel::{bounded, Receiver, Sender, TryRecvError};
+use crossbeam::channel::TryRecvError;
 use engine_traits::{
     KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
 };
@@ -23,6 +23,10 @@ use fail::fail_point;
 use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use protobuf::Message;
 use raft::eraftpb::Entry;
+use resource_control::{
+    channel::{bounded, Receiver, Sender},
+    ResourceController, ResourceMetered,
+};
 use tikv_util::{
     box_err,
     config::{ReadableSize, Tracker, VersionTrack},
@@ -41,6 +45,7 @@ use crate::{
         local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics, TimeTracker},
         metrics::*,
         transport::Transport,
+        util,
         util::LatencyInspector,
         PeerMsg,
     },
@@ -268,6 +273,29 @@ where
         inspector: Vec<LatencyInspector>,
     },
     Shutdown,
+    #[cfg(test)]
+    Pause(std::sync::mpsc::Receiver<()>),
+}
+
+impl<EK, ER> ResourceMetered for WriteMsg<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+        match self {
+            WriteMsg::WriteTask(t) => {
+                let mut map = HashMap::default();
+                for entry in &t.entries {
+                    let header = util::get_entry_header(entry);
+                    let group_name = header.get_resource_group_name().to_owned();
+                    *map.entry(group_name).or_default() += entry.compute_size() as u64;
+                }
+                Some(map)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl<EK, ER> fmt::Debug for WriteMsg<EK, ER>
@@ -284,6 +312,8 @@ where
             ),
             WriteMsg::Shutdown => write!(fmt, "WriteMsg::Shutdown"),
             WriteMsg::LatencyInspect { .. } => write!(fmt, "WriteMsg::LatencyInspect"),
+            #[cfg(test)]
+            WriteMsg::Pause(_) => write!(fmt, "WriteMsg::Pause"),
         }
     }
 }
@@ -641,6 +671,10 @@ where
             } => {
                 self.pending_latency_inspect.push((send_time, inspector));
             }
+            #[cfg(test)]
+            WriteMsg::Pause(rx) => {
+                let _ = rx.recv();
+            }
         }
         false
     }
@@ -845,13 +879,15 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    resource_ctl: Option<Arc<ResourceController>>,
     writers: Vec<Sender<WriteMsg<EK, ER>>>,
     handlers: Vec<JoinHandle<()>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Default for StoreWriters<EK, ER> {
-    fn default() -> Self {
+impl<EK: KvEngine, ER: RaftEngine> StoreWriters<EK, ER> {
+    pub fn new(resource_ctl: Option<Arc<ResourceController>>) -> Self {
         Self {
+            resource_ctl,
             writers: vec![],
             handlers: vec![],
         }
@@ -879,7 +915,10 @@ where
         let pool_size = cfg.value().store_io_pool_size;
         for i in 0..pool_size {
             let tag = format!("store-writer-{}", i);
-            let (tx, rx) = bounded(cfg.value().store_io_notify_capacity);
+            let (tx, rx) = bounded(
+                self.resource_ctl.clone(),
+                cfg.value().store_io_notify_capacity,
+            );
             let mut worker = Worker::new(
                 store_id,
                 tag.clone(),
@@ -906,7 +945,7 @@ where
         assert_eq!(self.writers.len(), self.handlers.len());
         for (i, handler) in self.handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
-            self.writers[i].send(WriteMsg::Shutdown).unwrap();
+            self.writers[i].send(WriteMsg::Shutdown, 0).unwrap();
             handler.join().unwrap();
         }
     }

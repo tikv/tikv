@@ -30,12 +30,13 @@ use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
     store::{
-        CheckLeaderRunner, FlowStatsReporter, ReadStats, RegionSnapshot, TabletSnapManager,
-        WriteStats,
+        AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats, RegionSnapshot,
+        TabletSnapManager, WriteStats,
     },
     RegionInfoAccessor,
 };
 use raftstore_v2::{router::RaftRouter, StateStorage, StoreMeta, StoreRouter};
+use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use slog_global::debug;
@@ -169,6 +170,7 @@ impl ServerCluster {
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64> {
         let (snap_mgr, snap_mgs_path) = if !self.snap_mgrs.contains_key(&node_id) {
             let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
@@ -194,7 +196,7 @@ impl ServerCluster {
         let mut raft_store = cfg.raft_store.clone();
         raft_store
             .validate(
-                cfg.coprocessor.region_split_size,
+                cfg.coprocessor.region_split_size.unwrap(),
                 cfg.coprocessor.enable_region_bucket,
                 cfg.coprocessor.region_bucket_size,
             )
@@ -229,7 +231,10 @@ impl ServerCluster {
 
         // Create storage.
         let pd_worker = LazyWorker::new("test-pd-worker");
-        let pd_sender = raftstore_v2::FlowReporter::new(pd_worker.scheduler());
+        let pd_sender = raftstore_v2::PdReporter::new(
+            pd_worker.scheduler(),
+            slog_global::borrow_global().new(slog::o!()),
+        );
         let storage_read_pool = ReadPool::from(storage::build_read_pool(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
             pd_sender,
@@ -273,7 +278,7 @@ impl ServerCluster {
         }
 
         // Start resource metering.
-        let (res_tag_factory, _, rsmeter_cleanup) =
+        let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
         let check_leader_runner = CheckLeaderRunner::new(store_meta, coprocessor_host.clone());
@@ -305,6 +310,9 @@ impl ServerCluster {
             quota_limiter.clone(),
             self.pd_client.feature_gate().clone(),
             casual_ts_provider.clone(),
+            resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
         )?;
         self.storages.insert(node_id, raft_kv_v2);
 
@@ -415,6 +423,8 @@ impl ServerCluster {
             concurrency_manager.clone(),
             casual_ts_provider,
             coprocessor_host,
+            AutoSplitController::default(),
+            collector_reg_handle,
             bg_worker,
             pd_worker,
             Arc::new(VersionTrack::new(raft_store)),
@@ -523,10 +533,18 @@ impl Simulator for ServerCluster {
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
-            self.run_node_impl::<API>(node_id, cfg, store_meta, raft_engine, tablet_registry,)
+            self.run_node_impl::<API>(
+                node_id,
+                cfg,
+                store_meta,
+                raft_engine,
+                tablet_registry,
+                resource_manager
+            )
         )
     }
 

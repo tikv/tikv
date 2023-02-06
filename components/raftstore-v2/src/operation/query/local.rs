@@ -815,6 +815,7 @@ mod tests {
                 txn_ext: txn_ext.clone(),
                 read_progress: read_progress.clone(),
                 pending_remove: false,
+                wait_data: false,
                 track_ver: TrackVer::new(),
                 bucket_meta: Some(bucket_meta.clone()),
             };

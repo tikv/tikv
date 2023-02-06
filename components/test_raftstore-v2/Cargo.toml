@@ -65,3 +65,4 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 txn_types = { workspace = true }
+resource_control = { workspace = true }

@@ -180,6 +180,7 @@ fn test_serde_custom_tikv_config() {
         raft_entry_max_size: ReadableSize::mb(12),
         raft_log_compact_sync_interval: ReadableDuration::secs(12),
         raft_log_gc_tick_interval: ReadableDuration::secs(12),
+        request_voter_replicated_index_interval: ReadableDuration::minutes(5),
         raft_log_gc_threshold: 12,
         raft_log_gc_count_limit: Some(12),
         raft_log_gc_size_limit: Some(ReadableSize::kb(1)),
@@ -254,6 +255,7 @@ fn test_serde_custom_tikv_config() {
         max_snapshot_file_raw_size: ReadableSize::gb(10),
         unreachable_backoff: ReadableDuration::secs(111),
         check_peers_availability_interval: ReadableDuration::secs(30),
+        check_request_snapshot_interval: ReadableDuration::minutes(1),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -724,7 +726,7 @@ fn test_serde_custom_tikv_config() {
         split_region_on_table: false,
         batch_split_limit: 1,
         region_max_size: Some(ReadableSize::mb(12)),
-        region_split_size: ReadableSize::mb(12),
+        region_split_size: Some(ReadableSize::mb(12)),
         region_max_keys: Some(100000),
         region_split_keys: Some(100000),
         consistency_check_method: ConsistencyCheckMethod::Raw,
