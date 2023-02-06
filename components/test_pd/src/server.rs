@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    str::from_utf8,
     sync::{
         atomic::{AtomicI64, Ordering},
         Arc,
@@ -20,6 +21,7 @@ use pd_client::Error as PdError;
 use security::*;
 
 use super::mocker::*;
+use crate::mocker::etcd::{EtcdClient, Keys, KvEventType, MetaKey};
 
 pub struct Server<C: PdMocker> {
     server: Option<GrpcServer>,
@@ -57,6 +59,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
             default_handler,
             case,
             tso_logical: Arc::new(AtomicI64::default()),
+            etcd_client: EtcdClient::default(),
         };
         let mut server = Server {
             server: None,
@@ -170,6 +173,7 @@ struct PdMock<C: PdMocker> {
     default_handler: Arc<Service>,
     case: Option<Arc<C>>,
     tso_logical: Arc<AtomicI64>,
+    etcd_client: EtcdClient,
 }
 
 impl<C: PdMocker> Clone for PdMock<C> {
@@ -178,6 +182,7 @@ impl<C: PdMocker> Clone for PdMock<C> {
             default_handler: Arc::clone(&self.default_handler),
             case: self.case.clone(),
             tso_logical: self.tso_logical.clone(),
+            etcd_client: self.etcd_client.clone(),
         }
     }
 }
@@ -189,39 +194,71 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         req: LoadGlobalConfigRequest,
         sink: UnarySink<LoadGlobalConfigResponse>,
     ) {
-        hijack_unary(self, ctx, sink, |c| c.load_global_config(&req))
+        let cli = self.etcd_client.clone();
+        hijack_unary(self, ctx, sink, |c| c.load_global_config(&req, cli.clone()))
     }
 
     fn store_global_config(
         &mut self,
-        _ctx: RpcContext<'_>,
-        _req: StoreGlobalConfigRequest,
-        _sink: UnarySink<StoreGlobalConfigResponse>,
+        ctx: RpcContext<'_>,
+        req: StoreGlobalConfigRequest,
+        sink: UnarySink<StoreGlobalConfigResponse>,
     ) {
-        unimplemented!()
+        let cli = self.etcd_client.clone();
+        hijack_unary(self, ctx, sink, |c| {
+            c.store_global_config(&req, cli.clone())
+        })
     }
 
     fn watch_global_config(
         &mut self,
         ctx: RpcContext<'_>,
-        _req: WatchGlobalConfigRequest,
+        req: WatchGlobalConfigRequest,
         mut sink: ServerStreamingSink<WatchGlobalConfigResponse>,
     ) {
-        ctx.spawn(async move {
-            let mut name: usize = 0;
-            loop {
+        let cli = self.etcd_client.clone();
+        let future = async move {
+            let mut watcher = match cli
+                .lock()
+                .await
+                .watch(
+                    Keys::Range(MetaKey(b"".to_vec()), MetaKey(b"\xff".to_vec())),
+                    req.revision,
+                )
+                .await
+            {
+                Ok(w) => w,
+                Err(err) => {
+                    error!("failed to watch: {:?}", err);
+                    return;
+                }
+            };
+
+            while let Some(event) = watcher.as_mut().recv().await {
+                info!("watch event from etcd"; "event" => ?event);
                 let mut change = GlobalConfigItem::new();
-                change.set_name(format!("/global/config/{:?}", name).to_owned());
-                change.set_value(format!("{:?}", name));
+                change.set_kind(match event.kind {
+                    KvEventType::Put => EventType::Put,
+                    KvEventType::Delete => EventType::Delete,
+                });
+                change.set_name(from_utf8(event.pair.key()).unwrap().to_string());
+                change.set_payload(event.pair.value().into());
                 let mut wc = WatchGlobalConfigResponse::default();
                 wc.set_changes(vec![change].into());
-                // simulate network delay
-                std::thread::sleep(Duration::from_millis(10));
-                name += 1;
                 let _ = sink.send((wc, WriteFlags::default())).await;
                 let _ = sink.flush().await;
+                #[cfg(feature = "failpoints")]
+                {
+                    use futures::executor::block_on;
+                    let cli_clone = cli.clone();
+                    fail_point!("watch_global_config_return", |_| {
+                        block_on(async move { cli_clone.lock().await.clear_subs() });
+                        watcher.close();
+                    });
+                }
             }
-        })
+        };
+        ctx.spawn(future);
     }
 
     fn get_members(

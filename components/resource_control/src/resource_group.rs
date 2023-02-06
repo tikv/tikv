@@ -9,7 +9,10 @@ use std::{
 };
 
 use dashmap::{mapref::one::Ref, DashMap};
-use kvproto::resource_manager::{GroupMode, ResourceGroup};
+use kvproto::{
+    kvrpcpb::CommandPri,
+    resource_manager::{GroupMode, ResourceGroup},
+};
 use yatp::queue::priority::TaskPriorityProvider;
 
 // a read task cost at least 50us.
@@ -38,25 +41,21 @@ pub struct ResourceGroupManager {
 impl ResourceGroupManager {
     fn get_ru_setting(rg: &ResourceGroup, is_read: bool) -> u64 {
         match (rg.get_mode(), is_read) {
-            (GroupMode::RuMode, true) => rg
+            // RU mode, read and write use the same setting.
+            (GroupMode::RuMode, _) => rg
                 .get_r_u_settings()
-                .get_r_r_u()
-                .get_settings()
-                .get_fill_rate(),
-            (GroupMode::RuMode, false) => rg
-                .get_r_u_settings()
-                .get_w_r_u()
+                .get_r_u()
                 .get_settings()
                 .get_fill_rate(),
             // TODO: currently we only consider the cpu usage in the read path, we may also take
             // io read bytes into account later.
             (GroupMode::RawMode, true) => rg
-                .get_resource_settings()
+                .get_raw_resource_settings()
                 .get_cpu()
                 .get_settings()
                 .get_fill_rate(),
             (GroupMode::RawMode, false) => rg
-                .get_resource_settings()
+                .get_raw_resource_settings()
                 .get_io_write()
                 .get_settings()
                 .get_fill_rate(),
@@ -97,7 +96,6 @@ impl ResourceGroupManager {
             let ru_quota = Self::get_ru_setting(g.value(), controller.is_read);
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota);
         }
-
         controller
     }
 
@@ -243,6 +241,15 @@ impl ResourceController {
         // need totally accurate here.
         self.last_min_vt.store(max_vt, Ordering::Relaxed);
     }
+
+    pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
+        let level = match pri {
+            CommandPri::Low => 2,
+            CommandPri::Normal => 1,
+            CommandPri::High => 0,
+        };
+        self.resource_group(name).get_priority(level)
+    }
 }
 
 impl TaskPriorityProvider for ResourceController {
@@ -295,18 +302,23 @@ impl GroupPriorityTracker {
 }
 
 #[cfg(test)]
-mod tests {
-    use kvproto::resource_manager::*;
+pub(crate) mod tests {
     use yatp::queue::Extras;
 
     use super::*;
 
-    fn new_resource_group(
+    pub fn new_resource_group_ru(name: String, ru: u64) -> ResourceGroup {
+        new_resource_group(name, true, ru, ru)
+    }
+
+    pub fn new_resource_group(
         name: String,
         is_ru_mode: bool,
         read_tokens: u64,
         write_tokens: u64,
     ) -> ResourceGroup {
+        use kvproto::resource_manager::{GroupRawResourceSettings, GroupRequestUnitSettings};
+
         let mut group = ResourceGroup::new();
         group.set_name(name);
         let mode = if is_ru_mode {
@@ -316,18 +328,15 @@ mod tests {
         };
         group.set_mode(mode);
         if is_ru_mode {
+            assert!(read_tokens == write_tokens);
             let mut ru_setting = GroupRequestUnitSettings::new();
             ru_setting
-                .mut_r_r_u()
+                .mut_r_u()
                 .mut_settings()
                 .set_fill_rate(read_tokens);
-            ru_setting
-                .mut_w_r_u()
-                .mut_settings()
-                .set_fill_rate(write_tokens);
             group.set_r_u_settings(ru_setting);
         } else {
-            let mut resource_setting = GroupResourceSettings::new();
+            let mut resource_setting = GroupRawResourceSettings::new();
             resource_setting
                 .mut_cpu()
                 .mut_settings()
@@ -336,7 +345,7 @@ mod tests {
                 .mut_io_write()
                 .mut_settings()
                 .set_fill_rate(write_tokens);
-            group.set_resource_settings(resource_setting);
+            group.set_raw_resource_settings(resource_setting);
         }
         group
     }
@@ -345,17 +354,16 @@ mod tests {
     fn test_resource_group() {
         let resource_manager = ResourceGroupManager::default();
 
-        let group1 = new_resource_group("TEST".into(), true, 100, 100);
+        let group1 = new_resource_group_ru("TEST".into(), 100);
         resource_manager.add_resource_group(group1);
 
         assert!(resource_manager.get_resource_group("test1").is_none());
-
         let group = resource_manager.get_resource_group("test").unwrap();
         assert_eq!(
             group
                 .value()
                 .get_r_u_settings()
-                .get_r_r_u()
+                .get_r_u()
                 .get_settings()
                 .get_fill_rate(),
             100
@@ -363,14 +371,14 @@ mod tests {
         drop(group);
         assert_eq!(resource_manager.resource_groups.len(), 1);
 
-        let group1 = new_resource_group("Test".into(), true, 200, 100);
+        let group1 = new_resource_group_ru("Test".into(), 200);
         resource_manager.add_resource_group(group1);
         let group = resource_manager.get_resource_group("test").unwrap();
         assert_eq!(
             group
                 .value()
                 .get_r_u_settings()
-                .get_r_r_u()
+                .get_r_u()
                 .get_settings()
                 .get_fill_rate(),
             200
@@ -378,44 +386,44 @@ mod tests {
         drop(group);
         assert_eq!(resource_manager.resource_groups.len(), 1);
 
-        let group2 = new_resource_group("test2".into(), true, 400, 200);
+        let group2 = new_resource_group_ru("test2".into(), 400);
         resource_manager.add_resource_group(group2);
         assert_eq!(resource_manager.resource_groups.len(), 2);
 
-        let resouce_ctl = resource_manager.derive_controller("test_read".into(), true);
-        assert_eq!(resouce_ctl.resource_consumptions.len(), 3);
+        let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
+        assert_eq!(resource_ctl.resource_consumptions.len(), 3);
 
-        let group1 = resouce_ctl.resource_group("test".as_bytes());
+        let group1 = resource_ctl.resource_group("test".as_bytes());
         assert_eq!(group1.weight, 500);
-        let group2 = resouce_ctl.resource_group("test2".as_bytes());
+        let group2 = resource_ctl.resource_group("test2".as_bytes());
         assert_eq!(group2.weight, 250);
         assert_eq!(group1.current_vt(), 0);
 
         let mut extras1 = Extras::single_level();
         extras1.set_metadata("test".as_bytes().to_owned());
-        assert_eq!(resouce_ctl.priority_of(&extras1), 25_000);
+        assert_eq!(resource_ctl.priority_of(&extras1), 25_000);
         assert_eq!(group1.current_vt(), 25_000);
 
         let mut extras2 = Extras::single_level();
         extras2.set_metadata("test2".as_bytes().to_owned());
-        assert_eq!(resouce_ctl.priority_of(&extras2), 12_500);
+        assert_eq!(resource_ctl.priority_of(&extras2), 12_500);
         assert_eq!(group2.current_vt(), 12_500);
 
         let mut extras3 = Extras::single_level();
         extras3.set_metadata("unknown_group".as_bytes().to_owned());
-        assert_eq!(resouce_ctl.priority_of(&extras3), 50);
+        assert_eq!(resource_ctl.priority_of(&extras3), 50);
         assert_eq!(
-            resouce_ctl
+            resource_ctl
                 .resource_group("default".as_bytes())
                 .current_vt(),
             50
         );
 
-        resouce_ctl.consume(
+        resource_ctl.consume(
             "test".as_bytes(),
             ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
         );
-        resouce_ctl.consume(
+        resource_ctl.consume(
             "test2".as_bytes(),
             ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
         );
@@ -429,7 +437,7 @@ mod tests {
         assert_eq!(group1_vt, 5_025_000);
         assert!(group2.current_vt() >= group1.current_vt() * 3 / 4);
         assert!(
-            resouce_ctl
+            resource_ctl
                 .resource_group("default".as_bytes())
                 .current_vt()
                 >= group1.current_vt() / 2
@@ -439,11 +447,11 @@ mod tests {
         drop(group2);
 
         // test add 1 new resource group
-        let new_group = new_resource_group("new_group".into(), true, 500, 500);
+        let new_group = new_resource_group_ru("new_group".into(), 500);
         resource_manager.add_resource_group(new_group);
 
-        assert_eq!(resouce_ctl.resource_consumptions.len(), 4);
-        let group3 = resouce_ctl.resource_group("new_group".as_bytes());
+        assert_eq!(resource_ctl.resource_consumptions.len(), 4);
+        let group3 = resource_ctl.resource_group("new_group".as_bytes());
         assert_eq!(group3.weight, 200);
         assert!(group3.current_vt() >= group1_vt / 2);
     }
@@ -454,29 +462,29 @@ mod tests {
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
 
-        let group1 = new_resource_group("test1".into(), true, 5000, 1000);
+        let group1 = new_resource_group_ru("test1".into(), 5000);
         resource_manager.add_resource_group(group1);
         assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 20);
         assert_eq!(
             resource_ctl_write.resource_group("test1".as_bytes()).weight,
-            100
+            20
         );
 
         // add a resource group with big ru
-        let group1 = new_resource_group("test2".into(), true, 50000, 2000);
+        let group1 = new_resource_group_ru("test2".into(), 50000);
         resource_manager.add_resource_group(group1);
         assert_eq!(*resource_ctl.max_ru_quota.lock().unwrap(), 50000);
         assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 100);
         assert_eq!(resource_ctl.resource_group("test2".as_bytes()).weight, 10);
         // resource_ctl_write should be unchanged.
-        assert_eq!(*resource_ctl_write.max_ru_quota.lock().unwrap(), 10000);
+        assert_eq!(*resource_ctl_write.max_ru_quota.lock().unwrap(), 50000);
         assert_eq!(
             resource_ctl_write.resource_group("test1".as_bytes()).weight,
             100
         );
         assert_eq!(
             resource_ctl_write.resource_group("test2".as_bytes()).weight,
-            50
+            10
         );
     }
 }

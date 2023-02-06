@@ -33,14 +33,16 @@ use raftstore::{
     coprocessor::CoprocessorHost,
     store::{
         region_meta::{RegionLocalState, RegionMeta},
-        Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+        AutoSplitController, Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport,
+        RAFT_INIT_LOG_INDEX,
     },
 };
 use raftstore_v2::{
     create_store_batch_system,
-    router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
+    router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter, StoreMsg},
     Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
+use resource_metering::CollectorRegHandle;
 use slog::{debug, o, Logger};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
@@ -125,7 +127,16 @@ impl TestRouter {
             let res = self.send(region_id, PeerMsg::WaitFlush(ch));
             match res {
                 Ok(_) => return block_on(sub.result()).is_some(),
-                Err(TrySendError::Disconnected(_)) => return false,
+                Err(TrySendError::Disconnected(m)) => {
+                    let PeerMsg::WaitFlush(ch) = m else { unreachable!() };
+                    match self
+                        .store_router()
+                        .send_control(StoreMsg::WaitFlush { region_id, ch })
+                    {
+                        Ok(_) => return block_on(sub.result()).is_some(),
+                        Err(_) => return false,
+                    }
+                }
                 Err(TrySendError::Full(_)) => thread::sleep(Duration::from_millis(10)),
             }
         }
@@ -300,6 +311,8 @@ impl RunningState {
                 concurrency_manager,
                 causal_ts_provider,
                 coprocessor_host,
+                AutoSplitController::default(),
+                CollectorRegHandle::new_for_test(),
                 background.clone(),
                 pd_worker,
             )
@@ -510,6 +523,10 @@ impl Cluster {
 
     pub fn node(&self, offset: usize) -> &TestNode {
         &self.nodes[offset]
+    }
+
+    pub fn receiver(&self, offset: usize) -> &Receiver<RaftMessage> {
+        &self.receivers[offset]
     }
 
     /// Send messages and wait for side effects are all handled.

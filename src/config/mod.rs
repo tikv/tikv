@@ -89,6 +89,9 @@ pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
 /// By default, block cache size will be set to 45% of system memory.
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
+/// Because multi-rocksdb has 25% memory table quota, we have to reduce block
+/// cache a bit
+pub const RAFTSTORE_V2_BLOCK_CACHE_RATE: f64 = 0.30;
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
 pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
 
@@ -116,7 +119,8 @@ fn bloom_filter_ratio(et: EngineType) -> f64 {
         EngineType::RaftKv => 0.1,
         // In v2, every peer has its own tablet. The data scale is about tens of
         // GiBs. We only need a small portion for those key.
-        EngineType::RaftKv2 => 0.005,
+        // TODO: disable it for now until find out the proper ratio
+        EngineType::RaftKv2 => 0.0,
     }
 }
 
@@ -630,7 +634,7 @@ impl Default for DefaultCfConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
 
         DefaultCfConfig {
-            block_size: ReadableSize::kb(64),
+            block_size: ReadableSize::kb(16),
             block_cache_size: memory_limit_for_cf(false, CF_DEFAULT, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
@@ -755,7 +759,7 @@ impl Default for WriteCfConfig {
         };
 
         WriteCfConfig {
-            block_size: ReadableSize::kb(64),
+            block_size: ReadableSize::kb(16),
             block_cache_size: memory_limit_for_cf(false, CF_WRITE, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
@@ -1229,6 +1233,10 @@ impl DbConfig {
                 self.write_buffer_limit.get_or_insert(ReadableSize(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                 ));
+                self.defaultcf.disable_write_stall = true;
+                self.writecf.disable_write_stall = true;
+                self.lockcf.disable_write_stall = true;
+                self.raftcf.disable_write_stall = true;
             }
         }
     }
@@ -1259,7 +1267,7 @@ impl DbConfig {
         }
     }
 
-    pub fn build_opt(&self, shared: &DbResources) -> RocksDbOptions {
+    pub fn build_opt(&self, shared: &DbResources, for_engine: EngineType) -> RocksDbOptions {
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -1301,7 +1309,9 @@ impl DbConfig {
         if let Some(b) = self.paranoid_checks {
             opts.set_paranoid_checks(b);
         }
-        opts.set_info_log(RocksdbLogger::default());
+        if for_engine == EngineType::RaftKv {
+            opts.set_info_log(RocksdbLogger::default());
+        }
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
@@ -1391,7 +1401,7 @@ impl DbConfig {
         // prevent mistakenly inputting too large values, the max limit is made
         // according to the cpu quota * 10. Notice 10 is only an estimate, not an
         // empirical value.
-        let limit = SysQuota::cpu_cores_quota() as i32 * 10;
+        let limit = (SysQuota::cpu_cores_quota() * 10.0) as i32;
         if self.max_background_jobs <= 0 || self.max_background_jobs > limit {
             return Err(format!(
                 "max_background_jobs should be greater than 0 and less than or equal to {:?}",
@@ -2648,7 +2658,7 @@ pub struct CdcConfig {
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
-            min_ts_interval: ReadableDuration::millis(200),
+            min_ts_interval: ReadableDuration::secs(1),
             hibernate_regions_compatible: true,
             // 4 threads for incremental scan.
             incremental_scan_threads: 4,
@@ -3130,7 +3140,7 @@ impl TikvConfig {
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
             if !self.raft_engine.enable {
-                panic!("raft-kv2 only supports raft log engine.");
+                panic!("partitioned-raft-kv only supports raft log engine.");
             }
         }
 
@@ -3223,9 +3233,14 @@ impl TikvConfig {
         self.raft_engine.validate()?;
         self.server.validate()?;
         self.pd.validate()?;
+
+        // cannot pass EngineType directly as component raftstore cannot have dependency
+        // on tikv
+        self.coprocessor
+            .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.coprocessor.validate()?;
         self.raft_store.validate(
-            self.coprocessor.region_split_size,
+            self.coprocessor.region_split_size(),
             self.coprocessor.enable_region_bucket,
             self.coprocessor.region_bucket_size,
         )?;
@@ -3440,7 +3455,7 @@ impl TikvConfig {
                     "override coprocessor.region-split-size with raftstore.region-split-size, {:?}",
                     self.raft_store.region_split_size
                 );
-                self.coprocessor.region_split_size = self.raft_store.region_split_size;
+                self.coprocessor.region_split_size = Some(self.raft_store.region_split_size);
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
@@ -4160,7 +4175,10 @@ mod tests {
     use grpcio::ResourceQuota;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
-    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use raftstore::coprocessor::{
+        config::{LARGE_REGION_SPLIT_SIZE_MB, RAFTSTORE_V2_SPLIT_SIZE_MB, SPLIT_SIZE_MB},
+        region_info_accessor::MockRegionInfoProvider,
+    };
     use slog::Level;
     use tempfile::Builder;
     use tikv_kv::RocksEngine as RocksDBEngine;
@@ -4419,9 +4437,10 @@ mod tests {
     fn test_rocks_rate_limit_zero() {
         let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.rocksdb.rate_bytes_per_sec = ReadableSize(0);
+        let resource = tikv_cfg.rocksdb.build_resources(Arc::new(Env::default()));
         tikv_cfg
             .rocksdb
-            .build_opt(&tikv_cfg.rocksdb.build_resources(Arc::new(Env::default())));
+            .build_opt(&resource, tikv_cfg.storage.engine);
     }
 
     #[test]
@@ -4582,15 +4601,16 @@ mod tests {
         Arc<FlowController>,
     ) {
         assert_eq!(F::TAG, cfg.storage.api_version());
+        let resource = cfg.rocksdb.build_resources(Arc::default());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
-            Some(
-                cfg.rocksdb
-                    .build_opt(&cfg.rocksdb.build_resources(Arc::new(Env::default()))),
-            ),
+            Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
             cfg.rocksdb.build_cf_opts(
-                &cfg.rocksdb
-                    .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
+                &cfg.rocksdb.build_cf_resources(
+                    cfg.storage
+                        .block_cache
+                        .build_shared_cache(cfg.storage.engine),
+                ),
                 None,
                 cfg.storage.api_version(),
                 cfg.storage.engine,
@@ -4925,14 +4945,8 @@ mod tests {
         let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
 
         let check_scale_pool_size = |size: usize, ok: bool| {
-            let origin_pool_size = scheduler
-                .get_sched_pool(CommandPri::Normal)
-                .pool
-                .get_pool_size();
-            let origin_pool_size_high = scheduler
-                .get_sched_pool(CommandPri::High)
-                .pool
-                .get_pool_size();
+            let origin_pool_size = scheduler.get_sched_pool().get_pool_size(CommandPri::Normal);
+            let origin_pool_size_high = scheduler.get_sched_pool().get_pool_size(CommandPri::High);
             let res = cfg_controller
                 .update_config("storage.scheduler-worker-pool-size", &format!("{}", size));
             let (expected_size, expected_size_high) = if ok {
@@ -4943,17 +4957,11 @@ mod tests {
                 (origin_pool_size, origin_pool_size_high)
             };
             assert_eq!(
-                scheduler
-                    .get_sched_pool(CommandPri::Normal)
-                    .pool
-                    .get_pool_size(),
+                scheduler.get_sched_pool().get_pool_size(CommandPri::Normal),
                 expected_size
             );
             assert_eq!(
-                scheduler
-                    .get_sched_pool(CommandPri::High)
-                    .pool
-                    .get_pool_size(),
+                scheduler.get_sched_pool().get_pool_size(CommandPri::High),
                 expected_size_high
             );
         };
@@ -5529,17 +5537,22 @@ mod tests {
         // on.
         default_cfg.readpool.storage.adjust_use_unified_pool();
         default_cfg.readpool.coprocessor.adjust_use_unified_pool();
+        default_cfg
+            .coprocessor
+            .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
+        default_cfg.coprocessor.region_split_size =
+            Some(default_cfg.coprocessor.region_split_size());
         default_cfg.coprocessor.region_split_keys =
             Some(default_cfg.coprocessor.region_split_keys());
         default_cfg.raft_store.raft_log_gc_size_limit =
-            Some(default_cfg.coprocessor.region_split_size * 3 / 4);
+            Some(default_cfg.coprocessor.region_split_size() * 3 / 4);
         default_cfg.raft_store.raft_log_gc_count_limit =
-            Some(default_cfg.coprocessor.region_split_size * 3 / 4 / ReadableSize::kb(1));
+            Some(default_cfg.coprocessor.region_split_size() * 3 / 4 / ReadableSize::kb(1));
         default_cfg.raft_store.region_split_check_diff =
-            Some(default_cfg.coprocessor.region_split_size / 16);
+            Some(default_cfg.coprocessor.region_split_size() / 16);
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
@@ -5573,8 +5586,56 @@ mod tests {
         cfg.raftdb.defaultcf.level0_stop_writes_trigger = None;
         cfg.raftdb.defaultcf.soft_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.hard_pending_compaction_bytes_limit = None;
+        cfg.coprocessor
+            .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
 
         assert_eq!(cfg, default_cfg);
+    }
+
+    #[test]
+    fn test_region_size_config() {
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.optimize_for(false);
+        default_cfg.coprocessor.validate().unwrap();
+        assert_eq!(
+            default_cfg.coprocessor.region_split_size(),
+            ReadableSize::mb(SPLIT_SIZE_MB)
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.enable_region_bucket = true;
+        default_cfg.coprocessor.optimize_for(false);
+        default_cfg.coprocessor.validate().unwrap();
+        assert_eq!(
+            default_cfg.coprocessor.region_split_size(),
+            ReadableSize::mb(LARGE_REGION_SPLIT_SIZE_MB)
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.optimize_for(true);
+        default_cfg.coprocessor.validate().unwrap();
+        assert_eq!(
+            default_cfg.coprocessor.region_split_size(),
+            ReadableSize::mb(RAFTSTORE_V2_SPLIT_SIZE_MB)
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
+        default_cfg.coprocessor.optimize_for(false);
+        default_cfg.coprocessor.validate().unwrap();
+        assert_eq!(
+            default_cfg.coprocessor.region_split_size(),
+            ReadableSize::mb(500)
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
+        default_cfg.coprocessor.optimize_for(true);
+        default_cfg.coprocessor.validate().unwrap();
+        assert_eq!(
+            default_cfg.coprocessor.region_split_size(),
+            ReadableSize::mb(500)
+        );
     }
 
     #[test]

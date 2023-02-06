@@ -97,60 +97,6 @@ fn test_pd_client_deadlock() {
     fail::remove(pd_client_reconnect_fp);
 }
 
-#[test]
-fn test_load_global_config() {
-    let (mut _server, mut client) = new_test_server_and_client(ReadableDuration::millis(100));
-    let res = futures::executor::block_on(async move {
-        client.load_global_config("global".to_string()).await
-    });
-    for (k, v) in res.unwrap() {
-        assert_eq!(k, format!("/global/config/{}", v))
-    }
-}
-
-#[test]
-fn test_watch_global_config_on_closed_server() {
-    let (mut server, mut client) = new_test_server_and_client(ReadableDuration::millis(100));
-    use futures::StreamExt;
-    let j = std::thread::spawn(move || {
-        let mut r = client.watch_global_config().unwrap();
-        block_on(async move {
-            let mut i: usize = 0;
-            while let Some(r) = r.next().await {
-                match r {
-                    Ok(res) => {
-                        let change = &res.get_changes()[0];
-                        assert_eq!(
-                            change
-                                .get_name()
-                                .split('/')
-                                .collect::<Vec<_>>()
-                                .last()
-                                .unwrap()
-                                .to_owned(),
-                            format!("{:?}", i)
-                        );
-                        assert_eq!(change.get_value().to_owned(), format!("{:?}", i));
-                        i += 1;
-                    }
-                    Err(e) => {
-                        if let grpcio::Error::RpcFailure(e) = e {
-                            // 14-UNAVAILABLE
-                            assert_eq!(e.code(), grpcio::RpcStatusCode::from(14));
-                            break;
-                        } else {
-                            panic!("other error occur {:?}", e)
-                        }
-                    }
-                }
-            }
-        });
-    });
-    thread::sleep(Duration::from_millis(200));
-    server.stop();
-    j.join().unwrap();
-}
-
 // Updating pd leader may be slow, we need to make sure it does not block other
 // RPC in the same gRPC Environment.
 #[test]
