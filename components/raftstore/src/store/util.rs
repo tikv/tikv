@@ -364,7 +364,7 @@ pub fn check_flashback_state(
                 return Ok(());
             }
         }
-        return Err(Error::FlashbackInProgress(region_id));
+        return Err(Error::FlashbackInProgress(region_id, flashback_start_ts));
     }
     // If the region is not in the flashback state, the flashback request itself
     // should be rejected.
