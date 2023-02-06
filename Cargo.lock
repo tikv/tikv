@@ -2732,7 +2732,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#2b853bed812556901846f42820b63d8a0d9c8d24"
+source = "git+https://github.com/pingcap/kvproto.git#eccad3776d7b076da68d6c51fb7506b8562b9802"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5941,6 +5941,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_raftstore_macro"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "test_sst_importer"
 version = "0.1.0"
 dependencies = [
@@ -6051,6 +6060,7 @@ dependencies = [
  "test_pd",
  "test_pd_client",
  "test_raftstore",
+ "test_raftstore_macro",
  "test_sst_importer",
  "test_storage",
  "test_util",

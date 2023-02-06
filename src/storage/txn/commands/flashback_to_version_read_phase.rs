@@ -213,6 +213,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                         &start_key,
                         self.start_ts,
                         self.commit_ts,
+                        self.ctx.get_region_id(),
                     )? {
                         statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);
