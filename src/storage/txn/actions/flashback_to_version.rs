@@ -241,7 +241,7 @@ pub fn check_flashback_commit(
                 return Ok(false);
             }
             error!(
-                "check flashback commit exception: lock not found";
+                "check flashback commit exception: lock record mismatched";
                 "key_to_commit" => log_wrappers::Value::key(key_to_commit.as_encoded()),
                 "flashback_start_ts" => flashback_start_ts,
                 "flashback_commit_ts" => flashback_commit_ts,
@@ -266,10 +266,10 @@ pub fn check_flashback_commit(
             );
         }
     }
-    // If both the lock and flashback commit record don't exist, it means that the
-    // current region is not in the flashback state. We could just let the check
-    // pass here and wait for the later raftstore to reject the request.
-    Ok(false)
+    // If both the flashback lock and commit records are mismatched, it means the
+    // current region is not in the flashback state. In this case, we can just
+    // return true to stop the flashback and do nothing.
+    Ok(true)
 }
 
 pub fn get_first_user_key(
