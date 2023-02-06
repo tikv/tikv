@@ -16,7 +16,7 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::{mem, time::Duration};
+use std::{mem, sync::atomic::Ordering, time::Duration};
 
 use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
@@ -41,7 +41,9 @@ use raftstore::{
 };
 use slog::{info, warn};
 use tikv_util::{
-    box_err, slog_panic,
+    box_err,
+    log::SlogFormat,
+    slog_panic,
     time::{duration_to_sec, monotonic_raw_now, Instant},
 };
 
@@ -107,7 +109,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn schedule_apply_fsm<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let region_state = self.storage().region_state().clone();
-        let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
+        let mailbox = match store_ctx.router.mailbox(self.region_id()) {
+            Some(m) => m,
+            None => {
+                assert!(
+                    store_ctx.shutdown.load(Ordering::Relaxed),
+                    "failed to load mailbox: {}",
+                    SlogFormat(&self.logger)
+                );
+                return;
+            }
+        };
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
@@ -334,6 +346,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
                 AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
+                AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
             }
         }
 
@@ -587,10 +600,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::PrepareFlashback => unimplemented!(),
                 AdminCmdType::FinishFlashback => unimplemented!(),
                 AdminCmdType::BatchSwitchWitness => unimplemented!(),
+                AdminCmdType::UpdateGcPeer => self.apply_update_gc_peer(log_index, admin_req),
                 AdminCmdType::InvalidAdmin => {
                     return Err(box_err!("invalid admin command type"));
                 }
-                AdminCmdType::UpdateGcPeer => unimplemented!(),
             };
 
             match admin_result {

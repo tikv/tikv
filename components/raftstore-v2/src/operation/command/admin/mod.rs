@@ -7,7 +7,7 @@ mod transfer_leader;
 
 pub use compact_log::CompactLogContext;
 use compact_log::CompactLogResult;
-use conf_change::ConfChangeResult;
+use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::Message;
@@ -28,6 +28,7 @@ pub enum AdminCmdResult {
     ConfChange(ConfChangeResult),
     TransferLeader(u64),
     CompactLog(CompactLogResult),
+    UpdateGcPeers(UpdateGcPeersResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -110,6 +111,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     }
                 }
                 AdminCmdType::CompactLog => self.propose_compact_log(ctx, req),
+                AdminCmdType::UpdateGcPeer => {
+                    let data = req.write_to_bytes().unwrap();
+                    self.propose(ctx, data)
+                }
                 _ => unimplemented!(),
             }
         };

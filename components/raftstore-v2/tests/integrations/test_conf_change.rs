@@ -44,7 +44,8 @@ fn test_simple_change() {
     // 3. remove peer from store-2
     remove_peer(&cluster, offset_id, region_id, peer_id);
 
-    // To avaid that some status doesn't clear after destroying, it can support to create peer by many times.
+    // To avaid that some status doesn't clear after destroying, it can support to
+    // create peer by many times.
     let repeat = 3;
     for i in 1..repeat {
         add_learner(&cluster, offset_id, region_id, peer_id + i);

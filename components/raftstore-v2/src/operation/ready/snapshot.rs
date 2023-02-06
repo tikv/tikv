@@ -553,6 +553,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap.get_data())?;
         let region = snap_data.take_region();
+        let removed_records = snap_data.take_removed_records();
+        let merged_records = snap_data.take_merged_records();
         if region.get_id() != region_id {
             return Err(box_err!(
                 "mismatch region id {}!={}",
@@ -593,6 +595,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let region_state = self.region_state_mut();
         region_state.set_state(PeerState::Normal);
         region_state.set_region(region);
+        region_state.set_removed_records(removed_records);
+        region_state.set_merged_records(merged_records);
         region_state.set_tablet_index(last_index);
         let entry_storage = self.entry_storage_mut();
         entry_storage.raft_state_mut().set_last_index(last_index);
