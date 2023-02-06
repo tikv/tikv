@@ -310,6 +310,8 @@ impl ReadPoolHandle {
 pub const UPDATE_EWMA_TIME_SLICE_INTERVAL: Duration = Duration::from_millis(200);
 
 pub struct TimeSliceInspector {
+    // `atomic_ewma_nanos` is a mirror of `inner.ewma` provided for fast access. It is updated in
+    // the `update` method.
     atomic_ewma_nanos: AtomicU64,
     inner: Mutex<TimeSliceInspectorInner>,
 }
@@ -350,6 +352,8 @@ impl TimeSliceInspector {
         let mut inner = self.inner.lock().unwrap();
         let mut new_sum = Duration::default();
         let mut new_count = 0;
+        // Now, we simplify the problem by merging samples from all levels. If we want
+        // more accurate answer in the future, calculate for each level separately.
         for hist in &inner.time_slice_hist {
             new_sum += Duration::from_secs_f64(hist.get_sample_sum());
             new_count += hist.get_sample_count();
