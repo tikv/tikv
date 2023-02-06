@@ -1684,7 +1684,7 @@ pub mod tests {
                 sub_ranges: ranges.clone(),
                 start_ts: 1.into(),
                 end_ts: 1.into(),
-                backend: backend.clone(),
+                backend,
                 limiter: Limiter::new(f64::INFINITY),
                 cancel: Arc::default(),
                 is_raw_kv: false,
