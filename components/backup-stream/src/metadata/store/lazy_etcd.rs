@@ -76,12 +76,14 @@ impl ConnectionConfig {
 
 impl LazyEtcdClient {
     pub fn new(endpoints: &[String], conf: ConnectionConfig) -> Self {
-        Self(Arc::new(AsyncMutex::new(LazyEtcdClientInner {
+        let mut inner = LazyEtcdClientInner {
             conf,
             endpoints: endpoints.iter().map(ToString::to_string).collect(),
             last_modified: None,
             cli: None,
-        })))
+        };
+        inner.normalize_urls();
+        Self(Arc::new(AsyncMutex::new(inner)))
     }
 
     async fn get_cli(&self) -> Result<EtcdStore> {
@@ -151,6 +153,21 @@ where
 }
 
 impl LazyEtcdClientInner {
+    fn normalize_urls(&mut self) {
+        let enabled_tls = self.conf.tls.client_suite().is_ok();
+        for endpoint in self.endpoints.iter_mut() {
+            // Don't touch them when the schemes already provided.
+            // Given etcd is based on gRPC (which relies on HTTP/2), 
+            // there shouldn't be other schemes available (Hopefully...)
+            if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+                continue;
+            }
+            let expected_scheme = if enabled_tls { "https" } else { "http" };
+            *endpoint = format!("{}://{}", expected_scheme, endpoint)
+        }
+        info!("log backup normalized etcd endpoints"; "endpoints" => ?self.endpoints);
+    }
+
     async fn connect(&mut self) -> Result<&EtcdStore> {
         let store = retry(|| {
             // For now, the interface of the `etcd_client` doesn't us to control
@@ -165,8 +182,9 @@ impl LazyEtcdClientInner {
         .await
         .context("during connecting to the etcd")?;
         let store = EtcdStore::from(store);
-        let updater = TopologyUpdater::new(Arc::downgrade(store.inner()));
+        let mut updater = TopologyUpdater::new(Arc::downgrade(store.inner()));
         self.cli = Some(store);
+        updater.init(self.endpoints.iter().cloned());
         tokio::task::spawn(updater.main_loop());
         Ok(self.cli.as_ref().unwrap())
     }

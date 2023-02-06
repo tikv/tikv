@@ -38,19 +38,18 @@ pub struct EtcdStore(Arc<Mutex<etcd_client::Client>>);
 
 #[derive(Default)]
 pub(super) struct TopologyUpdater<C> {
-    last_topology: HashMap<u64, Member>,
+    last_urls: HashSet<String>,
     client: Weak<Mutex<C>>,
 
     // back off configs
     pub(super) loop_interval: Duration,
     pub(super) loop_failure_back_off: Duration,
-    pub(super) init_failure_back_off: Duration,
 }
 
 impl<C> std::fmt::Debug for TopologyUpdater<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TopologyUpdater")
-            .field("last_topology", &self.last_topology)
+            .field("last_urls", &self.last_urls)
             .finish()
     }
 }
@@ -93,7 +92,7 @@ enum DiffType {
 #[derive(Clone)]
 struct Diff {
     diff_type: DiffType,
-    member: Member,
+    url: String,
 }
 
 impl std::fmt::Debug for Diff {
@@ -102,7 +101,7 @@ impl std::fmt::Debug for Diff {
             DiffType::Add => "+",
             DiffType::Remove => "-",
         };
-        write!(f, "{}{:?}", syn, self.member.client_urls())
+        write!(f, "{}{}", syn, self.url)
     }
 }
 
@@ -114,104 +113,84 @@ impl<C: ClusterInfoProvider> TopologyUpdater<C> {
     // connecting.
     pub fn new(cluster_ref: Weak<Mutex<C>>) -> Self {
         Self {
-            last_topology: Default::default(),
+            last_urls: Default::default(),
             client: cluster_ref,
 
             loop_interval: Duration::from_secs(60),
             loop_failure_back_off: Duration::from_secs(10),
-            init_failure_back_off: Duration::from_secs(30),
         }
     }
 
-    fn init(&mut self, members: impl Iterator<Item = Member>) {
+    pub fn init(&mut self, members: impl Iterator<Item = String>) {
         for mem in members {
-            self.last_topology.insert(mem.id(), mem);
+            self.last_urls.insert(mem);
         }
     }
 
-    fn diff(&self, incoming: impl Iterator<Item = Member>) -> Vec<Diff> {
+    fn diff(&self, incoming: &[Member]) -> Vec<Diff> {
         let newer = incoming
-            .map(|mem| (mem.id(), mem))
-            .collect::<HashMap<_, _>>();
+            .iter()
+            .flat_map(|mem| mem.client_urls().iter())
+            .collect::<HashSet<_>>();
         let mut result = vec![];
-        for (id, mem) in &newer {
-            if !self.last_topology.contains_key(id) {
+        for url in &newer {
+            if !self.last_urls.contains(*url) {
                 result.push(Diff {
                     diff_type: DiffType::Add,
-                    member: mem.clone(),
+                    url: String::clone(url),
                 })
             }
         }
-        for (id, mem) in &self.last_topology {
-            if !newer.contains_key(id) {
+        for url in &self.last_urls {
+            if !newer.contains(url) {
                 result.push(Diff {
                     diff_type: DiffType::Remove,
-                    member: mem.clone(),
+                    url: String::clone(url),
                 })
             }
         }
         result
     }
 
-    fn apply(&mut self, diff: Diff) -> Option<String> {
+    fn apply(&mut self, diff: &Diff) -> Option<String> {
         match diff.diff_type {
-            DiffType::Add => self
-                .last_topology
-                .insert(diff.member.id(), diff.member)
-                .map(|old| {
-                    format!(
-                        "the member with the same id {} has been added. member=({:?})",
-                        old.id(),
-                        old
-                    )
-                }),
-            DiffType::Remove => match self.last_topology.remove(&diff.member.id()) {
-                Some(_) => None,
-                None => Some(format!(
-                    "the member to remove with id {} hasn't been added. member=({:?})",
-                    diff.member.id(),
-                    diff.member
+            DiffType::Add => match self.last_urls.insert(diff.url.clone()) {
+                true => None,
+                false => Some(format!(
+                    "the member to adding with url {} overrides existing urls.",
+                    diff.url
+                )),
+            },
+            DiffType::Remove => match self.last_urls.remove(&diff.url) {
+                true => None,
+                false => Some(format!(
+                    "the member to remove with url {} hasn't been added.",
+                    diff.url
                 )),
             },
         }
     }
 
-    async fn do_init(&mut self, cli: &mut C) -> Result<()> {
-        let cluster = cli.get_members().await?;
-        self.init(cluster.into_iter());
-        Result::Ok(())
-    }
-
-    async fn try_until_init(&mut self) -> bool {
-        while let Some(client) = self.client.upgrade() {
-            if self.do_init(&mut *client.lock().await).await.is_ok() {
-                return true;
-            }
-            tokio::time::sleep(self.init_failure_back_off).await;
-        }
-        false
-    }
-
     async fn update_topology_by(&mut self, cli: &mut C, diff: &Diff) -> Result<()> {
-        for url in diff.member.client_urls() {
-            match diff.diff_type {
-                DiffType::Add => cli.add_endpoint(url).await?,
-                DiffType::Remove => cli.remove_endpoint(url).await?,
-            }
+        match diff.diff_type {
+            DiffType::Add => cli.add_endpoint(&diff.url).await?,
+            DiffType::Remove => cli.remove_endpoint(&diff.url).await?,
         }
         Ok(())
     }
 
     async fn do_update(&mut self, cli: &mut C) -> Result<()> {
         let cluster = cli.get_members().await?;
-        let diffs = self.diff(cluster.into_iter());
+        let diffs = self.diff(cluster.as_slice());
         if !diffs.is_empty() {
             info!("log backup updating store topology."; "diffs" => ?diffs, "current_state" => ?self);
         }
         for diff in diffs {
-            self.update_topology_by(cli, &diff).await?;
-            if let Some(warning) = self.apply(diff) {
-                warn!("log backup meet some wrong status when updating PD clients."; "warn" => %warning);
+            match self.apply(&diff) {
+                Some(warning) => {
+                    warn!("log backup meet some wrong status when updating PD clients, skipping this update."; "warn" => %warning);
+                }
+                None => self.update_topology_by(cli, &diff).await?,
             }
         }
         Result::Ok(())
@@ -230,10 +209,6 @@ impl<C: ClusterInfoProvider> TopologyUpdater<C> {
     }
 
     pub async fn main_loop(mut self) {
-        if !self.try_until_init().await {
-            warn!("log backup topology updater canceled during init.");
-            return;
-        }
         info!("log backup topology updater finish initialization."; "current_state" => ?self);
         self.update_topology_loop().await
     }
@@ -558,11 +533,15 @@ mod test {
             i
         }
 
-        fn init_with_member(&mut self, n: usize) {
+        fn init_with_member(&mut self, n: usize) -> Vec<String> {
+            let mut endpoints = Vec::with_capacity(n);
             for _ in 0..n {
                 let mem = self.add_member();
-                self.endpoints.insert(format!("fakestore://{}", mem));
+                let url = format!("fakestore://{}", mem);
+                self.endpoints.insert(url.clone());
+                endpoints.push(url);
             }
+            endpoints
         }
 
         fn add_member(&mut self) -> u64 {
@@ -596,7 +575,7 @@ mod test {
     #[test]
     fn test_topology_updater() {
         let mut c = FakeCluster::default();
-        c.init_with_member(3);
+        let eps = c.init_with_member(3);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -604,11 +583,10 @@ mod test {
 
         let sc = Arc::new(Mutex::new(c));
         let mut tu = TopologyUpdater::new(Arc::downgrade(&sc));
-        tu.init_failure_back_off = Duration::ZERO;
         tu.loop_failure_back_off = Duration::ZERO;
         tu.loop_interval = Duration::from_millis(100);
+        tu.init(eps.into_iter());
 
-        assert!(rt.block_on(tu.try_until_init()));
         {
             let mut sc = sc.blocking_lock();
             sc.check_consistency("after init");
