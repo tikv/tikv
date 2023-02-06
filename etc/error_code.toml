@@ -553,6 +553,11 @@ error = '''
 KV:SstImporter:InvalidKeyMode
 '''
 
+["KV:SstImporter:ResourceNotEnough"]
+error = '''
+KV:SstImporter:ResourceNotEnough
+'''
+
 ["KV:Storage:Timeout"]
 error = '''
 KV:Storage:Timeout
@@ -641,6 +646,11 @@ KV:Storage:KeyIsLocked
 ["KV:Storage:MaxTimestampNotSynced"]
 error = '''
 KV:Storage:MaxTimestampNotSynced
+'''
+
+["KV:Storage:FlashbackNotPrepared"]
+error = '''
+KV:Storage:FlashbackNotPrepared
 '''
 
 ["KV:Storage:DeadlineExceeded"]
