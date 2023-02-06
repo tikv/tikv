@@ -38,7 +38,7 @@ use tikv_util::{
     warn,
 };
 
-use super::write_router::{SenderVec, WriteSenders};
+use super::write_router::{SharedSenders, WriteSenders};
 use crate::{
     store::{
         config::Config,
@@ -899,7 +899,7 @@ where
 {
     resource_ctl: Option<Arc<ResourceController>>,
     /// Mailboxes for sending raft messages to async ios.
-    writers: Arc<VersionTrack<SenderVec<EK, ER>>>,
+    writers: Arc<VersionTrack<SharedSenders<EK, ER>>>,
     /// Background threads for handling asynchronous messages.
     handlers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
@@ -949,9 +949,9 @@ where
         Ok(())
     }
 
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         let mut handlers = self.handlers.lock();
-        let writers = self.writers.value();
+        let writers = &self.writers.value().0;
         assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
@@ -962,7 +962,7 @@ where
 
     /// Returns the valid size of store writers.
     pub fn size(&self) -> usize {
-        self.writers.value().len()
+        self.writers.value().0.len()
     }
 
     pub fn decrease_to(&mut self, size: usize) -> Result<()> {
@@ -973,10 +973,10 @@ where
         // capacity, specified by refreshed `store-io-pool-size`.
         //
         // TODO: find an elegant way to effectively free workers.
-        assert_eq!(self.writers.value().len(), self.handlers.lock().len());
+        assert_eq!(self.writers.value().0.len(), self.handlers.lock().len());
         self.writers
-            .update(move |writers: &mut SenderVec<EK, ER>| -> Result<()> {
-                assert!(writers.len() > size);
+            .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
+                assert!(writers.0.len() > size);
                 Ok(())
             })?;
         Ok(())
@@ -988,11 +988,11 @@ where
         writer_meta: StoreWritersContext<EK, ER, T, N>,
     ) -> Result<()> {
         let mut handlers = self.handlers.lock();
-        let current_size = self.writers.value().len();
+        let current_size = self.writers.value().0.len();
         assert_eq!(current_size, handlers.len());
         let resource_ctl = self.resource_ctl.clone();
         self.writers
-            .update(move |writers: &mut SenderVec<EK, ER>| -> Result<()> {
+            .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
                 for i in current_size..size {
                     let tag = format!("store-writer-{}", i);
                     let (tx, rx) = bounded(
@@ -1016,7 +1016,7 @@ where
                             .spawn_wrapper(move || {
                                 worker.run();
                             })?;
-                    writers.push(tx);
+                    writers.0.push(tx);
                     handlers.push(t);
                 }
                 Ok(())

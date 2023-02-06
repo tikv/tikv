@@ -257,20 +257,40 @@ where
     }
 }
 
-pub type SenderVec<EK, ER> = Vec<Sender<WriteMsg<EK, ER>>>;
+#[derive(Clone)]
+/// Safefly shared senders among the controller and raftstore threads.
+pub struct SharedSenders<EK: KvEngine, ER: RaftEngine>(pub Vec<Sender<WriteMsg<EK, ER>>>);
+
+impl<EK: KvEngine, ER: RaftEngine> Default for SharedSenders<EK, ER> {
+    fn default() -> Self {
+        Self(vec![])
+    }
+}
+
+/// All `Sender`s in `SharedSenders` just shared by the global controller thread
+/// and raftstore threads. There won't exist concurrent `Sender.send()` calling
+/// scenarios among threads on a same `Sender`. On the one hand, the controller
+/// thread will not call `Sender.send()` to consume resources to send messages,
+/// just updating the size of `Sender`s if `store-io-pool-size` is resized. On
+/// the other hand, each raftstore thread just use its local cloned `Sender`s
+/// for sending messages and update it in `begin()`, the first
+/// stage for processing.
+/// Therefore, it's safe to manually remain `Send` trait for
+/// `SharedSenders`.
+unsafe impl<EK: KvEngine, ER: RaftEngine> Sync for SharedSenders<EK, ER> {}
 
 #[derive(Clone)]
 /// Senders for asynchronous writes. There can be multiple senders, generally
 /// you should use `WriteRouter` to decide which sender to be used.
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
-    senders: Tracker<SenderVec<EK, ER>>,
-    cached_senders: SenderVec<EK, ER>,
+    senders: Tracker<SharedSenders<EK, ER>>,
+    cached_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
-    pub fn new(senders: Arc<VersionTrack<SenderVec<EK, ER>>>) -> Self {
-        let cached_senders = senders.value().clone();
+    pub fn new(senders: Arc<VersionTrack<SharedSenders<EK, ER>>>) -> Self {
+        let cached_senders = senders.value().0.clone();
         WriteSenders {
             senders: senders.tracker("async writers' tracker".to_owned()),
             cached_senders,
@@ -291,7 +311,7 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
     #[inline]
     pub fn refresh(&mut self) {
         if let Some(senders) = self.senders.any_new() {
-            self.cached_senders = senders.clone();
+            self.cached_senders = senders.0.clone();
         }
     }
 }
@@ -351,7 +371,7 @@ pub(crate) mod tests {
             Self {
                 receivers,
                 ctx: TestContext {
-                    senders: WriteSenders::new(Arc::new(VersionTrack::new(senders))),
+                    senders: WriteSenders::new(Arc::new(VersionTrack::new(SharedSenders(senders)))),
                     config,
                     raft_metrics: RaftMetrics::new(true),
                 },

@@ -152,8 +152,6 @@ impl<T: Send + 'static> Sender<T> {
     }
 }
 
-unsafe impl<T: Send + 'static> Sync for Sender<T> {}
-
 pub enum Receiver<T: Send + 'static> {
     Vanilla(channel::Receiver<T>),
     Priority(priority_queue::Receiver<T>),
