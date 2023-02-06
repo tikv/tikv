@@ -951,7 +951,7 @@ where
 
     pub fn shutdown(&self) {
         let mut handlers = self.handlers.lock();
-        let writers = &self.writers.value().senders();
+        let writers = self.writers.value().senders();
         assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
