@@ -8,6 +8,7 @@ use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 use raftstore::store::LocksStatus;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::storage::{
     kv::{SnapContext, SnapshotExt},
     Engine, Snapshot,
@@ -15,7 +16,10 @@ use tikv::storage::{
 use tikv_util::config::*;
 use txn_types::{Key, PessimisticLock};
 
-fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_server_basic_transfer_leader() {
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     let reserved_time = Duration::from_millis(
         cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
@@ -64,13 +68,10 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(resp.get_header().get_error().has_not_leader());
 }
 
-#[test]
-fn test_server_basic_transfer_leader() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_basic_transfer_leader(&mut cluster);
-}
-
-fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_server_pd_transfer_leader() {
+    let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -118,7 +119,10 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
-fn test_pd_transfer_leader_multi_target<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_server_pd_transfer_leader_multi_target() {
+    let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -170,19 +174,10 @@ fn test_pd_transfer_leader_multi_target<T: Simulator>(cluster: &mut Cluster<T>) 
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
 }
 
-#[test]
-fn test_server_pd_transfer_leader() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_pd_transfer_leader(&mut cluster);
-}
-
-#[test]
-fn test_server_pd_transfer_leader_multi_target() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_pd_transfer_leader_multi_target(&mut cluster);
-}
-
-fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_server_transfer_leader_during_snapshot() {
+    let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_operator();
@@ -226,34 +221,16 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
 }
 
 #[test]
-fn test_server_transfer_leader_during_snapshot() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_transfer_leader_during_snapshot(&mut cluster);
-}
-
-#[test]
 fn test_sync_max_ts_after_leader_transfer() {
-    test_kv_format_impl!(test_sync_max_ts_after_leader_transfer_impl);
+    test_kv_format_impl!(test_sync_max_ts_after_leader_transfer_v1);
+    test_kv_format_impl!(test_sync_max_ts_after_leader_transfer_v2);
 }
 
-fn test_sync_max_ts_after_leader_transfer_impl<F: KvFormat>() {
-    let mut cluster = new_server_cluster_with_api_ver(0, 3, F::TAG);
-    cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
-    cluster.run();
-
-    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    let mut storage = cluster
-        .sim
-        .read()
-        .unwrap()
-        .storages
-        .get(&1)
-        .unwrap()
-        .clone();
-    let mut wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
+macro_rules! wait_for_synced {
+    ($cluster:expr, $storage:expr) => {
         let region_id = 1;
-        let leader = cluster.leader_of_region(region_id).unwrap();
-        let epoch = cluster.get_region_epoch(region_id);
+        let leader = $cluster.leader_of_region(region_id).unwrap();
+        let epoch = $cluster.get_region_epoch(region_id);
         let mut ctx = Context::default();
         ctx.set_region_id(region_id);
         ctx.set_peer(leader);
@@ -262,7 +239,7 @@ fn test_sync_max_ts_after_leader_transfer_impl<F: KvFormat>() {
             pb_ctx: &ctx,
             ..Default::default()
         };
-        let snapshot = storage.snapshot(snap_ctx).unwrap();
+        let snapshot = $storage.snapshot(snap_ctx).unwrap();
         let txn_ext = snapshot.txn_ext.clone().unwrap();
         for retry in 0..10 {
             if txn_ext.is_max_ts_synced() {
@@ -272,24 +249,54 @@ fn test_sync_max_ts_after_leader_transfer_impl<F: KvFormat>() {
         }
         assert!(snapshot.ext().is_max_ts_synced());
     };
-
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    wait_for_synced(&mut cluster);
-    let max_ts = cm.max_ts();
-
-    cluster.pd_client.trigger_tso_failure();
-    // Transfer the leader out and back
-    cluster.must_transfer_leader(1, new_peer(2, 2));
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-
-    wait_for_synced(&mut cluster);
-    let new_max_ts = cm.max_ts();
-    assert!(new_max_ts > max_ts);
 }
 
-#[test]
+macro_rules! test_sync_max_ts_after_leader_transfer_impl {
+    ($cluster:expr) => {
+        $cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
+        $cluster.run();
+
+        let cm = $cluster.sim.read().unwrap().get_concurrency_manager(1);
+        let mut storage = $cluster
+            .sim
+            .read()
+            .unwrap()
+            .storages
+            .get(&1)
+            .unwrap()
+            .clone();
+
+        $cluster.must_transfer_leader(1, new_peer(1, 1));
+        // Give some time for leader to commit the first entry
+        thread::sleep(Duration::from_millis(100));
+        wait_for_synced!(&mut $cluster, &mut storage);
+        let max_ts = cm.max_ts();
+
+        $cluster.pd_client.trigger_tso_failure();
+        // Transfer the leader out and back
+        $cluster.must_transfer_leader(1, new_peer(2, 2));
+        $cluster.must_transfer_leader(1, new_peer(1, 1));
+
+        wait_for_synced!(&mut $cluster, &mut storage);
+        let new_max_ts = cm.max_ts();
+        assert!(new_max_ts > max_ts);
+    };
+}
+
+fn test_sync_max_ts_after_leader_transfer_v1<F: KvFormat>() {
+    let mut cluster = test_raftstore::new_server_cluster_with_api_ver(0, 3, F::TAG);
+    test_sync_max_ts_after_leader_transfer_impl!(cluster);
+}
+
+fn test_sync_max_ts_after_leader_transfer_v2<F: KvFormat>() {
+    let mut cluster = test_raftstore_v2::new_server_cluster_with_api_ver(0, 3, F::TAG);
+    test_sync_max_ts_after_leader_transfer_impl!(cluster);
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_propose_in_memory_pessimistic_locks() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
 
@@ -328,9 +335,10 @@ fn test_propose_in_memory_pessimistic_locks() {
     assert_eq!(value, lock.into_lock().to_bytes());
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.cfg.raft_store.reactive_memory_lock_tick_interval = ReadableDuration::millis(200);
     cluster.cfg.raft_store.reactive_memory_lock_timeout_tick = 3;
