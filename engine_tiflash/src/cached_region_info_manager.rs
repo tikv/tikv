@@ -148,7 +148,7 @@ impl CachedRegionInfoManager {
     pub fn fallback_to_slow_path(&self, region_id: u64) {
         // TODO clean local, and prepare to request snapshot from TiKV as a trivial
         // procedure.
-        fail::fail_point!("fallback_to_slow_path_not_allow", |_| {});
+        fail::fail_point!("fap_core_no_fallback", |_| {});
         if self.set_inited_or_fallback(region_id, true).is_err() {
             tikv_util::safe_panic!("set_inited_or_fallback");
         }

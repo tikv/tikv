@@ -27,8 +27,9 @@ use engine_rocks::{
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_store_ffi::{
-    self, ps_engine::PSEngine, EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus,
-    RaftStoreProxy, RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient, TiFlashEngine,
+    self, core::DebugStruct, ps_engine::PSEngine, EngineStoreServerHelper, EngineStoreServerStatus,
+    RaftProxyStatus, RaftStoreProxy, RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient,
+    TiFlashEngine,
 };
 use engine_traits::{
     CachedTablet, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
@@ -1260,19 +1261,20 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
-        let packed_envs = engine_store_ffi::observer::PackedEnvs {
+        let packed_envs = engine_store_ffi::core::PackedEnvs {
             engine_store_cfg: self.proxy_config.engine_store.clone(),
             pd_endpoints: self.config.pd.endpoints.clone(),
+            snap_handle_pool_size: self.proxy_config.raft_store.snap_handle_pool_size,
         };
         let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
             node.id(),
             self.engines.as_ref().unwrap().engines.kv.clone(),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             importer.clone(),
-            self.proxy_config.raft_store.snap_handle_pool_size,
             server.transport().clone(),
             snap_mgr.clone(),
             packed_envs,
+            DebugStruct::default(),
         );
         tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 

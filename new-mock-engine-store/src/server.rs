@@ -14,6 +14,7 @@ use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::RocksSnapshot;
+use engine_store_ffi::core::DebugStruct;
 use engine_traits::{Engines, MiscExt};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
@@ -536,19 +537,20 @@ impl ServerCluster {
         let max_grpc_thread_count = cfg.server.grpc_concurrency;
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
-        let packed_envs = engine_store_ffi::observer::PackedEnvs {
+        let packed_envs = engine_store_ffi::core::PackedEnvs {
             engine_store_cfg: cfg.proxy_cfg.engine_store.clone(),
             pd_endpoints: cfg.pd.endpoints.clone(),
+            snap_handle_pool_size: cfg.proxy_cfg.raft_store.snap_handle_pool_size,
         };
         let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
             node_id,
             engines.kv.clone(),
             engines.raft.clone(),
             importer.clone(),
-            cfg.proxy_cfg.raft_store.snap_handle_pool_size,
             simulate_trans.clone(),
             snap_mgr.clone(),
             packed_envs,
+            DebugStruct::default(),
         );
         tiflash_ob.register_to(&mut coprocessor_host);
 

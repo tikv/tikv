@@ -60,29 +60,50 @@ fn test_interaction() {
     cluster.shutdown();
 }
 
+enum TransferLeaderRunMode {
+    FilterAll,
+    AlsoCheckCompactLog,
+    NoCompactLog,
+}
+
 #[test]
 fn test_leadership_change_filter() {
-    test_leadership_change_impl(true);
+    leadership_change_impl(TransferLeaderRunMode::FilterAll);
 }
 
 #[test]
 fn test_leadership_change_no_persist() {
-    test_leadership_change_impl(false);
+    leadership_change_impl(TransferLeaderRunMode::AlsoCheckCompactLog);
 }
 
-fn test_leadership_change_impl(filter: bool) {
+#[test]
+fn test_leadership_change_normal() {
+    leadership_change_impl(TransferLeaderRunMode::NoCompactLog);
+}
+
+fn leadership_change_impl(mode: TransferLeaderRunMode) {
     // Test if a empty command can be observed when leadership changes.
     let (mut cluster, _pd_client) = new_mock_cluster(0, 3);
 
     disable_auto_gen_compact_log(&mut cluster);
 
-    if filter {
-        // We don't handle CompactLog at all.
-        fail::cfg("try_flush_data", "return(0)").unwrap();
-    } else {
-        // We don't return Persist after handling CompactLog.
-        fail::cfg("no_persist_compact_log", "return").unwrap();
-    }
+    match mode {
+        TransferLeaderRunMode::FilterAll => {
+            // We don't handle CompactLog at all.
+            fail::cfg("try_flush_data", "return(0)").unwrap();
+        }
+        TransferLeaderRunMode::AlsoCheckCompactLog => {
+            // We don't return Persist after handling CompactLog.
+            fail::cfg("no_persist_compact_log", "return").unwrap();
+        }
+        TransferLeaderRunMode::NoCompactLog => {
+            // Disable compact log
+            cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
+            cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10000);
+            cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(50000);
+            cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+        }
+    };
     // Do not handle empty cmd.
     fail::cfg("on_empty_cmd_normal", "return").unwrap();
     let _ = cluster.run();
@@ -101,24 +122,36 @@ fn test_leadership_change_impl(filter: bool) {
     cluster.must_transfer_leader(region.get_id(), peer_1.clone());
 
     cluster.must_put(b"k2", b"v2");
-    fail::cfg("on_empty_cmd_normal", "return").unwrap();
 
     // Wait until all nodes have (k2, v2), then transfer leader.
     check_key(&cluster, b"k2", b"v2", Some(true), None, None);
-    if filter {
-        // We should also filter normal kv, since a empty result can also be invoke
-        // pose_exec.
-        fail::cfg("on_post_exec_normal", "return(false)").unwrap();
-    }
+
+    match mode {
+        TransferLeaderRunMode::FilterAll => {
+            // We should also filter normal kv, since a empty result can also be invoke
+            // pose_exec.
+            fail::cfg("on_post_exec_normal", "return(false)").unwrap();
+        }
+        _ => {}
+    };
+
     let prev_states = collect_all_states(&cluster, region_id);
     cluster.must_transfer_leader(region.get_id(), peer_2.clone());
 
     // The states remain the same, since we don't observe empty cmd.
     let new_states = collect_all_states(&cluster, region_id);
-    if filter {
-        must_unaltered_memory_apply_state(&prev_states, &new_states);
-        must_unaltered_memory_apply_term(&prev_states, &new_states);
-    }
+
+    match mode {
+        TransferLeaderRunMode::FilterAll => {
+            must_unaltered_memory_apply_state(&prev_states, &new_states);
+            must_unaltered_memory_apply_term(&prev_states, &new_states);
+        }
+        TransferLeaderRunMode::AlsoCheckCompactLog => {
+            // CompactLog is executed here.
+            // Meta has been changed in memory.
+        }
+        _ => {}
+    };
     must_unaltered_disk_apply_state(&prev_states, &new_states);
 
     fail::remove("on_empty_cmd_normal");
@@ -130,12 +163,9 @@ fn test_leadership_change_impl(filter: bool) {
     must_altered_memory_apply_state(&prev_states, &new_states);
     must_altered_memory_apply_term(&prev_states, &new_states);
 
-    if filter {
-        fail::remove("try_flush_data");
-        fail::remove("on_post_exec_normal");
-    } else {
-        fail::remove("no_persist_compact_log");
-    }
+    fail::remove("try_flush_data");
+    fail::remove("on_post_exec_normal");
+    fail::remove("no_persist_compact_log");
     cluster.shutdown();
 }
 
@@ -163,7 +193,8 @@ fn test_kv_write_always_persist() {
         // This may happen after memory write data and before commit.
         // We must check if we already have in memory.
         check_apply_state(&cluster, region_id, &prev_states, Some(false), None);
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        // Wait persist.
+        std::thread::sleep(std::time::Duration::from_millis(25));
         // However, advanced apply index will always persisted.
         let new_states = collect_all_states(&cluster, region_id);
         must_altered_disk_apply_state(&prev_states, &new_states);
@@ -283,6 +314,18 @@ fn test_kv_write() {
     must_altered_memory_apply_state(&prev_states, &new_states);
     must_altered_disk_apply_state(&prev_states, &new_states);
 
+    // The CompactLog command is included.
+    check_state(&new_states, |states: &States| {
+        assert_eq!(
+            states.in_disk_apply_state.get_commit_index(),
+            states.in_disk_apply_state.get_applied_index()
+        );
+    });
+    // `commit_index` is not set in in_memory_apply_state.
+    // check_state(&new_states, |states: &States| {
+    //     assert_eq!(states.in_memory_apply_state.get_commit_index(),
+    // states.in_memory_apply_state.get_applied_index()); });
+
     fail::remove("no_persist_compact_log");
     cluster.shutdown();
 }
@@ -311,49 +354,6 @@ fn test_unsupport_admin_cmd() {
         .unwrap();
 
     cluster.must_put(b"k2", b"v2");
-    cluster.shutdown();
-}
-
-#[test]
-fn test_old_compact_log() {
-    // If we just return None for CompactLog, the region state in ApplyFsm will
-    // change. Because there is no rollback in new implementation.
-    // This is a ERROR state.
-    let (mut cluster, _pd_client) = new_mock_cluster(0, 3);
-    cluster.run();
-
-    // We don't return Persist after handling CompactLog.
-    fail::cfg("no_persist_compact_log", "return").unwrap();
-    for i in 0..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-    }
-
-    for i in 0..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
-    }
-
-    let region = cluster.get_region(b"k1");
-    let region_id = region.get_id();
-    let prev_state = collect_all_states(&cluster, region_id);
-    let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
-    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
-    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
-    let _ = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-
-    // Wait for state applys.
-    std::thread::sleep(std::time::Duration::from_secs(2));
-
-    let new_state = collect_all_states(&cluster, region_id);
-    must_altered_memory_apply_state(&prev_state, &new_state);
-    must_unaltered_disk_apply_state(&prev_state, &new_state);
-
-    fail::remove("no_persist_compact_log");
     cluster.shutdown();
 }
 
@@ -430,91 +430,77 @@ fn test_compact_log() {
     cluster.shutdown();
 }
 
-#[test]
-fn test_empty_cmd() {
-    // Test if a empty command can be observed when leadership changes.
-    let (mut cluster, _pd_client) = new_mock_cluster(0, 3);
-    // Disable compact log
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10000);
-    cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(50000);
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+mod mix_mode {
+    use super::*;
+    #[test]
+    fn test_old_compact_log() {
+        // If we just return None for CompactLog, the region state in ApplyFsm will
+        // change. Because there is no rollback in new implementation.
+        // This is a ERROR state.
+        let (mut cluster, _pd_client) = new_mock_cluster(0, 3);
+        cluster.run();
 
-    let _ = cluster.run();
+        // We don't return Persist after handling CompactLog.
+        fail::cfg("no_persist_compact_log", "return").unwrap();
 
-    cluster.must_put(b"k1", b"v1");
-    let region = cluster.get_region(b"k1");
-    let region_id = region.get_id();
-    let eng_ids = cluster
-        .engines
-        .iter()
-        .map(|e| e.0.to_owned())
-        .collect::<Vec<_>>();
-    let peer_1 = find_peer(&region, eng_ids[0]).cloned().unwrap();
-    let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
-    cluster.must_transfer_leader(region.get_id(), peer_1.clone());
-    std::thread::sleep(std::time::Duration::from_secs(2));
+        must_put_and_check_key(&mut cluster, 1, 10, Some(true), None, None);
 
-    check_key(&cluster, b"k1", b"v1", Some(true), None, None);
-    let prev_states = collect_all_states(&cluster, region_id);
+        let region = cluster.get_region(b"k1");
+        let region_id = region.get_id();
+        let prev_state = collect_all_states(&cluster, region_id);
+        let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
+        let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+        let req =
+            test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+        let _ = cluster
+            .call_command_on_leader(req, Duration::from_secs(3))
+            .unwrap();
 
-    // We need forward empty cmd generated by leadership changing to TiFlash.
-    cluster.must_transfer_leader(region.get_id(), peer_2.clone());
-    std::thread::sleep(std::time::Duration::from_secs(2));
+        // Wait for state applys.
+        std::thread::sleep(std::time::Duration::from_secs(2));
 
-    let new_states = collect_all_states(&cluster, region_id);
-    must_altered_memory_apply_state(&prev_states, &new_states);
-    must_altered_memory_apply_term(&prev_states, &new_states);
+        let new_state = collect_all_states(&cluster, region_id);
+        must_altered_memory_apply_state(&prev_state, &new_state);
+        must_unaltered_disk_apply_state(&prev_state, &new_state);
 
-    std::thread::sleep(std::time::Duration::from_secs(2));
-    fail::cfg("on_empty_cmd_normal", "return").unwrap();
-
-    let prev_states = new_states;
-    cluster.must_transfer_leader(region.get_id(), peer_1.clone());
-    std::thread::sleep(std::time::Duration::from_secs(2));
-
-    let new_states = collect_all_states(&cluster, region_id);
-    must_unaltered_memory_apply_state(&prev_states, &new_states);
-    must_unaltered_memory_apply_term(&prev_states, &new_states);
-
-    fail::remove("on_empty_cmd_normal");
-
-    cluster.shutdown();
-}
-
-#[test]
-fn test_old_kv_write() {
-    let (mut cluster, _pd_client) = new_mock_cluster(0, 3);
-
-    cluster.cfg.proxy_compat = false;
-    // No persist will be triggered by CompactLog
-    fail::cfg("no_persist_compact_log", "return").unwrap();
-    let _ = cluster.run();
-
-    cluster.must_put(b"k0", b"v0");
-    // check_key(&cluster, b"k0", b"v0", Some(false), Some(false), None);
-
-    // We can read initial raft state, since we don't persist meta either.
-    let r1 = cluster.get_region(b"k0").get_id();
-    let prev_states = collect_all_states(&mut cluster, r1);
-
-    for i in 1..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
+        fail::remove("no_persist_compact_log");
+        cluster.shutdown();
     }
 
-    // We can get from memory.
-    for i in 0..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
+    #[test]
+    fn test_old_kv_write() {
+        let (mut cluster, _pd_client) = new_mock_cluster(0, 3);
+
+        cluster.cfg.proxy_compat = false;
+        // No persist will be triggered by CompactLog
+        fail::cfg("no_persist_compact_log", "return").unwrap();
+        let _ = cluster.run();
+
+        cluster.must_put(b"k0", b"v0");
+        // check_key(&cluster, b"k0", b"v0", Some(false), Some(false), None);
+
+        // We can read initial raft state, since we don't persist meta either.
+        let r1 = cluster.get_region(b"k0").get_id();
+        let prev_states = collect_all_states(&mut cluster, r1);
+
+        for i in 1..10 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+
+        // We can get from memory.
+        for i in 0..10 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
+        }
+
+        let new_states = collect_all_states(&mut cluster, r1);
+        must_altered_memory_apply_state(&prev_states, &new_states);
+        must_unaltered_disk_apply_state(&prev_states, &new_states);
+
+        fail::remove("no_persist_compact_log");
+        cluster.shutdown();
     }
-
-    let new_states = collect_all_states(&mut cluster, r1);
-    must_altered_memory_apply_state(&prev_states, &new_states);
-    must_unaltered_disk_apply_state(&prev_states, &new_states);
-
-    fail::remove("no_persist_compact_log");
-    cluster.shutdown();
 }

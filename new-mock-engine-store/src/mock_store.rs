@@ -1388,21 +1388,21 @@ unsafe extern "C" fn ffi_fast_add_peer(
             region: create_cpp_str(None),
         };
     let from_store = (|| {
-        fail::fail_point!("ffi_fast_add_peer_from_id", |t| {
+        fail::fail_point!("fap_mock_add_peer_from_id", |t| {
             let t = t.unwrap().parse::<u64>().unwrap();
             t
         });
         1
     })();
     let block_wait: bool = (|| {
-        fail::fail_point!("ffi_fast_add_peer_block_wait", |t| {
+        fail::fail_point!("fap_mock_block_wait", |t| {
             let t = t.unwrap().parse::<u64>().unwrap();
             t
         });
         0
     })() != 0;
     let fail_after_write: bool = (|| {
-        fail::fail_point!("ffi_fast_add_peer_fail_after_write", |t| {
+        fail::fail_point!("fap_mock_fail_after_write", |t| {
             let t = t.unwrap().parse::<u64>().unwrap();
             t
         });
@@ -1467,7 +1467,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
                     info!("recover from remote peer: preparing from {} to {}:{}, ok peer state {:?}", from_store, store_id, new_peer_id, peer_state; "region_id" => region_id);
                 }
             };
-            if !engine_store_ffi::observer::validate_remote_peer_region(
+            if !engine_store_ffi::core::validate_remote_peer_region(
                 new_region_meta,
                 store_id,
                 new_peer_id,

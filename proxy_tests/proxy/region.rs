@@ -257,7 +257,7 @@ fn new_later_add_learner_cluster<F: Fn(&mut Cluster<NodeCluster>)>(
 ) -> (Cluster<NodeCluster>, Arc<TestPdClient>) {
     let (mut cluster, pd_client) = new_mock_cluster(0, 5);
     // Make sure we persist before generate snapshot.
-    fail::cfg("on_pre_persist_with_finish", "return").unwrap();
+    fail::cfg("on_pre_write_apply_state", "return").unwrap();
 
     cluster.cfg.proxy_compat = false;
     disable_auto_gen_compact_log(&mut cluster);
@@ -366,7 +366,7 @@ fn test_add_delayed_started_learner_by_joint() {
         );
     }
 
-    fail::remove("on_pre_persist_with_finish");
+    fail::remove("on_pre_write_apply_state");
     cluster.shutdown();
 }
 
@@ -518,7 +518,7 @@ fn test_add_delayed_started_learner_no_snapshot() {
     }
 
     fail::remove("apply_on_handle_snapshot_finish_1_1");
-    fail::remove("on_pre_persist_with_finish");
+    fail::remove("on_pre_write_apply_state");
     cluster.shutdown();
     // fail::remove("before_tiflash_check_double_write");
     // fail::remove("before_tiflash_do_write");
@@ -622,6 +622,6 @@ fn test_add_delayed_started_learner_snapshot() {
         },
     );
 
-    fail::remove("on_pre_persist_with_finish");
+    fail::remove("on_pre_write_apply_state");
     cluster.shutdown();
 }

@@ -2,18 +2,11 @@
 #![feature(drain_filter)]
 #![feature(let_chains)]
 
-#[allow(dead_code)]
-pub mod interfaces;
-
-pub mod basic_ffi_impls;
-pub mod domain_impls;
-pub mod encryption_impls;
-pub mod ffihub_impl;
-mod lock_cf_reader;
+pub mod core;
+pub mod engine;
+pub mod ffi;
 pub mod observer;
-pub mod ps_engine;
 mod read_index_helper;
-pub mod sst_reader_impls;
 mod utils;
 
 use std::{
@@ -25,18 +18,18 @@ use std::{
     time,
 };
 
-pub use basic_ffi_impls::*;
-pub use domain_impls::*;
 use encryption::DataKeyManager;
-pub use encryption_impls::*;
+pub use engine::{ffihub_impl::TiFlashFFIHub, ps_engine};
 pub use engine_tiflash::EngineStoreConfig;
-use engine_traits::{Peekable, CF_LOCK};
-pub use ffihub_impl::TiFlashFFIHub;
+use engine_traits::Peekable;
+use ffi::lock_cf_reader;
+pub use ffi::{
+    basic_ffi_impls::*, domain_impls::*, encryption_impls::*, interfaces, sst_reader_impls::*,
+};
 use kvproto::{kvrpcpb, metapb, raft_cmdpb};
 use lazy_static::lazy_static;
 use protobuf::Message;
 pub use read_index_helper::ReadIndexClient;
-pub use sst_reader_impls::*;
 
 pub use self::interfaces::root::DB::{
     BaseBuffView, ColumnFamilyType, CppStrVecView, CppStrWithView, EngineStoreApplyRes,

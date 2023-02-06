@@ -37,9 +37,9 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package proxy_tests --test proxy snapshot
     cargo test --package proxy_tests --test proxy normal::store
     cargo test --package proxy_tests --test proxy normal::config
-    cargo test --package proxy_tests --test proxy normal::ingest
     cargo test --package proxy_tests --test proxy normal::restart
     cargo test --package proxy_tests --test proxy normal::persist
+    cargo test --package proxy_tests --test proxy ingest
     cargo test --package proxy_tests --test proxy config
     cargo test --package proxy_tests --test proxy region
     cargo test --package proxy_tests --test proxy flashback

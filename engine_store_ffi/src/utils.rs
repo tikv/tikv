@@ -12,6 +12,14 @@ lazy_static! {
     pub static ref PROXY_TIMER_HANDLE: Handle = start_global_timer("proxy-timer");
 }
 
+#[macro_export]
+macro_rules! fatal {
+    ($lvl:expr $(, $arg:expr)*) => ({
+        crit!($lvl $(, $arg)*);
+        ::std::process::exit(1)
+    })
+}
+
 pub type ArcNotifyWaker = std::sync::Arc<NotifyWaker>;
 
 pub struct NotifyWaker {

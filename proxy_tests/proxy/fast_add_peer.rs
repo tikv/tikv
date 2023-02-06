@@ -17,14 +17,16 @@ enum PauseType {
     SendFakeSnapshot,
 }
 
-#[test]
+// This test is covered in `simple_fast_add_peer`.
+// It is here only as a demo for easy understanding the whole process.
+// #[test]
 fn basic_fast_add_peer() {
     tikv_util::set_panic_hook(true, "./");
     let (mut cluster, pd_client) = new_mock_cluster(0, 2);
     cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = true;
-    // fail::cfg("on_pre_persist_with_finish", "return").unwrap();
-    fail::cfg("fast_add_peer_fake_snapshot", "return(1)").unwrap();
-    fail::cfg("before_tiflash_check_double_write", "return").unwrap();
+    // fail::cfg("on_pre_write_apply_state", "return").unwrap();
+    fail::cfg("fap_mock_fake_snapshot", "return(1)").unwrap();
+    // fail::cfg("before_tiflash_check_double_write", "return").unwrap();
     disable_auto_gen_compact_log(&mut cluster);
     // Disable auto generate peer.
     pd_client.disable_default_operator();
@@ -36,20 +38,36 @@ fn basic_fast_add_peer() {
     check_key(&cluster, b"k1", b"v1", Some(true), None, Some(vec![1, 2]));
 
     cluster.shutdown();
-    fail::remove("fallback_to_slow_path_not_allow");
-    fail::remove("fast_add_peer_fake_snapshot");
-    fail::remove("before_tiflash_check_double_write");
+    fail::remove("fap_core_no_fallback");
+    fail::remove("fap_mock_fake_snapshot");
+    // fail::remove("before_tiflash_check_double_write");
 }
 
-fn simple_fast_add_peer(source_type: SourceType, block_wait: bool, pause: PauseType) {
+fn simple_fast_add_peer(
+    source_type: SourceType,
+    block_wait: bool,
+    pause: PauseType,
+    check_timeout: bool,
+) {
     // The case in TiFlash is (DelayedPeer, false, Build)
     tikv_util::set_panic_hook(true, "./");
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
     cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = true;
-    // fail::cfg("on_pre_persist_with_finish", "return").unwrap();
-    fail::cfg("before_tiflash_check_double_write", "return").unwrap();
+    if !check_timeout {
+        fail::cfg("fap_core_fallback_millis", "return(1000000)").unwrap();
+    } else {
+        fail::cfg("fap_core_fallback_millis", "return(1500)").unwrap();
+    }
+    // fail::cfg("on_pre_write_apply_state", "return").unwrap();
+    // fail::cfg("before_tiflash_check_double_write", "return").unwrap();
     if block_wait {
-        fail::cfg("ffi_fast_add_peer_block_wait", "return(1)").unwrap();
+        fail::cfg("fap_mock_block_wait", "return(1)").unwrap();
+    }
+    match pause {
+        PauseType::ApplySnapshot => {
+            cluster.cfg.tikv.raft_store.region_worker_tick_interval = ReadableDuration::millis(500);
+        }
+        _ => (),
     }
     disable_auto_gen_compact_log(&mut cluster);
     // Disable auto generate peer.
@@ -74,19 +92,39 @@ fn simple_fast_add_peer(source_type: SourceType, block_wait: bool, pause: PauseT
     // Add learner 3 according to source_type
     match source_type {
         SourceType::Learner | SourceType::DelayedLearner => {
-            fail::cfg("ffi_fast_add_peer_from_id", "return(2)").unwrap();
+            fail::cfg("fap_mock_add_peer_from_id", "return(2)").unwrap();
         }
         SourceType::InvalidSource => {
-            fail::cfg("ffi_fast_add_peer_from_id", "return(100)").unwrap();
+            fail::cfg("fap_mock_add_peer_from_id", "return(100)").unwrap();
         }
         _ => (),
     };
 
     match pause {
-        PauseType::Build => fail::cfg("ffi_fast_add_peer_pause", "pause").unwrap(),
-        PauseType::ApplySnapshot => fail::cfg("on_can_apply_snapshot", "return(false)").unwrap(),
+        PauseType::Build => fail::cfg("fap_ffi_pause", "pause").unwrap(),
+        PauseType::ApplySnapshot => {
+            assert!(
+                cluster
+                    .cfg
+                    .proxy_cfg
+                    .raft_store
+                    .region_worker_tick_interval
+                    .as_millis()
+                    < 1000
+            );
+            assert!(
+                cluster
+                    .cfg
+                    .tikv
+                    .raft_store
+                    .region_worker_tick_interval
+                    .as_millis()
+                    < 1000
+            );
+            fail::cfg("on_can_apply_snapshot", "return(false)").unwrap()
+        }
         PauseType::SendFakeSnapshot => {
-            fail::cfg("fast_add_peer_fake_send", "return(1)").unwrap();
+            fail::cfg("fap_core_fake_send", "return(1)").unwrap();
             // If we fake send snapshot, then fast path will certainly fail.
             // Then we will timeout in FALLBACK_MILLIS and go to slow path.
         }
@@ -97,17 +135,14 @@ fn simple_fast_add_peer(source_type: SourceType, block_wait: bool, pause: PauseT
     pd_client.must_add_peer(1, new_learner_peer(3, 3));
     cluster.must_put(b"k2", b"v2");
 
-    let need_fallback = if pause == PauseType::SendFakeSnapshot {
-        true
-    } else {
-        false
-    };
+    let need_fallback = check_timeout;
 
     // If we need to fallback to slow path,
     // we must make sure the data is persisted before Leader generated snapshot.
     // This is necessary, since we haven't adapt `handle_snapshot`,
     // which is a leader logic.
     if need_fallback {
+        assert!(pause == PauseType::SendFakeSnapshot);
         check_key(&cluster, b"k2", b"v2", Some(true), None, Some(vec![1]));
         iter_ffi_helpers(
             &cluster,
@@ -138,18 +173,20 @@ fn simple_fast_add_peer(source_type: SourceType, block_wait: bool, pause: PauseT
     match pause {
         PauseType::Build => {
             std::thread::sleep(std::time::Duration::from_millis(3000));
-            fail::remove("ffi_fast_add_peer_pause");
+            fail::remove("fap_ffi_pause");
         }
         PauseType::ApplySnapshot => {
-            std::thread::sleep(std::time::Duration::from_millis(4000));
+            std::thread::sleep(std::time::Duration::from_millis(3000));
+            check_key(&cluster, b"k2", b"v2", Some(false), None, Some(vec![3]));
             fail::remove("on_can_apply_snapshot");
             fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(5000));
+            // Wait tick for region worker.
+            std::thread::sleep(std::time::Duration::from_millis(2000));
         }
         PauseType::SendFakeSnapshot => {
             // Wait FALLBACK_MILLIS
-            std::thread::sleep(std::time::Duration::from_millis(5000));
-            fail::remove("fast_add_peer_fake_send");
+            std::thread::sleep(std::time::Duration::from_millis(3000));
+            fail::remove("fap_core_fake_send");
             std::thread::sleep(std::time::Duration::from_millis(2000));
         }
         _ => (),
@@ -238,7 +275,7 @@ fn simple_fast_add_peer(source_type: SourceType, block_wait: bool, pause: PauseT
     if source_type == SourceType::InvalidSource {
         // If we still use InvalidSource, we still need to goto slow path.
     } else {
-        fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
     }
     // Re-add peer in store.
     pd_client.must_add_peer(1, new_learner_peer(3, 4));
@@ -266,152 +303,190 @@ fn simple_fast_add_peer(source_type: SourceType, block_wait: bool, pause: PauseT
         None,
         Some(vec![1, 2, 3]),
     );
-    fail::remove("fallback_to_slow_path_not_allow");
+    fail::remove("fap_core_no_fallback");
     fail::remove("fast_path_is_not_first");
 
     fail::remove("on_can_apply_snapshot");
-    fail::remove("ffi_fast_add_peer_from_id");
-    fail::remove("on_pre_persist_with_finish");
-    fail::remove("ffi_fast_add_peer_block_wait");
+    fail::remove("fap_mock_add_peer_from_id");
+    fail::remove("on_pre_write_apply_state");
+    fail::remove("fap_core_fallback_millis");
+    fail::remove("fap_mock_block_wait");
     cluster.shutdown();
 }
 
-#[test]
-fn test_fast_add_peer_from_leader() {
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
-    simple_fast_add_peer(SourceType::Leader, false, PauseType::None);
-    fail::remove("fallback_to_slow_path_not_allow");
+mod simple_normal {
+    use super::*;
+    #[test]
+    fn test_simple_from_leader() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        simple_fast_add_peer(SourceType::Leader, false, PauseType::None, false);
+        fail::remove("fap_core_no_fallback");
+    }
+
+    /// Fast path by learner snapshot.
+    #[test]
+    fn test_simple_from_learner() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        simple_fast_add_peer(SourceType::Learner, false, PauseType::None, false);
+        fail::remove("fap_core_no_fallback");
+    }
+
+    /// If a learner is delayed, but already applied ConfChange.
+    #[test]
+    fn test_simple_from_delayed_learner() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        simple_fast_add_peer(SourceType::DelayedLearner, false, PauseType::None, false);
+        fail::remove("fap_core_no_fallback");
+    }
+
+    /// If we select a wrong source, or we can't run fast path, we can fallback
+    /// to normal.
+    #[test]
+    fn test_simple_from_invalid_source() {
+        simple_fast_add_peer(SourceType::InvalidSource, false, PauseType::None, false);
+    }
 }
 
-/// Fast path by learner snapshot.
-#[test]
-fn test_fast_add_peer_from_learner() {
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
-    simple_fast_add_peer(SourceType::Learner, false, PauseType::None);
-    fail::remove("fallback_to_slow_path_not_allow");
+mod simple_blocked_nopause {}
+
+mod simple_blocked_pause {
+    use super::*;
+    // Delay when fetch and build data
+    #[test]
+    fn test_simpleb_from_learner_paused_build() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        // Need to changed to pre_write_apply_state
+        fail::cfg("on_pre_write_apply_state", "return(true)").unwrap();
+        simple_fast_add_peer(SourceType::Learner, true, PauseType::Build, false);
+        fail::remove("on_pre_write_apply_state");
+        fail::remove("fap_core_no_fallback");
+    }
+
+    #[test]
+    fn test_simpleb_from_delayed_learner_paused_build() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        // Need to changed to pre_write_apply_state
+        fail::cfg("on_pre_write_apply_state", "return(true)").unwrap();
+        simple_fast_add_peer(SourceType::DelayedLearner, true, PauseType::Build, false);
+        fail::remove("on_pre_write_apply_state");
+        fail::remove("fap_core_no_fallback");
+    }
+
+    // Delay when applying snapshot
+    // This test is origianlly aimed to test multiple MsgSnapshot.
+    // However, we observed less repeated MsgAppend than in real cluster.
+    #[test]
+    fn test_simpleb_from_learner_paused_apply() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        simple_fast_add_peer(SourceType::Learner, true, PauseType::ApplySnapshot, false);
+        fail::remove("fap_core_no_fallback");
+    }
+
+    #[test]
+    fn test_simpleb_from_delayed_learner_paused_apply() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        simple_fast_add_peer(
+            SourceType::DelayedLearner,
+            true,
+            PauseType::ApplySnapshot,
+            false,
+        );
+        fail::remove("fap_core_no_fallback");
+    }
 }
 
-/// If a learner is delayed, but already applied ConfChange.
-#[test]
-fn test_fast_add_peer_from_delayed_learner() {
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
-    simple_fast_add_peer(SourceType::DelayedLearner, false, PauseType::None);
-    fail::remove("fallback_to_slow_path_not_allow");
+mod simple_non_blocked_non_pause {
+    use super::*;
+    #[test]
+    fn test_simplenb_from_learner() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        simple_fast_add_peer(SourceType::Learner, false, PauseType::None, false);
+        fail::remove("fap_core_no_fallback");
+    }
+
+    #[test]
+    fn test_simplenb_from_delayed_learner() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        simple_fast_add_peer(SourceType::DelayedLearner, false, PauseType::None, false);
+        fail::remove("fap_core_no_fallback");
+    }
 }
 
-/// If we select a wrong source, or we can't run fast path, we can fallback to
-/// normal.
-#[test]
-fn test_fast_add_peer_from_invalid_source() {
-    simple_fast_add_peer(SourceType::InvalidSource, false, PauseType::None);
-}
+mod simple_non_blocked_pause {
+    use super::*;
+    #[test]
+    fn test_simplenb_from_delayed_learner_paused_build() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        simple_fast_add_peer(SourceType::DelayedLearner, false, PauseType::Build, false);
+        fail::remove("fap_core_no_fallback");
+    }
 
-#[test]
-fn test_fast_add_peer_from_learner_blocked() {
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
-    simple_fast_add_peer(SourceType::Learner, true, PauseType::None);
-    fail::remove("fallback_to_slow_path_not_allow");
-}
-
-#[test]
-fn test_fast_add_peer_from_delayed_learner_blocked() {
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
-    simple_fast_add_peer(SourceType::DelayedLearner, true, PauseType::None);
-    fail::remove("fallback_to_slow_path_not_allow");
-}
-
-// Delay when fetch and build data
-#[test]
-fn test_fast_add_peer_from_learner_blocked_paused_build() {
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
-    // Need to changed to pre_write_apply_state
-    fail::cfg("on_pre_persist_with_finish", "return(true)").unwrap();
-    simple_fast_add_peer(SourceType::Learner, true, PauseType::Build);
-    fail::remove("on_pre_persist_with_finish");
-    fail::remove("fallback_to_slow_path_not_allow");
-}
-
-#[test]
-fn test_fast_add_peer_from_delayed_learner_blocked_paused_build() {
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
-    // Need to changed to pre_write_apply_state
-    fail::cfg("on_pre_persist_with_finish", "return(true)").unwrap();
-    simple_fast_add_peer(SourceType::DelayedLearner, true, PauseType::Build);
-    fail::remove("on_pre_persist_with_finish");
-    fail::remove("fallback_to_slow_path_not_allow");
-}
-
-// Delay when applying snapshot
-// This test is origianlly aimed to test multiple MsgSnapshot.
-// However, we observed less repeated MsgAppend than in real cluster.
-#[test]
-fn test_fast_add_peer_from_learner_blocked_paused_apply() {
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
-    simple_fast_add_peer(SourceType::Learner, true, PauseType::ApplySnapshot);
-    fail::remove("fallback_to_slow_path_not_allow");
-}
-
-#[test]
-fn test_fast_add_peer_from_delayed_learner_blocked_paused_apply() {
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
-    simple_fast_add_peer(SourceType::DelayedLearner, true, PauseType::ApplySnapshot);
-    fail::remove("fallback_to_slow_path_not_allow");
-}
-
-#[test]
-fn test_fast_add_peer_from_delayed_learner_apply() {
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
-    simple_fast_add_peer(SourceType::DelayedLearner, false, PauseType::ApplySnapshot);
-    fail::remove("fallback_to_slow_path_not_allow");
+    #[test]
+    fn test_simplenb_from_delayed_learner_paused_apply() {
+        fail::cfg("fap_core_no_fallback", "panic").unwrap();
+        simple_fast_add_peer(
+            SourceType::DelayedLearner,
+            false,
+            PauseType::ApplySnapshot,
+            false,
+        );
+        fail::remove("fap_core_no_fallback");
+    }
 }
 
 #[test]
 fn test_timeout_fallback() {
-    fail::cfg("on_pre_persist_with_finish", "return").unwrap();
+    fail::cfg("on_pre_write_apply_state", "return").unwrap();
     fail::cfg("apply_on_handle_snapshot_sync", "return(true)").unwrap();
-    simple_fast_add_peer(SourceType::Learner, false, PauseType::SendFakeSnapshot);
-    fail::remove("on_pre_persist_with_finish");
+    // By sending SendFakeSnapshot we can observe timeout.
+    simple_fast_add_peer(
+        SourceType::Learner,
+        false,
+        PauseType::SendFakeSnapshot,
+        true,
+    );
+    fail::remove("on_pre_write_apply_state");
     fail::remove("apply_on_handle_snapshot_sync");
 }
 
 #[test]
 fn test_existing_peer() {
-    fail::cfg("before_tiflash_check_double_write", "return").unwrap();
+    // fail::cfg("before_tiflash_check_double_write", "return").unwrap();
 
     tikv_util::set_panic_hook(true, "./");
     let (mut cluster, pd_client) = new_mock_cluster(0, 2);
     cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = true;
-    // fail::cfg("on_pre_persist_with_finish", "return").unwrap();
+    // fail::cfg("on_pre_write_apply_state", "return").unwrap();
     disable_auto_gen_compact_log(&mut cluster);
     // Disable auto generate peer.
     pd_client.disable_default_operator();
     let _ = cluster.run_conf_change();
     must_put_and_check_key(&mut cluster, 1, 2, Some(true), None, Some(vec![1]));
 
-    fail::cfg("fallback_to_slow_path_not_allow", "panic").unwrap();
+    fail::cfg("fap_core_no_fallback", "panic").unwrap();
     pd_client.must_add_peer(1, new_learner_peer(2, 2));
     must_put_and_check_key(&mut cluster, 3, 4, Some(true), None, None);
-    fail::remove("fallback_to_slow_path_not_allow");
+    fail::remove("fap_core_no_fallback");
 
     stop_tiflash_node(&mut cluster, 2);
-    fail::cfg("go_fast_path_not_allow", "panic").unwrap();
+    fail::cfg("fap_core_no_fast_path", "panic").unwrap();
     restart_tiflash_node(&mut cluster, 2);
     must_put_and_check_key(&mut cluster, 5, 6, Some(true), None, None);
 
     cluster.shutdown();
-    fail::remove("go_fast_path_not_allow");
-    fail::remove("before_tiflash_check_double_write");
+    fail::remove("fap_core_no_fast_path");
+    // fail::remove("before_tiflash_check_double_write");
 }
 
 // We will reject remote peer in Applying state.
 #[test]
 fn test_apply_snapshot() {
-    fail::cfg("before_tiflash_check_double_write", "return").unwrap();
+    // fail::cfg("before_tiflash_check_double_write", "return").unwrap();
 
     tikv_util::set_panic_hook(true, "./");
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
     cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = true;
-    // fail::cfg("on_pre_persist_with_finish", "return").unwrap();
+    // fail::cfg("on_pre_write_apply_state", "return").unwrap();
     disable_auto_gen_compact_log(&mut cluster);
     // Disable auto generate peer.
     pd_client.disable_default_operator();
@@ -422,8 +497,8 @@ fn test_apply_snapshot() {
 
     // We add peer 3 from peer 2, it will be paused before fetching peer 2's data.
     // However, peer 2 will apply conf change.
-    fail::cfg("ffi_fast_add_peer_from_id", "return(2)").unwrap();
-    fail::cfg("ffi_fast_add_peer_pause", "pause").unwrap();
+    fail::cfg("fap_mock_add_peer_from_id", "return(2)").unwrap();
+    fail::cfg("fap_ffi_pause", "pause").unwrap();
     pd_client.must_add_peer(1, new_learner_peer(3, 3));
     std::thread::sleep(std::time::Duration::from_millis(1000));
     must_put_and_check_key(&mut cluster, 2, 3, Some(true), None, Some(vec![1, 2]));
@@ -463,16 +538,16 @@ fn test_apply_snapshot() {
     // Now if we continue fast path, peer 2 will be in Applying state.
     // Peer 3 can't use peer 2's data.
     // We will end up going slow path.
-    fail::remove("ffi_fast_add_peer_pause");
-    fail::cfg("go_fast_path_not_allow", "panic").unwrap();
+    fail::remove("fap_ffi_pause");
+    fail::cfg("fap_core_no_fast_path", "panic").unwrap();
     std::thread::sleep(std::time::Duration::from_millis(300));
     // Resume applying snapshot
     fail::remove("on_ob_post_apply_snapshot");
     check_key(&cluster, b"k4", b"v4", Some(true), None, Some(vec![1, 3]));
     cluster.shutdown();
-    fail::remove("go_fast_path_not_allow");
-    fail::remove("ffi_fast_add_peer_from_id");
-    fail::remove("before_tiflash_check_double_write");
+    fail::remove("fap_core_no_fast_path");
+    fail::remove("fap_mock_add_peer_from_id");
+    // fail::remove("before_tiflash_check_double_write");
 }
 
 #[test]
@@ -497,7 +572,7 @@ fn test_split_no_fast_add() {
     let r3 = cluster.get_region(b"k3");
     assert_eq!(r1.get_id(), r3.get_id());
 
-    fail::cfg("go_fast_path_not_allow", "panic").unwrap();
+    fail::cfg("fap_core_no_fast_path", "panic").unwrap();
     cluster.must_split(&r1, b"k2");
     must_wait_until_cond_node(&cluster, 1000, None, &|states: &States| -> bool {
         states.in_disk_region_state.get_region().get_peers().len() == 3
@@ -507,7 +582,7 @@ fn test_split_no_fast_add() {
     cluster.must_put(b"k0", b"v0");
     check_key(&cluster, b"k0", b"v0", Some(true), None, None);
 
-    fail::remove("go_fast_path_not_allow");
+    fail::remove("fap_core_no_fast_path");
     fail::remove("on_can_apply_snapshot");
     cluster.shutdown();
 }
@@ -573,7 +648,7 @@ fn test_fall_back_to_slow_path() {
     tikv_util::set_panic_hook(true, "./");
     // Can always apply snapshot immediately
     fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
-    fail::cfg("on_pre_persist_with_finish", "return").unwrap();
+    fail::cfg("on_pre_write_apply_state", "return").unwrap();
 
     let _ = cluster.run_conf_change();
 
@@ -581,8 +656,8 @@ fn test_fall_back_to_slow_path() {
     check_key(&cluster, b"k1", b"v1", Some(true), None, Some(vec![1]));
     cluster.must_put(b"k2", b"v2");
 
-    fail::cfg("ffi_fast_add_peer_fail_after_write", "return(1)").unwrap();
-    fail::cfg("go_fast_path_not_allow", "panic").unwrap();
+    fail::cfg("fap_mock_fail_after_write", "return(1)").unwrap();
+    fail::cfg("fap_core_no_fast_path", "panic").unwrap();
 
     pd_client.must_add_peer(1, new_learner_peer(2, 2));
     check_key(&cluster, b"k2", b"v2", Some(true), None, Some(vec![1, 2]));
@@ -590,10 +665,10 @@ fn test_fall_back_to_slow_path() {
         find_peer_by_id(states.in_disk_region_state.get_region(), 2).is_some()
     });
 
-    fail::remove("ffi_fast_add_peer_fail_after_write");
+    fail::remove("fap_mock_fail_after_write");
     fail::remove("on_can_apply_snapshot");
-    fail::remove("on_pre_persist_with_finish");
-    fail::remove("go_fast_path_not_allow");
+    fail::remove("on_pre_write_apply_state");
+    fail::remove("fap_core_no_fast_path");
     cluster.shutdown();
 }
 
@@ -606,7 +681,7 @@ fn test_single_replica_migrate() {
     tikv_util::set_panic_hook(true, "./");
     // Can always apply snapshot immediately
     fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
-    fail::cfg("on_pre_persist_with_finish", "return").unwrap();
+    fail::cfg("on_pre_write_apply_state", "return").unwrap();
 
     let _ = cluster.run_conf_change();
 
@@ -620,7 +695,7 @@ fn test_single_replica_migrate() {
         find_peer_by_id(states.in_disk_region_state.get_region(), 2).is_some()
     });
 
-    fail::cfg("ffi_fast_add_peer_from_id", "return(2)").unwrap();
+    fail::cfg("fap_mock_add_peer_from_id", "return(2)").unwrap();
 
     // Remove peer 2.
     pd_client.must_remove_peer(1, new_learner_peer(2, 2));
@@ -638,7 +713,7 @@ fn test_single_replica_migrate() {
     // Try fast add peer from removed peer 2.
     // TODO It will fallback to slow path if we don't support single replica
     // migration.
-    fail::cfg("go_fast_path_not_allow", "panic").unwrap();
+    fail::cfg("fap_core_no_fast_path", "panic").unwrap();
     pd_client.must_add_peer(1, new_learner_peer(3, 3));
     check_key(&cluster, b"krm2", b"v", Some(true), None, Some(vec![3]));
     std::thread::sleep(std::time::Duration::from_millis(2000));
@@ -648,9 +723,9 @@ fn test_single_replica_migrate() {
         None,
         &|states: &HashMap<u64, States>| -> bool { states.get(&3).is_some() },
     );
-    fail::remove("go_fast_path_not_allow");
+    fail::remove("fap_core_no_fast_path");
 
     fail::remove("on_can_apply_snapshot");
-    fail::remove("on_pre_persist_with_finish");
+    fail::remove("on_pre_write_apply_state");
     cluster.shutdown();
 }
