@@ -190,7 +190,7 @@ impl Simulator for NodeCluster {
         let mut raft_store = cfg.raft_store.clone();
         raft_store
             .validate(
-                cfg.coprocessor.region_split_size.unwrap(),
+                cfg.coprocessor.region_split_size.unwrap_or_default(),
                 cfg.coprocessor.enable_region_bucket,
                 cfg.coprocessor.region_bucket_size,
             )
@@ -291,7 +291,7 @@ impl Simulator for NodeCluster {
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg
             .validate(
-                region_split_size.unwrap(),
+                region_split_size.unwrap_or_default(),
                 enable_region_bucket,
                 region_bucket_size,
             )
