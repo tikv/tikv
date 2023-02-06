@@ -259,11 +259,25 @@ where
 
 #[derive(Clone)]
 /// Safefly shared senders among the controller and raftstore threads.
-pub struct SharedSenders<EK: KvEngine, ER: RaftEngine>(pub Vec<Sender<WriteMsg<EK, ER>>>);
+/// Senders in it can only be accessed by cloning method `senders()`.
+
+pub struct SharedSenders<EK: KvEngine, ER: RaftEngine>(Vec<Sender<WriteMsg<EK, ER>>>);
 
 impl<EK: KvEngine, ER: RaftEngine> Default for SharedSenders<EK, ER> {
     fn default() -> Self {
         Self(vec![])
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> SharedSenders<EK, ER> {
+    #[inline]
+    pub fn senders(&self) -> Vec<Sender<WriteMsg<EK, ER>>> {
+        self.0.clone()
+    }
+
+    #[inline]
+    pub fn update(&mut self, senders: Vec<Sender<WriteMsg<EK, ER>>>) {
+        self.0 = senders;
     }
 }
 
@@ -290,7 +304,7 @@ pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
 
 impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
     pub fn new(senders: Arc<VersionTrack<SharedSenders<EK, ER>>>) -> Self {
-        let cached_senders = senders.value().0.clone();
+        let cached_senders = senders.value().senders();
         WriteSenders {
             senders: senders.tracker("async writers' tracker".to_owned()),
             cached_senders,
@@ -311,7 +325,7 @@ impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
     #[inline]
     pub fn refresh(&mut self) {
         if let Some(senders) = self.senders.any_new() {
-            self.cached_senders = senders.0.clone();
+            self.cached_senders = senders.senders();
         }
     }
 }

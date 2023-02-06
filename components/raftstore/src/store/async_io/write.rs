@@ -951,7 +951,7 @@ where
 
     pub fn shutdown(&self) {
         let mut handlers = self.handlers.lock();
-        let writers = &self.writers.value().0;
+        let writers = &self.writers.value().senders();
         assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
@@ -962,7 +962,7 @@ where
 
     /// Returns the valid size of store writers.
     pub fn size(&self) -> usize {
-        self.writers.value().0.len()
+        self.writers.value().senders().len()
     }
 
     pub fn decrease_to(&mut self, size: usize) -> Result<()> {
@@ -973,10 +973,13 @@ where
         // capacity, specified by refreshed `store-io-pool-size`.
         //
         // TODO: find an elegant way to effectively free workers.
-        assert_eq!(self.writers.value().0.len(), self.handlers.lock().len());
+        assert_eq!(
+            self.writers.value().senders().len(),
+            self.handlers.lock().len()
+        );
         self.writers
             .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
-                assert!(writers.0.len() > size);
+                assert!(writers.senders().len() > size);
                 Ok(())
             })?;
         Ok(())
@@ -988,11 +991,12 @@ where
         writer_meta: StoreWritersContext<EK, ER, T, N>,
     ) -> Result<()> {
         let mut handlers = self.handlers.lock();
-        let current_size = self.writers.value().0.len();
+        let current_size = self.writers.value().senders().len();
         assert_eq!(current_size, handlers.len());
         let resource_ctl = self.resource_ctl.clone();
         self.writers
             .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
+                let mut cached_senders = writers.senders();
                 for i in current_size..size {
                     let tag = format!("store-writer-{}", i);
                     let (tx, rx) = bounded(
@@ -1016,9 +1020,10 @@ where
                             .spawn_wrapper(move || {
                                 worker.run();
                             })?;
-                    writers.0.push(tx);
+                    cached_senders.push(tx);
                     handlers.push(t);
                 }
+                writers.update(cached_senders);
                 Ok(())
             })?;
         Ok(())
