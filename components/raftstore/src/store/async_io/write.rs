@@ -950,7 +950,7 @@ where
     }
 
     pub fn shutdown(&mut self) {
-        let mut handlers = self.handlers.lock();
+        let handlers = Arc::get_mut(&mut self.handlers).unwrap().get_mut();
         let writers = self.writers.value().get();
         assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
