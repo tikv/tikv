@@ -151,8 +151,6 @@ impl<EK: KvEngine> Runner<EK> {
         let logger = self.logger.clone();
         self.background_pool
             .spawn(async move {
-                let start_key = keys::data_key(&start);
-                let end_key = keys::data_end_key(&end);
                 let range1 = Range::new(&[], &start_key);
                 let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
                 for r in [range1, range2] {
