@@ -50,6 +50,7 @@ raftstore = { workspace = true, features = ["testexport"] }
 raftstore-v2 = { workspace = true, features = ["testexport"] }
 rand = "0.8"
 resolved_ts = { workspace = true }
+resource_control = { workspace = true }
 resource_metering = { workspace = true }
 security = { workspace = true }
 server = { workspace = true }
@@ -65,4 +66,3 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 txn_types = { workspace = true }
-resource_control = { workspace = true }
