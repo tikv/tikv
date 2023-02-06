@@ -29,6 +29,8 @@ pub struct BatchPartitionTopNExecutor<Src: BatchExecutor> {
     /// But if not, the result is still correct after the second-stage topn.
     partition_exprs: Box<[RpnExpression]>,
     partition_exprs_field_type: Box<[FieldType]>,
+    /// dummy value, just for convenience.
+    partition_is_desc: Box<[bool]>,
 
     last_partition_key: Option<HeapItemUnsafe>,
 
@@ -70,6 +72,7 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
         Self {
             heap: TopNHeap::new(n),
             eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
+            partition_is_desc: vec![false; partition_exprs.len()].into_boxed_slice(),
             partition_exprs: partition_exprs.into_boxed_slice(),
             partition_exprs_field_type: partition_exprs_field_type.into_boxed_slice(),
             last_partition_key: None,
@@ -107,6 +110,7 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
         Self {
             heap: TopNHeap::new(n),
             eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
+            partition_is_desc: vec![false; partition_exprs.len()].into_boxed_slice(),
             partition_exprs: partition_exprs.into_boxed_slice(),
             partition_exprs_field_type: partition_exprs_field_type.into_boxed_slice(),
             last_partition_key: None,
@@ -162,6 +166,7 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
             // Simply large enough to avoid repeated allocations
             heap: TopNHeap::new(n),
             eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
+            partition_is_desc: vec![false; partition_exprs.len()].into_boxed_slice(),
             partition_exprs: partition_exprs.into_boxed_slice(),
             partition_exprs_field_type: partition_exprs_field_type.into_boxed_slice(),
             order_exprs: order_exprs.into_boxed_slice(),
@@ -211,6 +216,7 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
                 logical_rows,
             });
 
+            dbg!(&self.eval_columns_buffer_unsafe);
             let order_eval_offset = self.eval_columns_buffer_unsafe.len();
             unsafe {
                 eval_exprs_decoded_no_lifetime(
@@ -222,6 +228,8 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
                     &mut self.eval_columns_buffer_unsafe,
                 )?;
             }
+            dbg!(&self.eval_columns_buffer_unsafe);
+            // todo: optimize memory usage of this.
             let partition_eval_offset = self.eval_columns_buffer_unsafe.len();
             unsafe {
                 eval_exprs_decoded_no_lifetime(
@@ -233,10 +241,12 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
                     &mut self.eval_columns_buffer_unsafe,
                 )?;
             }
-
+            // dbg!(&self.eval_columns_buffer_unsafe);
+            // todo: optimize the memory usage of this, don't need so many same information
+            // in items. Maybe we can import a Heap with customer comparator.
             for logical_row_index in 0..pinned_source_data.logical_rows.len() {
                 let partition_key = HeapItemUnsafe {
-                    order_is_desc_ptr: (*self.order_is_desc).into(), // just a dummy value
+                    order_is_desc_ptr: (*self.partition_is_desc).into(), // just a dummy value
                     order_exprs_field_type_ptr: (*self.partition_exprs_field_type).into(),
                     source_data: pinned_source_data.clone(),
                     eval_columns_buffer_ptr: self.eval_columns_buffer_unsafe.as_ref().into(),
@@ -295,8 +305,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
     /// partition with the first two. So heap will be flushed again.
     /// In this case, there can be 2*n-1 rows in the result, which may be larger
     /// than paging_size.
-    /// todo: find a solution to limit it up to paging_size. baseline: limit n
-    /// up to paging_size/2
+    /// todo: find a good solution to limit it up to paging_size.
+    /// baseline: limit n up to paging_size/2
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         if self.n == 0 {
             return BatchExecuteResult {
