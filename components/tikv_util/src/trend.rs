@@ -222,6 +222,11 @@ impl HistoryWindow {
         let margin_error = if self.flipping_start_time.is_none() {
             if self.current_window.is_overflow() {
                 self.current_window.std_ev()
+            } else if self.previous_window.is_overflow() {
+                // We use the previous margin error in the duration:
+                //    - After flipping ends
+                //    - Yet before current window is overflow
+                self.previous_window.std_ev()
             } else {
                 0.0
             }
@@ -244,8 +249,8 @@ impl HistoryWindow {
         let current_avg = self.current_window.avg();
         let margin_error = self.margin_error();
 
-        // The output margin_error can up to `self.flip_margin_error_multiple + 1`
-        // without flipping (increasing_rate already minus a margin_error)
+        // The output margin_error multiple can up to `self.flip_margin_error_multiple +
+        // 1`  without flipping (increasing_rate already minus a margin_error)
         let flip_margin_error = margin_error * self.flip_margin_error_multiple;
         let delta = f64::abs(value - current_avg);
 
