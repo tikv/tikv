@@ -141,6 +141,9 @@ pub enum ErrorInner {
         start_ts: {start_ts}, region_id: {region_id}"
     )]
     MaxTimestampNotSynced { region_id: u64, start_ts: TimeStamp },
+
+    #[error("region {0} not prepared the flashback")]
+    FlashbackNotPrepared(u64),
 }
 
 impl ErrorInner {
@@ -174,6 +177,9 @@ impl ErrorInner {
                 region_id,
                 start_ts,
             }),
+            ErrorInner::FlashbackNotPrepared(region_id) => {
+                Some(ErrorInner::FlashbackNotPrepared(region_id))
+            }
             ErrorInner::Other(_) | ErrorInner::ProtoBuf(_) | ErrorInner::Io(_) => None,
         }
     }
@@ -224,6 +230,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::MaxTimestampNotSynced { .. } => {
                 error_code::storage::MAX_TIMESTAMP_NOT_SYNCED
             }
+            ErrorInner::FlashbackNotPrepared(_) => error_code::storage::FLASHBACK_NOT_PREPARED,
         }
     }
 }

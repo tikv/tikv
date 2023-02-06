@@ -58,8 +58,8 @@ pub enum Error {
     #[error("region {0} is in the recovery progress")]
     RecoveryInProgress(u64),
 
-    #[error("region {0} is in the flashback progress")]
-    FlashbackInProgress(u64),
+    #[error("region {0} is in the flashback progress with start_ts {1}")]
+    FlashbackInProgress(u64, u64),
 
     #[error("region {0} not prepared the flashback")]
     FlashbackNotPrepared(u64),
@@ -256,9 +256,10 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_recovery_in_progress(e);
             }
-            Error::FlashbackInProgress(region_id) => {
+            Error::FlashbackInProgress(region_id, flashback_start_ts) => {
                 let mut e = errorpb::FlashbackInProgress::default();
                 e.set_region_id(region_id);
+                e.set_flashback_start_ts(flashback_start_ts);
                 errorpb.set_flashback_in_progress(e);
             }
             Error::FlashbackNotPrepared(region_id) => {
