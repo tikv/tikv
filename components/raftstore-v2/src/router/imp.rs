@@ -89,7 +89,6 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
             warn!(
                 self.logger(),
                 "failed to refresh region buckets";
-                "region_id" => region_id,
                 "err" => %e,
             );
         }

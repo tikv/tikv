@@ -268,29 +268,21 @@ pub struct PeerStat {
 }
 
 #[derive(Default)]
-pub struct ReportBucket {
+struct ReportBucket {
     current_stat: BucketStat,
     last_report_stat: Option<BucketStat>,
     last_report_ts: UnixSecs,
 }
 
 impl ReportBucket {
-    pub fn new(current_stat: BucketStat) -> Self {
+    fn new(current_stat: BucketStat) -> Self {
         Self {
             current_stat,
             ..Default::default()
         }
     }
 
-    pub fn last_report_ts(&self) -> UnixSecs {
-        self.last_report_ts.clone()
-    }
-
-    pub fn current_stat_mut(&mut self) -> &mut BucketStat {
-        &mut self.current_stat
-    }
-
-    pub fn new_report(&mut self, report_ts: UnixSecs) -> BucketStat {
+    fn new_report(&mut self, report_ts: UnixSecs) -> BucketStat {
         self.last_report_ts = report_ts;
         match self.last_report_stat.replace(self.current_stat.clone()) {
             Some(last) => {

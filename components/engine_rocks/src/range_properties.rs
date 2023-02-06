@@ -173,16 +173,6 @@ impl RangePropertiesExt for RocksEngine {
         let start_key = &range.start_key;
         let end_key = &range.end_key;
         let collection = box_try!(self.get_range_properties_cf(cfname, start_key, end_key));
-        let (mem_keys, _) = box_try!(self.get_approximate_memtable_stats_cf(cfname, &range));
-        println!(
-            "get_range_approximate_split_keys_cf, cf_name:{}, size:{}, mem_keys:{}, total_keys:{}, key_count:{}, collection size:{}",
-            cfname,
-            box_try!(self.get_range_approximate_size_cf(cfname, range, 0)),
-            mem_keys,
-            box_try!(self.get_range_approximate_keys_cf(cfname, range, 0)),
-            key_count,
-            collection.len(),
-        );
 
         let mut keys = vec![];
         for (_, v) in collection.iter() {

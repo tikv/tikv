@@ -22,13 +22,14 @@ use raftstore::{
         fsm::ApplyMetrics,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
-        TabletSnapManager, WriteTask, SplitCheckTask,
+        SplitCheckTask, TabletSnapManager, WriteTask,
     },
 };
 use slog::{error, Logger};
 
 use super::storage::Storage;
 use crate::{
+    batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
         AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext, ProposalControl,
@@ -36,7 +37,6 @@ use crate::{
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
-    batch::StoreContext
 };
 
 const REGION_READ_PROGRESS_CAP: usize = 128;
@@ -221,8 +221,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 error!(
                     self.logger,
                     "failed to schedule check approximate buckets";
-                    "region_id" => self.region().get_id(),
-                    "peer_id" => self.peer_id(),
                     "err" => %e,
                 );
             }

@@ -26,7 +26,7 @@ pub use self::{
     compact::{Runner as CompactRunner, Task as CompactTask},
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
     pd::{
-        new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask, ReportBucket,
+        new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,
         NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
     },

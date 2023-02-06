@@ -8,7 +8,6 @@ make_static_metric! {
     pub label_enum PDRequestEventType {
         get_region,
         get_region_by_id,
-        get_buckets_by_id,
         get_region_leader_by_id,
         scatter_region,
         get_store,

@@ -81,7 +81,7 @@ pub use self::{
         CheckLeaderRunner, CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry,
         LocalReadContext, LocalReader, LocalReaderCore, PdStatsMonitor, PdTask, ReadDelegate,
         ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
-        ReportBucket, SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
+        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
         StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
         NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
     },

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use engine_traits::CF_DEFAULT;
+use engine_traits::{MiscExt, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
 use pd_client::PdClient;
@@ -70,19 +70,20 @@ fn test_store_heartbeat() {
 #[test]
 fn test_report_buckets() {
     let region_id = 2;
-    let mut cluster = Cluster::with_node_count(1, None);
-    let router = &mut cluster.routers[0];
+    let cluster = Cluster::with_node_count(1, None);
+    let store_id = cluster.node(0).id();
+    let router = &cluster.routers[0];
 
     // When there is only one peer, it should campaign immediately.
     let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
+    req.mut_header().set_peer(new_peer(store_id, 3));
     req.mut_status_request()
         .set_cmd_type(StatusCmdType::RegionLeader);
     let res = router.query(region_id, req.clone()).unwrap();
     let status_resp = res.response().unwrap().get_status_response();
     assert_eq!(
         *status_resp.get_region_leader().get_leader(),
-        new_peer(1, 3)
+        new_peer(store_id, 3)
     );
     router.wait_applied_to_current_term(region_id, Duration::from_secs(3));
 
@@ -101,25 +102,22 @@ fn test_report_buckets() {
         router.send(region_id, msg).unwrap();
         let _resp = block_on(sub.result()).unwrap();
     }
-
+    // To find the split keys, it should flush memtable manually.
+    let mut cached = cluster.node(0).tablet_registry().get(region_id).unwrap();
+    cached.latest().unwrap().flush_cf(CF_DEFAULT, true).unwrap();
     // send split region check to split bucket.
     router
         .send(region_id, PeerMsg::Tick(PeerTick::SplitRegionCheck))
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1000));
+    std::thread::sleep(std::time::Duration::from_millis(50));
     // report buckets to pd.
     router
         .send(region_id, PeerMsg::Tick(PeerTick::ReportBuckets))
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1000));
-    for _ in 0..5 {
-        let resp = block_on(cluster.node(0).pd_client().get_buckets_by_id(region_id)).unwrap();
-        if let Some(buckets) = resp {
-            assert!(buckets.get_keys().len() > 2);
-            assert_eq!(buckets.get_region_id(), region_id);
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let resp = block_on(cluster.node(0).pd_client().get_buckets_by_id(region_id)).unwrap();
+    if let Some(buckets) = resp {
+        assert!(buckets.get_keys().len() > 2);
+        assert_eq!(buckets.get_region_id(), region_id);
     }
-    panic!("failed to get buckets");
 }

@@ -74,6 +74,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
         }
     }
 
+    #[inline]
     pub fn on_refresh_region_buckets(
         &mut self,
         region_epoch: RegionEpoch,
@@ -108,8 +109,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
             error!(
                  self.fsm.peer().logger,
                 "receive a stale refresh region bucket message";
-                "region_id" => self.fsm.peer().region_id(),
-                "peer_id" => self.fsm.peer().peer_id(),
                 "epoch" => ?region_epoch,
                 "current_epoch" => ?region.get_region_epoch(),
             );

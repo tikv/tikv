@@ -275,6 +275,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             );
             buckets.push(bucket_entry);
         }
+
         self.on_buckets_created(&mut buckets, region, &ranges);
         self.refresh_region_buckets(buckets, region, bucket_ranges);
         Ok(())
@@ -394,6 +395,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         let mut host = self
             .coprocessor
             .new_split_checker_host(region, tablet, auto_split, policy);
+
         if host.skip() {
             debug!("skip split check";
                 "region_id" => region.get_id(),
@@ -403,6 +405,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             );
             return;
         }
+
         let split_keys = match host.policy() {
             CheckPolicy::Scan => {
                 match self.scan_split_keys(
