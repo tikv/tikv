@@ -266,15 +266,6 @@ impl HistoryWindow {
                 (f64::abs(flipping_duration.as_secs() as f64) / 240.0 + 1.0).log2() / 20.0;
             if f64::abs(increasing_rate) > margin_error * time_based_multiple {
                 // Keep flipping, skip the huge-changing phase, wait for stable
-                info!(
-                    "history window flipping: continue";
-                    "name" => self.name,
-                    "delta" => delta,
-                    "flip_margin_error" => margin_error,
-                    "time_based_multiple" => time_based_multiple,
-                    "increasing_rate" => increasing_rate,
-                    "flipping_duration" => flipping_duration.as_secs(),
-                );
                 return true;
             } else {
                 // The huge-changing phase ends, do flipping
