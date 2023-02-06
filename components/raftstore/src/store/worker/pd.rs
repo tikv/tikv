@@ -1001,9 +1001,7 @@ where
                 tikv_util::time::duration_to_us(Duration::from_micros(500)),
                 STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L1"]),
                 STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L2"]),
-                // The param `unsensitive_multiple == 2.0` can yield good results,
-                // make it `10.0` to reduce a bit sensitive because SpikeFilter is disabled
-                10.0,
+                cfg.slow_trend_unsensitive_cause,
             ),
             slow_trend_result: Trend::new(
                 // Disable SpikeFilter for now
@@ -1020,7 +1018,7 @@ where
                     .with_label_values(&["L1"]),
                 STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
                     .with_label_values(&["L2"]),
-                0.5,
+                cfg.slow_trend_unsensitive_result,
             ),
             slow_trend_result_recorder: RequestPerSecRecorder::new(),
             health_service,
