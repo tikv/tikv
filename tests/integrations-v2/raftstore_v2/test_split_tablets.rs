@@ -201,16 +201,13 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let store_id = leader.get_store_id();
     let mut size = 0;
 
-    let region_ids = cluster.region_ids(store_id);
-    for id in region_ids {
-        cluster
-            .scan(store_id, id, CF_DEFAULT, b"", middle_key, false, |k, v| {
-                size += k.len() as u64;
-                size += v.len() as u64;
-                Ok(true)
-            })
-            .expect("");
-    }
+    cluster
+        .scan(store_id, CF_DEFAULT, b"", middle_key, false, |k, v| {
+            size += k.len() as u64;
+            size += v.len() as u64;
+            Ok(true)
+        })
+        .expect("");
 
     assert!(size <= REGION_SPLIT_SIZE);
     // although size may be smaller than REGION_SPLIT_SIZE, but the diff should

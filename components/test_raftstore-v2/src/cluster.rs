@@ -851,6 +851,25 @@ impl<T: Simulator> Cluster<T> {
     pub fn scan<F>(
         &self,
         store_id: u64,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        mut f: F,
+    ) -> engine_traits::Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> engine_traits::Result<bool>,
+    {
+        let region_ids = self.region_ids(store_id);
+        for id in region_ids {
+            self.scan_region(store_id, id, cf, start_key, end_key, fill_cache, &mut f)?;
+        }
+        Ok(())
+    }
+
+    fn scan_region<F>(
+        &self,
+        store_id: u64,
         region_id: u64,
         cf: &str,
         start_key: &[u8],

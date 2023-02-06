@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    fmt::Write,
     path::Path,
     str::FromStr,
     sync::{mpsc, Arc, Mutex},
@@ -16,8 +15,7 @@ use encryption_export::{
 use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CfNamesExt, Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, CF_DEFAULT,
-    CF_RAFT,
+    CfNamesExt, Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::executor::block_on;
@@ -42,7 +40,6 @@ use raftstore::{
     store::{fsm::RaftRouter, *},
     RaftRouterCompactedEventSender, Result,
 };
-use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -728,45 +725,49 @@ pub fn configure_for_causal_ts<T: Simulator>(
     cfg.renew_batch_min_size = renew_batch_min_size;
 }
 
-/// Keep putting random kvs until specified size limit is reached.
-pub fn put_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    limit: u64,
-    range: &mut dyn Iterator<Item = u64>,
-) -> Vec<u8> {
-    put_cf_till_size(cluster, CF_DEFAULT, limit, range)
+#[macro_export]
+macro_rules! put_cf_till_size {
+    // cluster: either test_raftstore::Cluster or test_raftstore_v2::Cluster
+    // cf: &'static str,
+    // limit: u64,
+    // range: &mut dyn Iterator<Item = u64>,
+    ($cluster:expr, $cf:expr, $limit:expr, $range:expr) => {{
+        assert!($limit > 0);
+        let mut len: u64 = 0;
+        let mut rng = rand::thread_rng();
+        let mut key = String::new();
+        let mut value = vec![0; 64];
+        while len < $limit {
+            let batch_size = std::cmp::min(1024, $limit - len);
+            let mut reqs = vec![];
+            for _ in 0..batch_size / 74 + 1 {
+                key.clear();
+                let key_id = $range.next().unwrap();
+                write!(key, "{:09}", key_id).unwrap();
+                rng.fill_bytes(&mut value);
+                // plus 1 for the extra encoding prefix
+                len += key.len() as u64 + 1;
+                len += value.len() as u64;
+                reqs.push(new_put_cf_cmd($cf, key.as_bytes(), &value));
+            }
+            $cluster.batch_put(key.as_bytes(), reqs).unwrap();
+            // Approximate size of memtable is inaccurate for small data,
+            // we flush it to SST so we can use the size properties instead.
+            $cluster.must_flush_cf($cf, true);
+        }
+        key.into_bytes()
+    }};
 }
 
-pub fn put_cf_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    cf: &'static str,
-    limit: u64,
-    range: &mut dyn Iterator<Item = u64>,
-) -> Vec<u8> {
-    assert!(limit > 0);
-    let mut len = 0;
-    let mut rng = rand::thread_rng();
-    let mut key = String::new();
-    let mut value = vec![0; 64];
-    while len < limit {
-        let batch_size = std::cmp::min(1024, limit - len);
-        let mut reqs = vec![];
-        for _ in 0..batch_size / 74 + 1 {
-            key.clear();
-            let key_id = range.next().unwrap();
-            write!(key, "{:09}", key_id).unwrap();
-            rng.fill_bytes(&mut value);
-            // plus 1 for the extra encoding prefix
-            len += key.len() as u64 + 1;
-            len += value.len() as u64;
-            reqs.push(new_put_cf_cmd(cf, key.as_bytes(), &value));
-        }
-        cluster.batch_put(key.as_bytes(), reqs).unwrap();
-        // Approximate size of memtable is inaccurate for small data,
-        // we flush it to SST so we can use the size properties instead.
-        cluster.must_flush_cf(cf, true);
-    }
-    key.into_bytes()
+/// Keep putting random kvs until specified size limit is reached.
+#[macro_export]
+macro_rules! put_till_size {
+    // cluster should be either test_raftstore::Cluster or test_raftstore_v2::Cluster
+    // limit: u64,
+    // range: &mut dyn Iterator<Item = u64>,
+    ($cluster:expr, $limit:expr, $range:expr) => {
+        put_cf_till_size!($cluster, CF_DEFAULT, $limit, $range)
+    };
 }
 
 pub fn new_mutation(op: Op, k: &[u8], v: &[u8]) -> Mutation {

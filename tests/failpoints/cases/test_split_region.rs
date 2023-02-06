@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    fmt::Write,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
@@ -186,7 +187,7 @@ fn gen_split_region() -> (Region, Region, Region) {
 
     assert_eq!(region, target);
 
-    let max_key = put_cf_till_size(&mut cluster, CF_WRITE, region_max_size, &mut range);
+    let max_key = put_cf_till_size!(&mut cluster, CF_WRITE, region_max_size, &mut range);
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();

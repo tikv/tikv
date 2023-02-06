@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{iter::*, sync::*, thread, time::*};
+use std::{fmt::Write, iter::*, sync::*, thread, time::*};
 
 use api_version::{test_kv_format_impl, KvFormat};
 use engine_traits::{Peekable, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -12,6 +12,7 @@ use kvproto::{
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, LocksStatus};
+use rand::RngCore;
 use test_raftstore::*;
 use tikv::storage::{
     kv::{SnapContext, SnapshotExt},
@@ -588,8 +589,8 @@ fn test_merge_approximate_size_and_keys() {
     cluster.run();
 
     let mut range = 1..;
-    let middle_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
-    let max_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
+    let middle_key = put_cf_till_size!(&mut cluster, CF_WRITE, 100, &mut range);
+    let max_key = put_cf_till_size!(&mut cluster, CF_WRITE, 100, &mut range);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"").unwrap();

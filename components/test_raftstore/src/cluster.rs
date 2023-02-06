@@ -1894,6 +1894,25 @@ impl<T: Simulator> Cluster<T> {
         .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
+
+    pub fn scan<F>(
+        &self,
+        store_id: u64,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        f: F,
+    ) -> engine_traits::Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> engine_traits::Result<bool>,
+    {
+        self.engines[&store_id]
+            .kv
+            .scan(cf, start_key, end_key, fill_cache, f)?;
+
+        Ok(())
+    }
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
