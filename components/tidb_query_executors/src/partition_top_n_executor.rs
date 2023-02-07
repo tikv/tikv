@@ -640,16 +640,7 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(
-                            vec![
-                                Some(1 as i64),
-                                Some(1 as i64),
-                                Some(1 as i64),
-                                Some(1 as i64),
-                                Some(1 as i64),
-                            ]
-                            .into(),
-                        ),
+                        VectorValue::Int(vec![Some(1), Some(1), Some(1), Some(1), Some(1)].into()),
                         VectorValue::Int(
                             vec![
                                 Some(18_446_744_073_709_551_615_u64 as i64),
@@ -676,16 +667,7 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(
-                            vec![
-                                Some(2 as i64),
-                                Some(2 as i64),
-                                Some(2 as i64),
-                                Some(2 as i64),
-                                Some(3 as i64),
-                            ]
-                            .into(),
-                        ),
+                        VectorValue::Int(vec![Some(2), Some(2), Some(2), Some(2), Some(3)].into()),
                         VectorValue::Int(
                             vec![
                                 Some(9_223_372_036_854_775_807_u64 as i64),
@@ -761,12 +743,7 @@ mod tests {
         assert!(!r.is_drained.unwrap());
         assert_eq!(
             r.physical_columns[0].decoded().to_int_vec(),
-            &[
-                Some(1 as i64),
-                Some(1 as i64),
-                Some(2 as i64),
-                Some(2 as i64)
-            ]
+            &[Some(1), Some(1), Some(2), Some(2)]
         );
 
         let r = block_on(exec.next_batch(1));
@@ -815,22 +792,14 @@ mod tests {
         assert!(!r.is_drained.unwrap());
         assert_eq!(
             r.physical_columns[0].decoded().to_int_vec(),
-            &[
-                Some(1 as i64),
-                Some(1 as i64),
-                Some(2 as i64),
-                Some(2 as i64)
-            ]
+            &[Some(1), Some(1), Some(2), Some(2)]
         );
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert!(r.is_drained.unwrap());
-        assert_eq!(
-            r.physical_columns[0].decoded().to_int_vec(),
-            &[Some(3 as i64)]
-        );
+        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(3)]);
     }
 
     #[test]
