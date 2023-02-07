@@ -563,11 +563,11 @@ impl ReadDelegate {
         if safe_ts >= read_ts {
             return Ok(());
         }
+        self.read_progress.notify_advance_resolved_ts();
         debug!(
             "reject stale read by safe ts";
             "safe_ts" => safe_ts,
             "read_ts" => read_ts,
-
             "region_id" => self.region.get_id(),
             "peer_id" => self.peer_id,
         );
@@ -2013,5 +2013,98 @@ mod tests {
                 .get_oldest_snapshot_sequence_number()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn test_stale_read_notify() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
+        reader.kv_engine.put(b"key", b"value").unwrap();
+
+        let epoch13 = {
+            let mut ep = metapb::RegionEpoch::default();
+            ep.set_conf_ver(1);
+            ep.set_version(3);
+            ep
+        };
+        let term6 = 6;
+
+        // Register region1
+        let pr_ids1 = vec![2, 3, 4];
+        let prs1 = new_peers(store_id, pr_ids1.clone());
+        prepare_read_delegate(
+            store_id,
+            1,
+            term6,
+            pr_ids1,
+            epoch13.clone(),
+            store_meta.clone(),
+        );
+        let leader1 = prs1[0].clone();
+
+        // Local read
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(1);
+        header.set_peer(leader1);
+        header.set_region_epoch(epoch13);
+        header.set_term(term6);
+        header.set_flags(header.get_flags() | WriteBatchFlags::STALE_READ.bits());
+        cmd.set_header(header.clone());
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        cmd.set_requests(vec![req].into());
+
+        // A peer can serve read_ts < safe_ts.
+        {
+            let mut meta = store_meta.lock().unwrap();
+            let delegate = meta.readers.get_mut(&1).unwrap();
+            delegate.read_progress.update_safe_ts(1, 2);
+            assert_eq!(delegate.read_progress.safe_ts(), 2);
+        }
+        let mut data = [0u8; 8];
+        (&mut data[..]).encode_u64(1).unwrap();
+        header.set_flag_data(data.into());
+        cmd.set_header(header.clone());
+        let (snap_tx, snap_rx) = channel();
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                snap_tx.send(resp).unwrap();
+            })),
+        );
+        must_not_redirect(&mut reader, &rx, task);
+        snap_rx.recv().unwrap().snapshot.unwrap();
+
+        // A peer has to notify advancing resolved ts if read_ts >= safe_ts.
+        let notify = Arc::new(tokio::sync::Notify::new());
+        {
+            let mut meta = store_meta.lock().unwrap();
+            let delegate = meta.readers.get_mut(&1).unwrap();
+            delegate
+                .read_progress
+                .update_advance_resolved_ts_notify(notify.clone());
+        }
+        let mut data = [0u8; 8];
+        (&mut data[..]).encode_u64(10).unwrap(); // Larger than safe_ts 2.
+        header.set_flag_data(data.into());
+        cmd.set_header(header.clone());
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
+        );
+        let (notify_tx, notify_rx) = channel();
+        let (wait_spawn_tx, wait_spawn_rx) = channel();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _ = runtime.spawn(async move {
+            wait_spawn_tx.send(()).unwrap();
+            notify.notified().await;
+            notify_tx.send(()).unwrap();
+        });
+        wait_spawn_rx.recv().unwrap();
+        thread::sleep(std::time::Duration::from_millis(500)); // Prevent lost notify.
+        must_not_redirect(&mut reader, &rx, task);
+        notify_rx.recv().unwrap();
     }
 }

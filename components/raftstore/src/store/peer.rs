@@ -4795,6 +4795,7 @@ where
             let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
             let safe_ts = self.read_progress.safe_ts();
             if safe_ts < read_ts {
+                self.read_progress.notify_advance_resolved_ts();
                 warn!(
                     "read rejected by safe timestamp";
                     "safe ts" => safe_ts,

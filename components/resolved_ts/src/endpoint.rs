@@ -90,6 +90,10 @@ impl ObserveRegion {
         }
     }
 
+    fn read_progress(&self) -> &RegionReadProgress {
+        self.resolver.read_progress.as_ref().unwrap()
+    }
+
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> std::result::Result<(), String> {
         match &mut self.resolver_status {
             ResolverStatus::Pending {
@@ -265,7 +269,7 @@ impl ObserveRegion {
 pub struct Endpoint<T, E: KvEngine> {
     store_id: Option<u64>,
     cfg: ResolvedTsConfig,
-    cfg_update_notify: Arc<Notify>,
+    advance_notify: Arc<Notify>,
     store_meta: Arc<Mutex<StoreMeta>>,
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
@@ -309,7 +313,7 @@ where
         let ep = Self {
             store_id,
             cfg: cfg.clone(),
-            cfg_update_notify: Arc::new(Notify::new()),
+            advance_notify: Arc::new(Notify::new()),
             scheduler,
             store_meta,
             region_read_progress,
@@ -345,6 +349,9 @@ where
             ResolverStatus::Pending { ref cancelled, .. } => cancelled.clone(),
             ResolverStatus::Ready => panic!("resolved ts illeagal created observe region"),
         };
+        observe_region
+            .read_progress()
+            .update_advance_resolved_ts_notify(self.advance_notify.clone());
         self.regions.insert(region_id, observe_region);
 
         let scan_task = self.build_scan_task(region, observe_handle, cancelled);
@@ -560,7 +567,7 @@ where
             regions,
             leader_resolver,
             self.cfg.advance_ts_interval.0,
-            self.cfg_update_notify.clone(),
+            self.advance_notify.clone(),
         );
     }
 
@@ -569,7 +576,7 @@ where
         if let Err(e) = self.cfg.update(change) {
             warn!("resolved-ts config fails"; "error" => ?e);
         } else {
-            self.cfg_update_notify.notify_waiters();
+            self.advance_notify.notify_waiters();
             info!(
                 "resolved-ts config changed";
                 "prev" => prev,
