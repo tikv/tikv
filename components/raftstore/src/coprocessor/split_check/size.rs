@@ -149,7 +149,7 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for SizeCheckObserver<C>
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
                     host.cfg.region_max_size().0,
-                    host.cfg.region_split_size.0,
+                    host.cfg.region_split_size().0,
                     host.cfg.batch_split_limit,
                     policy,
                 )));
@@ -186,7 +186,7 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for SizeCheckObserver<C>
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 host.cfg.region_max_size().0,
-                host.cfg.region_split_size.0,
+                host.cfg.region_split_size().0,
                 host.cfg.batch_split_limit,
                 policy,
             )));
@@ -420,7 +420,7 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
             region_max_size: Some(ReadableSize(100)),
-            region_split_size: ReadableSize(60),
+            region_split_size: Some(ReadableSize(60)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
@@ -545,7 +545,7 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
             region_max_size: Some(ReadableSize(50000)),
-            region_split_size: ReadableSize(50000),
+            region_split_size: Some(ReadableSize(50000)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
@@ -671,7 +671,7 @@ pub mod tests {
         let (tx, _rx) = mpsc::sync_channel(100);
         let mut cfg = Config {
             region_max_size: Some(ReadableSize(50000)),
-            region_split_size: ReadableSize(50000),
+            region_split_size: Some(ReadableSize(50000)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
@@ -736,7 +736,7 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
             region_max_size: Some(ReadableSize(100)),
-            region_split_size: ReadableSize(60),
+            region_split_size: Some(ReadableSize(60)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
