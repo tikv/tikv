@@ -830,7 +830,7 @@ where
                 Error::FlashbackNotPrepared(_) => {
                     m.borrow_mut().reject_reason.flashback_not_prepared.inc()
                 }
-                Error::FlashbackInProgress(_) => {
+                Error::FlashbackInProgress(..) => {
                     m.borrow_mut().reject_reason.flashback_in_progress.inc()
                 }
                 _ => unreachable!(),
