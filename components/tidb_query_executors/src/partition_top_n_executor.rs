@@ -750,10 +750,7 @@ mod tests {
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert!(r.is_drained.unwrap());
-        assert_eq!(
-            r.physical_columns[0].decoded().to_int_vec(),
-            &[Some(3 as i64)]
-        );
+        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(3)]);
     }
 
     #[test]
