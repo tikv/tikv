@@ -21,10 +21,11 @@ use engine_traits::{
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
+use parking_lot::Mutex;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use resource_control::{
-    channel::{bounded, Receiver, Sender},
+    channel::{bounded, Receiver},
     ResourceController, ResourceMetered,
 };
 use tikv_util::{
@@ -37,7 +38,7 @@ use tikv_util::{
     warn,
 };
 
-use super::write_router::WriteSenders;
+use super::write_router::{SharedSenders, WriteSenders};
 use crate::{
     store::{
         config::Config,
@@ -874,22 +875,41 @@ where
     }
 }
 
+#[derive(Clone)]
+pub struct StoreWritersContext<EK, ER, T, N>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: Transport + 'static,
+    N: PersistedNotifier,
+{
+    pub store_id: u64,
+    pub raft_engine: ER,
+    pub kv_engine: Option<EK>,
+    pub transfer: T,
+    pub notifier: N,
+    pub cfg: Arc<VersionTrack<Config>>,
+}
+
+#[derive(Clone)]
 pub struct StoreWriters<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
     resource_ctl: Option<Arc<ResourceController>>,
-    writers: Vec<Sender<WriteMsg<EK, ER>>>,
-    handlers: Vec<JoinHandle<()>>,
+    /// Mailboxes for sending raft messages to async ios.
+    writers: Arc<VersionTrack<SharedSenders<EK, ER>>>,
+    /// Background threads for handling asynchronous messages.
+    handlers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> StoreWriters<EK, ER> {
     pub fn new(resource_ctl: Option<Arc<ResourceController>>) -> Self {
         Self {
             resource_ctl,
-            writers: vec![],
-            handlers: vec![],
+            writers: Arc::new(VersionTrack::default()),
+            handlers: Arc::new(Mutex::new(vec![])),
         }
     }
 }
@@ -913,41 +933,98 @@ where
         cfg: &Arc<VersionTrack<Config>>,
     ) -> Result<()> {
         let pool_size = cfg.value().store_io_pool_size;
-        for i in 0..pool_size {
-            let tag = format!("store-writer-{}", i);
-            let (tx, rx) = bounded(
-                self.resource_ctl.clone(),
-                cfg.value().store_io_notify_capacity,
-            );
-            let mut worker = Worker::new(
-                store_id,
-                tag.clone(),
-                raft_engine.clone(),
-                kv_engine.clone(),
-                rx,
-                notifier.clone(),
-                trans.clone(),
-                cfg,
-            );
-            info!("starting store writer {}", i);
-            let t = thread::Builder::new()
-                .name(thd_name!(tag))
-                .spawn_wrapper(move || {
-                    worker.run();
-                })?;
-            self.writers.push(tx);
-            self.handlers.push(t);
+        if pool_size > 0 {
+            self.increase_to(
+                pool_size,
+                StoreWritersContext {
+                    store_id,
+                    notifier: notifier.clone(),
+                    raft_engine,
+                    kv_engine,
+                    transfer: trans.clone(),
+                    cfg: cfg.clone(),
+                },
+            )?;
         }
         Ok(())
     }
 
     pub fn shutdown(&mut self) {
-        assert_eq!(self.writers.len(), self.handlers.len());
-        for (i, handler) in self.handlers.drain(..).enumerate() {
+        let mut handlers = self.handlers.lock();
+        let writers = self.writers.value().get();
+        assert_eq!(writers.len(), handlers.len());
+        for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
-            self.writers[i].send(WriteMsg::Shutdown, 0).unwrap();
+            writers[i].send(WriteMsg::Shutdown, 0).unwrap();
             handler.join().unwrap();
         }
+    }
+
+    #[inline]
+    /// Returns the valid size of store writers.
+    pub fn size(&self) -> usize {
+        self.writers.value().get().len()
+    }
+
+    pub fn decrease_to(&mut self, size: usize) -> Result<()> {
+        // Only update logical version of writers but not destroying the workers, so
+        // that peers that are still using the writer_id (because there're
+        // unpersisted tasks) can proceed to finish their tasks. After the peer
+        // gets rescheduled, it will use a new writer_id within the new
+        // capacity, specified by refreshed `store-io-pool-size`.
+        //
+        // TODO: find an elegant way to effectively free workers.
+        assert_eq!(self.writers.value().get().len(), self.handlers.lock().len());
+        self.writers
+            .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
+                assert!(writers.get().len() > size);
+                Ok(())
+            })?;
+        Ok(())
+    }
+
+    pub fn increase_to<T: Transport + 'static, N: PersistedNotifier>(
+        &mut self,
+        size: usize,
+        writer_meta: StoreWritersContext<EK, ER, T, N>,
+    ) -> Result<()> {
+        let mut handlers = self.handlers.lock();
+        let current_size = self.writers.value().get().len();
+        assert_eq!(current_size, handlers.len());
+        let resource_ctl = self.resource_ctl.clone();
+        self.writers
+            .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
+                let mut cached_senders = writers.get();
+                for i in current_size..size {
+                    let tag = format!("store-writer-{}", i);
+                    let (tx, rx) = bounded(
+                        resource_ctl.clone(),
+                        writer_meta.cfg.value().store_io_notify_capacity,
+                    );
+                    let mut worker = Worker::new(
+                        writer_meta.store_id,
+                        tag.clone(),
+                        writer_meta.raft_engine.clone(),
+                        writer_meta.kv_engine.clone(),
+                        rx,
+                        writer_meta.notifier.clone(),
+                        writer_meta.transfer.clone(),
+                        &writer_meta.cfg,
+                    );
+                    info!("starting store writer {}", i);
+                    let t =
+                        thread::Builder::new()
+                            .name(thd_name!(tag))
+                            .spawn_wrapper(move || {
+                                worker.run();
+                            })?;
+                    cached_senders.push(tx);
+                    handlers.push(t);
+                }
+                writers.set(cached_senders);
+                Ok(())
+            })?;
+        Ok(())
     }
 }
 
