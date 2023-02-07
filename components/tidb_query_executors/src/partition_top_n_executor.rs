@@ -256,10 +256,9 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
             // in items. Maybe we can import a Heap with customized comparator.
             for logical_row_index in 0..pinned_source_data.logical_rows.len() {
                 let partition_key = HeapItemUnsafe {
-                    order_is_desc_ptr: (*self.partition_is_desc).into(), /* just a dummy value,
-                                                                          * todo: refactor the
-                                                                          * compare logic and
-                                                                          * eliminate this. */
+                    // order_is_desc_ptr here is just a dummy value, todo: refactor the compare
+                    // logic and eliminate this.
+                    order_is_desc_ptr: (*self.partition_is_desc).into(),
                     order_exprs_field_type_ptr: (*self.partition_exprs_field_type).into(),
                     source_data: pinned_source_data.clone(),
                     eval_columns_buffer_ptr: self.eval_columns_buffer_unsafe.as_ref().into(),
