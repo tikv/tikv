@@ -34,6 +34,16 @@ pub struct ConnectionConfig {
     pub keep_alive_timeout: Duration,
 }
 
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            tls: Default::default(),
+            keep_alive_interval: Duration::from_secs(10),
+            keep_alive_timeout: Duration::from_secs(3),
+        }
+    }
+}
+
 impl std::fmt::Debug for ConnectionConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConnectionConfig")
@@ -76,14 +86,15 @@ impl ConnectionConfig {
 
 impl LazyEtcdClient {
     pub fn new(endpoints: &[String], conf: ConnectionConfig) -> Self {
-        let mut inner = LazyEtcdClientInner {
-            conf,
-            endpoints: endpoints.iter().map(ToString::to_string).collect(),
-            last_modified: None,
-            cli: None,
-        };
+        let mut inner = LazyEtcdClientInner::new(endpoints, conf);
         inner.normalize_urls();
         Self(Arc::new(AsyncMutex::new(inner)))
+    }
+
+    // For testing -- check whether the endpoints are properly normalized.
+    #[cfg(test)]
+    pub(super) fn endpoints(&self) -> Vec<String> {
+        self.0.blocking_lock().endpoints.clone()
     }
 
     async fn get_cli(&self) -> Result<EtcdStore> {
@@ -99,6 +110,17 @@ pub struct LazyEtcdClientInner {
 
     last_modified: Option<SystemTime>,
     cli: Option<EtcdStore>,
+}
+
+impl LazyEtcdClientInner {
+    fn new(endpoints: &[String], conf: ConnectionConfig) -> Self {
+        LazyEtcdClientInner {
+            conf,
+            endpoints: endpoints.iter().map(ToString::to_string).collect(),
+            last_modified: None,
+            cli: None,
+        }
+    }
 }
 
 fn etcd_error_is_retryable(etcd_err: &EtcdError) -> bool {
@@ -157,7 +179,7 @@ impl LazyEtcdClientInner {
         let enabled_tls = self.conf.tls.client_suite().is_ok();
         for endpoint in self.endpoints.iter_mut() {
             // Don't touch them when the schemes already provided.
-            // Given etcd is based on gRPC (which relies on HTTP/2), 
+            // Given etcd is based on gRPC (which relies on HTTP/2),
             // there shouldn't be other schemes available (Hopefully...)
             if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
                 continue;
@@ -224,5 +246,17 @@ impl MetaStore for LazyEtcdClient {
 
     async fn txn_cond(&self, txn: super::CondTransaction) -> Result<()> {
         self.get_cli().await?.txn_cond(txn).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LazyEtcdClient;
+
+    #[test]
+    fn test_normalize_url() {
+        let endpoints = ["http://pd-1".to_owned(), "pd-2".to_owned()];
+        let le = LazyEtcdClient::new(&endpoints, Default::default());
+        assert_eq!(le.endpoints(), &["http://pd-1", "http://pd-2"]);
     }
 }

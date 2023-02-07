@@ -69,14 +69,14 @@ impl ClusterInfoProvider for Client {
     }
 
     async fn add_endpoint(&mut self, endpoint: &str) -> Result<()> {
-        self.add_endpoint(endpoint)
+        Client::add_endpoint(self, endpoint)
             .await
             .map_err(|err| annotate!(err, "during adding the endpoint {}", endpoint))?;
         Ok(())
     }
 
     async fn remove_endpoint(&mut self, endpoint: &str) -> Result<()> {
-        self.remove_endpoint(endpoint)
+        Client::remove_endpoint(self, endpoint)
             .await
             .map_err(|err| annotate!(err, "during removing the endpoint {}", endpoint))?;
         Ok(())
@@ -198,7 +198,10 @@ impl<C: ClusterInfoProvider> TopologyUpdater<C> {
 
     pub(super) async fn update_topology_loop(&mut self) {
         while let Some(cli) = self.client.upgrade() {
-            match self.do_update(&mut *cli.lock().await).await {
+            let mut lock = cli.lock().await;
+            let result = self.do_update(&mut lock).await;
+            drop(lock);
+            match result {
                 Ok(_) => tokio::time::sleep(self.loop_interval).await,
                 Err(err) => {
                     err.report("during updating etcd topology");
