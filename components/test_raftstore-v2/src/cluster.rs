@@ -337,7 +337,7 @@ pub trait Simulator {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
         let (msg, sub) = PeerMsg::raft_query(request);
@@ -350,8 +350,15 @@ pub trait Simulator {
             }
         }
 
-        // todo(SpadeA): unwrap and timeout
-        match block_on(sub.result()).unwrap() {
+        let timeout_f = GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + timeout);
+        // todo: unwrap?
+        match block_on(async move {
+            select! {
+                res = sub.result().fuse() => Ok(res.unwrap()),
+                _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request timeout for {:?}", timeout))),
+
+            }
+        }).unwrap() {
             QueryResult::Read(_) => unreachable!(),
             QueryResult::Response(resp) => Ok(resp),
         }
