@@ -35,65 +35,78 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with p
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
-        // Firstly, load all resource groups as of now.
-        let (groups, revision) = self.list_resource_groups().await;
-        self.revision = revision;
-        groups
-            .into_iter()
-            .for_each(|rg| self.manager.add_resource_group(rg));
-        // Secondly, start watcher at loading revision.
-        loop {
-            match self
-                .pd_client
-                .watch_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), self.revision)
-            {
-                Ok(mut stream) => {
-                    while let Some(grpc_response) = stream.next().await {
-                        match grpc_response {
-                            Ok(r) => {
-                                self.revision = r.get_revision();
-                                r.get_changes()
-                                    .iter()
-                                    .for_each(|item| match item.get_kind() {
-                                        EventType::Put => {
-                                            if let Ok(group) =
-                                                protobuf::parse_from_bytes::<ResourceGroup>(
+        'outer: loop {
+            // Firstly, load all resource groups as of now.
+            let (groups, revision) = self.list_resource_groups().await;
+            self.revision = revision;
+            // remove all potential deleted groups with retain.
+            let vaild_groups: Vec<_> = groups.iter().map(|g| &g.name).collect();
+            self.manager.retain(|name, _g| vaild_groups.contains(&name));
+            drop(vaild_groups);
+            groups
+                .into_iter()
+                .for_each(|rg| self.manager.add_resource_group(rg));
+            // Secondly, start watcher at loading revision.
+            loop {
+                match self
+                    .pd_client
+                    .watch_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), self.revision)
+                {
+                    Ok(mut stream) => {
+                        while let Some(grpc_response) = stream.next().await {
+                            match grpc_response {
+                                Ok(r) => {
+                                    self.revision = r.get_revision();
+                                    r.get_changes()
+                                        .iter()
+                                        .for_each(|item| match item.get_kind() {
+                                            EventType::Put => {
+                                                match protobuf::parse_from_bytes::<ResourceGroup>(
                                                     item.get_payload(),
-                                                )
-                                            {
-                                                self.manager.add_resource_group(group);
+                                                ) {
+                                                    Ok(group) => {
+                                                        self.manager.add_resource_group(group);
+                                                    }
+                                                    Err(e) => {
+                                                        error!("parse put resource group event failed, name: {}, err: {:?}", item.get_name(), e);
+                                                    }
+                                                }
                                             }
-                                        }
-                                        EventType::Delete => {
-                                            self.manager.remove_resource_group(item.get_name());
-                                        }
-                                    });
-                            }
-                            Err(err) => {
-                                error!("failed to get stream"; "err" => ?err);
-                                let _ = GLOBAL_TIMER_HANDLE
-                                    .delay(std::time::Instant::now() + RETRY_INTERVAL)
-                                    .compat()
-                                    .await;
+                                            EventType::Delete => {
+                                                match protobuf::parse_from_bytes::<ResourceGroup>(
+                                                    item.get_payload(),
+                                                ) {
+                                                    Ok(group) => {
+                                                        self.manager.remove_resource_group(group.get_name());
+                                                    }
+                                                    Err(e) => {
+                                                        error!("parse delete resource group event failed, name: {}, err: {:?}", item.get_name(), e);
+                                                    }
+                                                }
+                                            }
+                                        });
+                                }
+                                Err(err) => {
+                                    error!("failed to get stream"; "err" => ?err);
+                                    let _ = GLOBAL_TIMER_HANDLE
+                                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                                        .compat()
+                                        .await;
+                                }
                             }
                         }
                     }
-                }
-                Err(PdError::DataCompacted(msg)) => {
-                    error!("required revision has been compacted"; "err" => ?msg);
-                    // If the etcd revision is compacted, we need to reload all resouce groups.
-                    let (groups, revision) = self.list_resource_groups().await;
-                    self.revision = revision;
-                    groups
-                        .into_iter()
-                        .for_each(|rg| self.manager.add_resource_group(rg));
-                }
-                Err(err) => {
-                    error!("failed to watch resource groups"; "err" => ?err);
-                    let _ = GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
-                        .compat()
-                        .await;
+                    Err(PdError::DataCompacted(msg)) => {
+                        error!("required revision has been compacted"; "err" => ?msg);
+                        continue 'outer;
+                    }
+                    Err(err) => {
+                        error!("failed to watch resource groups"; "err" => ?err);
+                        let _ = GLOBAL_TIMER_HANDLE
+                            .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                            .compat()
+                            .await;
+                    }
                 }
             }
         }
