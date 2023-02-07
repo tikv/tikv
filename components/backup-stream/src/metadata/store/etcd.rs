@@ -23,7 +23,7 @@ use super::{
     TransactionOp,
 };
 use crate::{
-    errors::{Error, Result},
+    errors::{Error, EtcdErrorExt, Result},
     metadata::{
         keys::{KeyValue, MetaKey},
         metrics::METADATA_KEY_OPERATION,
@@ -114,24 +114,30 @@ impl MetaStore for EtcdStore {
                     match events {
                         Err(err) => Box::pin(tokio_stream::once(Err(err.into()))),
                         Ok(events) => {
-                            if events.canceled() {
-                                Box::pin(tokio_stream::iter(Err(Error::Etcd(
-                                    etcd_client::Error::WatchError("canceled".to_owned()),
-                                ))))
-                            } else {
-                                Box::pin(tokio_stream::iter(
-                                    // TODO: remove the copy here via access the protobuf field
-                                    // directly.
-                                    #[allow(clippy::unnecessary_to_owned)]
-                                    events.events().to_owned().into_iter().filter_map(|event| {
-                                        let kv = event.kv()?;
-                                        Some(Ok(KvEvent {
-                                            kind: event.event_type().into(),
-                                            pair: kv.clone().into(),
-                                        }))
-                                    }),
-                                ))
+                            if events.compact_revision() > 0 && events.canceled() {
+                                return Box::pin(tokio_stream::once(Err(Error::Etcd(
+                                    EtcdErrorExt::RevisionCompacted {
+                                        current: events.compact_revision(),
+                                    },
+                                ))));
                             }
+                            if events.canceled() {
+                                return Box::pin(tokio_stream::once(Err(Error::Etcd(
+                                    EtcdErrorExt::WatchCanceled,
+                                ))));
+                            }
+                            Box::pin(tokio_stream::iter(
+                                // TODO: remove the copy here via access the protobuf field
+                                // directly.
+                                #[allow(clippy::unnecessary_to_owned)]
+                                events.events().to_owned().into_iter().filter_map(|event| {
+                                    let kv = event.kv()?;
+                                    Some(Ok(KvEvent {
+                                        kind: event.event_type().into(),
+                                        pair: kv.clone().into(),
+                                    }))
+                                }),
+                            ))
                         }
                     }
                 },
