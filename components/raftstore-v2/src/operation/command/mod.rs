@@ -16,9 +16,9 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::{mem, time::Duration};
+use std::{mem, sync::atomic::Ordering, time::Duration};
 
-use engine_traits::{KvEngine, RaftEngine, WriteBatch, WriteOptions};
+use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
@@ -33,7 +33,7 @@ use raftstore::{
             Proposal,
         },
         local_metrics::RaftMetrics,
-        metrics::APPLY_TASK_WAIT_TIME_HISTOGRAM,
+        metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
         msg::ErrorCallback,
         util, Config, WriteCallback,
     },
@@ -41,7 +41,9 @@ use raftstore::{
 };
 use slog::{info, warn};
 use tikv_util::{
-    box_err, slog_panic,
+    box_err,
+    log::SlogFormat,
+    slog_panic,
     time::{duration_to_sec, monotonic_raw_now, Instant},
 };
 
@@ -107,7 +109,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn schedule_apply_fsm<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let region_state = self.storage().region_state().clone();
-        let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
+        let mailbox = match store_ctx.router.mailbox(self.region_id()) {
+            Some(m) => m,
+            None => {
+                assert!(
+                    store_ctx.shutdown.load(Ordering::Relaxed),
+                    "failed to load mailbox: {}",
+                    SlogFormat(&self.logger)
+                );
+                return;
+            }
+        };
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
@@ -221,12 +233,35 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         proposal.must_pass_epoch_check = self.applied_to_current_term();
         proposal.propose_time = Some(*ctx.current_time.get_or_insert_with(monotonic_raw_now));
+        self.report_batch_wait_duration(ctx, &proposal.cb);
         self.proposals_mut().push(proposal);
         self.set_has_ready();
     }
 
+    fn report_batch_wait_duration<T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        ch: &Vec<CmdResChannel>,
+    ) {
+        if !ctx.raft_metrics.waterfall_metrics || ch.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        for c in ch {
+            for tracker in c.write_trackers() {
+                tracker.observe(now, &ctx.raft_metrics.wf_batch_wait, |t| {
+                    &mut t.metrics.wf_batch_wait_nanos
+                });
+            }
+        }
+    }
+
     #[inline]
-    pub fn schedule_apply_committed_entries(&mut self, committed_entries: Vec<Entry>) {
+    pub fn schedule_apply_committed_entries<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        committed_entries: Vec<Entry>,
+    ) {
         if committed_entries.is_empty() {
             return;
         }
@@ -246,6 +281,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         } else {
             entry_and_proposals = committed_entries.into_iter().map(|e| (e, vec![])).collect();
         }
+        self.report_store_time_duration(ctx, &mut entry_and_proposals);
         // Unlike v1, v2 doesn't need to persist commit index and commit term. The
         // point of persist commit index/term of raft apply state is to recover commit
         // index when the writes to raft engine is lost but writes to kv engine is
@@ -265,12 +301,30 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .send(ApplyTask::CommittedEntries(apply));
     }
 
+    #[inline]
+    fn report_store_time_duration<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        entry_and_proposals: &mut [(Entry, Vec<CmdResChannel>)],
+    ) {
+        let now = std::time::Instant::now();
+        for (_, chs) in entry_and_proposals {
+            for tracker in chs.write_trackers_mut() {
+                tracker.observe(now, &ctx.raft_metrics.store_time, |t| {
+                    t.metrics.write_instant = Some(now);
+                    &mut t.metrics.store_time_nanos
+                });
+                tracker.reset(now);
+            }
+        }
+    }
+
     pub fn on_apply_res<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, apply_res: ApplyRes) {
         if !self.serving() {
             return;
         }
         // TODO: remove following log once stable.
-        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res);
+        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
             // Ignore admin command side effects, otherwise it may split incomplete
@@ -292,6 +346,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
                 AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
+                AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
             }
         }
 
@@ -333,6 +388,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
             }
+        }
+        let last_applying_index = self.compact_log_context().last_applying_index();
+        let committed_index = self.entry_storage().commit_index();
+        if last_applying_index < committed_index {
+            // We need to continue to apply after previous page is finished.
+            self.set_has_ready();
         }
     }
 }
@@ -539,6 +600,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::PrepareFlashback => unimplemented!(),
                 AdminCmdType::FinishFlashback => unimplemented!(),
                 AdminCmdType::BatchSwitchWitness => unimplemented!(),
+                AdminCmdType::UpdateGcPeer => self.apply_update_gc_peer(log_index, admin_req),
                 AdminCmdType::InvalidAdmin => {
                     return Err(box_err!("invalid admin command type"));
                 }
@@ -625,9 +687,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
         control.need_flush = false;
         let flush_state = self.flush_state().clone();
-        if let Some(wb) = &mut self.write_batch && !wb.is_empty() {
+        if let Some(wb) = &self.write_batch && !wb.is_empty() {
+            self.perf_context().start_observe();
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);
+            let wb = self.write_batch.as_mut().unwrap();
             if let Err(e) = wb.write_callback_opt(&write_opt, || {
                 flush_state.set_applied_index(index);
             }) {
@@ -640,13 +704,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             } else {
                 self.write_batch.take();
             }
-        }
-        let callbacks = self.callbacks_mut();
-        for (ch, resp) in callbacks.drain(..) {
-            ch.set_result(resp);
-        }
-        if callbacks.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP {
-            callbacks.shrink_to(SHRINK_PENDING_CMD_QUEUE_CAP);
+            let tokens: Vec<_> = self
+                .callbacks_mut()
+                .iter()
+                .flat_map(|(v, _)| {
+                    v.write_trackers()
+                        .flat_map(|t| t.as_tracker_token())
+                })
+                .collect();
+            self.perf_context().report_metrics(&tokens);
         }
         let mut apply_res = ApplyRes::default();
         apply_res.applied_index = index;
@@ -656,6 +722,23 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.metrics = mem::take(&mut self.metrics);
         let written_bytes = apply_res.metrics.written_bytes;
         self.res_reporter().report(apply_res);
+
+        // Report result first and then invoking callbacks. This may delays callback a
+        // little bit, but can make sure all following messages must see the side
+        // effect of admin commands.
+        let callbacks = self.callbacks_mut();
+        let now = std::time::Instant::now();
+        let apply_time = APPLY_TIME_HISTOGRAM.local();
+        for (ch, resp) in callbacks.drain(..) {
+            for tracker in ch.write_trackers() {
+                tracker.observe(now, &apply_time, |t| &mut t.metrics.apply_time_nanos);
+            }
+            ch.set_result(resp);
+        }
+        apply_time.flush();
+        if callbacks.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP {
+            callbacks.shrink_to(SHRINK_PENDING_CMD_QUEUE_CAP);
+        }
         written_bytes
     }
 }

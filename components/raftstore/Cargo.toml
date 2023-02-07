@@ -72,6 +72,7 @@ protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft-proto = { version = "0.7.0", default-features = false }
 rand = "0.8.3"
+resource_control = { workspace = true }
 resource_metering = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"

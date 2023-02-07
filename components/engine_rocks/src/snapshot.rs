@@ -5,7 +5,9 @@ use std::{
     sync::Arc,
 };
 
-use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot};
+use engine_traits::{
+    self, CfNamesExt, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot,
+};
 use rocksdb::{rocksdb_options::UnsafeSnap, DBIterator, DB};
 
 use crate::{
@@ -93,5 +95,11 @@ impl Peekable for RocksSnapshot {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         let v = self.db.get_cf_opt(handle, key, &opt).map_err(r2e)?;
         Ok(v.map(RocksDbVector::from_raw))
+    }
+}
+
+impl CfNamesExt for RocksSnapshot {
+    fn cf_names(&self) -> Vec<&str> {
+        self.db.cf_names()
     }
 }

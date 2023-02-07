@@ -49,6 +49,7 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 raftstore = { workspace = true, features = ["testexport"] }
 rand = "0.8"
 resolved_ts = { workspace = true }
+resource_control = { workspace = true }
 resource_metering = { workspace = true }
 security = { workspace = true }
 server = { workspace = true }

@@ -46,6 +46,7 @@ use raftstore::{
     },
     Error, Result,
 };
+use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::server::Result as ServerResult;
@@ -80,6 +81,7 @@ pub trait Simulator {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -174,6 +176,7 @@ pub struct Cluster<T: Simulator> {
     pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -207,6 +210,7 @@ impl<T: Simulator> Cluster<T> {
             pd_client,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
+            resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
         }
@@ -275,7 +279,8 @@ impl<T: Simulator> Cluster<T> {
 
         // Try start new nodes.
         for _ in 0..self.count - self.engines.len() {
-            let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+            let (router, system) =
+                create_raft_batch_system(&self.cfg.raft_store, &self.resource_manager);
             self.create_engine(Some(router.clone()));
 
             let engines = self.dbs.last().unwrap().clone();
@@ -294,6 +299,7 @@ impl<T: Simulator> Cluster<T> {
                 key_mgr.clone(),
                 router,
                 system,
+                &self.resource_manager,
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
@@ -345,7 +351,8 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
         let key_mgr = self.key_managers_map[&node_id].clone();
-        let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+        let (router, system) =
+            create_raft_batch_system(&self.cfg.raft_store, &self.resource_manager);
         let mut cfg = self.cfg.clone();
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
@@ -365,9 +372,16 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
-        self.sim
-            .wl()
-            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system)?;
+        self.sim.wl().run_node(
+            node_id,
+            cfg,
+            engines,
+            store_meta,
+            key_mgr,
+            router,
+            system,
+            &self.resource_manager,
+        )?;
         debug!("node {} started", node_id);
         Ok(())
     }

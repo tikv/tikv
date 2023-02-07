@@ -100,7 +100,7 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
 
     // Disable region split during recovering.
     config.coprocessor.region_max_size = Some(ReadableSize::gb(MAX_REGION_SIZE));
-    config.coprocessor.region_split_size = ReadableSize::gb(MAX_REGION_SIZE);
+    config.coprocessor.region_split_size = Some(ReadableSize::gb(MAX_REGION_SIZE));
     config.coprocessor.region_max_keys = Some(MAX_SPLIT_KEY);
     config.coprocessor.region_split_keys = Some(MAX_SPLIT_KEY);
 }
@@ -314,7 +314,10 @@ pub fn create_local_engine_service(
     let env = config
         .build_shared_rocks_env(key_manager.clone(), None)
         .map_err(|e| format!("build shared rocks env: {}", e))?;
-    let block_cache = config.storage.block_cache.build_shared_cache();
+    let block_cache = config
+        .storage
+        .block_cache
+        .build_shared_cache(config.storage.engine);
 
     // init rocksdb / kv db
     let factory = KvEngineFactoryBuilder::new(env.clone(), config, block_cache)

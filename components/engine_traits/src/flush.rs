@@ -157,7 +157,10 @@ impl PersistenceListener {
             }
             match flushed_pr {
                 Some(pr) => pr,
-                None => panic!("{} not found in {:?}", cf, prs),
+                None => panic!(
+                    "[region_id={}] [tablet_index={}] {} not found in {:?}",
+                    self.region_id, self.tablet_index, cf, prs
+                ),
             }
         };
         self.storage

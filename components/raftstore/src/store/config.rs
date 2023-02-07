@@ -68,6 +68,9 @@ pub struct Config {
     pub raft_log_compact_sync_interval: ReadableDuration,
     // Interval to gc unnecessary raft log.
     pub raft_log_gc_tick_interval: ReadableDuration,
+    // Interval to request voter_replicated_index for gc unnecessary raft log,
+    // if the leader has not initiated gc for a long time.
+    pub request_voter_replicated_index_interval: ReadableDuration,
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
     // When entry count exceed this value, gc will be forced trigger.
@@ -203,7 +206,6 @@ pub struct Config {
     pub store_batch_system: BatchSystemConfig,
 
     /// If it is 0, it means io tasks are handled in store threads.
-    #[online_config(skip)]
     pub store_io_pool_size: usize,
 
     #[online_config(skip)]
@@ -321,6 +323,12 @@ pub struct Config {
     #[online_config(hidden)]
     // Interval to check peers availability info.
     pub check_peers_availability_interval: ReadableDuration,
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    // Interval to check if need to request snapshot.
+    pub check_request_snapshot_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -339,6 +347,7 @@ impl Default for Config {
             raft_entry_max_size: ReadableSize::mb(8),
             raft_log_compact_sync_interval: ReadableDuration::secs(2),
             raft_log_gc_tick_interval: ReadableDuration::secs(3),
+            request_voter_replicated_index_interval: ReadableDuration::minutes(5),
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
@@ -429,6 +438,8 @@ impl Default for Config {
             unreachable_backoff: ReadableDuration::secs(10),
             // TODO: make its value reasonable
             check_peers_availability_interval: ReadableDuration::secs(30),
+            // TODO: make its value reasonable
+            check_request_snapshot_interval: ReadableDuration::minutes(1),
         }
     }
 }
@@ -648,7 +659,7 @@ impl Config {
         // prevent mistakenly inputting too large values, the max limit is made
         // according to the cpu quota * 10. Notice 10 is only an estimate, not an
         // empirical value.
-        let limit = SysQuota::cpu_cores_quota() as usize * 10;
+        let limit = (SysQuota::cpu_cores_quota() * 10.0) as usize;
         if self.apply_batch_system.pool_size == 0 || self.apply_batch_system.pool_size > limit {
             return Err(box_err!(
                 "apply-pool-size should be greater than 0 and less than or equal to: {}",
@@ -813,6 +824,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_tick_interval"])
             .set(self.raft_log_gc_tick_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["request_voter_replicated_index_interval"])
+            .set(self.request_voter_replicated_index_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_threshold"])
             .set(self.raft_log_gc_threshold as f64);
@@ -1034,8 +1048,25 @@ impl ConfigManager for RaftstoreConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.config
-                .update(move |cfg: &mut Config| cfg.update(change))?;
+            self.config.update(move |cfg: &mut Config| {
+                // Currently, it's forbidden to modify the write mode either from `async` to
+                // `sync` or from `sync` to `async`.
+                if let Some(ConfigValue::Usize(resized_io_size)) = change.get("store_io_pool_size")
+                {
+                    if cfg.store_io_pool_size == 0 && *resized_io_size > 0 {
+                        return Err(
+                            "SYNC mode, not allowed to resize the size of store-io-pool-size"
+                                .into(),
+                        );
+                    } else if cfg.store_io_pool_size > 0 && *resized_io_size == 0 {
+                        return Err(
+                            "ASYNC mode, not allowed to be set to SYNC mode by resizing store-io-pool-size to 0"
+                                .into(),
+                        );
+                    }
+                }
+                cfg.update(change)
+            })?;
         }
         if let Some(ConfigValue::Module(raft_batch_system_change)) =
             change.get("store_batch_system")
@@ -1046,6 +1077,12 @@ impl ConfigManager for RaftstoreConfigManager {
             change.get("apply_batch_system")
         {
             self.schedule_config_change(RaftStoreBatchComponent::Apply, apply_batch_system_change);
+        }
+        if let Some(ConfigValue::Usize(resized_io_size)) = change.get("store_io_pool_size") {
+            let resize_io_task = RefreshConfigTask::ScaleWriters(*resized_io_size);
+            if let Err(e) = self.scheduler.schedule(resize_io_task) {
+                error!("raftstore configuration manager schedule to resize store-io-pool-size work task failed"; "err"=> ?e);
+            }
         }
         info!(
             "raftstore config changed";

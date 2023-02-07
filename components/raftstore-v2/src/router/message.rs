@@ -8,6 +8,7 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
+use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
 
 use super::{
@@ -32,6 +33,7 @@ pub enum PeerTick {
     ReactivateMemoryLock = 8,
     ReportBuckets = 9,
     CheckLongUncommitted = 10,
+    GcPeer = 11,
 }
 
 impl PeerTick {
@@ -51,6 +53,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
+            PeerTick::GcPeer => "gc_peer",
         }
     }
 
@@ -67,6 +70,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock,
             PeerTick::ReportBuckets,
             PeerTick::CheckLongUncommitted,
+            PeerTick::GcPeer,
         ];
         TICKS
     }
@@ -197,6 +201,8 @@ pub enum PeerMsg {
     WaitFlush(super::FlushChannel),
 }
 
+impl ResourceMetered for PeerMsg {}
+
 impl PeerMsg {
     pub fn raft_query(req: RaftCmdRequest) -> (Self, QueryResSubscriber) {
         let (ch, sub) = QueryResChannel::pair();
@@ -257,5 +263,15 @@ pub enum StoreMsg {
     SplitInit(Box<SplitInit>),
     Tick(StoreTick),
     Start,
-    StoreUnreachable { to_store_id: u64 },
+    StoreUnreachable {
+        to_store_id: u64,
+    },
+    /// A message that used to check if a flush is happened.
+    #[cfg(feature = "testexport")]
+    WaitFlush {
+        region_id: u64,
+        ch: super::FlushChannel,
+    },
 }
+
+impl ResourceMetered for StoreMsg {}

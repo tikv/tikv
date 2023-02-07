@@ -42,6 +42,7 @@ use raftstore::{
     },
     Result,
 };
+use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tempfile::TempDir;
@@ -264,6 +265,7 @@ impl ServerCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = test_util::temp_dir("test_cluster", cfg.prefer_mem);
@@ -414,6 +416,9 @@ impl ServerCluster {
             quota_limiter.clone(),
             self.pd_client.feature_gate().clone(),
             self.get_causal_ts_provider(node_id),
+            resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -494,7 +499,7 @@ impl ServerCluster {
         let mut raft_store = cfg.raft_store.clone();
         raft_store
             .validate(
-                cfg.coprocessor.region_split_size,
+                cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket,
                 cfg.coprocessor.region_bucket_size,
             )
@@ -649,6 +654,7 @@ impl Simulator for ServerCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
@@ -660,6 +666,7 @@ impl Simulator for ServerCluster {
                 key_manager,
                 router,
                 system,
+                resource_manager,
             )
         )
     }

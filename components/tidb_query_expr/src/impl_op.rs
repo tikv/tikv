@@ -57,6 +57,18 @@ pub fn unary_not_decimal(arg: Option<&Decimal>) -> Result<Option<i64>> {
 
 #[rpn_fn(nullable)]
 #[inline]
+pub fn unary_not_json(arg: Option<JsonRef>) -> Result<Option<i64>> {
+    let json_zero = Json::from_i64(0).unwrap();
+    Ok(arg.as_ref().map(|v| {
+        if v == &json_zero.as_ref() {
+            return 1;
+        }
+        0
+    }))
+}
+
+#[rpn_fn(nullable)]
+#[inline]
 pub fn unary_minus_uint(arg: Option<&Int>) -> Result<Option<Int>> {
     use std::cmp::Ordering::*;
 
@@ -380,6 +392,26 @@ mod tests {
                 .evaluate(ScalarFuncSig::UnaryNotDecimal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_unary_not_json() {
+        let test_cases = vec![
+            (None, None),
+            (Some(Json::from_i64(0).unwrap()), Some(1)),
+            (Some(Json::from_i64(1).unwrap()), Some(0)),
+            (
+                Some(Json::from_array(vec![Json::from_i64(0).unwrap()]).unwrap()),
+                Some(0),
+            ),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::UnaryNotJson)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg.as_ref());
         }
     }
 

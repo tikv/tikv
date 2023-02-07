@@ -449,21 +449,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         fail_point!("on_split", self.peer().get_store_id() == 3, |_| {});
 
         let derived = &res.regions[res.derived_index];
-        let derived_epoch = derived.get_region_epoch().clone();
         let region_id = derived.get_id();
 
-        // Group in-memory pessimistic locks in the original region into new regions.
-        // The locks of new regions will be put into the corresponding new regions
-        // later. And the locks belonging to the old region will stay in the original
-        // map.
-        let region_locks = {
-            let mut pessimistic_locks = self.txn_ext().pessimistic_locks.write();
-            info!(self.logger, "moving {} locks to new regions", pessimistic_locks.len(););
-            // Update the version so the concurrent reader will fail due to EpochNotMatch
-            // instead of PessimisticLockNotFound.
-            pessimistic_locks.version = derived_epoch.get_version();
-            pessimistic_locks.group_by_regions(&res.regions, derived)
-        };
+        let region_locks = self.txn_context().split(&res.regions, derived);
         fail_point!("on_split_invalidate_locks");
 
         let tablet: EK = match res.tablet.downcast() {
@@ -650,7 +638,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let _ = self.raft_group_mut().campaign();
             self.set_has_ready();
 
-            *self.txn_ext().pessimistic_locks.write() = split_init.locks;
+            self.txn_context().init_with_lock(split_init.locks);
             let control = self.split_flow_control_mut();
             control.approximate_size = split_init.approximate_size;
             control.approximate_keys = split_init.approximate_keys;

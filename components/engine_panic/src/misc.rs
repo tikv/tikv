@@ -68,6 +68,10 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn continue_background_work(&self) -> Result<()> {
+        panic!()
+    }
+
     fn exists(path: &str) -> bool {
         panic!()
     }
@@ -89,6 +93,10 @@ impl MiscExt for PanicEngine {
     }
 
     fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>> {
+        panic!()
+    }
+
+    fn get_num_keys(&self) -> Result<u64> {
         panic!()
     }
 
