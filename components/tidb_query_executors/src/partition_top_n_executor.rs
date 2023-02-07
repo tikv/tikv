@@ -22,6 +22,8 @@ use crate::{
 pub struct BatchPartitionTopNExecutor<Src: BatchExecutor> {
     heap: TopNHeap,
 
+    /// See `BatchPartitionTopNExecutor::eval_columns_buffer_unsafe` for more
+    /// information.
     #[allow(clippy::box_collection)]
     eval_columns_buffer_unsafe: Box<Vec<RpnStackNode<'static>>>,
 
@@ -32,6 +34,10 @@ pub struct BatchPartitionTopNExecutor<Src: BatchExecutor> {
     /// dummy value, just for convenience.
     partition_is_desc: Box<[bool]>,
 
+    /// The partition key of the last row, i.e. all the heap items have the same
+    /// partition key.
+    /// The reason for make this a HeapItemUnsafe is to reuse of the existing
+    /// comparison logic, i.e. `cmp_sort_key`.
     last_partition_key: Option<HeapItemUnsafe>,
 
     order_exprs: Box<[RpnExpression]>,
@@ -210,6 +216,13 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
                 &mut physical_columns,
                 &logical_rows,
             )?;
+            ensure_columns_decoded(
+                &mut self.context,
+                &self.partition_exprs,
+                self.src.schema(),
+                &mut physical_columns,
+                &logical_rows,
+            )?;
 
             let pinned_source_data = Arc::new(HeapItemSourceData {
                 physical_columns,
@@ -239,12 +252,14 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
                     &mut self.eval_columns_buffer_unsafe,
                 )?;
             }
-            // dbg!(&self.eval_columns_buffer_unsafe);
             // todo: optimize the memory usage of this, don't need so many same information
-            // in items. Maybe we can import a Heap with customer comparator.
+            // in items. Maybe we can import a Heap with customized comparator.
             for logical_row_index in 0..pinned_source_data.logical_rows.len() {
                 let partition_key = HeapItemUnsafe {
-                    order_is_desc_ptr: (*self.partition_is_desc).into(), // just a dummy value
+                    order_is_desc_ptr: (*self.partition_is_desc).into(), /* just a dummy value,
+                                                                          * todo: refactor the
+                                                                          * compare logic and
+                                                                          * eliminate this. */
                     order_exprs_field_type_ptr: (*self.partition_exprs_field_type).into(),
                     source_data: pinned_source_data.clone(),
                     eval_columns_buffer_ptr: self.eval_columns_buffer_unsafe.as_ref().into(),
@@ -292,7 +307,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
         self.src.schema()
     }
 
-    #[inline]
     /// Implementation of BatchExecutor::next_batch
     /// Memory Control Analysis:
     /// 1. if n > paging_size(1024), this operator won't do anything and just
@@ -306,6 +320,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
     /// than paging_size.
     /// todo: find a good solution to limit it up to paging_size.
     /// baseline: limit n up to paging_size/2
+    #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         if self.n == 0 {
             return BatchExecuteResult {
@@ -316,7 +331,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
             };
         }
 
-        // limit middle memory by paging_size.
+        // limit intermediate memory by paging_size.
         if let Some(paging_size) = self.context.cfg.paging_size {
             if self.n * 2 > paging_size as usize {
                 return self.src.next_batch(scan_rows).await;
@@ -534,7 +549,6 @@ mod tests {
         );
 
         let r = block_on(exec.next_batch(1));
-        // dbg!(r.physical_columns);
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5]);
         assert_eq!(r.physical_columns.rows_len(), 6);
         assert_eq!(r.physical_columns.columns_len(), 2);
@@ -549,6 +563,8 @@ mod tests {
         assert!(r.is_drained.unwrap());
     }
 
+    /// Currently, When the data is not ordered by partition key, e.g. 1 1 2 1,
+    /// it will treat discontinuous same key as different partition.
     #[test]
     fn test_unordered_key() {
         let src_exec = MockExecutor::new(
@@ -589,7 +605,6 @@ mod tests {
         );
 
         let r = block_on(exec.next_batch(1));
-        // dbg!(r.physical_columns);
         assert_eq!(&r.logical_rows, &[0, 1, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert_eq!(r.physical_columns.columns_len(), 2);
@@ -890,13 +905,7 @@ mod tests {
         assert!(r.is_drained.unwrap());
     }
 
-    // #[test]
-    // fn test_null_pk() {
-    //     todo!()
-    // }
-
-    /// The following tests are copied from `batch_top_n_executor.rs` to
-    /// verify when partition_item is null.
+    /// The following tests are copied from `batch_top_n_executor.rs`.
     #[test]
     fn test_no_partition_top_0() {
         let src_exec = MockExecutor::new(

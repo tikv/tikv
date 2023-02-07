@@ -41,8 +41,6 @@ const BATCH_INITIAL_SIZE: usize = 32;
 // benchmarks.
 pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
-use crate::partition_top_n_executor::BatchPartitionTopNExecutor;
-
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 

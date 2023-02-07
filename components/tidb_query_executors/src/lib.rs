@@ -43,6 +43,7 @@ mod util;
 pub use self::{
     fast_hash_aggr_executor::BatchFastHashAggregationExecutor,
     index_scan_executor::BatchIndexScanExecutor, limit_executor::BatchLimitExecutor,
+    partition_top_n_executor::BatchPartitionTopNExecutor,
     projection_executor::BatchProjectionExecutor, selection_executor::BatchSelectionExecutor,
     simple_aggr_executor::BatchSimpleAggregationExecutor,
     slow_hash_aggr_executor::BatchSlowHashAggregationExecutor,
