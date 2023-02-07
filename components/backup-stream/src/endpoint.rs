@@ -337,6 +337,7 @@ where
                     continue;
                 }
             };
+            info!("start watching the task changes."; "from_rev" => %revision_new);
 
             loop {
                 if let Some(event) = watcher.stream.next().await {
@@ -386,6 +387,7 @@ where
                     continue;
                 }
             };
+            info!("start watching the pausing events."; "from_rev" => %revision_new);
 
             loop {
                 if let Some(event) = watcher.stream.next().await {
