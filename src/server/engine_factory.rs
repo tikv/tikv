@@ -6,6 +6,7 @@ use engine_rocks::{
     raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
+    TabletLogger,
 };
 use engine_traits::{
     CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
@@ -188,6 +189,8 @@ impl KvEngineFactory {
 impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<RocksEngine> {
         let mut db_opts = self.db_opts(EngineType::RaftKv2);
+        let tablet_name = path.file_name().unwrap().to_str().unwrap().to_string();
+        db_opts.set_info_log(TabletLogger::new(tablet_name));
         let cf_opts = self.cf_opts(EngineType::RaftKv2);
         if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
             db_opts.add_event_listener(listener.clone_with(ctx.id, suffix));
@@ -255,7 +258,10 @@ mod tests {
                 e
             );
         });
-        let cache = cfg.storage.block_cache.build_shared_cache();
+        let cache = cfg
+            .storage
+            .block_cache
+            .build_shared_cache(cfg.storage.engine);
         let dir = test_util::temp_dir("test-engine-factory", false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 

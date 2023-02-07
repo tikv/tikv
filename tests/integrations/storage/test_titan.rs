@@ -149,7 +149,10 @@ fn test_delete_files_in_range_for_titan() {
 
     // Set configs and create engines
     let mut cfg = TikvConfig::default();
-    let cache = cfg.storage.block_cache.build_shared_cache();
+    let cache = cfg
+        .storage
+        .block_cache
+        .build_shared_cache(cfg.storage.engine);
     cfg.rocksdb.titan.enabled = true;
     cfg.rocksdb.titan.disable_gc = true;
     cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
@@ -159,10 +162,8 @@ fn test_delete_files_in_range_for_titan() {
     cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize(0);
     cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
     cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
-    let kv_db_opts = cfg.rocksdb.build_opt(
-        &cfg.rocksdb.build_resources(Default::default()),
-        cfg.storage.engine,
-    );
+    let resource = cfg.rocksdb.build_resources(Default::default());
+    let kv_db_opts = cfg.rocksdb.build_opt(&resource, cfg.storage.engine);
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts(
         &cfg.rocksdb.build_cf_resources(cache),
         None,

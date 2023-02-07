@@ -49,6 +49,12 @@ pub struct ConfChangeResult {
     pub region_state: RegionLocalState,
 }
 
+#[derive(Debug)]
+pub struct UpdateGcPeersResult {
+    index: u64,
+    region_state: RegionLocalState,
+}
+
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn propose_conf_change<T>(
@@ -177,10 +183,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     }
                 }
             }
-            if has_new_peer.is_some() {
-                // Speed up snapshot instead of waiting another heartbeat.
-                self.raft_group_mut().ping();
-                self.set_has_ready();
+            if self.is_leader() {
+                if has_new_peer.is_some() {
+                    // Speed up snapshot instead of waiting another heartbeat.
+                    self.raft_group_mut().ping();
+                    self.set_has_ready();
+                }
+                self.maybe_schedule_gc_peer_tick();
             }
         }
         ctx.coprocessor_host.on_region_changed(
@@ -198,6 +207,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .unwrap();
             self.set_has_extra_write();
         }
+    }
+
+    pub fn on_apply_res_update_gc_peers(&mut self, result: UpdateGcPeersResult) {
+        let region_id = self.region_id();
+        self.state_changes_mut()
+            .put_region_state(region_id, result.index, &result.region_state)
+            .unwrap();
+        self.set_has_extra_write();
+        self.storage_mut().set_region_state(result.region_state);
     }
 }
 
@@ -279,7 +297,28 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         );
         let my_id = self.peer().get_id();
         let state = self.region_state_mut();
+        let mut removed_records: Vec<_> = state.take_removed_records().into();
+        for p0 in state.get_region().get_peers() {
+            // No matching store ID means the peer must be removed.
+            if new_region
+                .get_peers()
+                .iter()
+                .all(|p1| p1.get_store_id() != p0.get_store_id())
+            {
+                removed_records.push(p0.clone());
+            }
+        }
+        // If a peer is replaced in the same store, the leader will keep polling the
+        // new peer on the same store, which implies that the old peer must be
+        // tombstone in the end.
+        removed_records.retain(|p0| {
+            new_region
+                .get_peers()
+                .iter()
+                .all(|p1| p1.get_store_id() != p0.get_store_id())
+        });
         state.set_region(new_region.clone());
+        state.set_removed_records(removed_records.into());
         let new_peer = new_region
             .get_peers()
             .iter()
@@ -533,5 +572,34 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             .with_label_values(&[metric, "success"])
             .inc();
         Ok(())
+    }
+
+    pub fn apply_update_gc_peer(
+        &mut self,
+        log_index: u64,
+        admin_req: &AdminRequest,
+    ) -> (AdminResponse, AdminCmdResult) {
+        let mut removed_records: Vec<_> = self.region_state_mut().take_removed_records().into();
+        let mut merged_records: Vec<_> = self.region_state_mut().take_merged_records().into();
+        let updates = admin_req.get_update_gc_peers().get_peer_id();
+        info!(self.logger, "update gc peer"; "index" => log_index, "updates" => ?updates, "gc_peers" => ?removed_records, "merged_peers" => ?merged_records);
+        removed_records.retain(|p| !updates.contains(&p.get_id()));
+        merged_records.retain_mut(|r| {
+            let mut sources: Vec<_> = r.take_source_peers().into();
+            sources.retain(|p| !updates.contains(&p.get_id()));
+            r.set_source_peers(sources.into());
+            !r.get_source_peers().is_empty()
+        });
+        self.region_state_mut()
+            .set_removed_records(removed_records.into());
+        self.region_state_mut()
+            .set_merged_records(merged_records.into());
+        (
+            AdminResponse::default(),
+            AdminCmdResult::UpdateGcPeers(UpdateGcPeersResult {
+                index: log_index,
+                region_state: self.region_state().clone(),
+            }),
+        )
     }
 }

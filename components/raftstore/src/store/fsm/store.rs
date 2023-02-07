@@ -22,7 +22,7 @@ use batch_system::{
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
+use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
     CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
     RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
@@ -42,7 +42,7 @@ use kvproto::{
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
-use resource_control::ResourceGroupManager;
+use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -753,6 +753,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
+                    if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
+                        continue;
+                    }
                     if let Err(e) = self.on_raft_message(msg) {
                         if matches!(&e, Error::RegionNotRegistered { .. }) {
                             // This may happen in normal cases when add-peer runs slowly
@@ -806,7 +809,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .raft_metrics
             .event_time
             .store_msg
-            .observe(duration_to_sec(timer.saturating_elapsed()));
+            .observe(timer.saturating_elapsed_secs());
     }
 
     fn start(&mut self, store: metapb::Store) {
@@ -1050,12 +1053,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             }
         } else {
             let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-            if let Err(err) =
-                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+            if let Err(err) = self.poll_ctx.write_senders[writer_id].try_send(
+                WriteMsg::LatencyInspect {
                     send_time: write_begin,
                     inspector: latency_inspect,
-                })
-            {
+                },
+                0,
+            ) {
                 warn!("send latency inspecting to write workers failed"; "err" => ?err);
             }
         }
@@ -1337,7 +1341,7 @@ where
 
     fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
         let sync_write_worker = if self.write_senders.is_empty() {
-            let (_, rx) = unbounded();
+            let (_, rx) = unbounded(None);
             Some(WriteWorker::new(
                 self.store.get_id(),
                 "sync-writer".to_string(),
@@ -1818,7 +1822,11 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         apply_router,
         apply_system,
         router: raft_router.clone(),
-        store_writers: StoreWriters::default(),
+        store_writers: StoreWriters::new(
+            resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("store-writer".to_owned(), false)),
+        ),
     };
     (raft_router, system)
 }

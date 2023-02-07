@@ -6,11 +6,59 @@ use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use raftstore::store::*;
 use rand::prelude::*;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::*, time::Instant};
 
 // TODO add epoch not match test cases.
 
-fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
+    let data_set: Vec<_> = (1..500)
+        .map(|i| {
+            (
+                format!("key{:08}", i).into_bytes(),
+                format!("value{}", i).into_bytes(),
+            )
+        })
+        .collect();
+    for kvs in data_set.chunks(50) {
+        let requests = kvs.iter().map(|(k, v)| new_put_cf_cmd(cf, k, v)).collect();
+        // key9 is always the last region.
+        cluster.batch_put(b"key9", requests).unwrap();
+    }
+
+    // delete_range request with notify_only set should not actually delete data.
+    cluster.must_notify_delete_range_cf(cf, b"", b"");
+
+    let mut rng = rand::thread_rng();
+    for _ in 0..50 {
+        let (k, v) = data_set.choose(&mut rng).unwrap();
+        assert_eq!(cluster.get_cf(cf, k).unwrap(), *v);
+    }
+
+    // Empty keys means the whole range.
+    cluster.must_delete_range_cf(cf, b"", b"");
+
+    for _ in 0..50 {
+        let k = &data_set.choose(&mut rng).unwrap().0;
+        assert!(cluster.get_cf(cf, k).is_none());
+    }
+}
+
+fn test_put_large_entry<T: Simulator>(cluster: &mut Cluster<T>) {
+    let max_size: usize = 1024;
+    cluster.cfg.raft_store.raft_entry_max_size = ReadableSize(max_size as u64);
+
+    cluster.run();
+
+    let large_value = vec![b'v'; max_size + 1];
+    let res = cluster.put(b"key", large_value.as_slice());
+    assert!(res.as_ref().err().unwrap().has_raft_entry_too_large());
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_put() {
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
 
     let mut data_set: Vec<_> = (1..1000)
@@ -53,7 +101,10 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
-fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_delete() {
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
 
     let data_set: Vec<_> = (1..1000)
@@ -80,40 +131,30 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
-fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
-    let data_set: Vec<_> = (1..500)
-        .map(|i| {
-            (
-                format!("key{:08}", i).into_bytes(),
-                format!("value{}", i).into_bytes(),
-            )
-        })
-        .collect();
-    for kvs in data_set.chunks(50) {
-        let requests = kvs.iter().map(|(k, v)| new_put_cf_cmd(cf, k, v)).collect();
-        // key9 is always the last region.
-        cluster.batch_put(b"key9", requests).unwrap();
-    }
-
-    // delete_range request with notify_only set should not actually delete data.
-    cluster.must_notify_delete_range_cf(cf, b"", b"");
-
-    let mut rng = rand::thread_rng();
-    for _ in 0..50 {
-        let (k, v) = data_set.choose(&mut rng).unwrap();
-        assert_eq!(cluster.get_cf(cf, k).unwrap(), *v);
-    }
-
-    // Empty keys means the whole range.
-    cluster.must_delete_range_cf(cf, b"", b"");
-
-    for _ in 0..50 {
-        let k = &data_set.choose(&mut rng).unwrap().0;
-        assert!(cluster.get_cf(cf, k).is_none());
-    }
+#[test]
+fn test_node_use_delete_range() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.use_delete_range = true;
+    cluster.run();
+    test_delete_range(&mut cluster, CF_DEFAULT);
+    // Prefix bloom filter is always enabled in the Write CF.
+    test_delete_range(&mut cluster, CF_WRITE);
 }
 
-fn test_wrong_store_id<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test]
+fn test_node_not_use_delete_range() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.use_delete_range = false;
+    cluster.run();
+    test_delete_range(&mut cluster, CF_DEFAULT);
+    // Prefix bloom filter is always enabled in the Write CF.
+    test_delete_range(&mut cluster, CF_WRITE);
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_wrong_store_id() {
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
 
     let (k, v) = (b"k", b"v");
@@ -135,73 +176,6 @@ fn test_wrong_store_id<T: Simulator>(cluster: &mut Cluster<T>) {
             .get_message()
             .is_empty()
     );
-}
-
-fn test_put_large_entry<T: Simulator>(cluster: &mut Cluster<T>) {
-    let max_size: usize = 1024;
-    cluster.cfg.raft_store.raft_entry_max_size = ReadableSize(max_size as u64);
-
-    cluster.run();
-
-    let large_value = vec![b'v'; max_size + 1];
-    let res = cluster.put(b"key", large_value.as_slice());
-    assert!(res.as_ref().err().unwrap().has_raft_entry_too_large());
-}
-
-#[test]
-fn test_node_put() {
-    let mut cluster = new_node_cluster(0, 1);
-    test_put(&mut cluster);
-}
-
-#[test]
-fn test_node_delete() {
-    let mut cluster = new_node_cluster(0, 1);
-    test_delete(&mut cluster);
-}
-
-#[test]
-fn test_node_use_delete_range() {
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.cfg.raft_store.use_delete_range = true;
-    cluster.run();
-    test_delete_range(&mut cluster, CF_DEFAULT);
-    // Prefix bloom filter is always enabled in the Write CF.
-    test_delete_range(&mut cluster, CF_WRITE);
-}
-
-#[test]
-fn test_node_not_use_delete_range() {
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.cfg.raft_store.use_delete_range = false;
-    cluster.run();
-    test_delete_range(&mut cluster, CF_DEFAULT);
-    // Prefix bloom filter is always enabled in the Write CF.
-    test_delete_range(&mut cluster, CF_WRITE);
-}
-
-#[test]
-fn test_node_wrong_store_id() {
-    let mut cluster = new_node_cluster(0, 1);
-    test_wrong_store_id(&mut cluster);
-}
-
-#[test]
-fn test_server_put() {
-    let mut cluster = new_server_cluster(0, 1);
-    test_put(&mut cluster);
-}
-
-#[test]
-fn test_server_delete() {
-    let mut cluster = new_server_cluster(0, 1);
-    test_delete(&mut cluster);
-}
-
-#[test]
-fn test_server_wrong_store_id() {
-    let mut cluster = new_server_cluster(0, 1);
-    test_wrong_store_id(&mut cluster);
 }
 
 #[test]

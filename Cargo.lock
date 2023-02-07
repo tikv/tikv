@@ -359,7 +359,9 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "kvproto",
+ "lazy_static",
  "oauth2",
+ "regex",
  "slog",
  "slog-global",
  "tikv_util",
@@ -2724,12 +2726,13 @@ dependencies = [
  "panic_hook",
  "thiserror",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#009f31598ac3200dc8b32e18f96fc4deb7b32e48"
+source = "git+https://github.com/pingcap/kvproto.git#eccad3776d7b076da68d6c51fb7506b8562b9802"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3705,6 +3708,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "prometheus",
+ "prometheus-static-metric",
  "security",
  "semver 0.10.0",
  "serde",
@@ -4687,6 +4691,8 @@ name = "resource_control"
 version = "0.0.1"
 dependencies = [
  "byteorder",
+ "collections",
+ "crossbeam",
  "crossbeam-skiplist",
  "dashmap",
  "fail",
@@ -4704,7 +4710,6 @@ dependencies = [
  "test_pd",
  "test_pd_client",
  "tikv_util",
- "tokio",
  "yatp",
 ]
 
@@ -5936,6 +5941,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_raftstore_macro"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "test_sst_importer"
 version = "0.1.0"
 dependencies = [
@@ -6046,6 +6060,7 @@ dependencies = [
  "test_pd",
  "test_pd_client",
  "test_raftstore",
+ "test_raftstore_macro",
  "test_sst_importer",
  "test_storage",
  "test_util",

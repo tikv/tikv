@@ -482,11 +482,11 @@ impl RaftLogBatchTrait for RaftLogBatch {
         if dirty {
             self.0
                 .put(raft_group_id, key.to_vec(), vec![])
-                .map_err(transfer_error)?;
+                .map_err(transfer_error)
         } else {
             self.0.delete(raft_group_id, key.to_vec());
+            Ok(())
         }
-        Ok(())
     }
 
     fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {

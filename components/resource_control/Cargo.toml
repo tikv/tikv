@@ -9,6 +9,8 @@ failpoints = ["fail/failpoints"]
 
 [dependencies]
 byteorder = "1.2"
+collections = { workspace = true }
+crossbeam = "0.8"
 crossbeam-skiplist = "0.1"
 dashmap = "5.1"
 fail = "0.5"
@@ -26,5 +28,4 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 tikv_util = { workspace = true }
-tokio = { version = "1.5", features = ["time"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
