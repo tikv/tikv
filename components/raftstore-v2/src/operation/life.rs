@@ -9,15 +9,34 @@
 //! In v1, it can also be created by split. In v2, it's required to create by
 //! sending a message to store fsm first, and then using split to initialized
 //! the peer.
+//!
+//! A peer can only be removed in a raft group by conf change or merge. When
+//! applying conf change, removed peer is added to `removed_records`; when
+//! applying merge, source peer is added to merged_records. Quorum must agree
+//! on the removal, but the removed peer may not necessary be in the quorum. So
+//! the peer may not really destroy itself until either:
+//! - applying conf change remove;
+//! - receiving a RaftMessage with `is_tombstone` set;
+//! - receiving a RaftMessage targeting larger ID.
+//!
+//! Leader is responsible to keep polling all removed peers and guarantee they
+//! are really destroyed. A peer is considered destroyed only when a tombstone
+//! record with the same ID or larger ID is persisted. For `removed_records`,
+//! leader only needs to send a message with `is_tombstone` set. For
+//! `merged_records`, to avoid race between destroy and merge, leader needs to
+//! ask target peer to destroy source peer.
+
+use std::{cmp, mem};
 
 use batch_system::BasicMailbox;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
-    metapb::Region,
-    raft_serverpb::{PeerState, RaftMessage},
+    metapb::{self, Region},
+    raft_cmdpb::{AdminCmdType, RaftCmdRequest},
+    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage},
 };
-use raftstore::store::{util, WriteTask};
+use raftstore::store::{util, Transport, WriteTask};
 use slog::{debug, error, info, warn};
 use tikv_util::store::find_peer;
 
@@ -26,7 +45,7 @@ use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, Store},
     raft::{Peer, Storage},
-    router::PeerMsg,
+    router::{CmdResChannel, PeerMsg, PeerTick},
 };
 
 /// When a peer is about to destroy, it becomes `WaitReady` first. If there is
@@ -87,6 +106,11 @@ impl DestroyProgress {
     }
 }
 
+#[derive(Default)]
+pub struct GcPeerContext {
+    confirmed_ids: Vec<u64>,
+}
+
 impl Store {
     /// The method is called during split.
     /// The creation process is:
@@ -100,6 +124,7 @@ impl Store {
     ) where
         EK: KvEngine,
         ER: RaftEngine,
+        T: Transport,
     {
         let region_id = msg.region.id;
         let mut raft_msg = Box::<RaftMessage>::default();
@@ -137,10 +162,11 @@ impl Store {
     ) where
         EK: KvEngine,
         ER: RaftEngine,
+        T: Transport,
     {
         let region_id = msg.get_region_id();
         // The message can be sent when the peer is being created, so try send it first.
-        let msg = if let Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) =
+        let mut msg = if let Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) =
             ctx.router.send(region_id, PeerMsg::RaftMessage(msg))
         {
             m
@@ -166,13 +192,12 @@ impl Store {
             ctx.raft_metrics.message_dropped.mismatch_region_epoch.inc();
             return;
         }
-        // TODO: maybe we need to ack the message to confirm the peer is destroyed.
-        if msg.get_is_tombstone() || msg.has_merge_target() {
+        if msg.has_merge_target() {
             // Target tombstone peer doesn't exist, so ignore it.
             ctx.raft_metrics.message_dropped.stale_msg.inc();
             return;
         }
-        let from_epoch = msg.get_region_epoch();
+        let mut destroyed = false;
         let local_state = match ctx.engine.get_region_state(region_id, u64::MAX) {
             Ok(s) => s,
             Err(e) => {
@@ -192,30 +217,51 @@ impl Store {
             // skip handling gc for simplicity.
             let local_epoch = local_state.get_region().get_region_epoch();
             // The region in this peer is already destroyed
-            if util::is_epoch_stale(from_epoch, local_epoch) {
-                ctx.raft_metrics.message_dropped.region_tombstone_peer.inc();
+            if util::is_epoch_stale(msg.get_region_epoch(), local_epoch) {
+                destroyed = true;
+            }
+            if !destroyed && let Some(local_peer) = find_peer(local_state.get_region(), self.store_id()) && to_peer.id <= local_peer.get_id() {
+                destroyed = true;
+            }
+        }
+        if destroyed {
+            if msg.get_is_tombstone() {
+                if let Some(msg) = build_peer_destroyed_report(&mut msg) {
+                    let _ = ctx.trans.send(msg);
+                }
                 return;
             }
-            if let Some(local_peer) = find_peer(local_state.get_region(), self.store_id()) {
-                if to_peer.id <= local_peer.get_id() {
-                    ctx.raft_metrics.message_dropped.region_tombstone_peer.inc();
+            if msg.has_extra_msg() {
+                let extra_msg = msg.get_extra_msg();
+                if extra_msg.get_type() == ExtraMessageType::MsgGcPeerRequest
+                    && extra_msg.has_check_gc_peer()
+                {
+                    forward_destroy_source_peer(ctx, &msg);
                     return;
                 }
             }
+            ctx.raft_metrics.message_dropped.region_tombstone_peer.inc();
+            return;
         }
+        // If it's not destroyed, and the message is a tombstone message, create the
+        // peer and destroy immediately to leave a tombstone record.
 
         // So the peer must need to be created. We don't need to synchronous with split
         // as split won't create peer in v2. And we don't check for range
         // conflict as v2 depends on tablet, which allows conflict ranges.
         let mut region = Region::default();
         region.set_id(region_id);
-        region.set_region_epoch(from_epoch.clone());
+        region.set_region_epoch(msg.get_region_epoch().clone());
 
         // Peer list doesn't have to be complete, as it's uninitialized.
         //
         // If the id of the from_peer is INVALID_ID, this msg must be sent from parent
         // peer in the split execution in which case we do not add it into the region.
-        if from_peer.id != raft::INVALID_ID {
+        if from_peer.id != raft::INVALID_ID
+            // Check merge may be sent from different region
+            && (msg.get_extra_msg().get_type() != ExtraMessageType::MsgGcPeerRequest
+                || msg.get_extra_msg().get_check_gc_peer().get_from_region_id() == region_id)
+        {
             region.mut_peers().push(from_peer.clone());
         }
         region.mut_peers().push(to_peer.clone());
@@ -260,7 +306,225 @@ impl Store {
     }
 }
 
+/// Tell leader that `to_peer` from `tombstone_msg` is destroyed.
+fn build_peer_destroyed_report(tombstone_msg: &mut RaftMessage) -> Option<RaftMessage> {
+    let to_region_id = if tombstone_msg.has_extra_msg() {
+        assert_eq!(
+            tombstone_msg.get_extra_msg().get_type(),
+            ExtraMessageType::MsgGcPeerRequest
+        );
+        tombstone_msg
+            .get_extra_msg()
+            .get_check_gc_peer()
+            .get_from_region_id()
+    } else {
+        tombstone_msg.get_region_id()
+    };
+    if to_region_id == 0 || tombstone_msg.get_from_peer().get_id() == 0 {
+        return None;
+    }
+    let mut msg = RaftMessage::default();
+    msg.set_region_id(to_region_id);
+    msg.set_from_peer(tombstone_msg.take_to_peer());
+    msg.set_to_peer(tombstone_msg.take_from_peer());
+    msg.mut_extra_msg()
+        .set_type(ExtraMessageType::MsgGcPeerResponse);
+    Some(msg)
+}
+
+/// Forward the destroy request from target peer to merged source peer.
+fn forward_destroy_source_peer<EK, ER, T>(ctx: &mut StoreContext<EK, ER, T>, msg: &RaftMessage)
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: Transport,
+{
+    let extra_msg = msg.get_extra_msg();
+    // Instead of respond leader directly, send a message to target region to
+    // double check it's really destroyed.
+    let check_gc_peer = extra_msg.get_check_gc_peer();
+    let mut tombstone_msg = Box::<RaftMessage>::default();
+    tombstone_msg.set_region_id(check_gc_peer.get_check_region_id());
+    tombstone_msg.set_from_peer(msg.get_from_peer().clone());
+    tombstone_msg.set_to_peer(check_gc_peer.get_check_peer().clone());
+    tombstone_msg.set_region_epoch(check_gc_peer.get_check_region_epoch().clone());
+    tombstone_msg.set_is_tombstone(true);
+    // No need to set epoch as we don't know what it is.
+    tombstone_msg
+        .mut_extra_msg()
+        .set_type(ExtraMessageType::MsgGcPeerRequest);
+    tombstone_msg
+        .mut_extra_msg()
+        .mut_check_gc_peer()
+        .set_from_region_id(check_gc_peer.get_from_region_id());
+    let _ = ctx.router.send_raft_message(tombstone_msg);
+}
+
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn maybe_schedule_gc_peer_tick(&mut self) {
+        let region_state = self.storage().region_state();
+        if !region_state.get_removed_records().is_empty()
+            || !region_state.get_merged_records().is_empty()
+        {
+            self.add_pending_tick(PeerTick::GcPeer);
+        }
+    }
+
+    /// Returns `true` means the sender will be gced. The message is stale.
+    pub fn maybe_gc_sender(&mut self, msg: &RaftMessage) -> bool {
+        let removed_peers = self.storage().region_state().get_removed_records();
+        // Only removed_records can be determined directly.
+        if let Some(peer) = removed_peers
+            .iter()
+            .find(|p| p.id == msg.get_from_peer().get_id())
+        {
+            let tombstone_msg = self.tombstone_message_for_same_region(peer.clone());
+            self.add_message(tombstone_msg);
+            self.set_has_ready();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn tombstone_message_for_same_region(&self, peer: metapb::Peer) -> RaftMessage {
+        let region_id = self.region_id();
+        let mut tombstone_message = RaftMessage::default();
+        tombstone_message.set_region_id(region_id);
+        tombstone_message.set_from_peer(self.peer().clone());
+        tombstone_message.set_to_peer(peer);
+        tombstone_message.set_region_epoch(self.region().get_region_epoch().clone());
+        tombstone_message.set_is_tombstone(true);
+        tombstone_message
+    }
+
+    pub fn on_tombstone_message(&mut self, msg: &mut RaftMessage) {
+        match msg.get_to_peer().get_id().cmp(&self.peer_id()) {
+            cmp::Ordering::Less => {
+                if let Some(msg) = build_peer_destroyed_report(msg) {
+                    self.add_message(msg);
+                    self.set_has_ready();
+                }
+            }
+            // No matter it's greater or equal, the current peer must be destroyed.
+            _ => {
+                self.mark_for_destroy(None);
+            }
+        }
+    }
+
+    /// When leader tries to gc merged source peer, it will send a gc request to
+    /// target peer. If target peer makes sure the merged is finished, it
+    /// forward the message to source peer and let source peer send back a
+    /// response.
+    pub fn on_gc_peer_request<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        msg: &RaftMessage,
+    ) {
+        let extra_msg = msg.get_extra_msg();
+        if !extra_msg.has_check_gc_peer() || extra_msg.get_index() == 0 {
+            // Corrupted message.
+            return;
+        }
+        if self.storage().tablet_index() < extra_msg.get_index() {
+            // Merge not finish.
+            return;
+        }
+
+        forward_destroy_source_peer(ctx, msg);
+    }
+
+    /// A peer confirms it's destroyed.
+    pub fn on_gc_peer_response(&mut self, msg: &RaftMessage) {
+        let gc_peer_id = msg.get_from_peer().get_id();
+        let state = self.storage().region_state();
+        if state
+            .get_removed_records()
+            .iter()
+            .all(|p| p.get_id() != gc_peer_id)
+            && state.get_merged_records().iter().all(|p| {
+                p.get_source_peers()
+                    .iter()
+                    .all(|p| p.get_id() != gc_peer_id)
+            })
+        {
+            return;
+        }
+        let ctx = self.gc_peer_context_mut();
+        if ctx.confirmed_ids.contains(&gc_peer_id) {
+            return;
+        }
+        ctx.confirmed_ids.push(gc_peer_id);
+    }
+
+    pub fn on_gc_peer_tick<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        if !self.is_leader() {
+            return;
+        }
+        let state = self.storage().region_state();
+        if state.get_removed_records().is_empty() && state.get_merged_records().is_empty() {
+            return;
+        }
+        let mut need_gc_ids = Vec::with_capacity(5);
+        let gc_context = self.gc_peer_context();
+        for peer in state.get_removed_records() {
+            need_gc_ids.push(peer.get_id());
+            if gc_context.confirmed_ids.contains(&peer.get_id()) {
+                continue;
+            }
+
+            let msg = self.tombstone_message_for_same_region(peer.clone());
+            // For leader, it's OK to send gc message immediately.
+            let _ = ctx.trans.send(msg);
+        }
+        for record in state.get_merged_records() {
+            // For merge, we ask target to check whether source should be deleted.
+            for (source, target) in record
+                .get_source_peers()
+                .iter()
+                .zip(record.get_target_peers())
+            {
+                need_gc_ids.push(source.get_id());
+                if gc_context.confirmed_ids.contains(&source.get_id()) {
+                    continue;
+                }
+
+                let mut msg = RaftMessage::default();
+                msg.set_region_id(record.get_target_region_id());
+                msg.set_from_peer(self.peer().clone());
+                msg.set_to_peer(target.clone());
+                msg.set_region_epoch(record.get_target_epoch().clone());
+                let extra_msg = msg.mut_extra_msg();
+                extra_msg.set_type(ExtraMessageType::MsgGcPeerRequest);
+                extra_msg.set_index(record.get_index());
+                let check_peer = extra_msg.mut_check_gc_peer();
+                check_peer.set_from_region_id(self.region_id());
+                check_peer.set_check_region_id(record.get_source_region_id());
+                check_peer.set_check_peer(source.clone());
+                check_peer.set_check_region_epoch(record.get_source_epoch().clone());
+                let _ = ctx.trans.send(msg);
+            }
+        }
+        let gc_ctx = self.gc_peer_context_mut();
+        if !gc_ctx.confirmed_ids.is_empty() {
+            let mut confirmed_ids = mem::take(&mut gc_ctx.confirmed_ids);
+            confirmed_ids.retain(|id| need_gc_ids.contains(id));
+            let mut req = RaftCmdRequest::default();
+            let header = req.mut_header();
+            header.set_region_id(self.region_id());
+            header.set_peer(self.peer().clone());
+            let admin = req.mut_admin_request();
+            admin.set_cmd_type(AdminCmdType::UpdateGcPeer);
+            let gc_peer = admin.mut_update_gc_peers();
+            gc_peer.set_peer_id(confirmed_ids);
+            let (ch, _) = CmdResChannel::pair();
+            // It's OK to fail as we will retry by tick.
+            self.on_admin_command(ctx, req, ch);
+        }
+        self.maybe_schedule_gc_peer_tick();
+    }
+
     /// A peer can be destroyed in three cases:
     /// 1. Received a gc message;
     /// 2. Received a message whose target peer's ID is larger than this;
@@ -284,8 +548,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn postponed_destroy(&self) -> bool {
         let entry_storage = self.storage().entry_storage();
-        // TODO: check actual split index instead of commit index.
-        entry_storage.applied_index() != entry_storage.commit_index()
+        // If it's marked as tombstone, then it must be changed by conf change. In
+        // this case, all following entries are skipped so applied_index never equals
+        // to commit_index.
+        (self.storage().region_state().get_state() != PeerState::Tombstone
+           && entry_storage.applied_index() != entry_storage.commit_index())
             // Wait for critical commands like split.
             || self.has_pending_tombstone_tablets()
     }
