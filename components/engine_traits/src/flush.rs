@@ -51,7 +51,7 @@ impl ApplyProgress {
 #[derive(Default, Debug)]
 struct FlushProgress {
     prs: LinkedList<ApplyProgress>,
-    last_flushed: [AtomicU64; DATA_CFS_LEN],
+    last_flushed: [u64; DATA_CFS_LEN],
 }
 
 /// A share state between raftstore and underlying engine.
@@ -132,7 +132,7 @@ impl PersistenceListener {
         let offset = data_cf_offset(&cf);
         let apply_index = self.state.applied_index.load(Ordering::SeqCst);
         let mut prs = self.progress.lock().unwrap();
-        let flushed = prs.last_flushed[offset].load(Ordering::Relaxed);
+        let flushed = prs.last_flushed[offset];
         if flushed > earliest_seqno {
             panic!(
                 "sealed seqno has been flushed {} {} {} <= {}",
@@ -155,14 +155,14 @@ impl PersistenceListener {
         let offset = data_cf_offset(cf);
         let pr = {
             let mut prs = self.progress.lock().unwrap();
-            let flushed = prs.last_flushed[offset].load(Ordering::Relaxed);
+            let flushed = prs.last_flushed[offset];
             if flushed >= largest_seqno {
                 // According to facebook/rocksdb#11183, it's possible OnFlushCompleted can be
                 // called out of order. But it's guaranteed files are installed in order.
                 info!("flush complete reorder found"; "flushed" => flushed, "largest_seqno" => largest_seqno, "file_no" => file_no, "cf" => cf);
                 return;
             }
-            prs.last_flushed[offset].store(largest_seqno, Ordering::Relaxed);
+            prs.last_flushed[offset] = largest_seqno;
             let mut cursor = prs.prs.cursor_front_mut();
             let mut flushed_pr = None;
             while let Some(pr) = cursor.current() {
