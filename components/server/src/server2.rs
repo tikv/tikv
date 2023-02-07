@@ -73,7 +73,9 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
+    read_pool::{
+        build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
+    },
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
         gc_worker::{AutoGcConfig, GcWorker},
@@ -666,6 +668,15 @@ where
         } else {
             None
         };
+        if let Some(unified_read_pool) = &unified_read_pool {
+            let handle = unified_read_pool.handle();
+            self.background_worker.spawn_interval_task(
+                UPDATE_EWMA_TIME_SLICE_INTERVAL,
+                move || {
+                    handle.update_ewma_time_slice();
+                },
+            );
+        }
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
         let props = tikv_util::thread_group::current_properties();
