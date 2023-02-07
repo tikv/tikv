@@ -48,8 +48,9 @@ use test_raftstore::{
     is_error_response, new_admin_request, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd,
     new_peer, new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd, new_request,
     new_snap_cmd, new_status_request, new_store, new_tikv_config_with_api_ver,
-    new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
-    RawEngine,
+    new_transfer_leader_cmd, sleep_ms, Cluster as ClusterV1, Config, Filter, FilterFactory,
+    NodeCluster as NodeClusterV1, PartitionFilterFactory, RawEngine,
+    ServerCluster as ServerClusterV1,
 };
 use tikv::server::Result as ServerResult;
 use tikv_util::{
@@ -57,7 +58,181 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE, warn, worker::LazyWorker, HandyRwLock,
 };
 
-use crate::create_test_engine;
+use crate::{create_test_engine, NodeCluster, ServerCluster};
+
+pub enum ClusterType<'a> {
+    NodeClusterV1(&'a mut ClusterV1<NodeClusterV1>),
+    ServerClusterV1(&'a mut ClusterV1<ServerClusterV1>),
+    NodeClusterV2(&'a mut Cluster<NodeCluster>),
+    ServerClusterV2(&'a mut Cluster<ServerCluster>),
+}
+
+impl<'a> ClusterType<'a> {
+    pub fn run(&mut self) {
+        match *self {
+            Self::NodeClusterV1(ref mut cluster) => {
+                cluster.run();
+            }
+            Self::ServerClusterV1(ref mut cluster) => {
+                cluster.run();
+            }
+            Self::NodeClusterV2(ref mut cluster) => {
+                cluster.run();
+            }
+            Self::ServerClusterV2(ref mut cluster) => {
+                cluster.run();
+            }
+        }
+    }
+
+    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+        match *self {
+            Self::NodeClusterV1(ref mut cluster) => cluster.get(key),
+            Self::ServerClusterV1(ref mut cluster) => cluster.get(key),
+            Self::NodeClusterV2(ref mut cluster) => cluster.get(key),
+            Self::ServerClusterV2(ref mut cluster) => cluster.get(key),
+        }
+    }
+
+    pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
+        match *self {
+            Self::NodeClusterV1(ref mut cluster) => {
+                cluster.must_put(key, value);
+            }
+            Self::ServerClusterV1(ref mut cluster) => {
+                cluster.must_put(key, value);
+            }
+            Self::NodeClusterV2(ref mut cluster) => {
+                cluster.must_put(key, value);
+            }
+            Self::ServerClusterV2(ref mut cluster) => {
+                cluster.must_put(key, value);
+            }
+        }
+    }
+
+    pub fn batch_put(
+        &mut self,
+        region_key: &[u8],
+        reqs: Vec<Request>,
+    ) -> result::Result<RaftCmdResponse, PbError> {
+        match *self {
+            Self::NodeClusterV1(ref mut cluster) => cluster.batch_put(region_key, reqs),
+            Self::ServerClusterV1(ref mut cluster) => cluster.batch_put(region_key, reqs),
+            Self::NodeClusterV2(ref mut cluster) => cluster.batch_put(region_key, reqs),
+            Self::ServerClusterV2(ref mut cluster) => cluster.batch_put(region_key, reqs),
+        }
+    }
+
+    pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
+        match *self {
+            Self::NodeClusterV1(ref mut cluster) => cluster.must_flush_cf(cf, sync),
+            Self::ServerClusterV1(ref mut cluster) => cluster.must_flush_cf(cf, sync),
+            Self::NodeClusterV2(ref mut cluster) => cluster.must_flush_cf(cf, sync),
+            Self::ServerClusterV2(ref mut cluster) => cluster.must_flush_cf(cf, sync),
+        }
+    }
+
+    pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
+        match *self {
+            Self::NodeClusterV1(ref mut cluster) => cluster.leader_of_region(region_id),
+            Self::ServerClusterV1(ref mut cluster) => cluster.leader_of_region(region_id),
+            Self::NodeClusterV2(ref mut cluster) => cluster.leader_of_region(region_id),
+            Self::ServerClusterV2(ref mut cluster) => cluster.leader_of_region(region_id),
+        }
+    }
+
+    pub fn call_command(
+        &mut self,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        match *self {
+            Self::NodeClusterV1(ref mut cluster) => cluster.call_command(request, timeout),
+            Self::ServerClusterV1(ref mut cluster) => cluster.call_command(request, timeout),
+            Self::NodeClusterV2(ref mut cluster) => cluster.call_command(request, timeout),
+            Self::ServerClusterV2(ref mut cluster) => cluster.call_command(request, timeout),
+        }
+    }
+
+    pub fn call_command_on_leader(
+        &mut self,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        match *self {
+            Self::NodeClusterV1(ref mut cluster) => {
+                cluster.call_command_on_leader(request, timeout)
+            }
+            Self::ServerClusterV1(ref mut cluster) => {
+                cluster.call_command_on_leader(request, timeout)
+            }
+            Self::NodeClusterV2(ref mut cluster) => {
+                cluster.call_command_on_leader(request, timeout)
+            }
+            Self::ServerClusterV2(ref mut cluster) => {
+                cluster.call_command_on_leader(request, timeout)
+            }
+        }
+    }
+
+    pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
+        match *self {
+            Self::NodeClusterV1(ref mut cluster) => cluster.must_split(region, split_key),
+            Self::ServerClusterV1(ref mut cluster) => cluster.must_split(region, split_key),
+            Self::NodeClusterV2(ref mut cluster) => cluster.must_split(region, split_key),
+            Self::ServerClusterV2(ref mut cluster) => cluster.must_split(region, split_key),
+        }
+    }
+
+    pub fn pd_client(&self) -> &Arc<TestPdClient> {
+        match *self {
+            Self::NodeClusterV1(ref cluster) => &cluster.pd_client,
+            Self::ServerClusterV1(ref cluster) => &cluster.pd_client,
+            Self::NodeClusterV2(ref cluster) => &cluster.pd_client,
+            Self::ServerClusterV2(ref cluster) => &cluster.pd_client,
+        }
+    }
+
+    pub fn mut_config(&mut self) -> &mut Config {
+        match *self {
+            Self::NodeClusterV1(ref mut cluster) => &mut cluster.cfg,
+            Self::ServerClusterV1(ref mut cluster) => &mut cluster.cfg,
+            Self::NodeClusterV2(ref mut cluster) => &mut cluster.cfg,
+            Self::ServerClusterV2(ref mut cluster) => &mut cluster.cfg,
+        }
+    }
+}
+
+impl<'a> From<&'a mut ClusterV1<NodeClusterV1>> for ClusterType<'a> {
+    fn from(value: &'a mut ClusterV1<NodeClusterV1>) -> Self {
+        ClusterType::NodeClusterV1(value)
+    }
+}
+
+impl<'a> From<&'a mut ClusterV1<ServerClusterV1>> for ClusterType<'a> {
+    fn from(value: &'a mut ClusterV1<ServerClusterV1>) -> Self {
+        ClusterType::ServerClusterV1(value)
+    }
+}
+
+impl<'a> From<&'a mut Cluster<NodeCluster>> for ClusterType<'a> {
+    fn from(value: &'a mut Cluster<NodeCluster>) -> Self {
+        ClusterType::NodeClusterV2(value)
+    }
+}
+
+impl<'a> From<&'a mut Cluster<ServerCluster>> for ClusterType<'a> {
+    fn from(value: &'a mut Cluster<ServerCluster>) -> Self {
+        ClusterType::ServerClusterV2(value)
+    }
+}
+
+// impl<'a> AsMut<ClusterType<'a>> for ClusterV1<NodeClusterV1> {
+//     fn as_mut(&mut self) -> &mut ClusterType {
+//         &mut &mut ClusterType::NodeClusterV1(&mut self)
+//     }
+// }
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -891,8 +1066,8 @@ impl<T: Simulator> Cluster<T> {
         let region = block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap();
-        let region_start_key = region.get_start_key();
-        let region_end_key = region.get_end_key();
+        let region_start_key: &[u8] = &data_key(region.get_start_key());
+        let region_end_key: &[u8] = &data_key(region.get_end_key());
 
         let amended_start_key = if start_key > region_start_key {
             start_key
@@ -905,13 +1080,7 @@ impl<T: Simulator> Cluster<T> {
             region_end_key
         };
 
-        tablet.scan(
-            cf,
-            &data_key(amended_start_key),
-            &data_key(amended_end_key),
-            fill_cache,
-            f,
-        )
+        tablet.scan(cf, amended_start_key, amended_end_key, fill_cache, f)
     }
 
     pub fn get_raft_engine(&self, node_id: u64) -> RaftTestEngine {
@@ -1072,6 +1241,10 @@ impl<T: Simulator> Cluster<T> {
             .get_apply_state(region_id)
             .unwrap()
             .unwrap()
+    }
+
+    pub fn add_send_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        self.sim.wl().add_send_filter(node_id, filter);
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {

@@ -632,24 +632,24 @@ pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
 }
 
-pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_snapshot(config: &mut Config) {
     // Truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
-    cluster.cfg.raft_store.merge_max_log_gap = 1;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    config.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    config.raft_store.raft_log_gc_count_limit = Some(2);
+    config.raft_store.merge_max_log_gap = 1;
+    config.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
 
-pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_merge(config: &mut Config) {
     // Avoid log compaction which will prevent merge.
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
-    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
+    config.raft_store.raft_log_gc_threshold = 1000;
+    config.raft_store.raft_log_gc_count_limit = Some(1000);
+    config.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
     // Make merge check resume quickly.
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    config.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     // When isolated, follower relies on stale check tick to detect failure leader,
     // choose a smaller number to make it recover faster.
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
 }
 
 pub fn ignore_merge_target_integrity<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -657,30 +657,29 @@ pub fn ignore_merge_target_integrity<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.pd_client.ignore_merge_target_integrity();
 }
 
-pub fn configure_for_lease_read<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn configure_for_lease_read(
+    cfg: &mut Config,
     base_tick_ms: Option<u64>,
     election_ticks: Option<usize>,
 ) -> Duration {
     if let Some(base_tick_ms) = base_tick_ms {
-        cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
+        cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
     }
-    let base_tick_interval = cluster.cfg.raft_store.raft_base_tick_interval.0;
+    let base_tick_interval = cfg.raft_store.raft_base_tick_interval.0;
     if let Some(election_ticks) = election_ticks {
-        cluster.cfg.raft_store.raft_election_timeout_ticks = election_ticks;
+        cfg.raft_store.raft_election_timeout_ticks = election_ticks;
     }
-    let election_ticks = cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    let election_ticks = cfg.raft_store.raft_election_timeout_ticks as u32;
     let election_timeout = base_tick_interval * election_ticks;
     // Adjust max leader lease.
-    cluster.cfg.raft_store.raft_store_max_leader_lease =
+    cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(election_timeout - base_tick_interval);
     // Use large peer check interval, abnormal and max leader missing duration to
     // make a valid config, that is election timeout x 2 < peer stale state
     // check < abnormal < max leader missing duration.
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
-    cluster.cfg.raft_store.abnormal_leader_missing_duration =
-        ReadableDuration(election_timeout * 4);
-    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
+    cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
+    cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration(election_timeout * 4);
+    cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
 
     election_timeout
 }
@@ -723,51 +722,6 @@ pub fn configure_for_causal_ts<T: Simulator>(
     let cfg = &mut cluster.cfg.causal_ts;
     cfg.renew_interval = ReadableDuration::from_str(renew_interval).unwrap();
     cfg.renew_batch_min_size = renew_batch_min_size;
-}
-
-#[macro_export]
-macro_rules! put_cf_till_size {
-    // cluster: either test_raftstore::Cluster or test_raftstore_v2::Cluster
-    // cf: &'static str,
-    // limit: u64,
-    // range: &mut dyn Iterator<Item = u64>,
-    ($cluster:expr, $cf:expr, $limit:expr, $range:expr) => {{
-        assert!($limit > 0);
-        let mut len: u64 = 0;
-        let mut rng = rand::thread_rng();
-        let mut key = String::new();
-        let mut value = vec![0; 64];
-        while len < $limit {
-            let batch_size = std::cmp::min(1024, $limit - len);
-            let mut reqs = vec![];
-            for _ in 0..batch_size / 74 + 1 {
-                key.clear();
-                let key_id = $range.next().unwrap();
-                write!(key, "{:09}", key_id).unwrap();
-                rng.fill_bytes(&mut value);
-                // plus 1 for the extra encoding prefix
-                len += key.len() as u64 + 1;
-                len += value.len() as u64;
-                reqs.push(new_put_cf_cmd($cf, key.as_bytes(), &value));
-            }
-            $cluster.batch_put(key.as_bytes(), reqs).unwrap();
-            // Approximate size of memtable is inaccurate for small data,
-            // we flush it to SST so we can use the size properties instead.
-            $cluster.must_flush_cf($cf, true);
-        }
-        key.into_bytes()
-    }};
-}
-
-/// Keep putting random kvs until specified size limit is reached.
-#[macro_export]
-macro_rules! put_till_size {
-    // cluster should be either test_raftstore::Cluster or test_raftstore_v2::Cluster
-    // limit: u64,
-    // range: &mut dyn Iterator<Item = u64>,
-    ($cluster:expr, $limit:expr, $range:expr) => {
-        put_cf_till_size!($cluster, CF_DEFAULT, $limit, $range)
-    };
 }
 
 pub fn new_mutation(op: Op, k: &[u8], v: &[u8]) -> Mutation {

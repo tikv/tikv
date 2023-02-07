@@ -14,7 +14,7 @@ use test_raftstore::{new_put_cf_cmd, Config};
 use tikv::{server::KvEngineFactoryBuilder, storage::config::EngineType};
 use tikv_util::{config::ReadableDuration, worker::LazyWorker};
 
-use crate::{bootstrap_store, cluster::Cluster, Simulator};
+use crate::{bootstrap_store, cluster::Cluster, ClusterType, Simulator};
 
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
@@ -76,16 +76,16 @@ pub fn create_test_engine(
 }
 
 /// Keep putting random kvs until specified size limit is reached.
-pub fn put_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn put_till_size(
+    cluster: ClusterType<'_>,
     limit: u64,
     range: &mut dyn Iterator<Item = u64>,
 ) -> Vec<u8> {
     put_cf_till_size(cluster, CF_DEFAULT, limit, range)
 }
 
-pub fn put_cf_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn put_cf_till_size(
+    mut cluster: ClusterType<'_>,
     cf: &'static str,
     limit: u64,
     range: &mut dyn Iterator<Item = u64>,
@@ -124,7 +124,7 @@ pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
 
-pub fn configure_for_lease_read<T: Simulator>(
+pub fn configure_for_lease_read_v2<T: Simulator>(
     cluster: &mut Cluster<T>,
     base_tick_ms: Option<u64>,
     election_ticks: Option<usize>,

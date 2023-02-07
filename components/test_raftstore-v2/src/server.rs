@@ -224,8 +224,8 @@ impl ServerCluster {
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
-        // todo: simulate transport
         let sim_router = SimulateTransport::new(raft_router.clone());
+        // todo(SpadeA): simulate transport
         let mut raft_kv_v2 =
             RaftKv2::new(raft_router.clone(), region_info_accessor.region_leaders());
 

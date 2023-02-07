@@ -14,11 +14,6 @@ name = "integrations"
 path = "integrations/mod.rs"
 required-features = ["testexport"]
 
-[[test]]
-name = "integrations-v2"
-path = "integrations-v2/mod.rs"
-required-features = ["testexport"]
-
 [[bench]]
 name = "raftstore"
 harness = false
