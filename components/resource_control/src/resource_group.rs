@@ -89,6 +89,13 @@ impl ResourceGroupManager {
         self.resource_groups.iter().map(|g| g.clone()).collect()
     }
 
+    pub fn remove_all_resource_groups(&self) {
+        self.resource_groups
+            .iter()
+            .filter(|g| DEFAULT_RESOURCE_GROUP_NAME == g.name)
+            .for_each(|g| self.remove_resource_group(&g.name))
+    }
+
     pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
         let controller = Arc::new(ResourceController::new(name, is_read));
         self.registry.lock().unwrap().push(controller.clone());
@@ -348,6 +355,10 @@ pub(crate) mod tests {
             group.set_raw_resource_settings(resource_setting);
         }
         group
+    }
+
+    pub fn get_resource_groups_len(manager: &ResourceGroupManager) -> usize {
+        manager.resource_groups.len()
     }
 
     #[test]

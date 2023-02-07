@@ -36,11 +36,7 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with p
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
         // Firstly, load all resource groups as of now.
-        let (groups, revision) = self.list_resource_groups().await;
-        self.revision = revision;
-        groups
-            .into_iter()
-            .for_each(|rg| self.manager.add_resource_group(rg));
+        self.load_resource_groups().await;
         // Secondly, start watcher at loading revision.
         loop {
             match self
@@ -82,11 +78,8 @@ impl ResourceManagerService {
                 Err(PdError::DataCompacted(msg)) => {
                     error!("required revision has been compacted"; "err" => ?msg);
                     // If the etcd revision is compacted, we need to reload all resouce groups.
-                    let (groups, revision) = self.list_resource_groups().await;
-                    self.revision = revision;
-                    groups
-                        .into_iter()
-                        .for_each(|rg| self.manager.add_resource_group(rg));
+                    self.manager.remove_all_resource_groups();
+                    self.load_resource_groups().await;
                 }
                 Err(err) => {
                     error!("failed to watch resource groups"; "err" => ?err);
@@ -99,7 +92,7 @@ impl ResourceManagerService {
         }
     }
 
-    async fn list_resource_groups(&mut self) -> (Vec<ResourceGroup>, i64) {
+    async fn load_resource_groups(&mut self) {
         loop {
             match self
                 .pd_client
@@ -107,11 +100,12 @@ impl ResourceManagerService {
                 .await
             {
                 Ok((items, revision)) => {
-                    let groups = items
+                    items
                         .into_iter()
                         .filter_map(|g| protobuf::parse_from_bytes(g.get_payload()).ok())
-                        .collect();
-                    return (groups, revision);
+                        .for_each(|rg| self.manager.add_resource_group(rg));
+                    self.revision = revision;
+                    return;
                 }
                 Err(err) => {
                     error!("failed to load global config"; "err" => ?err);
@@ -136,7 +130,9 @@ pub mod tests {
     use test_pd::{mocker::Service, util::*, Server as MockServer};
     use tikv_util::{config::ReadableDuration, worker::Builder};
 
-    use crate::resource_group::tests::{new_resource_group, new_resource_group_ru};
+    use crate::resource_group::tests::{
+        get_resource_groups_len, new_resource_group, new_resource_group_ru,
+    };
 
     fn new_test_server_and_client(
         update_interval: ReadableDuration,
@@ -185,14 +181,17 @@ pub mod tests {
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
         let group = new_resource_group("TEST".into(), true, 100, 100);
         add_resource_group(s.pd_client.clone(), group);
-        let (res, revision) = block_on(s.list_resource_groups());
-        assert_eq!(res.len(), 1);
-        assert_eq!(revision, 1);
+        block_on(s.load_resource_groups());
+        assert_eq!(get_resource_groups_len(&s.manager), 1);
+        assert_eq!(s.revision, 1);
 
+        let group = new_resource_group("TEST2".into(), false, 100, 100);
+        add_resource_group(s.pd_client.clone(), group);
         delete_resource_group(s.pd_client.clone(), "TEST");
-        let (res, revision) = block_on(s.list_resource_groups());
-        assert_eq!(res.len(), 0);
-        assert_eq!(revision, 2);
+        s.manager.remove_all_resource_groups();
+        block_on(s.load_resource_groups());
+        assert_eq!(get_resource_groups_len(&s.manager), 2);
+        assert_eq!(s.revision, 3);
 
         server.stop();
     }
@@ -203,9 +202,9 @@ pub mod tests {
         let resource_manager = ResourceGroupManager::default();
 
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
-        let (res, revision) = block_on(s.list_resource_groups());
-        assert_eq!(res.len(), 0);
-        assert_eq!(revision, 0);
+        block_on(s.load_resource_groups());
+        assert_eq!(get_resource_groups_len(&s.manager), 0);
+        assert_eq!(s.revision, 0);
 
         let background_worker = Builder::new("background").thread_count(1).create();
         let mut s_clone = s.clone();
@@ -220,14 +219,14 @@ pub mod tests {
         // Mock modify
         let group2 = new_resource_group_ru("TEST2".into(), 50);
         add_resource_group(s.pd_client.clone(), group2);
-        let (res, revision) = block_on(s.list_resource_groups());
-        assert_eq!(res.len(), 2);
-        assert_eq!(revision, 3);
+        block_on(s.load_resource_groups());
+        assert_eq!(get_resource_groups_len(&s.manager), 2);
+        assert_eq!(s.revision, 3);
         // Mock delete
         delete_resource_group(s.pd_client.clone(), "TEST1");
-        let (res, revision) = block_on(s.list_resource_groups());
-        assert_eq!(res.len(), 1);
-        assert_eq!(revision, 4);
+        block_on(s.load_resource_groups());
+        assert_eq!(get_resource_groups_len(&s.manager), 1);
+        assert_eq!(s.revision, 4);
         // Wait for watcher
         std::thread::sleep(Duration::from_millis(100));
         let groups = s.manager.get_all_resource_groups();
