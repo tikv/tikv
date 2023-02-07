@@ -44,6 +44,7 @@ use super::command::SplitInit;
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, Store},
+    operation::command::report_split_init_finish,
     raft::{Peer, Storage},
     router::{CmdResChannel, PeerMsg, PeerTick},
 };
@@ -126,6 +127,7 @@ impl Store {
         ER: RaftEngine,
         T: Transport,
     {
+        let derived_region_id = msg.derived_region_id;
         let region_id = msg.region.id;
         let mut raft_msg = Box::<RaftMessage>::default();
         raft_msg.set_region_id(region_id);
@@ -147,7 +149,8 @@ impl Store {
                 self.logger(),
                 "Split peer is destroyed before sending the intialization msg";
                 "split init msg" => ?m,
-            )
+            );
+            report_split_init_finish(ctx, derived_region_id, region_id, true);
         }
     }
 
