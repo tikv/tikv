@@ -50,12 +50,18 @@ impl FlushProgress {
 /// raftstore will update state changes and corresponding apply index, when
 /// flush, `PersistenceListener` will query states related to the memtable
 /// and persist the relation to raft engine.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct FlushState {
     applied_index: AtomicU64,
 }
 
 impl FlushState {
+    pub fn new(applied_index: u64) -> Self {
+        Self {
+            applied_index: AtomicU64::new(applied_index),
+        }
+    }
+
     /// Set the latest applied index.
     #[inline]
     pub fn set_applied_index(&self, index: u64) {
@@ -151,7 +157,10 @@ impl PersistenceListener {
             }
             match flushed_pr {
                 Some(pr) => pr,
-                None => panic!("{} not found in {:?}", cf, prs),
+                None => panic!(
+                    "[region_id={}] [tablet_index={}] {} not found in {:?}",
+                    self.region_id, self.tablet_index, cf, prs
+                ),
             }
         };
         self.storage

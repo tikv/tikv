@@ -161,7 +161,7 @@ fn run_dump_raftdb_worker(
                                     // Assume that we always scan entry first and raft state at the
                                     // end.
                                     batch
-                                        .append(region_id, std::mem::take(&mut entries))
+                                        .append(region_id, None, std::mem::take(&mut entries))
                                         .unwrap();
                                 }
                                 _ => unreachable!("There is only 2 types of keys in raft"),
@@ -170,7 +170,7 @@ fn run_dump_raftdb_worker(
                             if local_size >= BATCH_THRESHOLD {
                                 local_size = 0;
                                 batch
-                                    .append(region_id, std::mem::take(&mut entries))
+                                    .append(region_id, None, std::mem::take(&mut entries))
                                     .unwrap();
 
                                 let size = new_engine.consume(&mut batch, false).unwrap();
@@ -205,7 +205,7 @@ fn run_dump_raft_engine_worker(
                 begin += old_engine
                     .fetch_entries_to(id, begin, end, Some(BATCH_THRESHOLD), &mut entries)
                     .unwrap() as u64;
-                batch.append(id, entries).unwrap();
+                batch.append(id, None, entries).unwrap();
                 let size = new_engine.consume(&mut batch, false).unwrap();
                 count_size.fetch_add(size, Ordering::Relaxed);
             }
@@ -237,7 +237,10 @@ mod tests {
         cfg.raft_store.raftdb_path = raftdb_path.to_str().unwrap().to_owned();
         cfg.raftdb.wal_dir = raftdb_wal_path.to_str().unwrap().to_owned();
         cfg.raft_engine.mut_config().dir = raft_engine_path.to_str().unwrap().to_owned();
-        let cache = cfg.storage.block_cache.build_shared_cache();
+        let cache = cfg
+            .storage
+            .block_cache
+            .build_shared_cache(cfg.storage.engine);
 
         // Dump logs from RocksEngine to RaftLogEngine.
         let raft_engine = RaftLogEngine::new(
@@ -251,7 +254,7 @@ mod tests {
             // Prepare some data for the RocksEngine.
             let raftdb = engine_rocks::util::new_engine_opt(
                 &cfg.raft_store.raftdb_path,
-                cfg.raftdb.build_opt(),
+                cfg.raftdb.build_opt(Default::default(), None),
                 cfg.raftdb.build_cf_opts(&cache),
             )
             .unwrap();
@@ -303,7 +306,7 @@ mod tests {
             e.set_index(i);
             entries.push(e);
         }
-        batch.append(num, entries).unwrap();
+        batch.append(num, None, entries).unwrap();
     }
 
     // Get data from raft engine and assert.

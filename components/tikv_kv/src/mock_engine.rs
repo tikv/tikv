@@ -154,7 +154,7 @@ impl Engine for MockEngine {
     }
 
     type RaftExtension = <RocksEngine as Engine>::RaftExtension;
-    fn raft_extension(&self) -> &Self::RaftExtension {
+    fn raft_extension(&self) -> Self::RaftExtension {
         self.base.raft_extension()
     }
 

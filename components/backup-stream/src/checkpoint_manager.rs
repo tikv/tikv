@@ -186,6 +186,16 @@ impl CheckpointManager {
 
     pub fn add_subscriber(&mut self, sub: Subscription) -> future![Result<()>] {
         let mgr = self.manager_handle.as_ref().cloned();
+        let initial_data = self
+            .items
+            .values()
+            .map(|v| FlushEvent {
+                start_key: v.region.start_key.clone(),
+                end_key: v.region.end_key.clone(),
+                checkpoint: v.checkpoint.into_inner(),
+                ..Default::default()
+            })
+            .collect::<Box<[_]>>();
 
         // NOTE: we cannot send the real error into the client directly because once
         // we send the subscription into the sink, we cannot fetch it again :(
@@ -208,6 +218,11 @@ impl CheckpointManager {
             mgr.send(SubscriptionOp::Add(sub))
                 .await
                 .map_err(|err| annotate!(err, "failed to send request to subscriber manager"))?;
+            mgr.send(SubscriptionOp::Emit(initial_data))
+                .await
+                .map_err(|err| {
+                    annotate!(err, "failed to send initial data to subscriber manager")
+                })?;
             Ok(())
         }
     }

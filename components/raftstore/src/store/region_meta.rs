@@ -93,6 +93,8 @@ pub struct RaftStatus {
     pub applied: u64,
     pub voters: HashMap<u64, RaftProgress>,
     pub learners: HashMap<u64, RaftProgress>,
+    pub last_index: u64,
+    pub persisted_index: u64,
 }
 
 impl<'a> From<raft::Status<'a>> for RaftStatus {
@@ -126,6 +128,8 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
             applied,
             voters,
             learners,
+            last_index: 0,
+            persisted_index: 0,
         }
     }
 }
@@ -250,6 +254,8 @@ impl RegionMeta {
         apply_state: &raft_serverpb::RaftApplyState,
         group_state: GroupState,
         raft_status: Status<'_>,
+        last_index: u64,
+        persisted_index: u64,
     ) -> Self {
         let region = local_state.get_region();
         let epoch = region.get_region_epoch();
@@ -270,10 +276,13 @@ impl RegionMeta {
         } else {
             None
         };
+        let mut raft_status: RaftStatus = raft_status.into();
+        raft_status.last_index = last_index;
+        raft_status.persisted_index = persisted_index;
 
         Self {
             group_state,
-            raft_status: raft_status.into(),
+            raft_status,
             raft_apply: RaftApplyState {
                 applied_index: apply_state.get_applied_index(),
                 commit_index: apply_state.get_commit_index(),

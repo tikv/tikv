@@ -7,7 +7,7 @@ use collections::HashSet;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::MessageType;
 use tikv_util::time::{Duration, Instant};
-use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS};
+use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
 use super::metrics::*;
 
@@ -208,47 +208,60 @@ impl StoreWriteMetrics {
 /// Tracker for the durations of a raftstore request.
 /// If a global tracker is not available, it will fallback to an Instant.
 #[derive(Debug, Clone, Copy)]
-pub enum TimeTracker {
-    Tracker(TrackerToken),
-    Instant(std::time::Instant),
+pub struct TimeTracker {
+    token: TrackerToken,
+    start: std::time::Instant,
+}
+
+impl Default for TimeTracker {
+    #[inline]
+    fn default() -> Self {
+        let token = tracker::get_tls_tracker_token();
+        let start = std::time::Instant::now();
+        let tracker = TimeTracker { token, start };
+        if token == INVALID_TRACKER_TOKEN {
+            return tracker;
+        }
+
+        GLOBAL_TRACKERS.with_tracker(token, |tracker| {
+            tracker.metrics.write_instant = Some(start);
+        });
+        tracker
+    }
 }
 
 impl TimeTracker {
+    #[inline]
     pub fn as_tracker_token(&self) -> Option<TrackerToken> {
-        match self {
-            TimeTracker::Tracker(tt) => Some(*tt),
-            TimeTracker::Instant(_) => None,
+        if self.token == INVALID_TRACKER_TOKEN {
+            None
+        } else {
+            Some(self.token)
         }
     }
 
+    #[inline]
     pub fn observe(
         &self,
         now: std::time::Instant,
         local_metric: &LocalHistogram,
         tracker_metric: impl FnOnce(&mut Tracker) -> &mut u64,
     ) {
-        match self {
-            TimeTracker::Tracker(t) => {
-                if let Some(dur) = GLOBAL_TRACKERS
-                    .with_tracker(*t, |tracker| {
-                        tracker.metrics.write_instant.map(|write_instant| {
-                            let dur = now.saturating_duration_since(write_instant);
-                            let metric = tracker_metric(tracker);
-                            if *metric == 0 {
-                                *metric = dur.as_nanos() as u64;
-                            }
-                            dur
-                        })
-                    })
-                    .flatten()
-                {
-                    local_metric.observe(dur.as_secs_f64());
-                }
-            }
-            TimeTracker::Instant(t) => {
-                let dur = now.saturating_duration_since(*t);
-                local_metric.observe(dur.as_secs_f64());
-            }
+        let dur = now.saturating_duration_since(self.start);
+        local_metric.observe(dur.as_secs_f64());
+        if self.token == INVALID_TRACKER_TOKEN {
+            return;
         }
+        GLOBAL_TRACKERS.with_tracker(self.token, |tracker| {
+            let metric = tracker_metric(tracker);
+            if *metric == 0 {
+                *metric = dur.as_nanos() as u64;
+            }
+        });
+    }
+
+    #[inline]
+    pub fn reset(&mut self, start: std::time::Instant) {
+        self.start = start;
     }
 }

@@ -493,7 +493,7 @@ mod tests {
         msg.mut_message().mut_snapshot().mut_metadata().set_term(1);
         let send_path = TempDir::new().unwrap();
         let send_snap_mgr =
-            TabletSnapManager::new(send_path.path().join("snap_dir").to_str().unwrap());
+            TabletSnapManager::new(send_path.path().join("snap_dir").to_str().unwrap()).unwrap();
         let snap_path = send_snap_mgr.tablet_gen_path(&snap_key);
         create_dir_all(snap_path.as_path()).unwrap();
         // send file should skip directory
@@ -512,7 +512,7 @@ mod tests {
 
         let recv_path = TempDir::new().unwrap();
         let recv_snap_manager =
-            TabletSnapManager::new(recv_path.path().join("snap_dir").to_str().unwrap());
+            TabletSnapManager::new(recv_path.path().join("snap_dir").to_str().unwrap()).unwrap();
         let (tx, rx) = mpsc::unbounded();
         let sink = tx.sink_map_err(Error::from);
         block_on(send_snap_files(

@@ -257,6 +257,17 @@ where
         self.remote.spawn(f);
     }
 
+    pub fn handle_update_store_infos(
+        &mut self,
+        cpu_usages: RecordPairVec,
+        read_io_rates: RecordPairVec,
+        write_io_rates: RecordPairVec,
+    ) {
+        self.store_stat.store_cpu_usages = cpu_usages;
+        self.store_stat.store_read_io_rates = read_io_rates;
+        self.store_stat.store_write_io_rates = write_io_rates;
+    }
+
     /// Returns (capacity, used, available).
     fn collect_engine_size(&self) -> Option<(u64, u64, u64)> {
         let disk_stats = match fs2::statvfs(self.tablet_registry.tablet_root()) {
@@ -272,11 +283,19 @@ where
             Ok(stats) => stats,
         };
         let disk_cap = disk_stats.total_space();
-        // TODO: custom capacity.
-        let capacity = disk_cap;
-        // TODO: accurate snapshot size and kv engines size.
-        let snap_size = 0;
-        let kv_size = 0;
+        let capacity = if self.cfg.value().capacity.0 == 0 {
+            disk_cap
+        } else {
+            std::cmp::min(disk_cap, self.cfg.value().capacity.0)
+        };
+        let mut kv_size = 0;
+        self.tablet_registry.for_each_opened_tablet(|_, cached| {
+            if let Some(tablet) = cached.latest() {
+                kv_size += tablet.get_engine_used_size().unwrap_or(0);
+            }
+            true
+        });
+        let snap_size = self.snap_mgr.total_snap_size().unwrap();
         let used_size = snap_size
             + kv_size
             + self

@@ -149,6 +149,7 @@ pub struct LeadershipResolver {
     region_map: HashMap<u64, Vec<Peer>>,
     // region_id -> peers id, record the responses.
     resp_map: HashMap<u64, Vec<u64>>,
+    checking_regions: HashSet<u64>,
     valid_regions: HashSet<u64>,
 
     gc_interval: Duration,
@@ -176,6 +177,7 @@ impl LeadershipResolver {
             region_map: HashMap::default(),
             resp_map: HashMap::default(),
             valid_regions: HashSet::default(),
+            checking_regions: HashSet::default(),
             last_gc_time: Instant::now_coarse(),
             gc_interval,
         }
@@ -188,6 +190,7 @@ impl LeadershipResolver {
             self.region_map = HashMap::default();
             self.resp_map = HashMap::default();
             self.valid_regions = HashSet::default();
+            self.checking_regions = HashSet::default();
             self.last_gc_time = now;
         }
     }
@@ -203,6 +206,7 @@ impl LeadershipResolver {
         for v in self.resp_map.values_mut() {
             v.clear();
         }
+        self.checking_regions.clear();
         self.valid_regions.clear();
     }
 
@@ -248,7 +252,11 @@ impl LeadershipResolver {
     // This function broadcasts a special message to all stores, gets the leader id
     // of them to confirm whether current peer has a quorum which accepts its
     // leadership.
-    pub async fn resolve(&mut self, _regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+        if regions.is_empty() {
+            return regions;
+        }
+
         // Clear previous result before resolving.
         self.clear();
         // GC when necessary to prevent memory leak.
@@ -256,15 +264,22 @@ impl LeadershipResolver {
 
         PENDING_RTS_COUNT.inc();
         defer!(PENDING_RTS_COUNT.dec());
-        fail_point!("before_sync_replica_read_state", |_| _regions.clone());
+        fail_point!("before_sync_replica_read_state", |_| regions.clone());
 
         let store_id = self.store_id;
         let valid_regions = &mut self.valid_regions;
         let region_map = &mut self.region_map;
         let resp_map = &mut self.resp_map;
         let store_req_map = &mut self.store_req_map;
+        let checking_regions = &mut self.checking_regions;
+        for region_id in &regions {
+            checking_regions.insert(*region_id);
+        }
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
+                if !checking_regions.contains(region_id) {
+                    continue;
+                }
                 let core = read_progress.get_core();
                 let local_leader_info = core.get_local_leader_info();
                 let leader_id = local_leader_info.get_leader_id();
@@ -511,4 +526,113 @@ async fn get_tikv_client(
     clients.insert(store_id, cli.clone());
     RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
     Ok(cli)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            mpsc::{channel, Receiver, Sender},
+            Arc,
+        },
+        time::Duration,
+    };
+
+    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder};
+    use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
+    use pd_client::PdClient;
+    use raftstore::store::util::RegionReadProgress;
+    use tikv_util::store::new_peer;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct MockTikv {
+        req_tx: Sender<CheckLeaderRequest>,
+    }
+
+    impl Tikv for MockTikv {
+        fn check_leader(
+            &mut self,
+            ctx: grpcio::RpcContext<'_>,
+            req: CheckLeaderRequest,
+            sink: ::grpcio::UnarySink<CheckLeaderResponse>,
+        ) {
+            self.req_tx.send(req).unwrap();
+            ctx.spawn(async {
+                sink.success(CheckLeaderResponse::default()).await.unwrap();
+            })
+        }
+    }
+
+    struct MockPdClient {}
+    impl PdClient for MockPdClient {}
+
+    fn new_rpc_suite(env: Arc<Environment>) -> (Server, TikvClient, Receiver<CheckLeaderRequest>) {
+        let (tx, rx) = channel();
+        let tikv_service = MockTikv { req_tx: tx };
+        let builder = ServerBuilder::new(env.clone()).register_service(create_tikv(tikv_service));
+        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        server.start();
+        let (_, port) = server.bind_addrs().next().unwrap();
+        let addr = format!("127.0.0.1:{}", port);
+        let channel = ChannelBuilder::new(env).connect(&addr);
+        let client = TikvClient::new(channel);
+        (server, client, rx)
+    }
+
+    #[tokio::test]
+    async fn test_resolve_leader_request_size() {
+        let env = Arc::new(EnvBuilder::new().build());
+        let (mut server, tikv_client, rx) = new_rpc_suite(env.clone());
+
+        let mut region1 = Region::default();
+        region1.id = 1;
+        region1.peers.push(new_peer(1, 1));
+        region1.peers.push(new_peer(2, 11));
+        let progress1 = RegionReadProgress::new(&region1, 1, 1, 1);
+        progress1.update_leader_info(1, 1, &region1);
+
+        let mut region2 = Region::default();
+        region2.id = 2;
+        region2.peers.push(new_peer(1, 2));
+        region2.peers.push(new_peer(2, 22));
+        let progress2 = RegionReadProgress::new(&region2, 1, 1, 2);
+        progress2.update_leader_info(2, 2, &region2);
+
+        let mut leader_resolver = LeadershipResolver::new(
+            1, // store id
+            Arc::new(MockPdClient {}),
+            env.clone(),
+            Arc::new(SecurityManager::default()),
+            RegionReadProgressRegistry::new(),
+            Duration::from_secs(1),
+        );
+        leader_resolver
+            .tikv_clients
+            .lock()
+            .await
+            .insert(2 /* store id */, tikv_client);
+        leader_resolver
+            .region_read_progress
+            .insert(1, Arc::new(progress1));
+        leader_resolver
+            .region_read_progress
+            .insert(2, Arc::new(progress2));
+
+        leader_resolver.resolve(vec![1, 2], TimeStamp::new(1)).await;
+        let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(req.regions.len(), 2);
+
+        // Checking one region only send 1 region in request.
+        leader_resolver.resolve(vec![1], TimeStamp::new(1)).await;
+        let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(req.regions.len(), 1);
+
+        // Checking zero region does not send request.
+        leader_resolver.resolve(vec![], TimeStamp::new(1)).await;
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+
+        let _ = server.shutdown().await;
+    }
 }

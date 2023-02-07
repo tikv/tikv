@@ -253,6 +253,7 @@
 #![feature(assert_matches)]
 #![feature(linked_list_cursors)]
 #![feature(let_chains)]
+#![feature(str_split_as_str)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -339,7 +340,7 @@ pub use crate::range::*;
 
 mod raft_engine;
 pub use raft_engine::{
-    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask,
+    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
     RAFT_LOG_MULTI_GET_CNT,
 };
 
