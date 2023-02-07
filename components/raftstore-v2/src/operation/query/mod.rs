@@ -207,7 +207,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
         self.store_ctx.coprocessor_host.on_region_changed(
             region,
             RegionChangeEvent::UpdateBuckets(buckets_count),
-            self.fsm.peer().get_role(),
+            self.fsm.peer().state_role(),
         );
         self.fsm.peer_mut().set_region_buckets(region_buckets);
         let mut store_meta = self.store_ctx.store_meta.lock().unwrap();

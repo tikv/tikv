@@ -249,7 +249,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn get_role(&self) -> StateRole {
+    pub fn state_role(&self) -> StateRole {
         self.raft_group.raft.state
     }
 
