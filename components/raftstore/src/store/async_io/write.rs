@@ -950,15 +950,13 @@ where
     }
 
     pub fn shutdown(&mut self) {
-        if let Some(handlers) = Arc::get_mut(&mut self.handlers) {
-            let handlers = handlers.get_mut();
-            let writers = self.writers.value().get();
-            assert_eq!(writers.len(), handlers.len());
-            for (i, handler) in handlers.drain(..).enumerate() {
-                info!("stopping store writer {}", i);
-                writers[i].send(WriteMsg::Shutdown, 0).unwrap();
-                handler.join().unwrap();
-            }
+        let mut handlers = self.handlers.lock();
+        let writers = self.writers.value().get();
+        assert_eq!(writers.len(), handlers.len());
+        for (i, handler) in handlers.drain(..).enumerate() {
+            info!("stopping store writer {}", i);
+            writers[i].send(WriteMsg::Shutdown, 0).unwrap();
+            handler.join().unwrap();
         }
     }
 

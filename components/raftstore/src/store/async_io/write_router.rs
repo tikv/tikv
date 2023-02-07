@@ -257,10 +257,12 @@ where
     }
 }
 
-#[derive(Clone)]
 /// Safefly shared senders among the controller and raftstore threads.
 /// Senders in it can only be accessed by cloning method `senders()`.
-
+///
+/// `Clone` is safe to race with concurrent `Sender.send()` because the
+/// `RefCell` field `last_msg_group` in `Sender` is skipped.
+#[derive(Clone)]
 pub struct SharedSenders<EK: KvEngine, ER: RaftEngine>(Vec<Sender<WriteMsg<EK, ER>>>);
 
 impl<EK: KvEngine, ER: RaftEngine> Default for SharedSenders<EK, ER> {
@@ -291,11 +293,14 @@ impl<EK: KvEngine, ER: RaftEngine> SharedSenders<EK, ER> {
 /// `begin()`, the first stage for processing messages.
 /// Therefore, it's safe to manually remain `Send` trait for
 /// `SharedSenders`.
+///
+/// TODO: use an elegant implementation, such as `Mutex<Sender>`, to avoid this
+/// hack for sharing `Sender`s among multi-threads.
 unsafe impl<EK: KvEngine, ER: RaftEngine> Sync for SharedSenders<EK, ER> {}
 
-#[derive(Clone)]
 /// Senders for asynchronous writes. There can be multiple senders, generally
 /// you should use `WriteRouter` to decide which sender to be used.
+#[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
     senders: Tracker<SharedSenders<EK, ER>>,
     cached_senders: Vec<Sender<WriteMsg<EK, ER>>>,
