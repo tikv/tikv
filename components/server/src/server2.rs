@@ -51,7 +51,7 @@ use kvproto::{
     deadlock::create_deadlock, diagnosticspb::create_diagnostics, kvrpcpb::ApiVersion,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
-use pd_client::{PdClientCommon, PdClientExtV2, PdClientTsoExt, RpcClientV2};
+use pd_client::{PdClientCommon, RpcClientV2, TsoGetter, TsoGetterFactory};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -281,10 +281,10 @@ where
             .create();
 
         // Initialize concurrency manager
-        let mut tso_stream = pd_client
-            .create_tso_stream()
+        let mut tso_getter = pd_client
+            .new_tso_getter()
             .expect("failed to create pd tso stream");
-        let latest_ts = block_on(tso_stream.get_tso()).expect("failed to get timestamp from PD");
+        let latest_ts = block_on(tso_getter.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
         // use different quota for front-end and back-end requests
@@ -321,7 +321,7 @@ where
         let mut causal_ts_provider = None;
         if let ApiVersion::V2 = F::TAG {
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
-                tso_stream.clone(),
+                tso_getter.clone(),
                 config.causal_ts.renew_interval.0,
                 config.causal_ts.alloc_ahead_buffer.0,
                 config.causal_ts.renew_batch_min_size,

@@ -34,7 +34,7 @@ use async_trait::async_trait;
 #[cfg(test)]
 use futures::executor::block_on;
 use parking_lot::RwLock;
-use pd_client::PdClientTsoExt;
+use pd_client::TsoGetter;
 use tikv_util::{
     time::{Duration, Instant},
     worker::{Builder as WorkerBuilder, Worker},
@@ -303,7 +303,7 @@ struct RenewParameter {
 }
 
 #[derive(Clone)]
-pub struct BatchTsoProvider<C: PdClientTsoExt> {
+pub struct BatchTsoProvider<C: TsoGetter> {
     pd_client: C,
     batch_list: Arc<TsoBatchList>,
     causal_ts_worker: Arc<Worker>,
@@ -312,7 +312,7 @@ pub struct BatchTsoProvider<C: PdClientTsoExt> {
     renew_request_tx: Sender<RenewRequest>,
 }
 
-impl<C: PdClientTsoExt> std::fmt::Debug for BatchTsoProvider<C> {
+impl<C: TsoGetter> std::fmt::Debug for BatchTsoProvider<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BatchTsoProvider")
             .field("batch_list", &self.batch_list)
@@ -322,7 +322,7 @@ impl<C: PdClientTsoExt> std::fmt::Debug for BatchTsoProvider<C> {
     }
 }
 
-impl<C: PdClientTsoExt + Clone + 'static> BatchTsoProvider<C> {
+impl<C: TsoGetter + Clone + 'static> BatchTsoProvider<C> {
     pub async fn new(pd_client: C) -> Result<Self> {
         Self::new_opt(
             pd_client,
@@ -578,7 +578,7 @@ impl<C: PdClientTsoExt + Clone + 'static> BatchTsoProvider<C> {
 const GET_TS_MAX_RETRY: u32 = 3;
 
 #[async_trait]
-impl<C: PdClientTsoExt + Clone + 'static> CausalTsProvider for BatchTsoProvider<C> {
+impl<C: TsoGetter + Clone + 'static> CausalTsProvider for BatchTsoProvider<C> {
     // TODO: support `after_ts` argument.
     async fn async_get_ts(&mut self) -> Result<TimeStamp> {
         let start = Instant::now();
@@ -643,7 +643,7 @@ impl<C> SimpleTsoProvider<C> {
 }
 
 #[async_trait]
-impl<C: PdClientTsoExt> CausalTsProvider for SimpleTsoProvider<C> {
+impl<C: TsoGetter> CausalTsProvider for SimpleTsoProvider<C> {
     async fn async_get_ts(&mut self) -> Result<TimeStamp> {
         let ts = self.pd_client.get_tso().await?;
         debug!("SimpleTsoProvider::get_ts"; "ts" => ?ts);

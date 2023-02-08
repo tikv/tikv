@@ -7,8 +7,8 @@ use futures::{executor::block_on, StreamExt};
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
 use pd_client::{
-    Error as PdError, Feature, PdClientCommon, PdClientExtV2, PdClientTsoExt, PdConnector,
-    RpcClientV2,
+    Error as PdError, Feature, PdClientCommon, PdClientExtV2, PdConnector, RpcClientV2, TsoGetter,
+    TsoGetterFactory,
 };
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
@@ -95,10 +95,10 @@ fn test_rpc_client() {
         .unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
-    let mut tso_stream = client.create_tso_stream().unwrap();
-    let ts = block_on(tso_stream.get_tso()).unwrap();
+    let mut tso_getter = client.new_tso_getter().unwrap();
+    let ts = block_on(tso_getter.get_tso()).unwrap();
     assert_ne!(ts, TimeStamp::zero());
-    let ts100 = block_on(tso_stream.batch_get_tso(100)).unwrap();
+    let ts100 = block_on(tso_getter.batch_get_tso(100)).unwrap();
     assert_eq!(ts.logical() + 100, ts100.logical());
 
     let mut prev_id = 0;

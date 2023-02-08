@@ -195,8 +195,9 @@ where
 
         let mut req = pdpb::RegionHeartbeatRequest::default();
         req.set_term(task.term);
-        // TODO(tabokie)
-        // req.set_header(self.header());
+        let mut header = pdpb::RequestHeader::default();
+        header.set_cluster_id(self.cluster_id);
+        req.set_header(header);
         req.set_region(task.region);
         req.set_leader(task.peer);
         req.set_down_peers(region_stat.down_peers.into());
@@ -342,7 +343,9 @@ where
         buckets.set_period_in_ms(Duration::from_secs(interval_second).as_millis() as u64);
         buckets.set_stats(delta.stats.clone());
         let mut req = pdpb::ReportBucketsRequest::default();
-        // req.set_header(self.header());
+        let mut header = pdpb::RequestHeader::default();
+        header.set_cluster_id(self.cluster_id);
+        req.set_header(header);
         req.set_buckets(buckets);
         req.set_region_epoch(delta.meta.region_epoch.clone());
 

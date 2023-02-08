@@ -35,7 +35,7 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
-use pd_client::PdClientTsoExt;
+use pd_client::TsoGetter;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{

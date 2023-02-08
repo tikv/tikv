@@ -36,8 +36,8 @@ use kvproto::{
     },
 };
 use pd_client::{
-    BucketStat, Error, FeatureGate, Key, PdClientCommon, PdClientExt, PdClientTsoExt, PdFuture,
-    RegionInfo, RegionStat, Result,
+    BucketStat, Error, FeatureGate, Key, PdClientCommon, PdClientExt, PdFuture, RegionInfo,
+    RegionStat, Result, TsoGetter, TsoGetterFactory,
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
@@ -1823,7 +1823,15 @@ impl PdClientCommon for TestPdClient {
     }
 }
 
-impl PdClientTsoExt for TestPdClient {
+impl TsoGetterFactory for TestPdClient {
+    type TsoGetter = Self;
+
+    fn new_tso_getter(&mut self) -> Result<Self::TsoGetter> {
+        Ok(self.clone())
+    }
+}
+
+impl TsoGetter for TestPdClient {
     fn batch_get_tso(&mut self, count: u32) -> PdFuture<TimeStamp> {
         fail_point!("test_raftstore_get_tso", |t| {
             let duration = Duration::from_millis(t.map_or(1000, |t| t.parse().unwrap()));

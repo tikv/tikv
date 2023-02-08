@@ -25,7 +25,7 @@ use kvproto::{
     raft_serverpb::*,
     tikvpb::*,
 };
-use pd_client::PdClientTsoExt;
+use pd_client::TsoGetter;
 use raft::eraftpb;
 use raftstore::{
     coprocessor::CoprocessorHost,

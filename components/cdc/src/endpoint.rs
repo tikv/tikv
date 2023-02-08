@@ -26,7 +26,7 @@ use kvproto::{
     metapb::Region,
 };
 use online_config::{ConfigChange, OnlineConfig};
-use pd_client::{Feature, PdClient};
+use pd_client::{Feature, PdClientCommon, TsoGetter, TsoGetterFactory};
 use raftstore::{
     coprocessor::{CmdBatch, ObserveId},
     router::RaftStoreRouter,
@@ -319,7 +319,7 @@ impl ResolvedRegionHeap {
     }
 }
 
-pub struct Endpoint<T, E, P> {
+pub struct Endpoint<T, E, P: TsoGetterFactory> {
     cluster_id: u64,
 
     capture_regions: HashMap<u64, Delegate>,
@@ -330,6 +330,7 @@ pub struct Endpoint<T, E, P> {
     observer: CdcObserver,
 
     pd_client: P,
+    tso_getter: P::TsoGetter,
     timer: SteadyTimer,
     tso_worker: Runtime,
     store_meta: Arc<StdMutex<StoreMeta>>,
@@ -362,14 +363,17 @@ pub struct Endpoint<T, E, P> {
     warn_resolved_ts_repeat_count: usize,
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, P: PdClient + Clone + 'static>
-    Endpoint<T, E, P>
+impl<
+    T: 'static + RaftStoreRouter<E>,
+    E: KvEngine,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
+> Endpoint<T, E, P>
 {
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
         api_version: ApiVersion,
-        pd_client: P,
+        mut pd_client: P,
         scheduler: Scheduler<Task>,
         raft_router: T,
         engine: E,
@@ -423,12 +427,16 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, P: PdClient + Clone + 'static
             region_read_progress,
             store_resolver_gc_interval,
         );
+        let tso_getter = pd_client
+            .new_tso_getter()
+            .expect("failed to create tso getter");
         let ep = Endpoint {
             cluster_id,
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
             scheduler,
             pd_client,
+            tso_getter,
             tso_worker,
             timer: SteadyTimer::default(),
             scan_speed_limiter: speed_limiter,
@@ -1013,6 +1021,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, P: PdClient + Clone + 'static
             .checked_sub(event_time.saturating_elapsed());
         let timeout = self.timer.delay(interval.unwrap_or_default());
         let mut pd_client = self.pd_client.clone();
+        let mut tso_getter = self.tso_getter.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
         let regions: Vec<u64> = self.capture_regions.keys().copied().collect();
@@ -1032,7 +1041,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, P: PdClient + Clone + 'static
                 // RawKV CDC's resolved_ts is guaranteed by ConcurrencyManager::global_min_lock_ts,
                 // which lock flying keys's ts in raw put and delete interfaces in `Storage`.
                 Some(mut provider) => provider.async_get_ts().await.unwrap_or_default(),
-                None => pd_client.get_tso().await.unwrap_or_default(),
+                None => tso_getter.get_tso().await.unwrap_or_default(),
             };
             let mut min_ts = min_ts_pd;
             let mut min_ts_min_lock = min_ts_pd;
@@ -1114,8 +1123,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, P: PdClient + Clone + 'static
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, P: PdClient + Clone + 'static> Runnable
-    for Endpoint<T, E, P>
+impl<
+    T: 'static + RaftStoreRouter<E>,
+    E: KvEngine,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
+> Runnable for Endpoint<T, E, P>
 {
     type Task = Task;
 
@@ -1192,8 +1204,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, P: PdClient + Clone + 'static
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, P: PdClient + Clone + 'static> RunnableWithTimer
-    for Endpoint<T, E, P>
+impl<
+    T: 'static + RaftStoreRouter<E>,
+    E: KvEngine,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
+> RunnableWithTimer for Endpoint<T, E, P>
 {
     fn on_timeout(&mut self) {
         CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);

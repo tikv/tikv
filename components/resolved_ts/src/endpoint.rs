@@ -16,7 +16,7 @@ use engine_traits::KvEngine;
 use grpcio::Environment;
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
-use pd_client::PdClient;
+use pd_client::{PdClientCommon, TsoGetterFactory};
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, ObserveId},
     router::RaftStoreRouter,
@@ -262,7 +262,7 @@ impl ObserveRegion {
     }
 }
 
-pub struct Endpoint<T, E: KvEngine, P> {
+pub struct Endpoint<T, E: KvEngine, P: PdClientCommon + TsoGetterFactory> {
     store_id: Option<u64>,
     cfg: ResolvedTsConfig,
     cfg_update_notify: Arc<Notify>,
@@ -271,7 +271,7 @@ pub struct Endpoint<T, E: KvEngine, P> {
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task>,
-    advance_worker: AdvanceTsWorker<P>,
+    advance_worker: AdvanceTsWorker<P, P::TsoGetter>,
     _phantom: PhantomData<(T, E)>,
 }
 
@@ -279,14 +279,14 @@ impl<T, E, P> Endpoint<T, E, P>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
-    P: PdClient + Clone + 'static,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
 {
     pub fn new(
         cfg: &ResolvedTsConfig,
         scheduler: Scheduler<Task>,
         raft_router: T,
         store_meta: Arc<Mutex<StoreMeta>>,
-        pd_client: P,
+        mut pd_client: P,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
@@ -295,8 +295,12 @@ where
             let meta = store_meta.lock().unwrap();
             (meta.region_read_progress.clone(), meta.store_id)
         };
-        let advance_worker =
-            AdvanceTsWorker::new(pd_client, scheduler.clone(), concurrency_manager);
+        let advance_worker = AdvanceTsWorker::new(
+            pd_client.clone(),
+            pd_client.new_tso_getter().unwrap(),
+            scheduler.clone(),
+            concurrency_manager,
+        );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
@@ -691,7 +695,7 @@ impl<T, E, P> Runnable for Endpoint<T, E, P>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
-    P: PdClient + Clone + 'static,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
 {
     type Task = Task;
 
@@ -748,7 +752,7 @@ impl<T, E, P> RunnableWithTimer for Endpoint<T, E, P>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
-    P: PdClient + Clone + 'static,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
 {
     fn on_timeout(&mut self) {
         let store_id = self.get_or_init_store_id();

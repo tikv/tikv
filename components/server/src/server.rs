@@ -62,7 +62,7 @@ use kvproto::{
     kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
-use pd_client::{PdClientCommon, PdClientTsoExt, RpcClient};
+use pd_client::{PdClientCommon, RpcClient, TsoGetter};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{

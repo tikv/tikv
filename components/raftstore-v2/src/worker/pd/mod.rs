@@ -158,6 +158,7 @@ where
 {
     store_id: u64,
     pd_client: T,
+    cluster_id: u64,
     raft_engine: ER,
     tablet_registry: TabletRegistry<EK>,
     snap_mgr: TabletSnapManager,
@@ -181,7 +182,7 @@ where
     // For update_max_timestamp.
     concurrency_manager: ConcurrencyManager,
     causal_ts_provider: Option<CausalTsProviderImpl>,
-    tso_transport: Option<T::TsoStream>,
+    tso_transport: Option<T::TsoGetter>,
 
     logger: Logger,
     shutdown: Arc<AtomicBool>,
@@ -196,7 +197,7 @@ where
 {
     pub fn new(
         store_id: u64,
-        pd_client: T,
+        mut pd_client: T,
         raft_engine: ER,
         tablet_registry: TabletRegistry<EK>,
         snap_mgr: TabletSnapManager,
@@ -223,9 +224,13 @@ where
             collector_reg_handle,
             store_id,
         )?;
+        let cluster_id = pd_client
+            .fetch_cluster_id()
+            .expect("failed to fetch cluster id from pd");
         Ok(Self {
             store_id,
             pd_client,
+            cluster_id,
             raft_engine,
             tablet_registry,
             snap_mgr,

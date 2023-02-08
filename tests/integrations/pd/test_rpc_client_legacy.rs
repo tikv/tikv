@@ -14,8 +14,8 @@ use futures::executor::block_on;
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
 use pd_client::{
-    Error as PdError, Feature, PdClientCommon, PdClientExt, PdClientTsoExt, PdConnector,
-    RegionStat, RpcClient,
+    Error as PdError, Feature, PdClientCommon, PdClientExt, PdConnector, RegionStat, RpcClient,
+    TsoGetter,
 };
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};

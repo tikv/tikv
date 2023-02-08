@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::*, metapb::RegionEpoch};
-use pd_client::PdClientTsoExt;
+use pd_client::TsoGetter;
 use tempfile::Builder;
 use test_raftstore::sleep_ms;
 use test_sst_importer::*;

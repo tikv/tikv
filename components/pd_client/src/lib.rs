@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(let_chains)]
+#![feature(associated_type_defaults)]
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
@@ -421,7 +422,16 @@ pub trait PdClientCommon: Sync + Send {
     }
 }
 
-pub trait PdClientTsoExt: Send + Sync {
+// A dedicated trait to avoid polluting `PdClientCommon` with associative types.
+pub trait TsoGetterFactory {
+    type TsoGetter: TsoGetter = ();
+
+    fn new_tso_getter(&mut self) -> Result<Self::TsoGetter> {
+        unimplemented!()
+    }
+}
+
+pub trait TsoGetter: Send + Sync + Clone {
     /// Gets a timestamp from PD.
     fn get_tso(&mut self) -> PdFuture<TimeStamp> {
         self.batch_get_tso(1)
@@ -435,6 +445,8 @@ pub trait PdClientTsoExt: Send + Sync {
         unimplemented!()
     }
 }
+
+impl TsoGetter for () {}
 
 pub trait PdClientExt {
     /// Region's Leader uses this to heartbeat PD.
@@ -480,10 +492,10 @@ pub trait PdClientExt {
     }
 }
 
-pub trait PdClient: PdClientCommon + PdClientExt + PdClientTsoExt {}
+pub trait PdClient: PdClientCommon + TsoGetterFactory + PdClientExt + TsoGetter {}
 
 pub trait PdClientExtV2 {
-    type TsoStream: PdClientTsoExt + Clone;
+    // type TsoStream: TsoGetter + Clone;
 
     fn subscribe_reconnect(&self) -> BoxStream<()>;
 
@@ -500,10 +512,10 @@ pub trait PdClientExtV2 {
         wake_policy: mpsc::WakePolicy,
     ) -> Result<mpsc::Sender<pdpb::ReportBucketsRequest>>;
 
-    fn create_tso_stream(&mut self) -> Result<Self::TsoStream>;
+    // fn create_tso_stream(&mut self) -> Result<Self::TsoStream>;
 }
 
-pub trait PdClientV2: PdClientCommon + PdClientExtV2 {}
+pub trait PdClientV2: PdClientCommon + TsoGetterFactory + PdClientExtV2 {}
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
 

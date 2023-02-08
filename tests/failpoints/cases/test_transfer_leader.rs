@@ -11,7 +11,7 @@ use engine_traits::CF_LOCK;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
-use pd_client::PdClientTsoExt;
+use pd_client::TsoGetter;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::storage::Snapshot;

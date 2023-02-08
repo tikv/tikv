@@ -61,7 +61,7 @@ use super::{
     Config, Error, FeatureGate, RegionInfo, Result, UnixSecs,
     REQUEST_TIMEOUT as REQUEST_TIMEOUT_SEC,
 };
-use crate::{BoxStream, PdClientCommon, PdClientExtV2, PdFuture};
+use crate::{BoxStream, PdClientCommon, PdClientExtV2, PdFuture, TsoGetterFactory};
 
 fn request_timeout() -> Duration {
     fail_point!("pd_client_v2_request_timeout", |s| {
@@ -1191,9 +1191,61 @@ impl PdClientCommon for RpcClient {
     }
 }
 
-impl PdClientExtV2 for RpcClient {
-    type TsoStream = TsoConnection;
+impl TsoGetterFactory for RpcClient {
+    type TsoGetter = TsoConnection;
 
+    fn new_tso_getter(&mut self) -> Result<Self::TsoGetter> {
+        let (rpc_req_tx, rpc_req_rx) =
+            futures::channel::mpsc::unbounded::<(TsoRequest, WriteFlags)>();
+        let (rpc_resp_stream_tx, rpc_resp_rx) = CachedDuplexResponse::<TsoResponse>::new();
+        let mut raw_client = self.raw_client.clone();
+        self.raw_client.stub().spawn(async move {
+            let mut rpc_req_rx = rpc_req_rx.map(Ok);
+            loop {
+                if let Err(e) = raw_client.wait_for_ready().await {
+                    warn!("failed to acquire client for Tso stream"; "err" => ?e);
+                    continue;
+                }
+                let (mut tso_tx, tso_rx) = raw_client
+                    .stub()
+                    .tso_opt(raw_client.call_option())
+                    .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
+                if rpc_resp_stream_tx.send(tso_rx).await.is_err() {
+                    break;
+                }
+                let res = tso_tx.send_all(&mut rpc_req_rx).await;
+                if res.is_ok() {
+                    // requests are drained.
+                    break;
+                } else {
+                    let res = raw_client.check_resp(res);
+                    warn!("tso exited"; "res" => ?res);
+                }
+                let _ = tso_tx.close().await;
+            }
+        });
+        let (user_req_tx, user_req_rx) = tokio::sync::mpsc::channel(1);
+        let cluster_id = self.fetch_cluster_id()?;
+        let handle = std::thread::Builder::new()
+            .name("tso-worker".into())
+            .spawn_wrapper(move || {
+                block_on(run_tso(
+                    cluster_id,
+                    rpc_req_tx.sink_err_into(),
+                    rpc_resp_rx.err_into(),
+                    user_req_rx,
+                    None,
+                ));
+            })
+            .expect("unable to create tso worker thread");
+        Ok(TsoConnection {
+            _handle: Arc::new(handle),
+            tx: user_req_tx,
+        })
+    }
+}
+
+impl PdClientExtV2 for RpcClient {
     fn subscribe_reconnect(&self) -> BoxStream<()> {
         let stream =
             tokio_stream::wrappers::BroadcastStream::new(self.raw_client.clone().on_reconnect_rx);
@@ -1288,55 +1340,55 @@ impl PdClientExtV2 for RpcClient {
         Ok(tx)
     }
 
-    fn create_tso_stream(&mut self) -> Result<TsoConnection> {
-        let (rpc_req_tx, rpc_req_rx) =
-            futures::channel::mpsc::unbounded::<(TsoRequest, WriteFlags)>();
-        let (rpc_resp_stream_tx, rpc_resp_rx) = CachedDuplexResponse::<TsoResponse>::new();
-        let mut raw_client = self.raw_client.clone();
-        self.raw_client.stub().spawn(async move {
-            let mut rpc_req_rx = rpc_req_rx.map(Ok);
-            loop {
-                if let Err(e) = raw_client.wait_for_ready().await {
-                    warn!("failed to acquire client for Tso stream"; "err" => ?e);
-                    continue;
-                }
-                let (mut tso_tx, tso_rx) = raw_client
-                    .stub()
-                    .tso_opt(raw_client.call_option())
-                    .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
-                if rpc_resp_stream_tx.send(tso_rx).await.is_err() {
-                    break;
-                }
-                let res = tso_tx.send_all(&mut rpc_req_rx).await;
-                if res.is_ok() {
-                    // requests are drained.
-                    break;
-                } else {
-                    let res = raw_client.check_resp(res);
-                    warn!("tso exited"; "res" => ?res);
-                }
-                let _ = tso_tx.close().await;
-            }
-        });
-        let (user_req_tx, user_req_rx) = tokio::sync::mpsc::channel(1);
-        let cluster_id = self.fetch_cluster_id()?;
-        let handle = std::thread::Builder::new()
-            .name("tso-worker".into())
-            .spawn_wrapper(move || {
-                block_on(run_tso(
-                    cluster_id,
-                    rpc_req_tx.sink_err_into(),
-                    rpc_resp_rx.err_into(),
-                    user_req_rx,
-                    None,
-                ));
-            })
-            .expect("unable to create tso worker thread");
-        Ok(TsoConnection {
-            _handle: Arc::new(handle),
-            tx: user_req_tx,
-        })
-    }
+    // fn create_tso_stream(&mut self) -> Result<TsoConnection> {
+    //     let (rpc_req_tx, rpc_req_rx) =
+    //         futures::channel::mpsc::unbounded::<(TsoRequest, WriteFlags)>();
+    //     let (rpc_resp_stream_tx, rpc_resp_rx) =
+    // CachedDuplexResponse::<TsoResponse>::new();     let mut raw_client =
+    // self.raw_client.clone();     self.raw_client.stub().spawn(async move {
+    //         let mut rpc_req_rx = rpc_req_rx.map(Ok);
+    //         loop {
+    //             if let Err(e) = raw_client.wait_for_ready().await {
+    //                 warn!("failed to acquire client for Tso stream"; "err" =>
+    // ?e);                 continue;
+    //             }
+    //             let (mut tso_tx, tso_rx) = raw_client
+    //                 .stub()
+    //                 .tso_opt(raw_client.call_option())
+    //                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}",
+    // "tso", e));             if rpc_resp_stream_tx.send(tso_rx).await.is_err()
+    // {                 break;
+    //             }
+    //             let res = tso_tx.send_all(&mut rpc_req_rx).await;
+    //             if res.is_ok() {
+    //                 // requests are drained.
+    //                 break;
+    //             } else {
+    //                 let res = raw_client.check_resp(res);
+    //                 warn!("tso exited"; "res" => ?res);
+    //             }
+    //             let _ = tso_tx.close().await;
+    //         }
+    //     });
+    //     let (user_req_tx, user_req_rx) = tokio::sync::mpsc::channel(1);
+    //     let cluster_id = self.fetch_cluster_id()?;
+    //     let handle = std::thread::Builder::new()
+    //         .name("tso-worker".into())
+    //         .spawn_wrapper(move || {
+    //             block_on(run_tso(
+    //                 cluster_id,
+    //                 rpc_req_tx.sink_err_into(),
+    //                 rpc_resp_rx.err_into(),
+    //                 user_req_rx,
+    //                 None,
+    //             ));
+    //         })
+    //         .expect("unable to create tso worker thread");
+    //     Ok(TsoConnection {
+    //         _handle: Arc::new(handle),
+    //         tx: user_req_tx,
+    //     })
+    // }
 }
 
 impl crate::PdClientV2 for RpcClient {}
@@ -1347,7 +1399,7 @@ pub struct TsoConnection {
     tx: tokio::sync::mpsc::Sender<TimestampRequest>,
 }
 
-impl crate::PdClientTsoExt for TsoConnection {
+impl crate::TsoGetter for TsoConnection {
     fn batch_get_tso(&mut self, count: u32) -> PdFuture<TimeStamp> {
         let (request, response) = tokio::sync::oneshot::channel();
         let tx = self.tx.clone();

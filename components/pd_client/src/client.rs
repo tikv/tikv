@@ -849,7 +849,15 @@ impl PdClientCommon for Arc<RpcClient> {
     }
 }
 
-impl crate::PdClientTsoExt for Arc<RpcClient> {
+impl crate::TsoGetterFactory for Arc<RpcClient> {
+    type TsoGetter = Self;
+
+    fn new_tso_getter(&mut self) -> Result<Self::TsoGetter> {
+        Ok(self.clone())
+    }
+}
+
+impl crate::TsoGetter for Arc<RpcClient> {
     fn batch_get_tso(&mut self, count: u32) -> PdFuture<TimeStamp> {
         let begin = Instant::now();
         let executor = move |client: &Client, _| {

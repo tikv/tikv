@@ -12,7 +12,7 @@ use cdc::{recv_timeout, Delegate, OldValueCache, Task, Validate};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
-use pd_client::PdClientTsoExt;
+use pd_client::TsoGetter;
 use test_raftstore::*;
 use tikv_util::{debug, worker::Scheduler, HandyRwLock};
 use txn_types::TimeStamp;

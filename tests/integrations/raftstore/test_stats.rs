@@ -7,7 +7,7 @@ use engine_traits::MiscExt;
 use futures::{executor::block_on, SinkExt, StreamExt};
 use grpcio::*;
 use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
-use pd_client::{PdClientCommon, PdClientTsoExt};
+use pd_client::{PdClientCommon, TsoGetter};
 use test_raftstore::*;
 use tikv_util::{config::*, store::QueryStats};
 use txn_types::Key;

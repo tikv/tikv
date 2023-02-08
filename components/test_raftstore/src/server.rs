@@ -29,7 +29,7 @@ use kvproto::{
     raft_serverpb,
     tikvpb::TikvClient,
 };
-use pd_client::{PdClientCommon, PdClientTsoExt};
+use pd_client::{PdClientCommon, TsoGetter};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,

@@ -8,7 +8,7 @@ use std::{
 use causal_ts::CausalTsProvider;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::{compat::Future01CompatExt, FutureExt};
-use pd_client::{PdClientTsoExt, PdClientV2};
+use pd_client::{PdClientV2, TsoGetter};
 use raftstore::{store::TxnExt, Result};
 use slog::{error, info, warn};
 use tikv_util::{box_err, timer::GLOBAL_TIMER_HANDLE};
@@ -28,10 +28,7 @@ where
         initial_status: u64,
         txn_ext: Arc<TxnExt>,
     ) {
-        if !self.maybe_create_transport() {
-            return;
-        }
-        let mut transport = self.tso_transport.clone().unwrap();
+        let Some(mut transport) = self.get_or_create_tso_transport() else { return };
         let concurrency_manager = self.concurrency_manager.clone();
         let mut causal_ts_provider = self.causal_ts_provider.clone();
         let logger = self.logger.clone();
@@ -112,15 +109,14 @@ where
         }
     }
 
-    fn maybe_create_transport(&mut self) -> bool {
-        if self.tso_transport.is_some() {
-            return true;
+    fn get_or_create_tso_transport(&mut self) -> Option<T::TsoGetter> {
+        if self.tso_transport.is_none() {
+            match self.pd_client.new_tso_getter() {
+                Ok(t) => self.tso_transport = Some(t),
+                Err(e) => error!(self.logger, "failed to create tso stream"; "err" => %e),
+            };
         }
-        match self.pd_client.create_tso_stream() {
-            Err(e) => error!(self.logger, "failed to create tso stream"; "err" => %e),
-            Ok(t) => self.tso_transport = Some(t),
-        };
-        self.tso_transport.is_some()
+        self.tso_transport.clone()
     }
 
     pub fn handle_report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) {

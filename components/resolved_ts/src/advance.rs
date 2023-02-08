@@ -20,7 +20,7 @@ use kvproto::{
     metapb::{Peer, PeerRole},
     tikvpb::TikvClient,
 };
-use pd_client::{PdClient, PdClientCommon};
+use pd_client::{PdClientCommon, TsoGetter};
 use protobuf::Message;
 use raftstore::{
     router::RaftStoreRouter,
@@ -47,8 +47,9 @@ use crate::{endpoint::Task, metrics::*};
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
-pub struct AdvanceTsWorker<P> {
+pub struct AdvanceTsWorker<P, T> {
     pd_client: P,
+    tso_getter: T,
     timer: SteadyTimer,
     worker: Runtime,
     scheduler: Scheduler<Task>,
@@ -57,9 +58,10 @@ pub struct AdvanceTsWorker<P> {
     concurrency_manager: ConcurrencyManager,
 }
 
-impl<P: PdClient + Clone> AdvanceTsWorker<P> {
+impl<P: PdClientCommon + Clone, T: TsoGetter + Clone> AdvanceTsWorker<P, T> {
     pub fn new(
         pd_client: P,
+        tso_getter: T,
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
     ) -> Self {
@@ -72,16 +74,17 @@ impl<P: PdClient + Clone> AdvanceTsWorker<P> {
             .build()
             .unwrap();
         Self {
-            scheduler,
             pd_client,
-            worker,
+            tso_getter,
             timer: SteadyTimer::default(),
+            worker,
+            scheduler,
             concurrency_manager,
         }
     }
 }
 
-impl<P: PdClient + Clone + 'static> AdvanceTsWorker<P> {
+impl<P: PdClientCommon + Clone + 'static, T: TsoGetter + Clone + 'static> AdvanceTsWorker<P, T> {
     // Advance ts asynchronously and register RegisterAdvanceEvent when its done.
     pub fn advance_ts_for_regions(
         &self,
@@ -91,13 +94,14 @@ impl<P: PdClient + Clone + 'static> AdvanceTsWorker<P> {
         cfg_update_notify: Arc<Notify>,
     ) {
         let cm = self.concurrency_manager.clone();
+        let mut tso_getter = self.tso_getter.clone();
         let mut pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let timeout = self.timer.delay(advance_ts_interval);
 
         let fut = async move {
             // Ignore get tso errors since we will retry every `advance_ts_interval`.
-            let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
+            let mut min_ts = tso_getter.get_tso().await.unwrap_or_default();
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.

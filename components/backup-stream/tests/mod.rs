@@ -30,7 +30,7 @@ use kvproto::{
     logbackuppb_grpc::{create_log_backup, LogBackupClient},
     tikvpb::*,
 };
-use pd_client::{PdClientCommon, PdClientTsoExt};
+use pd_client::{PdClientCommon, TsoGetter};
 use protobuf::parse_from_bytes;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};

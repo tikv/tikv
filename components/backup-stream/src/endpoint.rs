@@ -14,7 +14,7 @@ use kvproto::{
     metapb::Region,
 };
 use online_config::ConfigChange;
-use pd_client::PdClient;
+use pd_client::{PdClientCommon, TsoGetter, TsoGetterFactory};
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::RaftStoreRouter,
@@ -70,7 +70,7 @@ const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 /// 5s would be enough for it.
 const TICK_UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub struct Endpoint<S, R, E, RT, PDC> {
+pub struct Endpoint<S, R, E, RT, PDC: TsoGetterFactory> {
     // Note: those fields are more like a shared context between components.
     // For now, we copied them everywhere, maybe we'd better extract them into a
     // context type.
@@ -81,6 +81,7 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     pub(crate) engine: PhantomData<E>,
     pub(crate) router: RT,
     pub(crate) pd_client: PDC,
+    pub(crate) tso_getter: PDC::TsoGetter,
     pub(crate) subs: SubscriptionTracer,
     pub(crate) concurrency_manager: ConcurrencyManager,
 
@@ -103,7 +104,7 @@ where
     R: RegionInfoProvider + 'static + Clone,
     E: KvEngine,
     RT: RaftStoreRouter<E> + 'static,
-    PDC: PdClient + Clone + 'static,
+    PDC: PdClientCommon + TsoGetterFactory + Clone + 'static,
     S: MetaStore + 'static,
 {
     pub fn new(
@@ -114,7 +115,7 @@ where
         observer: BackupStreamObserver,
         accessor: R,
         router: RT,
-        pd_client: PDC,
+        mut pd_client: PDC,
         concurrency_manager: ConcurrencyManager,
         // Required by Leadership Resolver.
         env: Arc<Environment>,
@@ -182,6 +183,9 @@ where
         pool.spawn(op_loop);
         let mut checkpoint_mgr = CheckpointManager::default();
         pool.spawn(checkpoint_mgr.spawn_subscription_mgr());
+        let tso_getter = pd_client
+            .new_tso_getter()
+            .expect("failed to create tso getter");
         Endpoint {
             meta_client,
             range_router,
@@ -193,6 +197,7 @@ where
             engine: PhantomData,
             router,
             pd_client,
+            tso_getter,
             subs,
             concurrency_manager,
             initial_scan_memory_quota,
@@ -211,7 +216,7 @@ where
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
     RT: RaftStoreRouter<E> + 'static,
-    PDC: PdClient + Clone + 'static,
+    PDC: PdClientCommon + TsoGetterFactory + Clone + 'static,
 {
     fn get_meta_client(&self) -> MetadataClient<S> {
         self.meta_client.clone()
@@ -554,10 +559,10 @@ where
     }
 
     fn prepare_min_ts(&self) -> future![TimeStamp] {
-        let mut pd_cli = self.pd_client.clone();
+        let mut tso_getter = self.tso_getter.clone();
         let cm = self.concurrency_manager.clone();
         async move {
-            let pd_tso = pd_cli
+            let pd_tso = tso_getter
                 .get_tso()
                 .await
                 .map_err(|err| Error::from(err).report("failed to get tso from pd"))
@@ -1194,7 +1199,7 @@ where
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
     RT: RaftStoreRouter<E> + 'static,
-    PDC: PdClient + Clone + 'static,
+    PDC: PdClientCommon + TsoGetterFactory + Clone + 'static,
 {
     type Task = Task;
 

@@ -9,7 +9,7 @@ use std::{
 
 use grpcio::EnvBuilder;
 use kvproto::{metapb::*, pdpb::GlobalConfigItem};
-use pd_client::{PdClientCommon, PdClientExt, PdClientTsoExt, RegionInfo, RegionStat, RpcClient};
+use pd_client::{PdClientCommon, PdClientExt, RegionInfo, RegionStat, RpcClient, TsoGetter};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::{config::ReadableDuration, worker::Builder};
