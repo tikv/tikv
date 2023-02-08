@@ -72,7 +72,7 @@ impl ResourceManagerService {
                                                         self.manager.remove_resource_group(group.get_name());
                                                     }
                                                     Err(e) => {
-                                                        error!("parse delete resource group event failed, name: {}, err: {:?}", item.get_name(), e);
+                                                        error!("parse delete resource group event failed"; "name" => item.get_name(), "err" => ?e);
                                                     }
                                                 }
                                             }

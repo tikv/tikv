@@ -214,6 +214,7 @@ impl ResourceController {
         // do not remove the default resource group, reset to default setting instead.
         if DEFAULT_RESOURCE_GROUP_NAME.as_bytes() == name {
             self.add_resource_group(DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(), 0);
+            return;
         }
         self.resource_consumptions.remove(name);
     }
