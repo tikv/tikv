@@ -249,11 +249,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn state_role(&self) -> StateRole {
-        self.raft_group.raft.state
-    }
-
-    #[inline]
     pub fn region(&self) -> &metapb::Region {
         self.raft_group.store().region()
     }
