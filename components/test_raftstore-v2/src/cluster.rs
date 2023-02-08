@@ -228,12 +228,6 @@ impl<'a> From<&'a mut Cluster<ServerCluster>> for ClusterType<'a> {
     }
 }
 
-// impl<'a> AsMut<ClusterType<'a>> for ClusterV1<NodeClusterV1> {
-//     fn as_mut(&mut self) -> &mut ClusterType {
-//         &mut &mut ClusterType::NodeClusterV1(&mut self)
-//     }
-// }
-
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
 // isn't allocated by pd, and node id, store id are same.
@@ -718,21 +712,26 @@ impl<T: Simulator> Cluster<T> {
         )
     }
 
+    // mixed read and write requests are not supportted
     pub fn call_command(
         &mut self,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let mut is_read = false;
+        let mut not_read = false;
         for req in request.get_requests() {
             match req.get_cmd_type() {
                 CmdType::Get | CmdType::Snap | CmdType::ReadIndex => {
                     is_read = true;
                 }
-                _ => (),
+                _ => {
+                    not_read = true;
+                }
             }
         }
         let ret = if is_read {
+            assert!(!not_read);
             self.sim.wl().read(request.clone(), timeout)
         } else if request.has_status_request() {
             self.sim.wl().call_query(request.clone(), timeout)
@@ -1049,6 +1048,7 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
+    // start_key and end_key should be `data key`
     fn scan_region<F>(
         &self,
         store_id: u64,
@@ -1302,8 +1302,7 @@ impl<T: Simulator> Cluster<T> {
                     return;
                 }
             }
-            // todo(SpadeA): modify
-            if timer.saturating_elapsed() > Duration::from_secs(500) {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
                 panic!(
                     "failed to transfer leader to [{}] {:?}, current leader: {:?}",
                     region_id, leader, cur_leader

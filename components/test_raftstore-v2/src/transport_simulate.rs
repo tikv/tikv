@@ -76,7 +76,6 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotRouter<EK> for RaftRouter<EK, ER> {
         req: RaftCmdRequest,
         timeout: Duration,
     ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse> {
-        // block_on(self.snapshot(req))
         let timeout_f = GLOBAL_TIMER_HANDLE.delay(Instant::now() + timeout).compat();
         futures::executor::block_on(async move {
             futures::select! {
