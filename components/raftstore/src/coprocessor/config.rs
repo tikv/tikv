@@ -92,7 +92,7 @@ impl Default for Config {
             region_max_keys: None,
             consistency_check_method: ConsistencyCheckMethod::Mvcc,
             perf_level: PerfLevel::Uninitialized,
-            enable_region_bucket: false,
+            enable_region_bucket: true,
             region_bucket_size: DEFAULT_BUCKET_SIZE,
             region_size_threshold_for_approximate: DEFAULT_BUCKET_SIZE * BATCH_SPLIT_LIMIT / 2 * 3,
             region_bucket_merge_size_ratio: DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO,
