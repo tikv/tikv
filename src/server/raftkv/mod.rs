@@ -578,12 +578,10 @@ where
                 .map_err(kv::Error::from);
         }
         async move {
+            // It's impossible to return cancel because the callback will be invoked if it's
+            // destroyed.
             let res = match res {
-                Ok(()) => match f.await {
-                    Ok(r) => r,
-                    // Canceled may be returned during shutdown.
-                    Err(e) => Err(kv::Error::from(kv::ErrorInner::Other(box_err!(e)))),
-                },
+                Ok(()) => f.await.unwrap(),
                 Err(e) => Err(e),
             };
             match res {
