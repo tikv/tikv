@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{Peekable, CF_RAFT};
+use engine_traits::Peekable;
 use futures::executor::block_on;
 use kvproto::{
     metapb::{self, PeerRole},
@@ -32,7 +32,16 @@ macro_rules! call_conf_change {
     }};
 }
 
-fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
+fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<TestPdClient>) -> metapb::Peer {
+    let peer_id = pd_client.alloc_id().unwrap();
+    new_peer(store.get_id(), peer_id)
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+// #[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_server_simple_conf_change() {
+    let count = 5;
+    let mut cluster = new_cluster(0, count);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_operator();
@@ -145,18 +154,6 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_3, b"k4");
 
     // TODO: add more tests.
-}
-
-fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<TestPdClient>) -> metapb::Peer {
-    let peer_id = pd_client.alloc_id().unwrap();
-    new_peer(store.get_id(), peer_id)
-}
-
-#[test]
-fn test_server_simple_conf_change() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
-    test_simple_conf_change(&mut cluster);
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
@@ -406,19 +403,13 @@ fn test_after_remove_itself() {
     cluster.run_node(3).unwrap();
 
     for _ in 0..250 {
-        let region: RegionLocalState = engine1
-            .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
-            .unwrap()
-            .unwrap();
+        let region: RegionLocalState = engine1.region_local_state(r1).unwrap().unwrap();
         if region.get_state() == PeerState::Tombstone {
             return;
         }
         sleep_ms(20);
     }
-    let region: RegionLocalState = engine1
-        .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
-        .unwrap()
-        .unwrap();
+    let region: RegionLocalState = engine1.region_local_state(r1).unwrap().unwrap();
     assert_eq!(region.get_state(), PeerState::Tombstone);
 
     // TODO: add split after removing itself test later.

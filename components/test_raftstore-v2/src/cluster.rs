@@ -14,11 +14,11 @@ use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     Iterable, KvEngine, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch,
-    ReadOptions, SyncMutable, TabletRegistry, CF_DEFAULT, CF_RAFT,
+    ReadOptions, SyncMutable, TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
 use futures::{compat::Future01CompatExt, executor::block_on, select, FutureExt};
-use keys::{data_key, decode_region_meta_key};
+use keys::data_key;
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::ApiVersion,
@@ -1610,17 +1610,9 @@ impl Peekable for WrapFactory {
 
     fn get_msg_cf<M: protobuf::Message + Default>(
         &self,
-        cf: &str,
-        key: &[u8],
+        _cf: &str,
+        _key: &[u8],
     ) -> engine_traits::Result<Option<M>> {
-        if cf == CF_RAFT {
-            if let Ok((region_id, _)) = decode_region_meta_key(key) {
-                return self
-                    .raft_engine
-                    .get_region_state_in_message_format(region_id, u64::MAX);
-            }
-        }
-
         unimplemented!()
     }
 }
@@ -1668,4 +1660,11 @@ impl SyncMutable for WrapFactory {
     }
 }
 
-impl RawEngine for WrapFactory {}
+impl RawEngine for WrapFactory {
+    fn region_local_state(
+        &self,
+        region_id: u64,
+    ) -> engine_traits::Result<Option<RegionLocalState>> {
+        self.get_region_state(region_id)
+    }
+}
