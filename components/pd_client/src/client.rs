@@ -269,7 +269,11 @@ impl RpcClient {
     }
 }
 
-fn get_region_resp_by_id(pd_client:Arc<Client>,header:pdpb::RequestHeader, region_id: u64) -> PdFuture<Option<pdpb::GetRegionResponse>>{
+fn get_region_resp_by_id(
+    pd_client: Arc<Client>,
+    header: pdpb::RequestHeader,
+    region_id: u64,
+) -> PdFuture<Option<pdpb::GetRegionResponse>> {
     let timer = Instant::now();
     let mut req = pdpb::GetRegionByIdRequest::default();
     req.set_header(header);
@@ -294,7 +298,7 @@ fn get_region_resp_by_id(pd_client:Arc<Client>,header:pdpb::RequestHeader, regio
             Ok(Some(resp))
         }) as PdFuture<_>
     };
-    
+
     pd_client
         .request(req, executor, LEADER_CHANGE_RETRY)
         .execute()
@@ -558,12 +562,12 @@ impl PdClient for RpcClient {
     }
 
     fn get_buckets_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Buckets>> {
-        let header=self.header();
-        let pd_client=self.pd_client.clone();
-        Box::pin(async move{
-            let mut resp=   get_region_resp_by_id(pd_client,header,region_id).await?;
-            if let Some(r)=resp.as_mut(){
-                if r.has_buckets(){
+        let header = self.header();
+        let pd_client = self.pd_client.clone();
+        Box::pin(async move {
+            let mut resp = get_region_resp_by_id(pd_client, header, region_id).await?;
+            if let Some(r) = resp.as_mut() {
+                if r.has_buckets() {
                     return Ok(Some(r.take_buckets()));
                 }
             }
@@ -572,34 +576,34 @@ impl PdClient for RpcClient {
     }
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
-        let header=self.header();
-        let pd_client=self.pd_client.clone();
-        Box::pin(async move{
-            let mut resp=get_region_resp_by_id(pd_client,header,region_id).await?;
-            if let Some(r)=resp.as_mut(){
-                if r.has_region(){
+        let header = self.header();
+        let pd_client = self.pd_client.clone();
+        Box::pin(async move {
+            let mut resp = get_region_resp_by_id(pd_client, header, region_id).await?;
+            if let Some(r) = resp.as_mut() {
+                if r.has_region() {
                     return Ok(Some(r.take_region()));
                 }
             }
             Ok(None)
-        }) 
+        })
     }
 
     fn get_region_leader_by_id(
         &self,
         region_id: u64,
     ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
-        let header=self.header();
-        let pd_client=self.pd_client.clone();
-        Box::pin(async move{
-            let mut r=get_region_resp_by_id(pd_client,header,region_id).await?;
-            if let Some(resp)=r.as_mut(){
+        let header = self.header();
+        let pd_client = self.pd_client.clone();
+        Box::pin(async move {
+            let mut r = get_region_resp_by_id(pd_client, header, region_id).await?;
+            if let Some(resp) = r.as_mut() {
                 if resp.has_region() && resp.has_leader() {
-                    return Ok(Some((resp.take_region(), resp.take_leader())))
-                } 
+                    return Ok(Some((resp.take_region(), resp.take_leader())));
+                }
             }
             Ok(None)
-        }) 
+        })
     }
 
     fn region_heartbeat(

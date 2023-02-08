@@ -514,9 +514,11 @@ impl RpcClient {
         self.raw_client.initialized()
     }
 
-    fn handle_region_resp_by_id<Resp>(&self, region_id: u64, 
-        mut func: impl FnMut(&mut pdpb::GetRegionResponse) -> Resp + Send + 'static,) -> PdFuture<Resp>
-    {
+    fn handle_region_resp_by_id<Resp>(
+        &self,
+        region_id: u64,
+        mut func: impl FnMut(&mut pdpb::GetRegionResponse) -> Resp + Send + 'static,
+    ) -> PdFuture<Resp> {
         let timer = Instant::now_coarse();
 
         let mut req = pdpb::GetRegionByIdRequest::default();
@@ -1077,9 +1079,9 @@ impl PdClient for RpcClient {
             Ok((region, leader))
         })
     }
-    
-    fn get_buckets_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Buckets>>{
-        self.handle_region_resp_by_id(region_id,|resp|{
+
+    fn get_buckets_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Buckets>> {
+        self.handle_region_resp_by_id(region_id, |resp| {
             if resp.has_buckets() {
                 Some(resp.take_buckets())
             } else {
@@ -1089,7 +1091,7 @@ impl PdClient for RpcClient {
     }
 
     fn get_region_by_id(&mut self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
-        self.handle_region_resp_by_id(region_id,|resp|{
+        self.handle_region_resp_by_id(region_id, |resp| {
             if resp.has_region() {
                 Some(resp.take_region())
             } else {
@@ -1102,7 +1104,7 @@ impl PdClient for RpcClient {
         &mut self,
         region_id: u64,
     ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
-        self.handle_region_resp_by_id(region_id,|resp|{
+        self.handle_region_resp_by_id(region_id, |resp| {
             if resp.has_region() && resp.has_leader() {
                 Some((resp.take_region(), resp.take_leader()))
             } else {

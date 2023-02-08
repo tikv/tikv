@@ -13,6 +13,7 @@ use slog::{debug, error, info, warn, Logger};
 use tikv_util::{
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
+    Either,
 };
 
 const DEFAULT_BACKGROUND_POOL_SIZE: usize = 6;
@@ -25,7 +26,8 @@ pub enum Task<EK> {
         cb: Box<dyn FnOnce() + Send>,
     },
     PrepareDestroy {
-        tablet: EK,
+        // A path is passed only when the db is never opened.
+        tablet: Either<EK, PathBuf>,
         region_id: u64,
         wait_for_persisted: u64,
     },
@@ -33,6 +35,8 @@ pub enum Task<EK> {
         region_id: u64,
         persisted_index: u64,
     },
+    /// Sometimes we know for sure a tablet can be destroyed directly.
+    DirectDestroy { tablet: Either<EK, PathBuf> },
 }
 
 impl<EK> Display for Task<EK> {
@@ -63,6 +67,9 @@ impl<EK> Display for Task<EK> {
                 "destroy tablet for region_id {} persisted_index {}",
                 region_id, persisted_index,
             ),
+            Task::DirectDestroy { .. } => {
+                write!(f, "direct destroy tablet")
+            }
         }
     }
 }
@@ -81,7 +88,16 @@ impl<EK> Task<EK> {
     #[inline]
     pub fn prepare_destroy(tablet: EK, region_id: u64, wait_for_persisted: u64) -> Self {
         Task::PrepareDestroy {
-            tablet,
+            tablet: Either::Left(tablet),
+            region_id,
+            wait_for_persisted,
+        }
+    }
+
+    #[inline]
+    pub fn prepare_destroy_path(path: PathBuf, region_id: u64, wait_for_persisted: u64) -> Self {
+        Task::PrepareDestroy {
+            tablet: Either::Right(path),
             region_id,
             wait_for_persisted,
         }
@@ -92,6 +108,20 @@ impl<EK> Task<EK> {
         Task::Destroy {
             region_id,
             persisted_index,
+        }
+    }
+
+    #[inline]
+    pub fn direct_destroy(tablet: EK) -> Self {
+        Task::DirectDestroy {
+            tablet: Either::Left(tablet),
+        }
+    }
+
+    #[inline]
+    pub fn direct_destroy_path(path: PathBuf) -> Self {
+        Task::DirectDestroy {
+            tablet: Either::Right(path),
         }
     }
 }
@@ -184,14 +214,29 @@ impl<EK: KvEngine> Runner<EK> {
             .unwrap();
     }
 
-    fn prepare_destroy(&mut self, region_id: u64, tablet: EK, wait_for_persisted: u64) {
-        // The tablet is about to be deleted, flush is a waste and will block destroy.
-        let _ = tablet.set_db_options(&[("avoid_flush_during_shutdown", "true")]);
-        let _ = tablet.pause_background_work();
+    fn pause_background_work(&mut self, tablet: Either<EK, PathBuf>) -> PathBuf {
+        match tablet {
+            Either::Left(tablet) => {
+                // The tablet is about to be deleted, flush is a waste and will block destroy.
+                let _ = tablet.set_db_options(&[("avoid_flush_during_shutdown", "true")]);
+                let _ = tablet.pause_background_work();
+                PathBuf::from(tablet.path())
+            }
+            Either::Right(path) => path,
+        }
+    }
+
+    fn prepare_destroy(
+        &mut self,
+        region_id: u64,
+        tablet: Either<EK, PathBuf>,
+        wait_for_persisted: u64,
+    ) {
+        let path = self.pause_background_work(tablet);
         self.waiting_destroy_tasks
             .entry(region_id)
             .or_default()
-            .push((PathBuf::from(tablet.path()), wait_for_persisted));
+            .push((path, wait_for_persisted));
     }
 
     fn destroy(&mut self, region_id: u64, persisted: u64) {
@@ -205,6 +250,13 @@ impl<EK: KvEngine> Runner<EK> {
                 }
                 true
             });
+        }
+    }
+
+    fn direct_destroy(&mut self, tablet: Either<EK, PathBuf>) {
+        let path = self.pause_background_work(tablet);
+        if !Self::process_destroy_task(&self.logger, &self.tablet_registry, &path) {
+            self.pending_destroy_tasks.push(path);
         }
     }
 
@@ -268,6 +320,7 @@ where
                 region_id,
                 persisted_index,
             } => self.destroy(region_id, persisted_index),
+            Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
         }
     }
 }
