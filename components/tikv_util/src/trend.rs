@@ -229,12 +229,10 @@ impl HistoryWindow {
             } else {
                 0.0
             }
+        } else if self.previous_window.is_overflow() {
+            self.previous_window.std_ev()
         } else {
-            if self.previous_window.is_overflow() {
-                self.previous_window.std_ev()
-            } else {
-                0.0
-            }
+            0.0
         };
         f64::max(margin_error, self.margin_error_base)
     }
@@ -665,6 +663,12 @@ impl CurvesComposer {
 pub struct RequestPerSecRecorder {
     previous_ts: Instant,
     inited: bool,
+}
+
+impl Default for RequestPerSecRecorder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RequestPerSecRecorder {
