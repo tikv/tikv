@@ -87,7 +87,7 @@ pub struct ClientSuite {
 
 impl SecurityConfig {
     /// Validates ca, cert and private key.
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&self, raftstore_v2: bool) -> Result<(), Box<dyn Error>> {
         check_key_file("ca key", &self.ca_path)?;
         check_key_file("cert key", &self.cert_path)?;
         check_key_file("private key", &self.key_path)?;
@@ -96,6 +96,12 @@ impl SecurityConfig {
             && (self.ca_path.is_empty() || self.cert_path.is_empty() || self.key_path.is_empty())
         {
             return Err("ca, cert and private key should be all configured.".into());
+        }
+        if raftstore_v2
+            && self.encryption.data_encryption_method
+                != kvproto::encryptionpb::EncryptionMethod::Plaintext
+        {
+            return Err("encryption is not supported for partitioned-raft-kv".into());
         }
 
         Ok(())
