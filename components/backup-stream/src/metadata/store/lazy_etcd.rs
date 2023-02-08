@@ -267,12 +267,50 @@ impl MetaStore for LazyEtcdClient {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs::File, io::Write, path::PathBuf, sync::Arc};
+
+    use security::{SecurityConfig, SecurityManager};
+    use tempfile::TempDir;
+
     use super::LazyEtcdClient;
+    use crate::{errors::Result, metadata::ConnectionConfig};
 
     #[test]
-    fn test_normalize_url() {
+    fn test_normalize_url() -> Result<()> {
         let endpoints = ["http://pd-1".to_owned(), "pd-2".to_owned()];
         let le = LazyEtcdClient::new(&endpoints, Default::default());
         assert_eq!(le.endpoints(), &["http://pd-1", "http://pd-2"]);
+
+        let tempdir = TempDir::new()?;
+        let write_all = |path: &PathBuf, content| {
+            let mut f = File::create(path)?;
+            f.write_all(content)?;
+            Result::Ok(())
+        };
+        let ca = tempdir.path().join("ca");
+        let cert = tempdir.path().join("cert");
+        let key = tempdir.path().join("key");
+        write_all(&ca, b"CA :3")?;
+        write_all(&cert, b"Cert :D")?;
+        write_all(&key, b"Key X)")?;
+
+        let cfg = SecurityConfig {
+            ca_path: ca.to_string_lossy().into_owned(),
+            cert_path: cert.to_string_lossy().into_owned(),
+            key_path: key.to_string_lossy().into_owned(),
+
+            ..Default::default()
+        };
+        let sm = SecurityManager::new(&cfg).unwrap();
+        let endpoints = ["https://pd-1".to_owned(), "pd-2".to_owned()];
+        let le = LazyEtcdClient::new(
+            &endpoints,
+            ConnectionConfig {
+                tls: Arc::new(sm),
+                ..Default::default()
+            },
+        );
+        assert_eq!(le.endpoints(), &["https://pd-1", "https://pd-2"]);
+        Result::Ok(())
     }
 }
