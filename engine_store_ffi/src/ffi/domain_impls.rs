@@ -2,9 +2,12 @@
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
-pub use crate::interfaces::root::DB::{
-    BaseBuffView, ColumnFamilyType, RaftCmdHeader, RawRustPtr, RawVoidPtr, WriteCmdType,
-    WriteCmdsView,
+use super::{
+    interfaces,
+    interfaces::root::DB::{
+        BaseBuffView, ColumnFamilyType, RaftCmdHeader, RawRustPtr, RawVoidPtr, WriteCmdType,
+        WriteCmdsView,
+    },
 };
 
 pub fn name_to_cf(cf: &str) -> ColumnFamilyType {
@@ -19,6 +22,17 @@ pub fn name_to_cf(cf: &str) -> ColumnFamilyType {
         ColumnFamilyType::Default
     } else {
         unreachable!()
+    }
+}
+
+impl From<usize> for ColumnFamilyType {
+    fn from(i: usize) -> Self {
+        match i {
+            0 => ColumnFamilyType::Lock,
+            1 => ColumnFamilyType::Write,
+            2 => ColumnFamilyType::Default,
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -102,10 +116,7 @@ impl Into<u32> for RawRustPtrType {
     }
 }
 
-pub extern "C" fn ffi_gc_rust_ptr(
-    data: RawVoidPtr,
-    type_: crate::interfaces::root::DB::RawRustPtrType,
-) {
+pub extern "C" fn ffi_gc_rust_ptr(data: RawVoidPtr, type_: interfaces::root::DB::RawRustPtrType) {
     if data.is_null() {
         return;
     }

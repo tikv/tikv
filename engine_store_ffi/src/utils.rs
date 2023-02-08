@@ -3,10 +3,9 @@
 use std::time;
 
 use futures_util::{compat::Future01CompatExt, future::BoxFuture, FutureExt};
+use lazy_static::lazy_static;
 use tikv_util::timer::start_global_timer;
 use tokio_timer::timer::Handle;
-
-use crate::lazy_static;
 
 lazy_static! {
     pub static ref PROXY_TIMER_HANDLE: Handle = start_global_timer("proxy-timer");

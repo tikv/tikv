@@ -37,7 +37,13 @@ pub use yatp::{
 };
 
 pub(crate) use crate::{
-    gen_engine_store_server_helper, interfaces::root::DB::EngineStoreApplyRes, name_to_cf,
-    ColumnFamilyType, EngineStoreServerHelper, RaftCmdHeader, RawCppPtr, TiFlashEngine,
-    WriteCmdType, WriteCmds,
+    ffi::{
+        gen_engine_store_server_helper,
+        interfaces::root::DB::{
+            ColumnFamilyType, EngineStoreApplyRes, EngineStoreServerHelper, RaftCmdHeader,
+            RawCppPtr, WriteCmdType,
+        },
+        name_to_cf, WriteCmds,
+    },
+    TiFlashEngine,
 };

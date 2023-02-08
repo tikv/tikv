@@ -92,7 +92,6 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 }
             }
             MapEntry::Vacant(v) => {
-                // TODO support peer_id
                 info!("fast path: ongoing {}:{} {}, peer created",
                     self.store_id, region_id, r.peer_id;
                     "region_id" => region_id,

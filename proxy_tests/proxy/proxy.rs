@@ -11,7 +11,7 @@ pub use std::{
 };
 
 pub use collections::HashSet;
-pub use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
+pub use engine_store_ffi::ffi::{interfaces_ffi::KVGetStatus, RaftStoreProxyFFI};
 pub use engine_traits::{
     MiscExt, Mutable, RaftEngineDebug, RaftLogBatch, WriteBatch, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };

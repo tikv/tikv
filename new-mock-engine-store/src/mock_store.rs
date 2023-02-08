@@ -13,9 +13,11 @@ pub use std::{
 
 use assert_type_eq;
 use collections::{HashMap, HashSet};
-pub use engine_store_ffi::{
-    interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper, RaftStoreProxyFFIHelper,
-    RawCppPtr, RawVoidPtr, UnwrapExternCFunc,
+pub use engine_store_ffi::ffi::{
+    interfaces::root::DB as ffi_interfaces,
+    interfaces_ffi,
+    interfaces_ffi::{EngineStoreServerHelper, RaftStoreProxyFFIHelper, RawCppPtr, RawVoidPtr},
+    UnwrapExternCFunc,
 };
 use engine_traits::RaftEngineReadOnly;
 pub use engine_traits::{
@@ -651,10 +653,10 @@ impl EngineStoreServerWrap {
                 );
                 let _data = &mut region.data[cf_index as usize];
                 match tp {
-                    engine_store_ffi::WriteCmdType::Put => {
+                    interfaces_ffi::WriteCmdType::Put => {
                         write_kv_in_mem(region.as_mut(), cf_index as usize, k, v);
                     }
-                    engine_store_ffi::WriteCmdType::Del => {
+                    interfaces_ffi::WriteCmdType::Del => {
                         delete_kv_in_mem(region.as_mut(), cf_index as usize, k);
                     }
                 }

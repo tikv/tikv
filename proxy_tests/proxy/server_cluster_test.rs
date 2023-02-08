@@ -159,7 +159,7 @@ fn test_pprof() {
             assert!(router.is_some());
             status_server = Some(
                 StatusServer::new(
-                    engine_store_ffi::gen_engine_store_server_helper(
+                    engine_store_ffi::ffi::gen_engine_store_server_helper(
                         ffiset.engine_store_server_helper_ptr,
                     ),
                     1,

@@ -10,7 +10,7 @@ use file_system::File;
 use raftstore::store::snap::snap_io::get_decrypter_reader;
 use tikv_util::codec::bytes::CompactBytesFromFileDecoder;
 
-use crate::interfaces::root::DB::{BaseBuffView, RawVoidPtr};
+use super::interfaces::root::DB::{BaseBuffView, RawVoidPtr};
 
 type LockCFDecoder = BufReader<Box<dyn Read + Send>>;
 

@@ -27,8 +27,17 @@ use engine_rocks::{
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_store_ffi::{
-    self, core::DebugStruct, ps_engine::PSEngine, EngineStoreServerHelper, EngineStoreServerStatus,
-    RaftProxyStatus, RaftStoreProxy, RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient,
+    self,
+    core::DebugStruct,
+    engine::ps_engine::PSEngine,
+    ffi::{
+        interfaces_ffi::{
+            EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus,
+            RaftStoreProxyFFIHelper,
+        },
+        RaftStoreProxy, RaftStoreProxyFFI,
+    },
+    read_index_helper::ReadIndexClient,
     TiFlashEngine,
 };
 use engine_traits::{
@@ -428,8 +437,9 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
 
         self.kv_statistics = Some(factory.rocks_statistics());
 
-        let helper = engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper);
-        let ffi_hub = Arc::new(engine_store_ffi::TiFlashFFIHub {
+        let helper =
+            engine_store_ffi::ffi::gen_engine_store_server_helper(engine_store_server_helper);
+        let ffi_hub = Arc::new(engine_store_ffi::engine::TiFlashFFIHub {
             engine_store_server_helper: helper,
         });
         // engine_tiflash::RocksEngine has engine_rocks::RocksEngine inside
@@ -1200,8 +1210,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
 
         {
-            engine_store_ffi::gen_engine_store_server_helper(self.engine_store_server_helper_ptr)
-                .set_store(node.store());
+            engine_store_ffi::ffi::gen_engine_store_server_helper(
+                self.engine_store_server_helper_ptr,
+            )
+            .set_store(node.store());
             info!("set store {} to engine-store", node.id());
         }
 
@@ -1625,7 +1637,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let status_enabled = !self.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = match StatusServer::new(
-                engine_store_ffi::gen_engine_store_server_helper(
+                engine_store_ffi::ffi::gen_engine_store_server_helper(
                     self.engine_store_server_helper_ptr,
                 ),
                 self.config.server.status_thread_pool_size,

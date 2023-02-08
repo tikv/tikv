@@ -1,5 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::core::{common::*, ProxyForwarder};
+use crate::{
+    core::{common::*, ProxyForwarder},
+    ffi::interfaces::root::DB::FastAddPeerStatus,
+};
 
 pub fn get_region_local_state<EK: engine_traits::KvEngine>(
     engine: &EK,
@@ -46,7 +49,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         } else {
             return false;
         }
-        // TODO We don't need to recover all region infomation from restart,
+        // We don't need to recover all region infomation from restart,
         // since we have `has_already_inited`.
         let inner_msg = msg.get_message();
         if inner_msg.get_msg_type() != MessageType::MsgAppend {
@@ -240,8 +243,8 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             .engine_store_server_helper
             .fast_add_peer(region_id, new_peer_id);
         match res.status {
-            crate::FastAddPeerStatus::Ok => (),
-            crate::FastAddPeerStatus::WaitForData => {
+            FastAddPeerStatus::Ok => (),
+            FastAddPeerStatus::WaitForData => {
                 info!(
                     "fast path: ongoing {}:{} {}. remote peer preparing data, wait",
                     self.store_id, region_id, new_peer_id;
@@ -304,7 +307,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         match self.build_and_send_snapshot(region_id, new_peer_id, msg, apply_state, new_region) {
             Ok(s) => {
                 match s {
-                    crate::FastAddPeerStatus::Ok => {
+                    FastAddPeerStatus::Ok => {
                         fail::fail_point!("fap_core_no_fast_path", |_| { return false });
                         info!("fast path: ongoing {}:{} {}, finish build and send", self.store_id, region_id, new_peer_id;
                             "to_peer_id" => msg.get_to_peer().get_id(),
@@ -312,7 +315,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                             "region_id" => region_id,
                         );
                     }
-                    crate::FastAddPeerStatus::WaitForData => {
+                    FastAddPeerStatus::WaitForData => {
                         info!(
                             "fast path: ongoing {}:{} {}. remote peer preparing data, wait",
                             new_peer_id, self.store_id, region_id;
@@ -372,7 +375,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         msg: &RaftMessage,
         apply_state: RaftApplyState,
         new_region: kvproto::metapb::Region,
-    ) -> RaftStoreResult<crate::FastAddPeerStatus> {
+    ) -> RaftStoreResult<FastAddPeerStatus> {
         let cached_manager = self.get_cached_manager();
         let inner_msg = msg.get_message();
 
@@ -394,7 +397,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 cached_manager
                     .set_snapshot_inflight(region_id, current.as_millis())
                     .unwrap();
-                return Ok(crate::FastAddPeerStatus::Ok);
+                return Ok(FastAddPeerStatus::Ok);
             }
         }
 
@@ -512,11 +515,11 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                     trans.flush();
                 }
                 Err(RaftStoreError::RegionNotFound(_)) => (),
-                _ => return Ok(crate::FastAddPeerStatus::OtherError),
+                _ => return Ok(FastAddPeerStatus::OtherError),
             },
             Err(e) => return Err(box_err!("send snapshot meets error {:?}", e)),
         }
 
-        Ok(crate::FastAddPeerStatus::Ok)
+        Ok(FastAddPeerStatus::Ok)
     }
 }

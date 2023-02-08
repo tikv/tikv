@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use engine_store_ffi::interfaces::root::DB::{BaseBuffView, RaftStoreProxyPtr, RawVoidPtr};
+use engine_store_ffi::ffi::interfaces::root::DB::{BaseBuffView, RaftStoreProxyPtr, RawVoidPtr};
 use futures::{compat::Future01CompatExt, executor::block_on};
 use kvproto::diagnosticspb::{ServerInfoRequest, ServerInfoResponse, ServerInfoType};
 use protobuf::Message;
@@ -71,6 +71,6 @@ pub extern "C" fn ffi_server_info(
     req.merge_from_bytes(view.to_slice()).unwrap();
 
     let resp = server_info_for_ffi(req);
-    engine_store_ffi::set_server_info_resp(&resp, res);
+    engine_store_ffi::ffi::set_server_info_resp(&resp, res);
     0
 }

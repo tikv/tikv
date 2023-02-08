@@ -2,3 +2,5 @@
 
 pub mod ffihub_impl;
 pub mod ps_engine;
+
+pub use ffihub_impl::*;

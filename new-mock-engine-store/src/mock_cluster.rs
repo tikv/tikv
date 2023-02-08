@@ -11,10 +11,14 @@ use std::{
 use collections::{HashMap, HashSet};
 use encryption::DataKeyManager;
 // mock cluster
-pub use engine_store_ffi::{
-    interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper, RaftStoreProxyFFIHelper,
-    RawCppPtr, TiFlashEngine, UnwrapExternCFunc,
+pub use engine_store_ffi::ffi::{
+    interfaces::root::DB as ffi_interfaces,
+    interfaces_ffi::{
+        EngineStoreServerHelper, RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr,
+    },
+    UnwrapExternCFunc,
 };
+pub use engine_store_ffi::TiFlashEngine;
 use engine_tiflash::DB;
 use engine_traits::{Engines, KvEngine, Peekable, CF_DEFAULT};
 use file_system::IoRateLimiter;
@@ -71,19 +75,19 @@ use crate::{
 };
 
 pub struct FFIHelperSet {
-    pub proxy: Box<engine_store_ffi::RaftStoreProxy>,
-    pub proxy_helper: Box<engine_store_ffi::RaftStoreProxyFFIHelper>,
+    pub proxy: Box<engine_store_ffi::ffi::RaftStoreProxy>,
+    pub proxy_helper: Box<RaftStoreProxyFFIHelper>,
     pub engine_store_server: Box<EngineStoreServer>,
     // Make interface happy, don't own proxy and server.
     pub engine_store_server_wrap: Box<EngineStoreServerWrap>,
-    pub engine_store_server_helper: Box<engine_store_ffi::EngineStoreServerHelper>,
+    pub engine_store_server_helper: Box<EngineStoreServerHelper>,
     pub engine_store_server_helper_ptr: isize,
 }
 
 pub struct EngineHelperSet {
     pub engine_store_server: Box<EngineStoreServer>,
     pub engine_store_server_wrap: Box<EngineStoreServerWrap>,
-    pub engine_store_server_helper: Box<engine_store_ffi::EngineStoreServerHelper>,
+    pub engine_store_server_helper: Box<EngineStoreServerHelper>,
 }
 
 pub struct TestData {
@@ -171,20 +175,22 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         mock_cfg: MockConfig,
     ) -> (FFIHelperSet, TikvConfig) {
         // We must allocate on heap to avoid move.
-        let proxy = Box::new(engine_store_ffi::RaftStoreProxy {
-            status: AtomicU8::new(engine_store_ffi::RaftProxyStatus::Idle as u8),
+        let proxy = Box::new(engine_store_ffi::ffi::RaftStoreProxy {
+            status: AtomicU8::new(RaftProxyStatus::Idle as u8),
             key_manager: key_mgr.clone(),
             read_index_client: match router {
-                Some(r) => Some(Box::new(engine_store_ffi::ReadIndexClient::new(
-                    r.clone(),
-                    SysQuota::cpu_cores_quota() as usize * 2,
-                ))),
+                Some(r) => Some(Box::new(
+                    engine_store_ffi::read_index_helper::ReadIndexClient::new(
+                        r.clone(),
+                        SysQuota::cpu_cores_quota() as usize * 2,
+                    ),
+                )),
                 None => None,
             },
             kv_engine: std::sync::RwLock::new(Some(engines.kv.clone())),
         });
 
-        let mut proxy_helper = Box::new(engine_store_ffi::RaftStoreProxyFFIHelper::new(&proxy));
+        let mut proxy_helper = Box::new(RaftStoreProxyFFIHelper::new(&proxy));
         let mut engine_store_server = Box::new(EngineStoreServer::new(id, Some(engines)));
         engine_store_server.proxy_compat = proxy_compat;
         engine_store_server.mock_cfg = mock_cfg;
@@ -321,8 +327,8 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 .unwrap()
                 .engine_store_server_helper;
 
-            let helper = engine_store_ffi::gen_engine_store_server_helper(helper_ptr);
-            let ffi_hub = Arc::new(engine_store_ffi::TiFlashFFIHub {
+            let helper = engine_store_ffi::ffi::gen_engine_store_server_helper(helper_ptr);
+            let ffi_hub = Arc::new(engine_store_ffi::engine::TiFlashFFIHub {
                 engine_store_server_helper: helper,
             });
             (helper_ptr, ffi_hub)
@@ -411,11 +417,12 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             let router = self.sim.rl().get_router(node_id).unwrap();
             let mut lock = self.ffi_helper_set.lock().unwrap();
             let ffi_helper_set = lock.get_mut(&node_id).unwrap();
-            ffi_helper_set.proxy.read_index_client =
-                Some(Box::new(engine_store_ffi::ReadIndexClient::new(
+            ffi_helper_set.proxy.read_index_client = Some(Box::new(
+                engine_store_ffi::read_index_helper::ReadIndexClient::new(
                     router.clone(),
                     SysQuota::cpu_cores_quota() as usize * 2,
-                )));
+                ),
+            ));
         }
 
         // Try start new nodes.
@@ -484,8 +491,7 @@ pub fn make_global_ffi_helper_set_no_bind() -> (EngineHelperSet, *const u8) {
     let engine_store_server_helper = Box::new(gen_engine_store_server_helper(std::pin::Pin::new(
         &*engine_store_server_wrap,
     )));
-    let ptr =
-        &*engine_store_server_helper as *const engine_store_ffi::EngineStoreServerHelper as *mut u8;
+    let ptr = &*engine_store_server_helper as *const EngineStoreServerHelper as *mut u8;
     // Will mutate ENGINE_STORE_SERVER_HELPER_PTR
     (
         EngineHelperSet {
@@ -501,9 +507,12 @@ pub fn init_global_ffi_helper_set() {
     unsafe {
         START.call_once(|| {
             debug!("init_global_ffi_helper_set");
-            assert_eq!(engine_store_ffi::get_engine_store_server_helper_ptr(), 0);
+            assert_eq!(
+                engine_store_ffi::ffi::get_engine_store_server_helper_ptr(),
+                0
+            );
             let (set, ptr) = make_global_ffi_helper_set_no_bind();
-            engine_store_ffi::init_engine_store_server_helper(ptr);
+            engine_store_ffi::ffi::init_engine_store_server_helper(ptr);
             GLOBAL_ENGINE_HELPER_SET = Some(set);
         });
     }

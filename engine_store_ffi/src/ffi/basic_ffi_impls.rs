@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use std::pin::Pin;
 
-pub use crate::interfaces::root::DB::BaseBuffView;
+use super::interfaces::root::DB::BaseBuffView;
 
 impl From<&[u8]> for BaseBuffView {
     fn from(s: &[u8]) -> Self {

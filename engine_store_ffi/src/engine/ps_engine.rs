@@ -23,61 +23,10 @@ use raft::eraftpb::Entry;
 use tikv_util::{box_try, info};
 use tracker::TrackerToken;
 
-use crate::{gen_engine_store_server_helper, PageAndCppStrWithView, RawCppPtr};
-
-// 1. STORE_IDENT 0
-// 2. PREPARE_BOOTSTRAP 1
-// 3. RaftLocalState 2
-// 4. RegionLocalState 3
-// 5. RaftApplyState 4
-// 6. Snapshot RaftLocalState 5
-// 7. Reserved 6..9
-// 8. Log 10(+ offset 5)
-
-// pub const PS_KEY_PREFIX: &[u8] = &[b'r', b'_'];
-// pub const PS_KEY_SEP: u8 = b'_';
-//
-// const RAFT_LOCAL_STATE_ID : u64 = 2;
-// const RAFT_LOG_ID_OFFSET : u64 = 5;
-//
-// pub fn ps_raft_state_key(region_id: u64) -> [u8; 19] {
-//     let mut key = [0; 19];
-//     key[..2].copy_from_slice(PS_KEY_PREFIX);
-//     BigEndian::write_u64(&mut key[2..10], region_id);
-//     key[10] = PS_KEY_SEP;
-//     BigEndian::write_u64(&mut key[11..19], RAFT_LOCAL_STATE_ID);
-//     key
-// }
-//
-// pub fn ps_raft_log_key(region_id: u64, log_index: u64) -> [u8; 19] {
-//     let mut key = [0; 19];
-//     key[..2].copy_from_slice(PS_KEY_PREFIX);
-//     BigEndian::write_u64(&mut key[2..10], region_id);
-//     key[10] = PS_KEY_SEP;
-//     BigEndian::write_u64(&mut key[11..19], log_index + RAFT_LOG_ID_OFFSET);
-//     key
-// }
-//
-// pub fn ps_raft_log_prefix(region_id: u64) -> [u8; 11] {
-//     let mut key = [0; 11];
-//     key[..2].copy_from_slice(PS_KEY_PREFIX);
-//     BigEndian::write_u64(&mut key[2..10], region_id);
-//     key[10] = PS_KEY_SEP;
-//     key
-// }
-//
-// pub fn ps_raft_log_index(key: &[u8]) -> u64 {
-//     let expect_key_len = PS_KEY_PREFIX.len()
-//         + mem::size_of::<u64>()
-//         + mem::size_of::<u8>()
-//         + mem::size_of::<u64>();
-//     if key.len() != expect_key_len {
-//         panic!("wrong key format {:?}", key);
-//     }
-//     BigEndian::read_u64(
-//         &key[expect_key_len - mem::size_of::<u64>()..],
-//     )
-// }
+use crate::ffi::{
+    gen_engine_store_server_helper,
+    interfaces_ffi::{PageAndCppStrWithView, RawCppPtr},
+};
 
 pub struct PSEngineWriteBatch {
     pub engine_store_server_helper: isize,
