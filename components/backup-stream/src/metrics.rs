@@ -155,4 +155,9 @@ lazy_static! {
         &["stage"]
     )
     .unwrap();
+    pub static ref LOST_LEADER_REGION: IntCounter = register_int_counter!(
+        "tikv_log_backup_lost_leader_region",
+        "The regions that lost leadership during resolving"
+    )
+    .unwrap();
 }

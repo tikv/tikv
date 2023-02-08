@@ -715,6 +715,13 @@ impl Command {
         self.command_ext().get_ctx().get_priority()
     }
 
+    pub fn group_name(&self) -> String {
+        self.command_ext()
+            .get_ctx()
+            .get_resource_group_name()
+            .to_owned()
+    }
+
     pub fn need_flow_control(&self) -> bool {
         !self.readonly() && self.priority() != CommandPri::High
     }

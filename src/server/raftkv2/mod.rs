@@ -15,7 +15,7 @@ use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
 use futures::{Future, Stream, StreamExt};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
 pub use node::NodeV2;
-use raftstore::store::RegionSnapshot;
+use raftstore::store::{util::encode_start_ts_into_flag_data, RegionSnapshot};
 use raftstore_v2::{
     router::{
         message::SimpleWrite, CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter,
@@ -23,7 +23,7 @@ use raftstore_v2::{
     SimpleWriteBinary, SimpleWriteEncoder,
 };
 use tikv_kv::{Modify, WriteEvent};
-use tikv_util::{codec::number::NumberEncoder, time::Instant};
+use tikv_util::time::Instant;
 use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::{
@@ -153,18 +153,21 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
 
         let mut header = new_request_header(ctx.pb_ctx);
         let mut flags = 0;
-        if ctx.pb_ctx.get_stale_read() && ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
-            let mut data = [0u8; 8];
-            (&mut data[..])
-                .encode_u64(ctx.start_ts.unwrap_or_default().into_inner())
-                .unwrap();
+        let need_encoded_start_ts = ctx.start_ts.map_or(true, |ts| !ts.is_zero());
+        if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
             flags |= WriteBatchFlags::STALE_READ.bits();
-            header.set_flag_data(data.into());
         }
         if ctx.allowed_in_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
         header.set_flags(flags);
+        // Encode `start_ts` in `flag_data` for the check of stale read and flashback.
+        if need_encoded_start_ts {
+            encode_start_ts_into_flag_data(
+                &mut header,
+                ctx.start_ts.unwrap_or_default().into_inner(),
+            );
+        }
 
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);

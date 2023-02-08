@@ -90,7 +90,7 @@ a = "b"
 
 [storage]
 data-dir = "/var"
-engine = "raft-kv2"
+engine = "partitioned-raft-kv"
 gc-ratio-threshold = 1.2
 max-key-size = 4096
 scheduler-concurrency = 123

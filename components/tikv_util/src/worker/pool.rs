@@ -405,6 +405,13 @@ impl Worker {
         });
     }
 
+    pub fn spawn_async_task<F>(&self, f: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.remote.spawn(f);
+    }
+
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
         let now = Instant::now();
         let f = GLOBAL_TIMER_HANDLE

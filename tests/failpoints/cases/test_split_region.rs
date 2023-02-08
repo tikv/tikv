@@ -175,7 +175,7 @@ fn gen_split_region() -> (Region, Region, Region) {
     let region_split_size = 30000;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
-    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
 
     let mut range = 1..;
     cluster.run();

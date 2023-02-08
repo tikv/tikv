@@ -54,6 +54,7 @@ fn test_store_heartbeat() {
             .1;
         if stats.get_start_time() > 0 {
             assert_ne!(stats.get_capacity(), 0);
+            assert_ne!(stats.get_used_size(), 0);
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));

@@ -14,7 +14,7 @@ mod util;
 
 mod config;
 pub mod errors;
-use std::{cmp::Ordering, collections::HashMap, ops::Deref, sync::Arc, time::Duration};
+use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 
 use futures::{executor::block_on, future::BoxFuture};
 use grpcio::ClientSStreamReceiver;
@@ -205,6 +205,8 @@ impl BucketStat {
 }
 
 pub const INVALID_ID: u64 = 0;
+// TODO: Implementation of config registration for each module
+pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
 
 /// PdClient communicates with Placement Driver (PD).
 /// Because now one PD only supports one cluster, so it is no need to pass
@@ -217,13 +219,28 @@ pub trait PdClientCommon: Sync + Send {
         unimplemented!()
     }
 
+    fn store_global_config(
+        &mut self,
+        _config_path: String,
+        _items: Vec<pdpb::GlobalConfigItem>,
+    ) -> PdFuture<()> {
+        unimplemented!()
+    }
+
     /// Load a list of GlobalConfig.
-    fn load_global_config(&mut self, _list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+    fn load_global_config(
+        &mut self,
+        _config_path: String,
+    ) -> PdFuture<(Vec<pdpb::GlobalConfigItem>, i64)> {
         unimplemented!()
     }
 
     /// Watching change of GlobalConfig.
-    fn watch_global_config(&mut self) -> Result<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
+    fn watch_global_config(
+        &mut self,
+        _config_path: String,
+        _revision: i64,
+    ) -> Result<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
         unimplemented!()
     }
 

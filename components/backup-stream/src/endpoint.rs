@@ -6,6 +6,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::FutureExt;
+use grpcio::Environment;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -15,7 +16,10 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::RaftStoreRouter,
+    store::RegionReadProgressRegistry,
 };
+use resolved_ts::LeadershipResolver;
+use security::SecurityManager;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
@@ -110,6 +114,10 @@ where
         router: RT,
         pd_client: PDC,
         concurrency_manager: ConcurrencyManager,
+        // Required by Leadership Resolver.
+        env: Arc<Environment>,
+        region_read_progress: RegionReadProgressRegistry,
+        security_mgr: Arc<SecurityManager>,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
         let pool = create_tokio_runtime((config.num_threads / 2).max(1), "backup-stream")
@@ -145,6 +153,14 @@ where
         let initial_scan_throughput_quota = Limiter::new(limit);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         let subs = SubscriptionTracer::default();
+        let leadership_resolver = LeadershipResolver::new(
+            store_id,
+            Arc::clone(&pd_client) as _,
+            env,
+            security_mgr,
+            region_read_progress,
+            Duration::from_secs(60),
+        );
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
             InitialDataLoader::new(
                 router.clone(),
@@ -160,6 +176,7 @@ where
             meta_client.clone(),
             pd_client.clone(),
             ((config.num_threads + 1) / 2).max(1),
+            leadership_resolver,
         );
         pool.spawn(op_loop);
         let mut checkpoint_mgr = CheckpointManager::default();
@@ -789,7 +806,7 @@ async fn starts_flush_ticks(router: Router) {
 }
 
 // TODO find a proper way to exit watch tasks
-async fn start_and_watch_tasks<S: MetaStore + 'static>(
+async fn start_and_watch_tasks(
     meta_client: MetadataClient<S>,
     scheduler: Scheduler<Task>,
 ) -> Result<()> {
@@ -825,13 +842,15 @@ async fn start_and_watch_tasks<S: MetaStore + 'static>(
     let scheduler_clone = scheduler.clone();
 
     Handle::current().spawn(async move {
-        if let Err(err) = starts_watch_task(meta_client_clone, scheduler_clone, revision).await {
+        if let Err(err) =
+            Self::starts_watch_task(meta_client_clone, scheduler_clone, revision).await
+        {
             err.report("failed to start watch tasks");
         }
     });
 
     Handle::current().spawn(async move {
-        if let Err(err) = starts_watch_pause(meta_client, scheduler, revision).await {
+        if let Err(err) = Self::starts_watch_pause(meta_client, scheduler, revision).await {
             err.report("failed to start watch pause");
         }
     });
@@ -839,7 +858,7 @@ async fn start_and_watch_tasks<S: MetaStore + 'static>(
     Ok(())
 }
 
-async fn starts_watch_task<S: MetaStore + 'static>(
+async fn starts_watch_task(
     meta_client: MetadataClient<S>,
     scheduler: Scheduler<Task>,
     revision: i64,
@@ -850,19 +869,21 @@ async fn starts_watch_task<S: MetaStore + 'static>(
         let mut watcher = match watcher {
             Ok(w) => w,
             Err(e) => {
-                e.report("failed to start watch pause");
+                e.report("failed to start watch task");
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }
         };
+        info!("start watching the task changes."; "from_rev" => %revision_new);
 
         loop {
             if let Some(event) = watcher.stream.next().await {
-                info!("backup stream watch event from etcd"; "event" => ?event);
+                info!("backup stream watch task from etcd"; "event" => ?event);
 
                 let revision = meta_client.get_reversion().await;
                 if let Ok(r) = revision {
                     revision_new = r;
+                    info!("update the revision"; "revision" => revision_new);
                 }
 
                 match event {
@@ -887,7 +908,7 @@ async fn starts_watch_task<S: MetaStore + 'static>(
     }
 }
 
-async fn starts_watch_pause<S: MetaStore + 'static>(
+async fn starts_watch_pause(
     meta_client: MetadataClient<S>,
     scheduler: Scheduler<Task>,
     revision: i64,
@@ -904,13 +925,15 @@ async fn starts_watch_pause<S: MetaStore + 'static>(
                 continue;
             }
         };
+        info!("start watching the pausing events."; "from_rev" => %revision_new);
 
         loop {
             if let Some(event) = watcher.stream.next().await {
-                info!("backup stream watch event from etcd"; "event" => ?event);
+                info!("backup stream watch pause from etcd"; "event" => ?event);
                 let revision = meta_client.get_reversion().await;
                 if let Ok(r) = revision {
                     revision_new = r;
+                    info!("update the revision"; "revision" => revision_new);
                 }
 
                 match event {

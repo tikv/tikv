@@ -82,6 +82,9 @@ fn test_restart_resume() {
         .new_request_for(split_region_id)
         .take_header()
         .take_region_epoch();
+    // Split will be resumed for region 2, not removing the fp will make write block
+    // forever.
+    fail::remove(fp);
     let timer = Instant::now();
     for (region_id, key, val) in cases {
         let mut put = SimpleWriteEncoder::with_capacity(64);
