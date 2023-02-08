@@ -389,7 +389,8 @@ impl<T: Simulator> Cluster<T> {
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
         self.group_props[&node_id].mark_shutdown();
-        // When shutdown behavior of server shutdown.
+        // Simulate shutdown behavior of server shutdown. It's not enough to just set
+        // the map above as current thread may also query properties during shutdown.
         let previous_prop = tikv_util::thread_group::current_properties();
         tikv_util::thread_group::set_properties(Some(self.group_props[&node_id].clone()));
         match self.sim.write() {
