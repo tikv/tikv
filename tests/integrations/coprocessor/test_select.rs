@@ -264,7 +264,6 @@ fn test_select_failed() {
     let req = DagSelect::from(&product).build_with(ctx.clone(), &[0]);
     let f = endpoint.parse_and_handle_unary_request(req, None);
     cluster.stop_node(ctx.get_peer().get_store_id());
-    thread::sleep(Duration::from_millis(10));
     drop(cluster);
     let _ = futures::executor::block_on(f);
 }
