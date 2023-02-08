@@ -231,8 +231,7 @@ pub mod tests {
                 }
                 std::thread::sleep(Duration::from_millis(1));
             }
-            assert!(
-                false,
+            panic!(
                 "wait time out, expectd: {}, got: {}",
                 count,
                 s.manager.get_all_resource_groups().len()
