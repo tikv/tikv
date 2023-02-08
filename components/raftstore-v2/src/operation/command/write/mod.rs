@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, Mutable, RaftEngine, CF_DEFAULT};
+use engine_traits::{data_cf_offset, KvEngine, Mutable, RaftEngine, CF_DEFAULT};
 use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
     store::{
@@ -15,7 +15,6 @@ use tikv_util::slog_panic;
 
 use crate::{
     batch::StoreContext,
-    operation::cf_offset,
     raft::{Apply, Peer},
     router::{ApplyTask, CmdResChannel},
 };
@@ -129,7 +128,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn apply_put(&mut self, cf: &str, index: u64, key: &[u8], value: &[u8]) -> Result<()> {
-        let off = cf_offset(cf);
+        let off = data_cf_offset(cf);
         if self.should_skip(off, index) {
             return Ok(());
         }
@@ -172,7 +171,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
     #[inline]
     pub fn apply_delete(&mut self, cf: &str, index: u64, key: &[u8]) -> Result<()> {
-        let off = cf_offset(cf);
+        let off = data_cf_offset(cf);
         if self.should_skip(off, index) {
             return Ok(());
         }

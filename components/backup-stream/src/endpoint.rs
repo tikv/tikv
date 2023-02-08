@@ -349,7 +349,7 @@ where
             let mut watcher = match watcher {
                 Ok(w) => w,
                 Err(e) => {
-                    e.report("failed to start watch pause");
+                    e.report("failed to start watch task");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
@@ -358,11 +358,12 @@ where
 
             loop {
                 if let Some(event) = watcher.stream.next().await {
-                    info!("backup stream watch event from etcd"; "event" => ?event);
+                    info!("backup stream watch task from etcd"; "event" => ?event);
 
                     let revision = meta_client.get_reversion().await;
                     if let Ok(r) = revision {
                         revision_new = r;
+                        info!("update the revision"; "revision" => revision_new);
                     }
 
                     match event {
@@ -408,10 +409,11 @@ where
 
             loop {
                 if let Some(event) = watcher.stream.next().await {
-                    info!("backup stream watch event from etcd"; "event" => ?event);
+                    info!("backup stream watch pause from etcd"; "event" => ?event);
                     let revision = meta_client.get_reversion().await;
                     if let Ok(r) = revision {
                         revision_new = r;
+                        info!("update the revision"; "revision" => revision_new);
                     }
 
                     match event {
