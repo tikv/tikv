@@ -599,6 +599,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.remove_region(region_id);
             meta.readers.remove(&region_id);
+            ctx.tablet_registry.remove(region_id);
         }
         if let Some(msg) = self.destroy_progress_mut().finish() {
             // The message will be dispatched to store fsm, which will create a

@@ -1,16 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    convert::TryFrom,
     future::Future,
-    sync::{mpsc::SyncSender, Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::SyncSender,
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
 use file_system::{set_io_type, IoType};
 use futures::{channel::oneshot, future::TryFutureExt};
-use kvproto::kvrpcpb::CommandPri;
+use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
-use prometheus::{IntCounter, IntGauge};
+use prometheus::{Histogram, IntCounter, IntGauge};
 use resource_control::{ControlledFuture, ResourceController};
 use thiserror::Error;
 use tikv_util::{
@@ -54,6 +59,7 @@ pub enum ReadPool {
         max_tasks: usize,
         pool_size: usize,
         resource_ctl: Option<Arc<ResourceController>>,
+        time_slice_inspector: Arc<TimeSliceInspector>,
     },
 }
 
@@ -76,6 +82,7 @@ impl ReadPool {
                 max_tasks,
                 pool_size,
                 resource_ctl,
+                time_slice_inspector,
             } => ReadPoolHandle::Yatp {
                 remote: pool.remote().clone(),
                 running_tasks: running_tasks.clone(),
@@ -83,6 +90,7 @@ impl ReadPool {
                 max_tasks: *max_tasks,
                 pool_size: *pool_size,
                 resource_ctl: resource_ctl.clone(),
+                time_slice_inspector: time_slice_inspector.clone(),
             },
         }
     }
@@ -102,6 +110,7 @@ pub enum ReadPoolHandle {
         max_tasks: usize,
         pool_size: usize,
         resource_ctl: Option<Arc<ResourceController>>,
+        time_slice_inspector: Arc<TimeSliceInspector>,
     },
 }
 
@@ -251,6 +260,121 @@ impl ReadPoolHandle {
             }
         }
     }
+
+    pub fn get_ewma_time_slice(&self) -> Option<Duration> {
+        match self {
+            ReadPoolHandle::FuturePools { .. } => None,
+            ReadPoolHandle::Yatp {
+                time_slice_inspector,
+                ..
+            } => Some(time_slice_inspector.get_ewma_time_slice()),
+        }
+    }
+
+    pub fn update_ewma_time_slice(&self) {
+        if let ReadPoolHandle::Yatp {
+            time_slice_inspector,
+            ..
+        } = self
+        {
+            time_slice_inspector.update();
+        }
+    }
+
+    pub fn get_estimated_wait_duration(&self) -> Option<Duration> {
+        self.get_ewma_time_slice()
+            .map(|s| s * (self.get_queue_size_per_worker() as u32))
+    }
+
+    pub fn check_busy_threshold(
+        &self,
+        busy_threshold: Duration,
+    ) -> Result<(), errorpb::ServerIsBusy> {
+        if busy_threshold.is_zero() {
+            return Ok(());
+        }
+        let estimated_wait = match self.get_estimated_wait_duration() {
+            Some(estimated_wait) if estimated_wait > busy_threshold => estimated_wait,
+            _ => return Ok(()),
+        };
+        // TODO: Get applied_index from the raftstore and check memory locks. Then, we
+        // can skip read index in replica read. But now the difficulty is that we don't
+        // have access to the the local reader in gRPC threads.
+        let mut busy_err = errorpb::ServerIsBusy::default();
+        busy_err.set_reason("estimated wait time exceeds threshold".to_owned());
+        busy_err.estimated_wait_ms = u32::try_from(estimated_wait.as_millis()).unwrap_or(u32::MAX);
+        Err(busy_err)
+    }
+}
+
+pub const UPDATE_EWMA_TIME_SLICE_INTERVAL: Duration = Duration::from_millis(200);
+
+pub struct TimeSliceInspector {
+    // `atomic_ewma_nanos` is a mirror of `inner.ewma` provided for fast access. It is updated in
+    // the `update` method.
+    atomic_ewma_nanos: AtomicU64,
+    inner: Mutex<TimeSliceInspectorInner>,
+}
+
+struct TimeSliceInspectorInner {
+    time_slice_hist: [Histogram; 3],
+    ewma: Duration,
+
+    last_sum: Duration,
+    last_count: u64,
+}
+
+impl TimeSliceInspector {
+    pub fn new(name: &str) -> Self {
+        let time_slice_hist = [
+            yatp::metrics::TASK_POLL_DURATION.with_label_values(&[name, "0"]),
+            yatp::metrics::TASK_POLL_DURATION.with_label_values(&[name, "1"]),
+            yatp::metrics::TASK_POLL_DURATION.with_label_values(&[name, "2"]),
+        ];
+        let inner = TimeSliceInspectorInner {
+            time_slice_hist,
+            ewma: Duration::default(),
+            last_sum: Duration::default(),
+            last_count: 0,
+        };
+        Self {
+            atomic_ewma_nanos: AtomicU64::default(),
+            inner: Mutex::new(inner),
+        }
+    }
+
+    pub fn update(&self) {
+        // new_ewma = WEIGHT * new_val + (1 - WEIGHT) * old_ewma
+        const WEIGHT: f64 = 0.3;
+        // If the accumulated time slice is less than 100ms, the EWMA is not updated.
+        const MIN_TIME_DIFF: Duration = Duration::from_millis(100);
+
+        let mut inner = self.inner.lock().unwrap();
+        let mut new_sum = Duration::default();
+        let mut new_count = 0;
+        // Now, we simplify the problem by merging samples from all levels. If we want
+        // more accurate answer in the future, calculate for each level separately.
+        for hist in &inner.time_slice_hist {
+            new_sum += Duration::from_secs_f64(hist.get_sample_sum());
+            new_count += hist.get_sample_count();
+        }
+        let time_diff = new_sum - inner.last_sum;
+        if time_diff < MIN_TIME_DIFF {
+            return;
+        }
+        let new_val = time_diff / ((new_count - inner.last_count) as u32);
+        let new_ewma = new_val.mul_f64(WEIGHT) + inner.ewma.mul_f64(1.0 - WEIGHT);
+        inner.ewma = new_ewma;
+        inner.last_sum = new_sum;
+        inner.last_count = new_count;
+
+        self.atomic_ewma_nanos
+            .store(new_ewma.as_nanos() as u64, Ordering::Release);
+    }
+
+    pub fn get_ewma_time_slice(&self) -> Duration {
+        Duration::from_nanos(self.atomic_ewma_nanos.load(Ordering::Acquire))
+    }
 }
 
 #[derive(Clone)]
@@ -273,8 +397,6 @@ impl<R: FlowStatsReporter> ReporterTicker<R> {
 
 #[cfg(test)]
 fn get_unified_read_pool_name() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     format!(
         "unified-read-pool-test-{}",
@@ -302,8 +424,11 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
             config.min_thread_count,
             config.max_thread_count,
             std::cmp::max(
-                UNIFIED_READPOOL_MIN_CONCURRENCY,
-                SysQuota::cpu_cores_quota() as usize,
+                std::cmp::max(
+                    UNIFIED_READPOOL_MIN_CONCURRENCY,
+                    SysQuota::cpu_cores_quota() as usize,
+                ),
+                config.max_thread_count,
             ),
         )
         .after_start(move || {
@@ -319,6 +444,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     } else {
         builder.build_multi_level_pool()
     };
+    let time_slice_inspector = Arc::new(TimeSliceInspector::new(&unified_read_pool_name));
     ReadPool::Yatp {
         pool,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
@@ -330,6 +456,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
             .saturating_mul(config.max_thread_count),
         pool_size: config.max_thread_count,
         resource_ctl,
+        time_slice_inspector,
     }
 }
 
@@ -764,5 +891,46 @@ mod tests {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
+    }
+
+    #[test]
+    fn test_time_slice_inspector_ewma() {
+        const MARGIN: f64 = 1e-5; // 10us
+
+        let name = "test_time_slice_inspector_ewma";
+        let inspector = TimeSliceInspector::new(name);
+        let hist = yatp::metrics::TASK_POLL_DURATION.with_label_values(&[name, "0"]);
+
+        // avg: 0.055, prev_ewma: 0 => new_ewma = 0.0165
+        for i in 1..=10 {
+            hist.observe(i as f64 * 0.01);
+        }
+        inspector.update();
+        let ewma = inspector.get_ewma_time_slice().as_secs_f64();
+        assert!((ewma - 0.0165).abs() < MARGIN);
+
+        // avg: 0.0125, prev_ewma: 0.0165 => new_ewma = 0.0153
+        for i in 5..=20 {
+            hist.observe(i as f64 * 0.001);
+        }
+        inspector.update();
+        let ewma = inspector.get_ewma_time_slice().as_secs_f64();
+        assert!((ewma - 0.0153).abs() < MARGIN);
+
+        // sum: 55ms, don't update ewma
+        for i in 1..=10 {
+            hist.observe(i as f64 * 0.001);
+        }
+        inspector.update();
+        let ewma = inspector.get_ewma_time_slice().as_secs_f64();
+        assert!((ewma - 0.0153).abs() < MARGIN);
+
+        // avg: 0.00786, prev_ewma: 0.0153 => new_ewma = 0.01307
+        for i in 5..=15 {
+            hist.observe(i as f64 * 0.001);
+        }
+        inspector.update();
+        let ewma = inspector.get_ewma_time_slice().as_secs_f64();
+        assert!((ewma - 0.01307).abs() < MARGIN);
     }
 }
