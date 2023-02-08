@@ -808,6 +808,35 @@ fn transfer_error(e: RaftEngineError) -> engine_traits::Error {
     }
 }
 
+impl RaftLogEngine {
+    // Use for test only
+    pub fn get_region_state_in_message_format<M: protobuf::Message>(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<M>> {
+        let mut state = None;
+        self.0
+            .scan_messages(
+                raft_group_id,
+                Some(REGION_STATE_KEY),
+                Some(APPLY_STATE_KEY),
+                true,
+                |key, value| {
+                    let index = NumberCodec::decode_u64(&key[REGION_STATE_KEY.len()..]);
+                    if index > apply_index {
+                        true
+                    } else {
+                        state = Some(value);
+                        false
+                    }
+                },
+            )
+            .map_err(transfer_error)?;
+        Ok(state)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::assert_matches::assert_matches;
