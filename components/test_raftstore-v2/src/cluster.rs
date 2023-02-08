@@ -617,6 +617,23 @@ impl<T: Simulator> Cluster<T> {
             true
         });
         for region_id in regions {
+            if let Some(mut tablet) = reg.get(region_id) {
+                if let Some(tablet) = tablet.latest() {
+                    let mut tried = 0;
+                    while tried < 10 {
+                        if Arc::strong_count(tablet.as_inner()) <= 3 {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                        tried += 1;
+                    }
+                    // println!(
+                    //     "Ref Count {}, path {:?}",
+                    //     Arc::strong_count(tablet.as_inner()),
+                    //     tablet.path()
+                    // );
+                }
+            }
             reg.remove(region_id);
         }
 
