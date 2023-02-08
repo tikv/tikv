@@ -116,7 +116,7 @@ impl ResourceManagerService {
                     items.iter().for_each(|g| {
                         match protobuf::parse_from_bytes::<ResourceGroup>(g.get_payload()) {
                             Ok(rg) => {
-                                vaild_groups.insert(rg.get_name().to_owned());
+                                vaild_groups.insert(rg.get_name().to_ascii_lowercase());
                                 self.manager.add_resource_group(rg);
                             }
                             Err(e) => {
