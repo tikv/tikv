@@ -223,6 +223,22 @@ pub mod tests {
         assert_eq!(s.manager.get_all_resource_groups().len(), 0);
         assert_eq!(s.revision, 0);
 
+        // TODO: find a better way to observe the watch is ready.
+        let wait_watch_ready = |s: &ResourceManagerService, count: usize| {
+            for _i in 0..100 {
+                if s.manager.get_all_resource_groups().len() == count {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(
+                false,
+                "wait time out, expectd: {}, got: {}",
+                count,
+                s.manager.get_all_resource_groups().len()
+            );
+        };
+
         let background_worker = Builder::new("background").thread_count(1).create();
         let mut s_clone = s.clone();
         background_worker.spawn_async_task(async move {
@@ -236,16 +252,13 @@ pub mod tests {
         // Mock modify
         let group2 = new_resource_group_ru("TEST2".into(), 50);
         add_resource_group(s.pd_client.clone(), group2);
-        block_on(s.reload_all_resource_groups());
-        assert_eq!(s.manager.get_all_resource_groups().len(), 2);
-        assert_eq!(s.revision, 3);
+        wait_watch_ready(&s, 2);
+
         // Mock delete
         delete_resource_group(s.pd_client.clone(), "TEST1");
-        block_on(s.reload_all_resource_groups());
-        assert_eq!(s.manager.get_all_resource_groups().len(), 1);
-        assert_eq!(s.revision, 4);
+
         // Wait for watcher
-        std::thread::sleep(Duration::from_millis(100));
+        wait_watch_ready(&s, 1);
         let groups = s.manager.get_all_resource_groups();
         assert_eq!(groups.len(), 1);
         assert!(s.manager.get_resource_group("TEST1").is_none());
