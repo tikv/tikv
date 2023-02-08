@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
@@ -37,15 +37,7 @@ impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
         'outer: loop {
             // Firstly, load all resource groups as of now.
-            let (groups, revision) = self.list_resource_groups().await;
-            self.revision = revision;
-            // remove all potential deleted groups with retain.
-            let vaild_groups: Vec<_> = groups.iter().map(|g| &g.name).collect();
-            self.manager.retain(|name, _g| vaild_groups.contains(&name));
-            drop(vaild_groups);
-            groups
-                .into_iter()
-                .for_each(|rg| self.manager.add_resource_group(rg));
+            self.reload_all_resource_groups().await;
             // Secondly, start watcher at loading revision.
             loop {
                 match self
@@ -68,7 +60,7 @@ impl ResourceManagerService {
                                                         self.manager.add_resource_group(group);
                                                     }
                                                     Err(e) => {
-                                                        error!("parse put resource group event failed, name: {}, err: {:?}", item.get_name(), e);
+                                                        error!("parse put resource group event failed"; "name" => item.get_name(), "err" => ?e);
                                                     }
                                                 }
                                             }
@@ -112,7 +104,7 @@ impl ResourceManagerService {
         }
     }
 
-    async fn list_resource_groups(&mut self) -> (Vec<ResourceGroup>, i64) {
+    async fn reload_all_resource_groups(&mut self) {
         loop {
             match self
                 .pd_client
@@ -120,11 +112,22 @@ impl ResourceManagerService {
                 .await
             {
                 Ok((items, revision)) => {
-                    let groups = items
-                        .into_iter()
-                        .filter_map(|g| protobuf::parse_from_bytes(g.get_payload()).ok())
-                        .collect();
-                    return (groups, revision);
+                    let mut vaild_groups = HashSet::with_capacity(items.len());
+                    items.iter().for_each(|g| {
+                        match protobuf::parse_from_bytes::<ResourceGroup>(g.get_payload()) {
+                            Ok(rg) => {
+                                vaild_groups.insert(rg.get_name().to_owned());
+                                self.manager.add_resource_group(rg);
+                            }
+                            Err(e) => {
+                                error!("parse resource group failed"; "name" => g.get_name(), "err" => ?e);
+                            }
+                        }
+                    });
+
+                    self.manager.retain(|name, _g| vaild_groups.contains(name));
+                    self.revision = revision;
+                    return;
                 }
                 Err(err) => {
                     error!("failed to load global config"; "err" => ?err);
@@ -198,14 +201,14 @@ pub mod tests {
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
         let group = new_resource_group("TEST".into(), true, 100, 100);
         add_resource_group(s.pd_client.clone(), group);
-        let (res, revision) = block_on(s.list_resource_groups());
-        assert_eq!(res.len(), 1);
-        assert_eq!(revision, 1);
+        block_on(s.reload_all_resource_groups());
+        assert_eq!(s.manager.get_all_resource_groups().len(), 1);
+        assert_eq!(s.revision, 1);
 
         delete_resource_group(s.pd_client.clone(), "TEST");
-        let (res, revision) = block_on(s.list_resource_groups());
-        assert_eq!(res.len(), 0);
-        assert_eq!(revision, 2);
+        block_on(s.reload_all_resource_groups());
+        assert_eq!(s.manager.get_all_resource_groups().len(), 0);
+        assert_eq!(s.revision, 2);
 
         server.stop();
     }
@@ -216,9 +219,9 @@ pub mod tests {
         let resource_manager = ResourceGroupManager::default();
 
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
-        let (res, revision) = block_on(s.list_resource_groups());
-        assert_eq!(res.len(), 0);
-        assert_eq!(revision, 0);
+        block_on(s.reload_all_resource_groups());
+        assert_eq!(s.manager.get_all_resource_groups().len(), 0);
+        assert_eq!(s.revision, 0);
 
         let background_worker = Builder::new("background").thread_count(1).create();
         let mut s_clone = s.clone();
@@ -233,14 +236,14 @@ pub mod tests {
         // Mock modify
         let group2 = new_resource_group_ru("TEST2".into(), 50);
         add_resource_group(s.pd_client.clone(), group2);
-        let (res, revision) = block_on(s.list_resource_groups());
-        assert_eq!(res.len(), 2);
-        assert_eq!(revision, 3);
+        block_on(s.reload_all_resource_groups());
+        assert_eq!(s.manager.get_all_resource_groups().len(), 2);
+        assert_eq!(s.revision, 3);
         // Mock delete
         delete_resource_group(s.pd_client.clone(), "TEST1");
-        let (res, revision) = block_on(s.list_resource_groups());
-        assert_eq!(res.len(), 1);
-        assert_eq!(revision, 4);
+        block_on(s.reload_all_resource_groups());
+        assert_eq!(s.manager.get_all_resource_groups().len(), 1);
+        assert_eq!(s.revision, 4);
         // Wait for watcher
         std::thread::sleep(Duration::from_millis(100));
         let groups = s.manager.get_all_resource_groups();
