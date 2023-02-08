@@ -30,7 +30,7 @@ test-engines-rocksdb = [
 test-engines-panic = [
   "tikv/test-engines-panic",
 ]
-nortcheck = ["engine_rocks/nortcheck"]
+nortcheck = ["engine_rocks/nortcheck", "engine_tiflash/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
 pprof-fp = ["tikv/pprof-fp"]

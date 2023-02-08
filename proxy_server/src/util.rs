@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use engine_store_ffi::ffi::interfaces::root::DB::{BaseBuffView, RaftStoreProxyPtr, RawVoidPtr};
+use engine_store_ffi::ffi::interfaces_ffi::{BaseBuffView, RaftStoreProxyPtr, RawVoidPtr};
 use futures::{compat::Future01CompatExt, executor::block_on};
 use kvproto::diagnosticspb::{ServerInfoRequest, ServerInfoResponse, ServerInfoType};
 use protobuf::Message;

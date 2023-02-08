@@ -3,8 +3,8 @@
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use super::{
-    interfaces,
-    interfaces::root::DB::{
+    interfaces_ffi,
+    interfaces_ffi::{
         BaseBuffView, ColumnFamilyType, RaftCmdHeader, RawRustPtr, RawVoidPtr, WriteCmdType,
         WriteCmdsView,
     },
@@ -116,7 +116,7 @@ impl Into<u32> for RawRustPtrType {
     }
 }
 
-pub extern "C" fn ffi_gc_rust_ptr(data: RawVoidPtr, type_: interfaces::root::DB::RawRustPtrType) {
+pub extern "C" fn ffi_gc_rust_ptr(data: RawVoidPtr, type_: interfaces_ffi::RawRustPtrType) {
     if data.is_null() {
         return;
     }

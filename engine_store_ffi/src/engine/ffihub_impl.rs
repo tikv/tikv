@@ -2,7 +2,7 @@
 use engine_tiflash::{FsStatsExt, RawPSWriteBatchPtr, RawPSWriteBatchWrapper};
 
 use crate::ffi::{
-    interfaces::root::DB as ffi_interfaces,
+    interfaces_ffi,
     interfaces_ffi::{EngineStoreServerHelper, PageAndCppStrWithView, RawCppPtr},
 };
 
@@ -102,7 +102,7 @@ impl From<RawCppPtr> for RawPSWriteBatchWrapper {
 }
 
 #[allow(clippy::from_over_into)]
-impl Into<engine_tiflash::FsStatsExt> for ffi_interfaces::StoreStats {
+impl Into<engine_tiflash::FsStatsExt> for interfaces_ffi::StoreStats {
     fn into(self) -> FsStatsExt {
         FsStatsExt {
             available: self.fs_stats.avail_size,

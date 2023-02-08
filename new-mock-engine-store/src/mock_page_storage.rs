@@ -7,7 +7,7 @@ use std::{
 };
 
 pub use engine_store_ffi::ffi::{
-    interfaces::root::DB as ffi_interfaces,
+    interfaces_ffi,
     interfaces_ffi::{
         BaseBuffView, CppStrWithView, EngineStoreServerHelper, PageAndCppStrWithView,
         RaftStoreProxyFFIHelper, RawCppPtr, RawCppPtrCarr, RawVoidPtr,
@@ -76,7 +76,7 @@ pub struct MockPageStorage {
 }
 
 pub unsafe extern "C" fn ffi_mockps_create_write_batch(
-    wrap: *const ffi_interfaces::EngineStoreServerWrap,
+    wrap: *const interfaces_ffi::EngineStoreServerWrap,
 ) -> RawCppPtr {
     let store = into_engine_store_server_wrap(wrap);
     let core = (*store.engine_store_server).page_storage.core.clone();
@@ -133,7 +133,7 @@ pub unsafe extern "C" fn ffi_mockps_write_batch_clear(wb: RawVoidPtr) {
 }
 
 pub unsafe extern "C" fn ffi_mockps_consume_write_batch(
-    wrap: *const ffi_interfaces::EngineStoreServerWrap,
+    wrap: *const interfaces_ffi::EngineStoreServerWrap,
     wb: RawVoidPtr,
 ) {
     let store = into_engine_store_server_wrap(wrap);
@@ -157,7 +157,7 @@ pub unsafe extern "C" fn ffi_mockps_consume_write_batch(
 }
 
 pub unsafe extern "C" fn ffi_mockps_handle_read_page(
-    wrap: *const ffi_interfaces::EngineStoreServerWrap,
+    wrap: *const interfaces_ffi::EngineStoreServerWrap,
     page_id: BaseBuffView,
 ) -> CppStrWithView {
     let store = into_engine_store_server_wrap(wrap);
@@ -174,7 +174,7 @@ pub unsafe extern "C" fn ffi_mockps_handle_read_page(
 }
 
 pub unsafe extern "C" fn ffi_mockps_handle_scan_page(
-    wrap: *const ffi_interfaces::EngineStoreServerWrap,
+    wrap: *const interfaces_ffi::EngineStoreServerWrap,
     start_page_id: BaseBuffView,
     end_page_id: BaseBuffView,
 ) -> RawCppPtrCarr {
@@ -211,13 +211,13 @@ pub unsafe extern "C" fn ffi_mockps_handle_scan_page(
 }
 
 pub unsafe extern "C" fn ffi_mockps_handle_purge_pagestorage(
-    _wrap: *const ffi_interfaces::EngineStoreServerWrap,
+    _wrap: *const interfaces_ffi::EngineStoreServerWrap,
 ) {
     // TODO
 }
 
 pub unsafe extern "C" fn ffi_mockps_handle_seek_ps_key(
-    wrap: *const ffi_interfaces::EngineStoreServerWrap,
+    wrap: *const interfaces_ffi::EngineStoreServerWrap,
     page_id: BaseBuffView,
 ) -> CppStrWithView {
     // Find the first great or equal than
@@ -233,7 +233,7 @@ pub unsafe extern "C" fn ffi_mockps_handle_seek_ps_key(
 }
 
 pub unsafe extern "C" fn ffi_mockps_ps_is_empty(
-    wrap: *const ffi_interfaces::EngineStoreServerWrap,
+    wrap: *const interfaces_ffi::EngineStoreServerWrap,
 ) -> u8 {
     let store = into_engine_store_server_wrap(wrap);
     let guard = (*store.engine_store_server)

@@ -39,7 +39,7 @@ pub use yatp::{
 pub(crate) use crate::{
     ffi::{
         gen_engine_store_server_helper,
-        interfaces::root::DB::{
+        interfaces_ffi::{
             ColumnFamilyType, EngineStoreApplyRes, EngineStoreServerHelper, RaftCmdHeader,
             RawCppPtr, WriteCmdType,
         },

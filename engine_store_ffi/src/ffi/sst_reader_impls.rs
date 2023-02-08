@@ -6,7 +6,7 @@ use engine_rocks::{get_env, RocksSstIterator, RocksSstReader};
 use engine_traits::{IterOptions, Iterator, RefIterable, SstReader};
 
 use super::{
-    interfaces::root::DB::{
+    interfaces_ffi::{
         BaseBuffView, ColumnFamilyType, RaftStoreProxyPtr, RawVoidPtr, SSTReaderInterfaces,
         SSTReaderPtr, SSTView, SSTViewVec,
     },

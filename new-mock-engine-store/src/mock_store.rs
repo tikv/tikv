@@ -14,7 +14,6 @@ pub use std::{
 use assert_type_eq;
 use collections::{HashMap, HashSet};
 pub use engine_store_ffi::ffi::{
-    interfaces::root::DB as ffi_interfaces,
     interfaces_ffi,
     interfaces_ffi::{EngineStoreServerHelper, RaftStoreProxyFFIHelper, RawCppPtr, RawVoidPtr},
     UnwrapExternCFunc,
@@ -124,7 +123,7 @@ impl EngineStoreServer {
     pub fn get_mem(
         &self,
         region_id: u64,
-        cf: ffi_interfaces::ColumnFamilyType,
+        cf: interfaces_ffi::ColumnFamilyType,
         key: &Vec<u8>,
     ) -> Option<&Vec<u8>> {
         match self.kvstore.get(&region_id) {
@@ -338,8 +337,8 @@ impl EngineStoreServerWrap {
         &mut self,
         req: &kvproto::raft_cmdpb::AdminRequest,
         resp: &kvproto::raft_cmdpb::AdminResponse,
-        header: ffi_interfaces::RaftCmdHeader,
-    ) -> ffi_interfaces::EngineStoreApplyRes {
+        header: interfaces_ffi::RaftCmdHeader,
+    ) -> interfaces_ffi::EngineStoreApplyRes {
         let region_id = header.region_id;
         let node_id = (*self.engine_store_server).id;
         info!("handle_admin_raft_cmd";
@@ -359,7 +358,7 @@ impl EngineStoreServerWrap {
                     "node_id"=>node_id,
                     );
                     panic!("observe obsolete admin index");
-                    // return ffi_interfaces::EngineStoreApplyRes::None;
+                    // return interfaces_ffi::EngineStoreApplyRes::None;
                 }
                 match req.get_cmd_type() {
                     AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2 => {
@@ -468,7 +467,7 @@ impl EngineStoreServerWrap {
                     }
                     AdminCmdType::CommitMerge => {
                         fail::fail_point!("ffi_before_commit_merge", |_| {
-                            return ffi_interfaces::EngineStoreApplyRes::Persist;
+                            return interfaces_ffi::EngineStoreApplyRes::Persist;
                         });
                         let (target_id, source_id) =
                             { (region_id, req.get_commit_merge().get_source().get_id()) };
@@ -557,18 +556,18 @@ impl EngineStoreServerWrap {
                     AdminCmdType::CompactLog => {
                         fail::fail_point!("no_persist_compact_log", |_| {
                             // Persist data, but don't persist meta.
-                            ffi_interfaces::EngineStoreApplyRes::None
+                            interfaces_ffi::EngineStoreApplyRes::None
                         });
-                        ffi_interfaces::EngineStoreApplyRes::Persist
+                        interfaces_ffi::EngineStoreApplyRes::Persist
                     }
                     AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                         fail::fail_point!("no_persist_flashback", |_| {
                             // Persist data, but don't persist meta.
-                            ffi_interfaces::EngineStoreApplyRes::None
+                            interfaces_ffi::EngineStoreApplyRes::None
                         });
-                        ffi_interfaces::EngineStoreApplyRes::Persist
+                        interfaces_ffi::EngineStoreApplyRes::Persist
                     }
-                    _ => ffi_interfaces::EngineStoreApplyRes::Persist,
+                    _ => interfaces_ffi::EngineStoreApplyRes::Persist,
                 }
             };
 
@@ -597,7 +596,7 @@ impl EngineStoreServerWrap {
                 None
             }
         };
-        if res == ffi_interfaces::EngineStoreApplyRes::Persist {
+        if res == interfaces_ffi::EngineStoreApplyRes::Persist {
             // Persist tells ApplyDelegate to do a commit.
             // So we also need a persist of actual data on engine-store' side.
             if let Some(region) = region {
@@ -617,9 +616,9 @@ impl EngineStoreServerWrap {
 
     unsafe fn handle_write_raft_cmd(
         &mut self,
-        cmds: ffi_interfaces::WriteCmdsView,
-        header: ffi_interfaces::RaftCmdHeader,
-    ) -> ffi_interfaces::EngineStoreApplyRes {
+        cmds: interfaces_ffi::WriteCmdsView,
+        header: interfaces_ffi::RaftCmdHeader,
+    ) -> interfaces_ffi::EngineStoreApplyRes {
         let region_id = header.region_id;
         let server = &mut (*self.engine_store_server);
         let node_id = (*self.engine_store_server).id;
@@ -633,7 +632,7 @@ impl EngineStoreServerWrap {
                 "node_id"=>node_id,
                 );
                 panic!("observe obsolete write index");
-                // return ffi_interfaces::EngineStoreApplyRes::None;
+                // return interfaces_ffi::EngineStoreApplyRes::None;
             }
             for i in 0..cmds.len {
                 let key = &*cmds.keys.add(i as _);
@@ -667,7 +666,7 @@ impl EngineStoreServerWrap {
                 // If we don't support new proxy, we persist everytime.
                 write_to_db_data(server, region, "write".to_string());
             }
-            ffi_interfaces::EngineStoreApplyRes::None
+            interfaces_ffi::EngineStoreApplyRes::None
         };
 
         match (*self.engine_store_server).kvstore.entry(region_id) {
@@ -683,20 +682,20 @@ impl EngineStoreServerWrap {
 }
 
 unsafe extern "C" fn ffi_set_pb_msg_by_bytes(
-    type_: ffi_interfaces::MsgPBType,
-    ptr: ffi_interfaces::RawVoidPtr,
-    buff: ffi_interfaces::BaseBuffView,
+    type_: interfaces_ffi::MsgPBType,
+    ptr: interfaces_ffi::RawVoidPtr,
+    buff: interfaces_ffi::BaseBuffView,
 ) {
     match type_ {
-        ffi_interfaces::MsgPBType::ReadIndexResponse => {
+        interfaces_ffi::MsgPBType::ReadIndexResponse => {
             let v = &mut *(ptr as *mut kvproto::kvrpcpb::ReadIndexResponse);
             v.merge_from_bytes(buff.to_slice()).unwrap();
         }
-        ffi_interfaces::MsgPBType::ServerInfoResponse => {
+        interfaces_ffi::MsgPBType::ServerInfoResponse => {
             let v = &mut *(ptr as *mut kvproto::diagnosticspb::ServerInfoResponse);
             v.merge_from_bytes(buff.to_slice()).unwrap();
         }
-        ffi_interfaces::MsgPBType::RegionLocalState => {
+        interfaces_ffi::MsgPBType::RegionLocalState => {
             let v = &mut *(ptr as *mut kvproto::raft_serverpb::RegionLocalState);
             v.merge_from_bytes(buff.to_slice()).unwrap();
         }
@@ -707,8 +706,8 @@ pub fn gen_engine_store_server_helper(
     wrap: Pin<&EngineStoreServerWrap>,
 ) -> EngineStoreServerHelper {
     EngineStoreServerHelper {
-        magic_number: ffi_interfaces::RAFT_STORE_PROXY_MAGIC_NUMBER,
-        version: ffi_interfaces::RAFT_STORE_PROXY_VERSION,
+        magic_number: interfaces_ffi::RAFT_STORE_PROXY_MAGIC_NUMBER,
+        version: interfaces_ffi::RAFT_STORE_PROXY_VERSION,
         inner: &(*wrap) as *const EngineStoreServerWrap as *mut _,
         fn_gen_cpp_string: Some(ffi_gen_cpp_string),
         fn_handle_write_raft_cmd: Some(ffi_handle_write_raft_cmd),
@@ -749,17 +748,17 @@ pub fn gen_engine_store_server_helper(
 }
 
 pub unsafe fn into_engine_store_server_wrap(
-    arg1: *const ffi_interfaces::EngineStoreServerWrap,
+    arg1: *const interfaces_ffi::EngineStoreServerWrap,
 ) -> &'static mut EngineStoreServerWrap {
     &mut *(arg1 as *mut EngineStoreServerWrap)
 }
 
 unsafe extern "C" fn ffi_handle_admin_raft_cmd(
-    arg1: *const ffi_interfaces::EngineStoreServerWrap,
-    arg2: ffi_interfaces::BaseBuffView,
-    arg3: ffi_interfaces::BaseBuffView,
-    arg4: ffi_interfaces::RaftCmdHeader,
-) -> ffi_interfaces::EngineStoreApplyRes {
+    arg1: *const interfaces_ffi::EngineStoreServerWrap,
+    arg2: interfaces_ffi::BaseBuffView,
+    arg3: interfaces_ffi::BaseBuffView,
+    arg4: interfaces_ffi::RaftCmdHeader,
+) -> interfaces_ffi::EngineStoreApplyRes {
     let store = into_engine_store_server_wrap(arg1);
     let mut req = kvproto::raft_cmdpb::AdminRequest::default();
     let mut resp = kvproto::raft_cmdpb::AdminResponse::default();
@@ -769,10 +768,10 @@ unsafe extern "C" fn ffi_handle_admin_raft_cmd(
 }
 
 unsafe extern "C" fn ffi_handle_write_raft_cmd(
-    arg1: *const ffi_interfaces::EngineStoreServerWrap,
-    arg2: ffi_interfaces::WriteCmdsView,
-    arg3: ffi_interfaces::RaftCmdHeader,
-) -> ffi_interfaces::EngineStoreApplyRes {
+    arg1: *const interfaces_ffi::EngineStoreServerWrap,
+    arg2: interfaces_ffi::WriteCmdsView,
+    arg3: interfaces_ffi::RaftCmdHeader,
+) -> interfaces_ffi::EngineStoreApplyRes {
     let store = into_engine_store_server_wrap(arg1);
     store.handle_write_raft_cmd(arg2, arg3)
 }
@@ -789,15 +788,15 @@ pub enum RawCppPtrTypeImpl {
     PSPageAndCppStr = 15,
 }
 
-impl From<RawCppPtrTypeImpl> for ffi_interfaces::RawCppPtrType {
+impl From<RawCppPtrTypeImpl> for interfaces_ffi::RawCppPtrType {
     fn from(value: RawCppPtrTypeImpl) -> Self {
-        assert_type_eq::assert_type_eq!(ffi_interfaces::RawCppPtrType, u32);
+        assert_type_eq::assert_type_eq!(interfaces_ffi::RawCppPtrType, u32);
         value.int_value()
     }
 }
 
-impl From<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
-    fn from(value: ffi_interfaces::RawCppPtrType) -> Self {
+impl From<interfaces_ffi::RawCppPtrType> for RawCppPtrTypeImpl {
+    fn from(value: interfaces_ffi::RawCppPtrType) -> Self {
         if let Ok(s) = RawCppPtrTypeImpl::from_int(value) {
             s
         } else {
@@ -807,7 +806,7 @@ impl From<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
 }
 
 extern "C" fn ffi_need_flush_data(
-    _arg1: *mut ffi_interfaces::EngineStoreServerWrap,
+    _arg1: *mut interfaces_ffi::EngineStoreServerWrap,
     _region_id: u64,
 ) -> u8 {
     fail::fail_point!("need_flush_data", |e| e.unwrap().parse::<u8>().unwrap());
@@ -815,7 +814,7 @@ extern "C" fn ffi_need_flush_data(
 }
 
 unsafe extern "C" fn ffi_try_flush_data(
-    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
+    arg1: *mut interfaces_ffi::EngineStoreServerWrap,
     region_id: u64,
     _try_until_succeed: u8,
     index: u64,
@@ -868,16 +867,16 @@ unsafe extern "C" fn ffi_try_flush_data(
     true as u8
 }
 
-extern "C" fn ffi_gen_cpp_string(s: ffi_interfaces::BaseBuffView) -> ffi_interfaces::RawCppPtr {
+extern "C" fn ffi_gen_cpp_string(s: interfaces_ffi::BaseBuffView) -> interfaces_ffi::RawCppPtr {
     let str = Box::new(Vec::from(s.to_slice()));
     let ptr = Box::into_raw(str);
-    ffi_interfaces::RawCppPtr {
+    interfaces_ffi::RawCppPtr {
         ptr: ptr as *mut _,
         type_: RawCppPtrTypeImpl::String.into(),
     }
 }
 
-pub struct RawCppStringPtrGuard(ffi_interfaces::RawCppStringPtr);
+pub struct RawCppStringPtrGuard(interfaces_ffi::RawCppStringPtr);
 
 impl Default for RawCppStringPtrGuard {
     fn default() -> Self {
@@ -885,20 +884,20 @@ impl Default for RawCppStringPtrGuard {
     }
 }
 
-impl std::convert::AsRef<ffi_interfaces::RawCppStringPtr> for RawCppStringPtrGuard {
-    fn as_ref(&self) -> &ffi_interfaces::RawCppStringPtr {
+impl std::convert::AsRef<interfaces_ffi::RawCppStringPtr> for RawCppStringPtrGuard {
+    fn as_ref(&self) -> &interfaces_ffi::RawCppStringPtr {
         &self.0
     }
 }
-impl std::convert::AsMut<ffi_interfaces::RawCppStringPtr> for RawCppStringPtrGuard {
-    fn as_mut(&mut self) -> &mut ffi_interfaces::RawCppStringPtr {
+impl std::convert::AsMut<interfaces_ffi::RawCppStringPtr> for RawCppStringPtrGuard {
+    fn as_mut(&mut self) -> &mut interfaces_ffi::RawCppStringPtr {
         &mut self.0
     }
 }
 
 impl Drop for RawCppStringPtrGuard {
     fn drop(&mut self) {
-        ffi_interfaces::RawCppPtr {
+        interfaces_ffi::RawCppPtr {
             ptr: self.0 as *mut _,
             type_: RawCppPtrTypeImpl::String.into(),
         };
@@ -958,20 +957,20 @@ impl ProxyNotifier {
 }
 
 extern "C" fn ffi_gc_special_raw_cpp_ptr(
-    ptr: ffi_interfaces::RawVoidPtr,
+    ptr: interfaces_ffi::RawVoidPtr,
     hint_len: u64,
-    tp: ffi_interfaces::SpecialCppPtrType,
+    tp: interfaces_ffi::SpecialCppPtrType,
 ) {
     match tp {
-        ffi_interfaces::SpecialCppPtrType::None => (),
-        ffi_interfaces::SpecialCppPtrType::TupleOfRawCppPtr => unsafe {
+        interfaces_ffi::SpecialCppPtrType::None => (),
+        interfaces_ffi::SpecialCppPtrType::TupleOfRawCppPtr => unsafe {
             let p = Box::from_raw(std::slice::from_raw_parts_mut(
                 ptr as *mut RawCppPtr,
                 hint_len as usize,
             ));
             drop(p);
         },
-        ffi_interfaces::SpecialCppPtrType::ArrayOfRawCppPtr => unsafe {
+        interfaces_ffi::SpecialCppPtrType::ArrayOfRawCppPtr => unsafe {
             let p = Box::from_raw(std::slice::from_raw_parts_mut(
                 ptr as *mut RawVoidPtr,
                 hint_len as usize,
@@ -982,8 +981,8 @@ extern "C" fn ffi_gc_special_raw_cpp_ptr(
 }
 
 extern "C" fn ffi_gc_raw_cpp_ptr(
-    ptr: ffi_interfaces::RawVoidPtr,
-    tp: ffi_interfaces::RawCppPtrType,
+    ptr: interfaces_ffi::RawVoidPtr,
+    tp: interfaces_ffi::RawCppPtrType,
 ) {
     match tp.into() {
         RawCppPtrTypeImpl::None => {}
@@ -1007,8 +1006,8 @@ extern "C" fn ffi_gc_raw_cpp_ptr(
 }
 
 extern "C" fn ffi_gc_raw_cpp_ptr_carr(
-    ptr: ffi_interfaces::RawVoidPtr,
-    tp: ffi_interfaces::RawCppPtrType,
+    ptr: interfaces_ffi::RawVoidPtr,
+    tp: interfaces_ffi::RawCppPtrType,
     len: u64,
 ) {
     match tp.into() {
@@ -1037,15 +1036,15 @@ extern "C" fn ffi_gc_raw_cpp_ptr_carr(
 }
 
 unsafe extern "C" fn ffi_atomic_update_proxy(
-    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
-    arg2: *mut ffi_interfaces::RaftStoreProxyFFIHelper,
+    arg1: *mut interfaces_ffi::EngineStoreServerWrap,
+    arg2: *mut interfaces_ffi::RaftStoreProxyFFIHelper,
 ) {
     let store = into_engine_store_server_wrap(arg1);
     store.maybe_proxy_helper = Some(&mut *(arg2 as *mut RaftStoreProxyFFIHelper));
 }
 
 unsafe extern "C" fn ffi_handle_destroy(
-    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
+    arg1: *mut interfaces_ffi::EngineStoreServerWrap,
     arg2: u64,
 ) {
     let store = into_engine_store_server_wrap(arg1);
@@ -1058,8 +1057,8 @@ type MockRaftProxyHelper = RaftStoreProxyFFIHelper;
 #[derive(Debug)]
 pub struct SSTReader<'a> {
     proxy_helper: &'a MockRaftProxyHelper,
-    inner: ffi_interfaces::SSTReaderPtr,
-    type_: ffi_interfaces::ColumnFamilyType,
+    inner: interfaces_ffi::SSTReaderPtr,
+    type_: interfaces_ffi::ColumnFamilyType,
 }
 
 impl<'a> Drop for SSTReader<'a> {
@@ -1076,7 +1075,7 @@ impl<'a> Drop for SSTReader<'a> {
 impl<'a> SSTReader<'a> {
     pub unsafe fn new(
         proxy_helper: &'a MockRaftProxyHelper,
-        view: &'a ffi_interfaces::SSTView,
+        view: &'a interfaces_ffi::SSTView,
     ) -> Self {
         SSTReader {
             proxy_helper,
@@ -1097,14 +1096,14 @@ impl<'a> SSTReader<'a> {
             != 0
     }
 
-    pub unsafe fn key(&mut self) -> ffi_interfaces::BaseBuffView {
+    pub unsafe fn key(&mut self) -> interfaces_ffi::BaseBuffView {
         (self.proxy_helper.sst_reader_interfaces.fn_key.into_inner())(
             self.inner.clone(),
             self.type_,
         )
     }
 
-    pub unsafe fn value(&mut self) -> ffi_interfaces::BaseBuffView {
+    pub unsafe fn value(&mut self) -> interfaces_ffi::BaseBuffView {
         (self
             .proxy_helper
             .sst_reader_interfaces
@@ -1125,13 +1124,13 @@ struct PrehandledSnapshot {
 }
 
 unsafe extern "C" fn ffi_pre_handle_snapshot(
-    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
-    region_buff: ffi_interfaces::BaseBuffView,
+    arg1: *mut interfaces_ffi::EngineStoreServerWrap,
+    region_buff: interfaces_ffi::BaseBuffView,
     peer_id: u64,
-    snaps: ffi_interfaces::SSTViewVec,
+    snaps: interfaces_ffi::SSTViewVec,
     index: u64,
     term: u64,
-) -> ffi_interfaces::RawCppPtr {
+) -> interfaces_ffi::RawCppPtr {
     let store = into_engine_store_server_wrap(arg1);
     let proxy_helper = &mut *(store.maybe_proxy_helper.unwrap());
     let _kvstore = &mut (*store.engine_store_server).kvstore;
@@ -1164,7 +1163,7 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
 
     for i in 0..snaps.len {
         let snapshot = snaps.views.add(i as usize);
-        let view = &*(snapshot as *mut ffi_interfaces::SSTView);
+        let view = &*(snapshot as *mut interfaces_ffi::SSTView);
         let mut sst_reader = SSTReader::new(proxy_helper, view);
 
         while sst_reader.remained() {
@@ -1187,27 +1186,27 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
         region.apply_state.mut_truncated_state().set_index(index);
         region.apply_state.mut_truncated_state().set_term(term);
     }
-    ffi_interfaces::RawCppPtr {
+    interfaces_ffi::RawCppPtr {
         ptr: Box::into_raw(Box::new(PrehandledSnapshot {
             region: Some(*region),
-        })) as *const Region as ffi_interfaces::RawVoidPtr,
+        })) as *const Region as interfaces_ffi::RawVoidPtr,
         type_: RawCppPtrTypeImpl::PreHandledSnapshotWithBlock.into(),
     }
 }
 
 // In case of newly added cfs.
 #[allow(unreachable_patterns)]
-pub fn cf_to_name(cf: ffi_interfaces::ColumnFamilyType) -> &'static str {
+pub fn cf_to_name(cf: interfaces_ffi::ColumnFamilyType) -> &'static str {
     match cf {
-        ffi_interfaces::ColumnFamilyType::Lock => CF_LOCK,
-        ffi_interfaces::ColumnFamilyType::Write => CF_WRITE,
-        ffi_interfaces::ColumnFamilyType::Default => CF_DEFAULT,
+        interfaces_ffi::ColumnFamilyType::Lock => CF_LOCK,
+        interfaces_ffi::ColumnFamilyType::Write => CF_WRITE,
+        interfaces_ffi::ColumnFamilyType::Default => CF_DEFAULT,
         _ => unreachable!(),
     }
 }
 
 unsafe extern "C" fn ffi_handle_safe_ts_update(
-    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
+    arg1: *mut interfaces_ffi::EngineStoreServerWrap,
     _region_id: u64,
     self_safe_ts: u64,
     leader_safe_ts: u64,
@@ -1219,9 +1218,9 @@ unsafe extern "C" fn ffi_handle_safe_ts_update(
 }
 
 unsafe extern "C" fn ffi_apply_pre_handled_snapshot(
-    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
-    arg2: ffi_interfaces::RawVoidPtr,
-    _arg3: ffi_interfaces::RawCppPtrType,
+    arg1: *mut interfaces_ffi::EngineStoreServerWrap,
+    arg2: interfaces_ffi::RawVoidPtr,
+    _arg3: interfaces_ffi::RawCppPtrType,
 ) {
     let store = into_engine_store_server_wrap(arg1);
     let region_meta = &mut *(arg2 as *mut PrehandledSnapshot);
@@ -1251,10 +1250,10 @@ unsafe extern "C" fn ffi_apply_pre_handled_snapshot(
 }
 
 unsafe extern "C" fn ffi_handle_ingest_sst(
-    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
-    snaps: ffi_interfaces::SSTViewVec,
-    header: ffi_interfaces::RaftCmdHeader,
-) -> ffi_interfaces::EngineStoreApplyRes {
+    arg1: *mut interfaces_ffi::EngineStoreServerWrap,
+    snaps: interfaces_ffi::SSTViewVec,
+    header: interfaces_ffi::RaftCmdHeader,
+) -> interfaces_ffi::EngineStoreApplyRes {
     let store = into_engine_store_server_wrap(arg1);
     let node_id = (*store.engine_store_server).id;
     let proxy_helper = &mut *(store.maybe_proxy_helper.unwrap());
@@ -1290,7 +1289,7 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
         let snapshot = snaps.views.add(i as usize);
         // let _path = std::str::from_utf8_unchecked((*snapshot).path.to_slice());
         let mut sst_reader =
-            SSTReader::new(proxy_helper, &*(snapshot as *mut ffi_interfaces::SSTView));
+            SSTReader::new(proxy_helper, &*(snapshot as *mut interfaces_ffi::SSTView));
         while sst_reader.remained() {
             let key = sst_reader.key();
             let value = sst_reader.value();
@@ -1307,21 +1306,21 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
     }
 
     fail::fail_point!("on_handle_ingest_sst_return", |_e| {
-        ffi_interfaces::EngineStoreApplyRes::None
+        interfaces_ffi::EngineStoreApplyRes::None
     });
     write_to_db_data(
         &mut (*store.engine_store_server),
         region,
         String::from("ingest-sst"),
     );
-    ffi_interfaces::EngineStoreApplyRes::Persist
+    interfaces_ffi::EngineStoreApplyRes::Persist
 }
 
 unsafe extern "C" fn ffi_handle_compute_store_stats(
-    _arg1: *mut ffi_interfaces::EngineStoreServerWrap,
-) -> ffi_interfaces::StoreStats {
-    ffi_interfaces::StoreStats {
-        fs_stats: ffi_interfaces::FsStats {
+    _arg1: *mut interfaces_ffi::EngineStoreServerWrap,
+) -> interfaces_ffi::StoreStats {
+    interfaces_ffi::StoreStats {
+        fs_stats: interfaces_ffi::FsStats {
             capacity_size: 444444,
             used_size: 111111,
             avail_size: 333333,
@@ -1336,28 +1335,28 @@ unsafe extern "C" fn ffi_handle_compute_store_stats(
 
 pub unsafe fn create_cpp_str_parts(
     s: Option<Vec<u8>>,
-) -> (ffi_interfaces::RawCppPtr, ffi_interfaces::BaseBuffView) {
+) -> (interfaces_ffi::RawCppPtr, interfaces_ffi::BaseBuffView) {
     match s {
         Some(s) => {
             let len = s.len() as u64;
             let ptr = Box::into_raw(Box::new(s)); // leak
             (
-                ffi_interfaces::RawCppPtr {
+                interfaces_ffi::RawCppPtr {
                     ptr: ptr as RawVoidPtr,
                     type_: RawCppPtrTypeImpl::String.into(),
                 },
-                ffi_interfaces::BaseBuffView {
+                interfaces_ffi::BaseBuffView {
                     data: (*ptr).as_ptr() as *const _,
                     len,
                 },
             )
         }
         None => (
-            ffi_interfaces::RawCppPtr {
+            interfaces_ffi::RawCppPtr {
                 ptr: std::ptr::null_mut(),
                 type_: RawCppPtrTypeImpl::None.into(),
             },
-            ffi_interfaces::BaseBuffView {
+            interfaces_ffi::BaseBuffView {
                 data: std::ptr::null(),
                 len: 0,
             },
@@ -1365,17 +1364,17 @@ pub unsafe fn create_cpp_str_parts(
     }
 }
 
-pub unsafe fn create_cpp_str(s: Option<Vec<u8>>) -> ffi_interfaces::CppStrWithView {
+pub unsafe fn create_cpp_str(s: Option<Vec<u8>>) -> interfaces_ffi::CppStrWithView {
     let (p, v) = create_cpp_str_parts(s);
-    ffi_interfaces::CppStrWithView { inner: p, view: v }
+    interfaces_ffi::CppStrWithView { inner: p, view: v }
 }
 
 #[allow(clippy::redundant_closure_call)]
 unsafe extern "C" fn ffi_fast_add_peer(
-    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
+    arg1: *mut interfaces_ffi::EngineStoreServerWrap,
     region_id: u64,
     new_peer_id: u64,
-) -> ffi_interfaces::FastAddPeerRes {
+) -> interfaces_ffi::FastAddPeerRes {
     let store = into_engine_store_server_wrap(arg1);
     let cluster = &*(store.cluster_ptr as *const mock_cluster::Cluster<NodeCluster>);
     let store_id = (*store.engine_store_server).id;
@@ -1384,7 +1383,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
     });
 
     let failed_add_peer_res =
-        |status: ffi_interfaces::FastAddPeerStatus| ffi_interfaces::FastAddPeerRes {
+        |status: interfaces_ffi::FastAddPeerStatus| interfaces_ffi::FastAddPeerRes {
             status,
             apply_state: create_cpp_str(None),
             region: create_cpp_str(None),
@@ -1413,7 +1412,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
     debug!("recover from remote peer: enter from {} to {}", from_store, store_id; "region_id" => region_id);
 
     for retry in 0..300 {
-        let mut ret: Option<ffi_interfaces::FastAddPeerRes> = None;
+        let mut ret: Option<interfaces_ffi::FastAddPeerRes> = None;
         if retry > 0 {
             std::thread::sleep(std::time::Duration::from_millis(30));
         }
@@ -1422,7 +1421,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
             let source_server = match guard.get_mut(&from_store) {
                 Some(s) => &mut s.engine_store_server,
                 None => {
-                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::NoSuitable));
+                    ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::NoSuitable));
                     return;
                 }
             };
@@ -1430,7 +1429,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
                 Some(s) => s,
                 None => {
                     error!("recover from remote peer: failed get source engine"; "region_id" => region_id);
-                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData));
+                    ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::BadData));
                     return
                 }
             };
@@ -1439,7 +1438,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
                 Some(s) => s,
                 None => {
                     error!("recover from remote peer: failed read source region info"; "region_id" => region_id);
-                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData));
+                    ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::BadData));
                     return;
                 }
             };
@@ -1451,7 +1450,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
                 None => {
                     debug!("recover from remote peer: preparing from {} to {}:{}, not region state", from_store, store_id, new_peer_id; "region_id" => region_id);
                     // We don't return BadData here, since the data may not be persisted.
-                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::WaitForData));
+                    ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::WaitForData));
                     return;
                 }
             };
@@ -1462,7 +1461,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
                 PeerState::Tombstone | PeerState::Applying => {
                     // Note in real implementation, we will avoid selecting this peer.
                     error!("recover from remote peer: preparing from {} to {}:{}, error peer state {:?}", from_store, store_id, new_peer_id, peer_state; "region_id" => region_id);
-                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData));
+                    ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::BadData));
                     return;
                 }
                 _ => {
@@ -1475,7 +1474,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
                 new_peer_id,
             ) {
                 debug!("recover from remote peer: preparing from {} to {}, not applied conf change {}", from_store, store_id, new_peer_id; "region_id" => region_id);
-                ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::WaitForData));
+                ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::WaitForData));
                 return;
             }
             // TODO check commit_index and applied_index here
@@ -1490,14 +1489,14 @@ unsafe extern "C" fn ffi_fast_add_peer(
             let target_engines = match (*store.engine_store_server).engines.clone() {
                 Some(s) => s,
                 None => {
-                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::OtherError));
+                    ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::OtherError));
                     return;
                 }
             };
             let target_region = match (*store.engine_store_server).kvstore.get_mut(&region_id) {
                 Some(s) => s,
                 None => {
-                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData));
+                    ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::BadData));
                     return;
                 }
             };
@@ -1511,7 +1510,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
                 Some(x) => x,
                 None => {
                     error!("recover from remote peer: failed read apply state"; "region_id" => region_id);
-                    ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData));
+                    ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::BadData));
                     return;
                 }
             };
@@ -1527,7 +1526,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
                 target_region,
             ) {
                 error!("recover from remote peer: inject error {:?}", e; "region_id" => region_id);
-                ret = Some(failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::FailedInject));
+                ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::FailedInject));
                 return;
             }
             if fail_after_write {
@@ -1557,15 +1556,15 @@ unsafe extern "C" fn ffi_fast_add_peer(
             let region_ptr = create_cpp_str(Some(region_bytes));
             // Check if we have commit_index.
             debug!("recover from remote peer: ok from {} to {}", from_store, store_id; "region_id" => region_id);
-            ret = Some(ffi_interfaces::FastAddPeerRes {
-                status: ffi_interfaces::FastAddPeerStatus::Ok,
+            ret = Some(interfaces_ffi::FastAddPeerRes {
+                status: interfaces_ffi::FastAddPeerStatus::Ok,
                 apply_state: apply_state_ptr,
                 region: region_ptr,
             });
         });
         if let Some(r) = ret {
             match r.status {
-                ffi_interfaces::FastAddPeerStatus::WaitForData => {
+                interfaces_ffi::FastAddPeerStatus::WaitForData => {
                     if block_wait {
                         continue;
                     } else {
@@ -1577,7 +1576,7 @@ unsafe extern "C" fn ffi_fast_add_peer(
         }
     }
     error!("recover from remote peer: failed after retry"; "region_id" => region_id);
-    failed_add_peer_res(ffi_interfaces::FastAddPeerStatus::BadData)
+    failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::BadData)
 }
 
 #[allow(clippy::single_element_loop)]
@@ -1597,7 +1596,7 @@ pub fn move_data_from(
         let new_region_meta = new_region.region.clone();
         let start_key = new_region_meta.get_start_key();
         let end_key = new_region_meta.get_end_key();
-        for cf in &[ffi_interfaces::ColumnFamilyType::Default] {
+        for cf in &[interfaces_ffi::ColumnFamilyType::Default] {
             let cf = (*cf) as usize;
             for (k, v) in &kvs[cf] {
                 let k = k.as_slice();

@@ -2,7 +2,7 @@
 
 use super::{
     get_engine_store_server_helper,
-    interfaces::root::DB::{
+    interfaces_ffi::{
         RawCppPtr, RawCppPtrArr, RawCppPtrCarr, RawCppPtrTuple, RawVoidPtr, SpecialCppPtrType,
     },
 };

@@ -12,7 +12,7 @@ use collections::{HashMap, HashSet};
 use encryption::DataKeyManager;
 // mock cluster
 pub use engine_store_ffi::ffi::{
-    interfaces::root::DB as ffi_interfaces,
+    interfaces_ffi,
     interfaces_ffi::{
         EngineStoreServerHelper, RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr,
     },
@@ -98,7 +98,7 @@ pub struct TestData {
 pub struct Cluster<T: Simulator<TiFlashEngine>> {
     // Helper to set ffi_helper_set.
     pub ffi_helper_lst: Vec<FFIHelperSet>,
-    pub ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
+    ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
 
     pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,

@@ -45,6 +45,7 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package proxy_tests --test proxy flashback
     cargo test --package proxy_tests --test proxy server_cluster_test
     cargo test --package proxy_tests --test proxy fast_add_peer
+    cargo test --package proxy_tests --test proxy replica_read -- --test-threads 1
     cargo test --package proxy_tests --test proxy ffi -- --test-threads 1
     cargo test --package proxy_tests --test proxy write --features="proxy_tests/enable-pagestorage"
 elif [[ $M == "debug" ]]; then

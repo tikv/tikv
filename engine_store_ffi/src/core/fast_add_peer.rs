@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{
     core::{common::*, ProxyForwarder},
-    ffi::interfaces::root::DB::FastAddPeerStatus,
+    ffi::interfaces_ffi::FastAddPeerStatus,
 };
 
 pub fn get_region_local_state<EK: engine_traits::KvEngine>(

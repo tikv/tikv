@@ -164,7 +164,7 @@ pub fn must_get_mem(
     value: Option<&[u8]>,
 ) {
     let last_res: Option<&Vec<u8>> = None;
-    let cf = new_mock_engine_store::ffi_interfaces::ColumnFamilyType::Default;
+    let cf = new_mock_engine_store::interfaces_ffi::ColumnFamilyType::Default;
     for _ in 1..300 {
         let mut ok = false;
         {

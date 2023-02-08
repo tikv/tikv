@@ -4,7 +4,7 @@ use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 
 use super::{
     get_engine_store_server_helper,
-    interfaces::root::DB::{
+    interfaces_ffi::{
         BaseBuffView, EncryptionMethod as EncryptionMethodImpl, FileEncryptionInfoRaw,
         FileEncryptionRes, RaftStoreProxyPtr, RawCppStringPtr,
     },
