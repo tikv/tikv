@@ -430,17 +430,28 @@ impl SstImporter {
 
         if self.import_support_download() {
             let shrink_file_count = shrink_files.len();
-            info!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
-
+            debug!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
+            IMPORTER_PITR_LOCAL_CACHE
+                .with_label_values(&["disk"])
+                .set(retain_file_count);
+            IMPORTER_PITR_LOCAL_CACHE_RELEASE
+                .with_label_values(&["disk"])
+                .add(shrink_file_count);
             for f in shrink_files {
                 if let Err(e) = file_system::remove_file(&f) {
-                    info!("failed to remove file"; "filename" => ?f, "error" => ?e);
+                    warn!("failed to remove file"; "filename" => ?f, "error" => ?e);
                 }
             }
             shrink_file_count
         } else {
-            info!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
+            debug!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
             self.dec_mem(shrink_buff_size as _);
+            IMPORTER_PITR_LOCAL_CACHE
+                .with_label_values(&["mem"])
+                .set(retain_buff_size);
+            IMPORTER_PITR_LOCAL_CACHE_RELEASE
+                .with_label_values(&["mem"])
+                .add(shrink_buff_size);
             shrink_buff_size
         }
     }
