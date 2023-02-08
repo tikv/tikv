@@ -388,10 +388,13 @@ mod tests {
         expr::EvalWarnings,
         Collation, FieldTypeFlag, FieldTypeTp,
     };
-    use tidb_query_expr::RpnExpressionBuilder;
+    use tidb_query_expr::{
+        impl_arithmetic::{IntDivideInt, IntIntPlus},
+        RpnExpressionBuilder,
+    };
 
     use super::*;
-    use crate::util::mock_executor::MockExecutor;
+    use crate::{impl_arithmetic::arithmetic_fn_meta, util::mock_executor::MockExecutor};
 
     #[test]
     fn test_top_0() {
@@ -562,6 +565,133 @@ mod tests {
         assert!(r.is_drained.unwrap());
     }
 
+    fn make_expr_case() -> MockExecutor {
+        MockExecutor::new(
+            vec![
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+            ],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![
+                    VectorValue::Int(
+                        vec![
+                            Some(1),
+                            Some(2),
+                            Some(3),
+                            Some(4),
+                            None,
+                            Some(6),
+                            None,
+                            Some(8),
+                            Some(9),
+                        ]
+                        .into(),
+                    ),
+                    VectorValue::Int(
+                        vec![
+                            Some(2),
+                            Some(1),
+                            Some(4),
+                            Some(3),
+                            Some(5),
+                            None,
+                            None,
+                            Some(9),
+                            Some(8),
+                        ]
+                        .into(),
+                    ),
+                    VectorValue::Int(
+                        vec![
+                            Some(1),
+                            Some(2),
+                            Some(3),
+                            Some(4),
+                            Some(5),
+                            Some(6),
+                            Some(7),
+                            Some(8),
+                            Some(9),
+                        ]
+                        .into(),
+                    ),
+                ]),
+                logical_rows: (0..9).collect(),
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(true),
+            }],
+        )
+    }
+
+    /// partition by col2/2, order by col2
+    #[test]
+    fn test_expr_key1() {
+        let mut exec = BatchPartitionTopNExecutor::new_for_test(
+            make_expr_case(),
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(2)
+                    .build_for_test(),
+            ],
+            vec![false],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(2)
+                    .push_constant_for_test(2)
+                    .push_fn_call_for_test(
+                        arithmetic_fn_meta::<IntDivideInt>(),
+                        2,
+                        FieldTypeTp::Long,
+                    )
+                    .build_for_test(),
+            ],
+            1,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+        assert_eq!(r.physical_columns.rows_len(), 5);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert_eq!(
+            r.physical_columns[2].decoded().to_int_vec(),
+            &[Some(1), Some(2), Some(4), Some(6), Some(8)]
+        );
+        assert!(r.is_drained.unwrap());
+    }
+
+    /// partition by col0 + col1, order by col2
+    #[test]
+    fn test_expr_key2() {
+        let mut exec = BatchPartitionTopNExecutor::new_for_test(
+            make_expr_case(),
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(2)
+                    .build_for_test(),
+            ],
+            vec![true],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .push_column_ref_for_test(1)
+                    .push_fn_call_for_test(arithmetic_fn_meta::<IntIntPlus>(), 2, FieldTypeTp::Long)
+                    .build_for_test(),
+            ],
+            1,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3]);
+        assert_eq!(r.physical_columns.rows_len(), 4);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert_eq!(
+            r.physical_columns[2].decoded().to_int_vec(),
+            &[Some(2), Some(4), Some(7), Some(9)]
+        );
+        assert!(r.is_drained.unwrap());
+    }
+
     /// Currently, When the data is not ordered by partition key, e.g. 1 1 2 1,
     /// it will treat discontinuous same key as different partition.
     #[test]
@@ -616,6 +746,169 @@ mod tests {
             &[None, Real::new(7.0).ok(), Real::new(4.0).ok()]
         );
         assert!(r.is_drained.unwrap());
+    }
+
+    fn make_integrated_data() -> MockExecutor {
+        MockExecutor::new(
+            vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarString)
+                    .flag(FieldTypeFlag::BINARY)
+                    .into(), // primary key
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarString)
+                    .flag(FieldTypeFlag::BINARY)
+                    .into(), // secondary key
+                FieldTypeTp::LongLong.into(),   // timestamp
+                FieldTypeTp::MediumBlob.into(), // value
+            ],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![
+                    VectorValue::Bytes(
+                        vec![
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                        ]
+                        .into(),
+                    ),
+                    VectorValue::Bytes(
+                        vec![
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"1".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                            Some(b"2".to_vec()),
+                        ]
+                        .into(),
+                    ),
+                    VectorValue::Int(
+                        vec![
+                            Some(1672736824585607000 as i64),
+                            Some(1672736824789029000 as i64),
+                            Some(1672736824850598000 as i64),
+                            Some(1672736824884993000 as i64),
+                            Some(1672736824918933000 as i64),
+                            Some(1672736824953241000 as i64),
+                            Some(1672736824987116000 as i64),
+                            Some(1672736825021485000 as i64),
+                            Some(1672736825208127000 as i64),
+                            Some(1672736825263135000 as i64),
+                            Some(1672736825296467000 as i64),
+                            Some(1672736825330420000 as i64),
+                            Some(1672736825363611000 as i64),
+                            Some(1672736825398155000 as i64),
+                            Some(1672736825432106000 as i64),
+                            Some(1672736825466432000 as i64),
+                        ]
+                        .into(),
+                    ),
+                    VectorValue::Bytes(
+                        vec![
+                            Some(b"01".to_vec()),
+                            Some(b"02".to_vec()),
+                            Some(b"03".to_vec()),
+                            Some(b"04".to_vec()),
+                            Some(b"05".to_vec()),
+                            Some(b"06".to_vec()),
+                            Some(b"07".to_vec()),
+                            Some(b"08".to_vec()),
+                            Some(b"09".to_vec()),
+                            Some(b"10".to_vec()),
+                            Some(b"11".to_vec()),
+                            Some(b"12".to_vec()),
+                            Some(b"13".to_vec()),
+                            Some(b"14".to_vec()),
+                            Some(b"15".to_vec()),
+                            Some(b"16".to_vec()),
+                        ]
+                        .into(),
+                    ),
+                ]),
+                logical_rows: (0..16).collect(),
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(true),
+            }],
+        )
+    }
+
+    #[test]
+    fn test_integrated() {
+        let mut exec = BatchPartitionTopNExecutor::new_for_test(
+            make_integrated_data(),
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(2)
+                    .build_for_test(),
+            ],
+            vec![true],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
+            ],
+            2,
+        );
+
+        let r = block_on(exec.next_batch(1));
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(r.physical_columns.rows_len(), 8);
+        assert_eq!(r.physical_columns.columns_len(), 4);
+        assert!(r.is_drained.unwrap());
+
+        assert_eq!(
+            r.physical_columns[2].decoded().to_int_vec(),
+            &[
+                Some(1672736824884993000),
+                Some(1672736824850598000),
+                Some(1672736825021485000),
+                Some(1672736824987116000),
+                Some(1672736825330420000),
+                Some(1672736825296467000),
+                Some(1672736825466432000),
+                Some(1672736825432106000)
+            ]
+        );
+        assert_eq!(
+            r.physical_columns[3].decoded().to_bytes_vec(),
+            &[
+                Some(b"04".to_vec()),
+                Some(b"03".to_vec()),
+                Some(b"08".to_vec()),
+                Some(b"07".to_vec()),
+                Some(b"12".to_vec()),
+                Some(b"11".to_vec()),
+                Some(b"16".to_vec()),
+                Some(b"15".to_vec())
+            ]
+        );
     }
 
     /// Builds an executor that will return these data:
@@ -768,7 +1061,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_order_key() {
+    fn test_without_order_key() {
         let mut config = EvalConfig::default();
         config.paging_size = Some(10);
         let config = Arc::new(config);
