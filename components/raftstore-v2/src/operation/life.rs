@@ -44,6 +44,7 @@ use super::command::SplitInit;
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, Store},
+    operation::command::report_split_init_finish,
     raft::{Peer, Storage},
     router::{CmdResChannel, PeerMsg, PeerTick},
 };
@@ -111,6 +112,46 @@ pub struct GcPeerContext {
     confirmed_ids: Vec<u64>,
 }
 
+fn check_if_to_peer_destroyed<ER: RaftEngine>(
+    engine: &ER,
+    msg: &RaftMessage,
+    store_id: u64,
+) -> engine_traits::Result<bool> {
+    let region_id = msg.get_region_id();
+    let to_peer = msg.get_to_peer();
+    let local_state = match engine.get_region_state(region_id, u64::MAX)? {
+        Some(s) => s,
+        None => return Ok(false),
+    };
+    // Split will not create peer in v2, so the state must be Tombstone.
+    if local_state.get_state() != PeerState::Tombstone {
+        panic!(
+            "[region {}] {} peer doesn't exist but has valid local state {:?}",
+            region_id, to_peer.id, local_state
+        );
+    }
+    // Compared to v1, we rely on leader to confirm destroy actively, so here
+    // skip handling gc for simplicity.
+    let local_epoch = local_state.get_region().get_region_epoch();
+    // The region in this peer is already destroyed
+    if util::is_epoch_stale(msg.get_region_epoch(), local_epoch) {
+        return Ok(true);
+    }
+    if let Some(local_peer) = find_peer(local_state.get_region(), store_id) && to_peer.id <= local_peer.get_id() {
+        return Ok(true);
+    }
+    // If the peer is destroyed by conf change, all above checks will pass.
+    if local_state
+        .get_removed_records()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
+        .map_or(false, |p| to_peer.id <= p.get_id())
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 impl Store {
     /// The method is called during split.
     /// The creation process is:
@@ -126,6 +167,7 @@ impl Store {
         ER: RaftEngine,
         T: Transport,
     {
+        let derived_region_id = msg.derived_region_id;
         let region_id = msg.region.id;
         let mut raft_msg = Box::<RaftMessage>::default();
         raft_msg.set_region_id(region_id);
@@ -147,7 +189,8 @@ impl Store {
                 self.logger(),
                 "Split peer is destroyed before sending the intialization msg";
                 "split init msg" => ?m,
-            )
+            );
+            report_split_init_finish(ctx, derived_region_id, region_id, true);
         }
     }
 
@@ -197,33 +240,13 @@ impl Store {
             ctx.raft_metrics.message_dropped.stale_msg.inc();
             return;
         }
-        let mut destroyed = false;
-        let local_state = match ctx.engine.get_region_state(region_id, u64::MAX) {
-            Ok(s) => s,
+        let destroyed = match check_if_to_peer_destroyed(&ctx.engine, &msg, self.store_id()) {
+            Ok(d) => d,
             Err(e) => {
                 error!(self.logger(), "failed to get region state"; "region_id" => region_id, "err" => ?e);
                 return;
             }
         };
-        if let Some(local_state) = local_state {
-            // Split will not create peer in v2, so the state must be Tombstone.
-            if local_state.get_state() != PeerState::Tombstone {
-                panic!(
-                    "[region {}] {} peer doesn't exist but has valid local state {:?}",
-                    region_id, to_peer.id, local_state
-                );
-            }
-            // Compared to v1, we rely on leader to confirm destroy actively, so here
-            // skip handling gc for simplicity.
-            let local_epoch = local_state.get_region().get_region_epoch();
-            // The region in this peer is already destroyed
-            if util::is_epoch_stale(msg.get_region_epoch(), local_epoch) {
-                destroyed = true;
-            }
-            if !destroyed && let Some(local_peer) = find_peer(local_state.get_region(), self.store_id()) && to_peer.id <= local_peer.get_id() {
-                destroyed = true;
-            }
-        }
         if destroyed {
             if msg.get_is_tombstone() {
                 if let Some(msg) = build_peer_destroyed_report(&mut msg) {
@@ -599,6 +622,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.remove_region(region_id);
             meta.readers.remove(&region_id);
+            ctx.tablet_registry.remove(region_id);
         }
         if let Some(msg) = self.destroy_progress_mut().finish() {
             // The message will be dispatched to store fsm, which will create a

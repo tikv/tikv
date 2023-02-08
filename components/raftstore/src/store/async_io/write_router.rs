@@ -16,7 +16,11 @@ use std::{
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use resource_control::channel::Sender;
-use tikv_util::{info, time::Instant};
+use tikv_util::{
+    config::{Tracker, VersionTrack},
+    error, info, safe_panic,
+    time::Instant,
+};
 
 use crate::store::{
     async_io::write::WriteMsg, config::Config, fsm::store::PollContext, local_metrics::RaftMetrics,
@@ -163,13 +167,14 @@ where
         if self.last_unpersisted.is_some() {
             return false;
         }
-        if ctx.config().store_io_pool_size <= 1 {
-            self.writer_id = 0;
-            return true;
-        }
+        // Local senders may not be updated when `store_io_pool_size()` has been
+        // increased by the `ctx.config().update()`, keep the real size until it's
+        // updated by `poller.begin()`.
+        let async_io_pool_size =
+            std::cmp::min(ctx.write_senders().size(), ctx.config().store_io_pool_size);
         if last_unpersisted.is_none() {
             // If no previous pending ready, we can randomly select a new writer worker.
-            self.writer_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
+            self.writer_id = rand::random::<usize>() % async_io_pool_size;
             self.next_retry_time =
                 Instant::now_coarse() + ctx.config().io_reschedule_hotpot_duration.0;
             self.next_writer_id = None;
@@ -188,7 +193,7 @@ where
             // The hot write peers should not be rescheduled entirely.
             // So it will not be rescheduled if the random id is the same as the original
             // one.
-            let new_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
+            let new_id = rand::random::<usize>() % async_io_pool_size;
             if new_id == self.writer_id {
                 // Reset the time
                 self.next_retry_time = now + ctx.config().io_reschedule_hotpot_duration.0;
@@ -238,7 +243,7 @@ where
                 let now = Instant::now();
                 if sender.send(msg, self.last_msg_priority).is_err() {
                     // Write threads are destroyed after store threads during shutdown.
-                    panic!("{} failed to send write msg, err: disconnected", self.tag);
+                    safe_panic!("{} failed to send write msg, err: disconnected", self.tag);
                 }
                 ctx.raft_metrics()
                     .write_block_wait
@@ -246,31 +251,87 @@ where
             }
             Err(TrySendError::Disconnected(_)) => {
                 // Write threads are destroyed after store threads during shutdown.
-                panic!("{} failed to send write msg, err: disconnected", self.tag);
+                safe_panic!("{} failed to send write msg, err: disconnected", self.tag);
             }
         }
     }
 }
 
+/// Safefly shared senders among the controller and raftstore threads.
+/// Senders in it can only be accessed by cloning method `senders()`.
+///
+/// `Clone` is safe to race with concurrent `Sender.send()` because the
+/// `RefCell` field `last_msg_group` in `Sender` is skipped.
+#[derive(Clone)]
+pub struct SharedSenders<EK: KvEngine, ER: RaftEngine>(Vec<Sender<WriteMsg<EK, ER>>>);
+
+impl<EK: KvEngine, ER: RaftEngine> Default for SharedSenders<EK, ER> {
+    fn default() -> Self {
+        Self(vec![])
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> SharedSenders<EK, ER> {
+    #[inline]
+    pub fn get(&self) -> Vec<Sender<WriteMsg<EK, ER>>> {
+        self.0.clone()
+    }
+
+    #[inline]
+    pub fn set(&mut self, senders: Vec<Sender<WriteMsg<EK, ER>>>) {
+        self.0 = senders;
+    }
+}
+
+/// All `Sender`s in `SharedSenders` are shared by the global controller
+/// thread and raftstore threads. There won't exist concurrent `Sender.send()`
+/// calling scenarios among threads on a same `Sender`.
+/// On the one hand, th controller thread will not call `Sender.send()` to
+/// consume resources to send messages, just updating the size of `Sender`s if
+/// `store-io-pool-size` is resized. On the other hand, each raftstore thread
+/// just use its local cloned `Sender`s for sending messages and update it at
+/// `begin()`, the first stage for processing messages.
+/// Therefore, it's safe to manually remain `Send` trait for
+/// `SharedSenders`.
+///
+/// TODO: use an elegant implementation, such as `Mutex<Sender>`, to avoid this
+/// hack for sharing `Sender`s among multi-threads.
+unsafe impl<EK: KvEngine, ER: RaftEngine> Sync for SharedSenders<EK, ER> {}
+
 /// Senders for asynchronous writes. There can be multiple senders, generally
 /// you should use `WriteRouter` to decide which sender to be used.
 #[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
-    write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+    senders: Tracker<SharedSenders<EK, ER>>,
+    cached_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
-    pub fn new(write_senders: Vec<Sender<WriteMsg<EK, ER>>>) -> Self {
+    pub fn new(senders: Arc<VersionTrack<SharedSenders<EK, ER>>>) -> Self {
+        let cached_senders = senders.value().get();
         WriteSenders {
-            write_senders,
+            senders: senders.tracker("async writers' tracker".to_owned()),
+            cached_senders,
             io_reschedule_concurrent_count: Arc::default(),
         }
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.write_senders.is_empty()
+        self.cached_senders.is_empty()
+    }
+
+    #[inline]
+    pub fn size(&self) -> usize {
+        self.cached_senders.len()
+    }
+
+    #[inline]
+    pub fn refresh(&mut self) {
+        if let Some(senders) = self.senders.any_new() {
+            self.cached_senders = senders.get();
+        }
     }
 }
 
@@ -279,7 +340,7 @@ impl<EK: KvEngine, ER: RaftEngine> Index<usize> for WriteSenders<EK, ER> {
 
     #[inline]
     fn index(&self, index: usize) -> &Sender<WriteMsg<EK, ER>> {
-        &self.write_senders[index]
+        &self.cached_senders[index]
     }
 }
 
@@ -329,7 +390,7 @@ pub(crate) mod tests {
             Self {
                 receivers,
                 ctx: TestContext {
-                    senders: WriteSenders::new(senders),
+                    senders: WriteSenders::new(Arc::new(VersionTrack::new(SharedSenders(senders)))),
                     config,
                     raft_metrics: RaftMetrics::new(true),
                 },
