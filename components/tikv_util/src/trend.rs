@@ -616,12 +616,10 @@ impl Trend {
             } else {
                 0.0
             }
+        } else if increased > margin_error {
+            increased - margin_error
         } else {
-            if increased > margin_error {
-                increased - margin_error
-            } else {
-                0.0
-            }
+            0.0
         };
         let mut inc_sq = increased * increased;
         if la_avg < lb_avg {
