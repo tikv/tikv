@@ -53,7 +53,7 @@ use raftstore::{
     },
     Result,
 };
-use slog::info;
+use slog::{error, info};
 use tikv_util::{log::SlogFormat, slog_panic};
 
 use crate::{
@@ -86,8 +86,8 @@ pub struct SplitInit {
     pub region: metapb::Region,
     pub check_split: bool,
     pub scheduled: bool,
-    pub source_leader: bool,
-    pub source_id: u64,
+    pub derived_leader: bool,
+    pub derived_region_id: u64,
 
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
@@ -110,6 +110,35 @@ impl SplitInit {
         snap_data.mut_meta().set_for_balance(false);
         snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
         snapshot
+    }
+}
+
+pub fn report_split_init_finish<EK, ER, T>(
+    ctx: &mut StoreContext<EK, ER, T>,
+    derived_region_id: u64,
+    finish_region_id: u64,
+    cleanup: bool,
+) where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    let _ = ctx.router.force_send(
+        derived_region_id,
+        PeerMsg::SplitInitFinish(finish_region_id),
+    );
+    if !cleanup {
+        return;
+    }
+
+    if let Err(e) = ctx
+        .schedulers
+        .tablet_gc
+        .schedule(tablet_gc::Task::direct_destroy_path(temp_split_path(
+            &ctx.tablet_registry,
+            finish_region_id,
+        )))
+    {
+        error!(ctx.logger, "failed to destroy split init temp"; "error" => ?e);
     }
 }
 
@@ -527,8 +556,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             new_ids.insert(new_region_id);
             let split_init = PeerMsg::SplitInit(Box::new(SplitInit {
                 region: new_region,
-                source_leader: self.is_leader(),
-                source_id: region_id,
+                derived_leader: self.is_leader(),
+                derived_region_id: region_id,
                 check_split: last_region_id == new_region_id,
                 scheduled: false,
                 approximate_size: estimated_size,
@@ -574,10 +603,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_id = split_init.region.id;
         if self.storage().is_initialized() && self.persisted_index() >= RAFT_INIT_LOG_INDEX {
             // Race with split operation. The tablet created by split will eventually be
-            // deleted (TODO). We don't trim it.
-            let _ = store_ctx
-                .router
-                .force_send(split_init.source_id, PeerMsg::SplitInitFinish(region_id));
+            // deleted. We don't trim it.
+            report_split_init_finish(store_ctx, split_init.derived_region_id, region_id, true);
             return;
         }
 
@@ -631,7 +658,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     },
                 ));
         }
-        if split_init.source_leader
+        if split_init.derived_leader
             && self.leader_id() == INVALID_ID
             && self.term() == RAFT_INIT_LOG_TERM
         {
@@ -650,9 +677,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if split_init.check_split {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
-        let _ = store_ctx
-            .router
-            .force_send(split_init.source_id, PeerMsg::SplitInitFinish(region_id));
+        report_split_init_finish(store_ctx, split_init.derived_region_id, region_id, false);
     }
 
     pub fn on_split_init_finish(&mut self, region_id: u64) {
