@@ -15,7 +15,7 @@ use raftstore::store::initial_region;
 use slog::{debug, error, info, warn, Logger};
 use tikv_util::{box_err, box_try};
 
-use crate::{raft::write_initial_states, Result};
+use crate::{operation::write_initial_states, Result};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
@@ -97,8 +97,9 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         let mut ident = StoreIdent::default();
         ident.set_cluster_id(self.cluster_id);
         ident.set_store_id(id);
-        self.engine.put_store_ident(&ident)?;
-        self.engine.sync()?;
+        let mut lb = self.engine.log_batch(1);
+        lb.put_store_ident(&ident)?;
+        self.engine.consume(&mut lb, true)?;
         fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
             "injected error: node_after_bootstrap_store"
         )));

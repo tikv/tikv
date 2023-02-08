@@ -11,9 +11,9 @@ use std::{
     time::Duration,
 };
 
-use collections::HashMap;
+use collections::{HashMap, HashMapEntry};
 use engine_rocks::FlowInfo;
-use engine_traits::{CfNamesExt, FlowControlFactorsExt, OpenOptions, TabletFactory};
+use engine_traits::{CfNamesExt, FlowControlFactorsExt, TabletRegistry};
 use rand::Rng;
 use tikv_util::{sys::thread::StdThreadBuildWrapper, time::Limiter};
 
@@ -47,9 +47,9 @@ impl Drop for TabletFlowController {
 }
 
 impl TabletFlowController {
-    pub fn new<E: CfNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
+    pub fn new<E: CfNamesExt + FlowControlFactorsExt + Clone + Send + Sync + 'static>(
         config: &FlowControlConfig,
-        tablet_factory: Arc<dyn TabletFactory<E> + Send + Sync>,
+        registry: TabletRegistry<E>,
         flow_info_receiver: Receiver<FlowInfo>,
     ) -> Self {
         let (tx, rx) = mpsc::sync_channel(5);
@@ -69,7 +69,7 @@ impl TabletFlowController {
             handle: Some(FlowInfoDispatcher::start(
                 rx,
                 flow_info_receiver,
-                tablet_factory,
+                registry,
                 flow_checkers,
                 limiters,
                 config.clone(),
@@ -86,10 +86,10 @@ impl TabletFlowController {
 struct FlowInfoDispatcher;
 
 impl FlowInfoDispatcher {
-    fn start<E: CfNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
+    fn start<E: CfNamesExt + FlowControlFactorsExt + Clone + Send + Sync + 'static>(
         rx: Receiver<Msg>,
         flow_info_receiver: Receiver<FlowInfo>,
-        tablet_factory: Arc<dyn TabletFactory<E> + Send + Sync>,
+        registry: TabletRegistry<E>,
         flow_checkers: Arc<RwLock<HashMap<u64, FlowChecker<E>>>>,
         limiters: Limiters,
         config: FlowControlConfig,
@@ -116,32 +116,6 @@ impl FlowInfoDispatcher {
                         Err(_) => {}
                     }
 
-                    let insert_limiter_and_checker = |region_id, suffix| -> FlowChecker<E> {
-                        let engine = tablet_factory
-                            .open_tablet(
-                                region_id,
-                                Some(suffix),
-                                OpenOptions::default().set_cache_only(true),
-                            )
-                            .unwrap();
-                        let mut v = limiters.as_ref().write().unwrap();
-                        let discard_ratio = Arc::new(AtomicU32::new(0));
-                        let limiter = v.entry(region_id).or_insert((
-                            Arc::new(
-                                <Limiter>::builder(f64::INFINITY)
-                                    .refill(Duration::from_millis(1))
-                                    .build(),
-                            ),
-                            discard_ratio,
-                        ));
-                        FlowChecker::new_with_tablet_suffix(
-                            &config,
-                            engine,
-                            limiter.1.clone(),
-                            limiter.0.clone(),
-                            suffix,
-                        )
-                    };
                     let msg = flow_info_receiver.recv_deadline(deadline);
                     match msg.clone() {
                         Ok(FlowInfo::L0(_cf, _, region_id, suffix))
@@ -165,22 +139,43 @@ impl FlowInfoDispatcher {
                         }
                         Ok(FlowInfo::Created(region_id, suffix)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
-                            let checker = checkers
-                                .entry(region_id)
-                                .or_insert_with(|| insert_limiter_and_checker(region_id, suffix));
+                            let checker = match checkers.entry(region_id) {
+                                HashMapEntry::Occupied(e) => e.into_mut(),
+                                HashMapEntry::Vacant(e) => {
+                                    let engine = if let Some(mut c) = registry.get(region_id) && let Some(t) = c.latest() {
+                                        t.clone()
+                                    } else {
+                                        continue;
+                                    };
+                                    let mut v = limiters.as_ref().write().unwrap();
+                                    let discard_ratio = Arc::new(AtomicU32::new(0));
+                                    let limiter = v.entry(region_id).or_insert((
+                                        Arc::new(
+                                            <Limiter>::builder(f64::INFINITY)
+                                                .refill(Duration::from_millis(1))
+                                                .build(),
+                                        ),
+                                        discard_ratio,
+                                    ));
+                                    e.insert(FlowChecker::new_with_tablet_suffix(
+                                        &config,
+                                        engine,
+                                        limiter.1.clone(),
+                                        limiter.0.clone(),
+                                        suffix,
+                                    ))
+                                },
+                            };
                             // check if the checker's engine is exactly (region_id, suffix)
                             // if checker.suffix < suffix, it means its tablet is old and needs the
                             // refresh
                             if checker.tablet_suffix() < suffix {
-                                let engine = tablet_factory
-                                    .open_tablet(
-                                        region_id,
-                                        Some(suffix),
-                                        OpenOptions::default().set_cache_only(true),
-                                    )
-                                    .unwrap();
-                                checker.set_engine(engine);
-                                checker.set_tablet_suffix(suffix);
+                                let cached = registry.get(region_id);
+                                // None means the region is destroyed.
+                                if let Some(mut c) = cached && let Some(engine) = c.latest() {
+                                    checker.set_engine(engine.clone());
+                                    checker.set_tablet_suffix(suffix);
+                                }
                             }
                         }
                         Ok(FlowInfo::Destroyed(region_id, suffix)) => {
@@ -296,35 +291,44 @@ impl TabletFlowController {
 #[cfg(test)]
 mod tests {
     use engine_rocks::FlowInfo;
-    use engine_traits::DummyFactory;
+    use engine_traits::{SingletonFactory, TabletContext};
+    use tempfile::TempDir;
 
     use super::{
         super::{singleton_flow_controller::tests::*, FlowController},
         *,
     };
 
-    fn create_tablet_flow_controller() -> (FlowController, mpsc::SyncSender<FlowInfo>, EngineStub) {
+    fn create_tablet_flow_controller() -> (
+        TempDir,
+        FlowController,
+        mpsc::SyncSender<FlowInfo>,
+        TabletRegistry<EngineStub>,
+    ) {
         let (tx, rx) = mpsc::sync_channel(0);
-        let root_path = "/tmp";
+        let temp_dir = tempfile::tempdir().unwrap();
         let stub = EngineStub::new();
-        let factory = DummyFactory::<EngineStub>::new(Some(stub.clone()), root_path.to_string());
-        let tablet_factory = Arc::new(factory);
+        let factory = Box::new(SingletonFactory::new(stub));
+        let registry = TabletRegistry::new(factory, temp_dir.path()).unwrap();
         (
+            temp_dir,
             FlowController::Tablet(TabletFlowController::new(
                 &FlowControlConfig::default(),
-                tablet_factory,
+                registry.clone(),
                 rx,
             )),
             tx,
-            stub,
+            registry,
         )
     }
 
     #[test]
     fn test_tablet_flow_controller_basic() {
-        let (flow_controller, tx, _) = create_tablet_flow_controller();
+        let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        reg.load(tablet_context, false).unwrap();
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
             .unwrap();
         tx.send(FlowInfo::L0Intra(
@@ -348,9 +352,12 @@ mod tests {
 
     #[test]
     fn test_tablet_flow_controller_memtable() {
-        let (flow_controller, tx, stub) = create_tablet_flow_controller();
+        let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        let mut cached = reg.load(tablet_context, false).unwrap();
+        let stub = cached.latest().unwrap().clone();
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
             .unwrap();
         tx.send(FlowInfo::L0Intra(
@@ -365,9 +372,12 @@ mod tests {
 
     #[test]
     fn test_tablet_flow_controller_l0() {
-        let (flow_controller, tx, stub) = create_tablet_flow_controller();
+        let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        let mut cached = reg.load(tablet_context, false).unwrap();
+        let stub = cached.latest().unwrap().clone();
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
             .unwrap();
         tx.send(FlowInfo::L0Intra(
@@ -382,9 +392,12 @@ mod tests {
 
     #[test]
     fn test_tablet_flow_controller_pending_compaction_bytes() {
-        let (flow_controller, tx, stub) = create_tablet_flow_controller();
+        let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        let mut cached = reg.load(tablet_context, false).unwrap();
+        let stub = cached.latest().unwrap().clone();
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
             .unwrap();
         tx.send(FlowInfo::L0Intra(

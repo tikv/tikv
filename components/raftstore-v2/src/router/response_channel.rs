@@ -24,14 +24,18 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::task::AtomicWaker;
+use futures::{task::AtomicWaker, FutureExt, Stream};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{
     local_metrics::TimeTracker, msg::ErrorCallback, region_meta::RegionMeta, ReadCallback,
     WriteCallback,
 };
-use smallvec::SmallVec;
-use tracker::TrackerToken;
+use tracker::{get_tls_tracker_token, TrackerToken};
+
+union Tracker {
+    read: TrackerToken,
+    write: TimeTracker,
+}
 
 /// A struct allows to watch and notify specific events.
 ///
@@ -47,15 +51,24 @@ struct EventCore<Res> {
     /// Event 0 and Event 31 is reserved as payload and cancel respectively.
     /// Other events should be defined within [1, 30].
     event: AtomicU64,
+    /// Even a channel supports multiple events, it's not necessary to trigger
+    /// all of them. `event_mask` is used to filter unnecessary events.
+    event_mask: u32,
     res: UnsafeCell<Option<Res>>,
+    before_set: UnsafeCell<Option<Box<dyn FnOnce(&mut Res) + Send>>>,
     // Waker can be changed, need to use `AtomicWaker` to guarantee no data race.
     waker: AtomicWaker,
+    tracker: UnsafeCell<Tracker>,
 }
 
 unsafe impl<Res: Send> Send for EventCore<Res> {}
 
 const PAYLOAD_EVENT: u64 = 0;
 const CANCEL_EVENT: u64 = 31;
+
+const fn event_mask_bit_of(event: u64) -> u32 {
+    1 << event
+}
 
 #[inline]
 const fn subscribed_bit_of(event: u64) -> u64 {
@@ -67,23 +80,14 @@ const fn fired_bit_of(event: u64) -> u64 {
     1 << (event * 2 + 1)
 }
 
-impl<Res> Default for EventCore<Res> {
-    #[inline]
-    fn default() -> Self {
-        Self {
-            event: AtomicU64::new(0),
-            res: UnsafeCell::new(None),
-            waker: AtomicWaker::new(),
-        }
-    }
-}
-
 impl<Res> EventCore<Res> {
     #[inline]
     fn notify_event(&self, event: u64) {
-        let previous = self.event.fetch_or(fired_bit_of(event), Ordering::AcqRel);
-        if previous & subscribed_bit_of(event) != 0 {
-            self.waker.wake()
+        if self.event_mask & event_mask_bit_of(event) != 0 {
+            let previous = self.event.fetch_or(fired_bit_of(event), Ordering::AcqRel);
+            if previous & subscribed_bit_of(event) != 0 {
+                self.waker.wake()
+            }
         }
     }
 
@@ -91,8 +95,11 @@ impl<Res> EventCore<Res> {
     ///
     /// After this call, no events should be notified.
     #[inline]
-    fn set_result(&self, result: Res) {
+    fn set_result(&self, mut result: Res) {
         unsafe {
+            if let Some(cb) = (*self.before_set.get()).take() {
+                cb(&mut result);
+            }
             *self.res.get() = Some(result);
         }
         let previous = self.event.fetch_or(
@@ -173,7 +180,7 @@ impl<'a, Res> Future for WaitEvent<'a, Res> {
 }
 
 struct WaitResult<'a, Res> {
-    core: &'a EventCore<Res>,
+    sub: &'a BaseSubscriber<Res>,
 }
 
 impl<'a, Res> Future for WaitResult<'a, Res> {
@@ -181,16 +188,16 @@ impl<'a, Res> Future for WaitResult<'a, Res> {
 
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let event = &self.core.event;
+        let event = &self.sub.core.event;
         let fired_bit = fired_bit_of(PAYLOAD_EVENT);
         let mut e = event.load(Ordering::Relaxed);
         if check_bit(e, fired_bit).is_some() {
             unsafe {
-                return Poll::Ready((*self.core.res.get()).take());
+                return Poll::Ready((*self.sub.core.res.get()).take());
             }
         }
         let subscribed_bit = subscribed_bit_of(PAYLOAD_EVENT);
-        self.core.waker.register(cx.waker());
+        self.sub.core.waker.register(cx.waker());
         loop {
             match event.compare_exchange_weak(
                 e,
@@ -203,7 +210,7 @@ impl<'a, Res> Future for WaitResult<'a, Res> {
             };
             if check_bit(e, fired_bit).is_some() {
                 unsafe {
-                    return Poll::Ready((*self.core.res.get()).take());
+                    return Poll::Ready((*self.sub.core.res.get()).take());
                 }
             }
         }
@@ -219,7 +226,7 @@ impl<Res> BaseSubscriber<Res> {
     /// Wait for the result.
     #[inline]
     pub async fn result(self) -> Option<Res> {
-        WaitResult { core: &self.core }.await
+        WaitResult { sub: &self }.await
     }
 
     /// Test if the result is ready without any polling.
@@ -238,11 +245,25 @@ pub struct BaseChannel<Res> {
     core: Arc<EventCore<Res>>,
 }
 
+#[inline]
+fn pair<Res>() -> (BaseChannel<Res>, BaseSubscriber<Res>) {
+    let tracker = Tracker {
+        read: get_tls_tracker_token(),
+    };
+    BaseChannel::<Res>::with_mask(u32::MAX, tracker)
+}
+
 impl<Res> BaseChannel<Res> {
-    /// Creates a pair of channel and subscriber.
     #[inline]
-    pub fn pair() -> (Self, BaseSubscriber<Res>) {
-        let core: Arc<EventCore<Res>> = Arc::default();
+    fn with_mask(mask: u32, tracker: Tracker) -> (Self, BaseSubscriber<Res>) {
+        let core: Arc<EventCore<Res>> = Arc::new(EventCore {
+            event: AtomicU64::new(0),
+            res: UnsafeCell::new(None),
+            event_mask: mask,
+            before_set: UnsafeCell::new(None),
+            waker: AtomicWaker::new(),
+            tracker: UnsafeCell::new(tracker),
+        });
         (Self { core: core.clone() }, BaseSubscriber { core })
     }
 
@@ -283,6 +304,122 @@ impl CmdResSubscriber {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum CmdResPollStage {
+    ExpectProposed,
+    ExpectCommitted,
+    ExpectResult,
+    Drained,
+}
+
+impl CmdResPollStage {
+    #[inline]
+    fn init(event_mask: u32) -> CmdResPollStage {
+        if event_mask & event_mask_bit_of(CmdResChannel::PROPOSED_EVENT) != 0 {
+            CmdResPollStage::ExpectProposed
+        } else if event_mask & event_mask_bit_of(CmdResChannel::COMMITTED_EVENT) != 0 {
+            CmdResPollStage::ExpectCommitted
+        } else {
+            CmdResPollStage::ExpectResult
+        }
+    }
+
+    #[inline]
+    fn next(&mut self, event_mask: u32) {
+        *self = match self {
+            CmdResPollStage::ExpectProposed => {
+                if event_mask & event_mask_bit_of(CmdResChannel::COMMITTED_EVENT) == 0 {
+                    CmdResPollStage::ExpectResult
+                } else {
+                    CmdResPollStage::ExpectCommitted
+                }
+            }
+            CmdResPollStage::ExpectCommitted => CmdResPollStage::ExpectResult,
+            CmdResPollStage::ExpectResult => CmdResPollStage::Drained,
+            CmdResPollStage::Drained => CmdResPollStage::Drained,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum CmdResEvent {
+    Proposed,
+    Committed,
+    Finished(RaftCmdResponse),
+}
+
+pub struct CmdResStream {
+    sub: CmdResSubscriber,
+    stage: CmdResPollStage,
+}
+
+impl CmdResStream {
+    #[inline]
+    pub fn new(sub: CmdResSubscriber) -> Self {
+        Self {
+            stage: CmdResPollStage::init(sub.core.event_mask),
+            sub,
+        }
+    }
+}
+
+impl Stream for CmdResStream {
+    type Item = CmdResEvent;
+
+    #[inline]
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let stream = self.get_mut();
+        loop {
+            match stream.stage {
+                CmdResPollStage::ExpectProposed => {
+                    match (WaitEvent {
+                        event: CmdResChannel::PROPOSED_EVENT,
+                        core: &stream.sub.core,
+                    })
+                    .poll_unpin(cx)
+                    {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(b) => {
+                            stream.stage.next(stream.sub.core.event_mask);
+                            if b {
+                                return Poll::Ready(Some(CmdResEvent::Proposed));
+                            }
+                        }
+                    }
+                }
+                CmdResPollStage::ExpectCommitted => {
+                    match (WaitEvent {
+                        event: CmdResChannel::COMMITTED_EVENT,
+                        core: &stream.sub.core,
+                    })
+                    .poll_unpin(cx)
+                    {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(b) => {
+                            stream.stage.next(stream.sub.core.event_mask);
+                            if b {
+                                return Poll::Ready(Some(CmdResEvent::Committed));
+                            }
+                        }
+                    }
+                }
+                CmdResPollStage::ExpectResult => {
+                    match (WaitResult { sub: &stream.sub }).poll_unpin(cx) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(res) => {
+                            stream.stage.next(stream.sub.core.event_mask);
+                            if let Some(res) = res {
+                                return Poll::Ready(Some(CmdResEvent::Finished(res)));
+                            }
+                        }
+                    }
+                }
+                CmdResPollStage::Drained => return Poll::Ready(None),
+            }
+        }
+    }
+}
+
 pub type CmdResChannel = BaseChannel<RaftCmdResponse>;
 
 impl Debug for CmdResChannel {
@@ -291,10 +428,62 @@ impl Debug for CmdResChannel {
     }
 }
 
+#[derive(Default)]
+pub struct CmdResChannelBuilder {
+    event_mask: u32,
+    before_set: Option<Box<dyn FnOnce(&mut RaftCmdResponse) + Send>>,
+}
+
+impl CmdResChannelBuilder {
+    #[inline]
+    pub fn subscribe_proposed(&mut self) -> &mut Self {
+        self.event_mask |= event_mask_bit_of(CmdResChannel::PROPOSED_EVENT);
+        self
+    }
+
+    #[inline]
+    pub fn subscribe_committed(&mut self) -> &mut Self {
+        self.event_mask |= event_mask_bit_of(CmdResChannel::COMMITTED_EVENT);
+        self
+    }
+
+    #[inline]
+    pub fn before_set(
+        &mut self,
+        f: impl FnOnce(&mut RaftCmdResponse) + Send + 'static,
+    ) -> &mut Self {
+        self.before_set = Some(Box::new(f));
+        self
+    }
+
+    #[inline]
+    pub fn build(self) -> (CmdResChannel, CmdResSubscriber) {
+        let tracker = Tracker {
+            write: TimeTracker::default(),
+        };
+        let (c, s) = CmdResChannel::with_mask(self.event_mask, tracker);
+        if let Some(f) = self.before_set {
+            unsafe {
+                *c.core.before_set.get() = Some(f);
+            }
+        }
+        (c, s)
+    }
+}
+
 impl CmdResChannel {
     // Valid range is [1, 30]
     const PROPOSED_EVENT: u64 = 1;
     const COMMITTED_EVENT: u64 = 2;
+
+    /// Creates a pair of channel and subscriber.
+    #[inline]
+    pub fn pair() -> (Self, CmdResSubscriber) {
+        let tracker = Tracker {
+            write: TimeTracker::default(),
+        };
+        Self::with_mask(u32::MAX, tracker)
+    }
 }
 
 impl ErrorCallback for CmdResChannel {
@@ -325,12 +514,15 @@ impl WriteCallback for CmdResChannel {
         self.core.notify_event(Self::COMMITTED_EVENT);
     }
 
-    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
-        None
+    type TimeTrackerListRef<'a> = &'a [TimeTracker];
+    #[inline]
+    fn write_trackers(&self) -> Self::TimeTrackerListRef<'_> {
+        std::slice::from_ref(unsafe { &(*self.core.tracker.get()).write })
     }
 
-    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
-        None
+    type TimeTrackerListMut<'a> = &'a mut [TimeTracker];
+    fn write_trackers_mut(&mut self) -> Self::TimeTrackerListMut<'_> {
+        std::slice::from_mut(unsafe { &mut (*self.core.tracker.get()).write })
     }
 
     // TODO: support executing hooks inside setting result.
@@ -388,6 +580,13 @@ impl QueryResult {
 
 pub type QueryResChannel = BaseChannel<QueryResult>;
 
+impl QueryResChannel {
+    #[inline]
+    pub fn pair() -> (Self, QueryResSubscriber) {
+        pair()
+    }
+}
+
 impl ErrorCallback for QueryResChannel {
     #[inline]
     fn report_error(self, err: RaftCmdResponse) {
@@ -404,12 +603,12 @@ impl ReadCallback for QueryResChannel {
     type Response = QueryResult;
 
     #[inline]
-    fn set_result(mut self, res: QueryResult) {
+    fn set_result(self, res: QueryResult) {
         self.set_result(res);
     }
 
-    fn read_tracker(&self) -> Option<&TrackerToken> {
-        None
+    fn read_tracker(&self) -> Option<TrackerToken> {
+        Some(unsafe { (*self.core.tracker.get()).read })
     }
 }
 
@@ -424,14 +623,48 @@ impl fmt::Debug for QueryResChannel {
 pub type DebugInfoChannel = BaseChannel<RegionMeta>;
 pub type DebugInfoSubscriber = BaseSubscriber<RegionMeta>;
 
+impl DebugInfoChannel {
+    #[inline]
+    pub fn pair() -> (Self, DebugInfoSubscriber) {
+        pair()
+    }
+}
+
+impl Debug for DebugInfoChannel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "DebugInfoChannel")
+    }
+}
+
 #[cfg(feature = "testexport")]
-pub type FlushChannel = BaseChannel<()>;
+mod flush_channel {
+    use super::*;
+
+    pub type FlushChannel = BaseChannel<()>;
+    pub type FlushSubscriber = BaseSubscriber<()>;
+
+    impl FlushChannel {
+        #[inline]
+        pub fn pair() -> (Self, FlushSubscriber) {
+            pair()
+        }
+    }
+
+    impl Debug for FlushChannel {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "FlushChannel")
+        }
+    }
+}
+
 #[cfg(feature = "testexport")]
-pub type FlushSubscriber = BaseSubscriber<()>;
+pub use flush_channel::{FlushChannel, FlushSubscriber};
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
+    use std::assert_matches::assert_matches;
+
+    use futures::{executor::block_on, StreamExt};
 
     use super::*;
 
@@ -481,5 +714,45 @@ mod tests {
         });
         chan.set_result(read.clone());
         assert_eq!(block_on(sub.result()).unwrap(), read);
+    }
+
+    #[test]
+    fn test_cmd_res_stream() {
+        let mut builder = CmdResChannelBuilder::default();
+        builder.before_set(|res| {
+            res.mut_header().set_current_term(6);
+        });
+        let (chan, sub) = builder.build();
+        let mut stream = CmdResStream::new(sub);
+        chan.set_result(RaftCmdResponse::default());
+        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Finished(res)) if res.get_header().get_current_term() == 6);
+
+        // When using builder, no event is subscribed by default.
+        let (mut chan, sub) = CmdResChannelBuilder::default().build();
+        let mut stream = CmdResStream::new(sub);
+        chan.notify_proposed();
+        chan.notify_committed();
+        drop(chan);
+        assert_matches!(block_on(stream.next()), None);
+
+        let mut builder = CmdResChannelBuilder::default();
+        builder.subscribe_proposed();
+        let (mut chan, sub) = builder.build();
+        let mut stream = CmdResStream::new(sub);
+        chan.notify_proposed();
+        chan.notify_committed();
+        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Proposed));
+        drop(chan);
+        assert_matches!(block_on(stream.next()), None);
+
+        let mut builder = CmdResChannelBuilder::default();
+        builder.subscribe_committed();
+        let (mut chan, sub) = builder.build();
+        let mut stream = CmdResStream::new(sub);
+        chan.notify_proposed();
+        chan.notify_committed();
+        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Committed));
+        drop(chan);
+        assert_matches!(block_on(stream.next()), None);
     }
 }

@@ -9,7 +9,7 @@ use futures::{channel::oneshot, executor::block_on};
 use kvproto::{
     errorpb::FlashbackInProgress,
     metapb,
-    raft_cmdpb::{AdminCmdType, RaftCmdResponse, Request},
+    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdResponse, Request},
 };
 use raftstore::store::Callback;
 use test_raftstore::*;
@@ -17,6 +17,39 @@ use txn_types::WriteBatchFlags;
 
 const TEST_KEY: &[u8] = b"k1";
 const TEST_VALUE: &[u8] = b"v1";
+
+#[test]
+fn test_allow_read_only_request() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let mut region = cluster.get_region(TEST_KEY);
+    let mut snap_req = Request::default();
+    snap_req.set_cmd_type(CmdType::Snap);
+    // Get snapshot normally.
+    let snap_resp = request(&mut cluster, &mut region.clone(), snap_req.clone(), false);
+    assert!(!snap_resp.get_header().has_error());
+    // Get snapshot with flashback flag without in the flashback state.
+    let snap_resp = request(&mut cluster, &mut region.clone(), snap_req.clone(), true);
+    assert!(!snap_resp.get_header().has_error());
+    // Get snapshot with flashback flag with in the flashback state.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    let snap_resp = request(&mut cluster, &mut region.clone(), snap_req.clone(), true);
+    assert!(!snap_resp.get_header().has_error());
+    // Get snapshot without flashback flag with in the flashback state.
+    let snap_resp = request(&mut cluster, &mut region, snap_req, false);
+    assert!(
+        snap_resp
+            .get_header()
+            .get_error()
+            .has_flashback_in_progress(),
+        "{:?}",
+        snap_resp
+    );
+    // Finish flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+}
 
 #[test]
 #[cfg(feature = "failpoints")]

@@ -50,6 +50,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Pause {
             pr: ProcessResult::Res,
             lock_info: vec![],
             released_locks: ReleasedLocks::new(),
+            new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

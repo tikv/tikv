@@ -288,14 +288,15 @@ impl WriteEvent {
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
-    // When start_ts is None and `stale_read` is true, it means acquire a snapshot without any
-    // consistency guarantee.
+    // When `start_ts` is None and `stale_read` is true, it means acquire a snapshot without any
+    // consistency guarantee. This filed is also used to check if a read is allowed in the
+    // flashback.
     pub start_ts: Option<TimeStamp>,
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
-    // Marks that this read is a FlashbackToVersionReadPhase.
-    pub for_flashback: bool,
+    // Marks that this snapshot request is allowed in the flashback state.
+    pub allowed_in_flashback: bool,
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -311,7 +312,7 @@ pub trait Engine: Send + Clone + 'static {
 
     type RaftExtension: raft_extension::RaftExtension = FakeExtension;
     /// Get the underlying raft extension.
-    fn raft_extension(&self) -> &Self::RaftExtension {
+    fn raft_extension(&self) -> Self::RaftExtension {
         unimplemented!()
     }
 
@@ -418,7 +419,7 @@ pub trait Engine: Send + Clone + 'static {
 
     /// Mark the start of flashback.
     // It's an infrequent API, use trait object for simplicity.
-    fn start_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
+    fn start_flashback(&self, _ctx: &Context, _start_ts: u64) -> BoxFuture<'static, Result<()>> {
         Box::pin(futures::future::ready(Ok(())))
     }
 

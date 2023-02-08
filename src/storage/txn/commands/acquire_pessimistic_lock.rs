@@ -144,6 +144,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             }
         }
 
+        let new_acquired_locks = txn.take_new_locks();
         let modifies = txn.into_modifies();
 
         let mut res = Ok(res);
@@ -179,6 +180,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             pr,
             lock_info: encountered_locks,
             released_locks: ReleasedLocks::new(),
+            new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
         })
@@ -191,7 +193,7 @@ pub(super) fn make_write_data(modifies: Vec<Modify>, old_values: OldValues) -> W
             old_values,
             // One pc status is unknown in AcquirePessimisticLock stage.
             one_pc: false,
-            for_flashback: false,
+            allowed_in_flashback: false,
         };
         WriteData::new(modifies, extra)
     } else {

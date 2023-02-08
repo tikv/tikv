@@ -11,7 +11,7 @@ use crate::cluster::Cluster;
 fn test_region_heartbeat() {
     let region_id = 2;
     let cluster = Cluster::with_node_count(1, None);
-    let router = cluster.router(0);
+    let router = &cluster.routers[0];
 
     // When there is only one peer, it should campaign immediately.
     let mut req = RaftCmdRequest::default();
@@ -52,6 +52,7 @@ fn test_store_heartbeat() {
         let stats = block_on(cluster.node(0).pd_client().get_store_stats_async(store_id)).unwrap();
         if stats.get_start_time() > 0 {
             assert_ne!(stats.get_capacity(), 0);
+            assert_ne!(stats.get_used_size(), 0);
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));

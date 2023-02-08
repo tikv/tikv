@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::{keyspace::KvPair, ApiV1};
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
@@ -18,7 +19,7 @@ use crate::{
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
-    scanner: RangesScanner<TikvStorage<SnapshotStore<S>>>,
+    scanner: RangesScanner<TikvStorage<SnapshotStore<S>>, ApiV1>,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -73,12 +74,13 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         let mut prefix_digest = crc64fast::Digest::new();
         prefix_digest.write(&old_prefix);
 
-        while let Some((k, v)) = self.scanner.next().await? {
+        while let Some(row) = self.scanner.next().await? {
+            let (k, v) = row.kv();
             if !k.starts_with(&new_prefix) {
                 return Err(box_err!("Wrong prefix expect: {:?}", new_prefix));
             }
             checksum =
-                checksum_crc64_xor(checksum, prefix_digest.clone(), &k[new_prefix.len()..], &v);
+                checksum_crc64_xor(checksum, prefix_digest.clone(), &k[new_prefix.len()..], v);
             total_kvs += 1;
             total_bytes += k.len() + v.len() + old_prefix.len() - new_prefix.len();
         }

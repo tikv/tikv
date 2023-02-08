@@ -76,7 +76,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     lock_manager::{
         lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
-        LockManager, LockWaitToken,
+        KeyLockWaitInfo, LockDigest, LockManager, LockWaitToken, UpdateWaitForEvent,
     },
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
@@ -597,6 +597,36 @@ impl<L: LockManager> LockWaitQueues<L> {
         }
 
         result
+    }
+
+    pub fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) {
+        let mut update_wait_for_events = vec![];
+        for lock_info in lock_info {
+            let key = Key::from_raw(lock_info.get_key());
+            if let Some(mut key_state) = self.inner.queue_map.get_mut(&key) {
+                key_state.current_lock = lock_info;
+                update_wait_for_events.reserve(key_state.queue.len());
+                for (&token, entry) in key_state.queue.iter() {
+                    let event = UpdateWaitForEvent {
+                        token,
+                        start_ts: entry.parameters.start_ts,
+                        is_first_lock: entry.parameters.is_first_lock,
+                        wait_info: KeyLockWaitInfo {
+                            key: key.clone(),
+                            lock_digest: LockDigest {
+                                ts: key_state.current_lock.lock_version.into(),
+                                hash: entry.lock_hash,
+                            },
+                            lock_info: key_state.current_lock.clone(),
+                        },
+                    };
+                    update_wait_for_events.push(event);
+                }
+            }
+        }
+        if !update_wait_for_events.is_empty() {
+            self.inner.lock_mgr.update_wait_for(update_wait_for_events);
+        }
     }
 
     /// Gets the count of entries currently waiting in queues.
@@ -1204,5 +1234,45 @@ mod tests {
         );
         queues.must_not_contain_key(b"k1");
         assert_eq!(queues.entry_count(), 0);
+    }
+
+    #[bench]
+    fn bench_update_lock_wait_empty(b: &mut test::Bencher) {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        queues.mock_lock_wait(b"k1", 5, 6, false);
+
+        let mut lock_info = kvrpcpb::LockInfo::default();
+        let key = b"t\x00\x00\x00\x00\x00\x00\x00\x01_r\x00\x00\x00\x00\x00\x00\x00\x01";
+        lock_info.set_key(key.to_vec());
+        lock_info.set_primary_lock(key.to_vec());
+        lock_info.set_lock_version(10);
+        lock_info.set_lock_for_update_ts(10);
+        let lock_info = vec![lock_info];
+
+        b.iter(|| {
+            queues.update_lock_wait(lock_info.clone());
+        });
+    }
+
+    #[bench]
+    fn bench_update_lock_wait_queue_len_512(b: &mut test::Bencher) {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+
+        let key = b"t\x00\x00\x00\x00\x00\x00\x00\x01_r\x00\x00\x00\x00\x00\x00\x00\x01";
+
+        for i in 0..512 {
+            queues.mock_lock_wait(key, 15 + i, 10, true);
+        }
+
+        let mut lock_info = kvrpcpb::LockInfo::default();
+        lock_info.set_key(key.to_vec());
+        lock_info.set_primary_lock(key.to_vec());
+        lock_info.set_lock_version(10);
+        lock_info.set_lock_for_update_ts(10);
+        let lock_info = vec![lock_info];
+
+        b.iter(|| {
+            queues.update_lock_wait(lock_info.clone());
+        });
     }
 }

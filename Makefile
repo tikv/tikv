@@ -334,7 +334,7 @@ pre-format: unset-override
 
 format: pre-format
 	@cargo fmt
-	@cargo sort -w >/dev/null 
+	@cargo sort -w -c &>/dev/null || cargo sort -w >/dev/null
 
 doc:
 	@cargo doc --workspace --document-private-items \

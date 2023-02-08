@@ -20,9 +20,7 @@ use engine_rocks::{
     },
     RocksEngine, RocksMvccProperties, RocksWriteBatchVec,
 };
-use engine_traits::{
-    KvEngine, MiscExt, Mutable, MvccProperties, WriteBatch, WriteBatchExt, WriteOptions,
-};
+use engine_traits::{KvEngine, MiscExt, MvccProperties, WriteBatch, WriteOptions};
 use file_system::{IoType, WithIoType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
@@ -30,6 +28,7 @@ use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{
     time::Instant,
     worker::{ScheduleError, Scheduler},
+    Either,
 };
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
@@ -51,7 +50,7 @@ const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 // these fields are not available when constructing
 // `WriteCompactionFilterFactory`.
 pub struct GcContext {
-    pub(crate) db: RocksEngine,
+    pub(crate) db: Option<RocksEngine>,
     pub(crate) store_id: u64,
     pub(crate) safe_point: Arc<AtomicU64>,
     pub(crate) cfg_tracker: GcWorkerConfigManager,
@@ -154,7 +153,7 @@ where
     );
 }
 
-impl<EK> CompactionFilterInitializer<EK> for EK
+impl<EK> CompactionFilterInitializer<EK> for Option<EK>
 where
     EK: KvEngine,
 {
@@ -171,7 +170,7 @@ where
     }
 }
 
-impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
+impl CompactionFilterInitializer<RocksEngine> for Option<RocksEngine> {
     fn init_compaction_filter(
         &self,
         store_id: u64,
@@ -237,7 +236,10 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "ratio_threshold" => ratio_threshold,
         );
 
-        if db.is_stalled_or_stopped() {
+        if db
+            .as_ref()
+            .map_or(false, RocksEngine::is_stalled_or_stopped)
+        {
             debug!("skip gc in compaction filter because the DB is stalled");
             return std::ptr::null_mut();
         }
@@ -277,13 +279,60 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
     }
 }
 
+pub struct DeleteBatch<B> {
+    pub batch: Either<B, Vec<Key>>,
+}
+
+impl<B: WriteBatch> DeleteBatch<B> {
+    fn new<EK>(db: &Option<EK>) -> Self
+    where
+        EK: KvEngine<WriteBatch = B>,
+    {
+        Self {
+            batch: match db {
+                Some(db) => Either::Left(db.write_batch_with_cap(DEFAULT_DELETE_BATCH_SIZE)),
+                None => Either::Right(Vec::with_capacity(64)),
+            },
+        }
+    }
+
+    // `key` has prefix `DATA_KEY`.
+    fn delete(&mut self, key: &[u8], ts: TimeStamp) -> Result<(), String> {
+        match &mut self.batch {
+            Either::Left(batch) => {
+                let key = Key::from_encoded_slice(key).append_ts(ts);
+                batch.delete(key.as_encoded())?;
+            }
+            Either::Right(keys) => {
+                let key = Key::from_encoded_slice(keys::origin_key(key)).append_ts(ts);
+                keys.push(key);
+            }
+        }
+        Ok(())
+    }
+
+    fn is_empty(&self) -> bool {
+        match &self.batch {
+            Either::Left(batch) => batch.is_empty(),
+            Either::Right(keys) => keys.is_empty(),
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        match &self.batch {
+            Either::Left(batch) => batch.count(),
+            Either::Right(keys) => keys.len(),
+        }
+    }
+}
+
 struct WriteCompactionFilter {
     safe_point: u64,
-    engine: RocksEngine,
+    engine: Option<RocksEngine>,
     is_bottommost_level: bool,
     encountered_errors: bool,
 
-    write_batch: RocksWriteBatchVec,
+    write_batch: DeleteBatch<RocksWriteBatchVec>,
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     // A key batch which is going to be sent to the GC worker.
     mvcc_deletions: Vec<Key>,
@@ -312,7 +361,7 @@ struct WriteCompactionFilter {
 
 impl WriteCompactionFilter {
     fn new(
-        engine: RocksEngine,
+        engine: Option<RocksEngine>,
         safe_point: u64,
         context: &CompactionFilterContext,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
@@ -322,7 +371,7 @@ impl WriteCompactionFilter {
         assert!(safe_point > 0);
         debug!("gc in compaction filter"; "safe_point" => safe_point);
 
-        let write_batch = engine.write_batch_with_cap(DEFAULT_DELETE_BATCH_SIZE);
+        let write_batch = DeleteBatch::new(&engine);
         WriteCompactionFilter {
             safe_point,
             engine,
@@ -469,9 +518,8 @@ impl WriteCompactionFilter {
 
     fn handle_filtered_write(&mut self, write: WriteRef<'_>) -> Result<(), String> {
         if write.short_value.is_none() && write.write_type == WriteType::Put {
-            let prefix = Key::from_encoded_slice(&self.mvcc_key_prefix);
-            let def_key = prefix.append_ts(write.start_ts).into_encoded();
-            self.write_batch.delete(&def_key)?;
+            self.write_batch
+                .delete(&self.mvcc_key_prefix, write.start_ts)?;
         }
         Ok(())
     }
@@ -499,24 +547,40 @@ impl WriteCompactionFilter {
         }
 
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT || force {
-            let mut wopts = WriteOptions::default();
-            wopts.set_no_slowdown(true);
-            if let Err(e) = do_flush(&mut self.write_batch, &wopts) {
-                let wb = mem::replace(
-                    &mut self.write_batch,
-                    self.engine.write_batch_with_cap(DEFAULT_DELETE_BATCH_SIZE),
-                );
-                self.orphan_versions += wb.count();
-                let id = ORPHAN_VERSIONS_ID.fetch_add(1, Ordering::Relaxed);
-                let task = GcTask::OrphanVersions { wb, id };
+            let err = match &mut self.write_batch.batch {
+                Either::Left(wb) => {
+                    let mut wopts = WriteOptions::default();
+                    wopts.set_no_slowdown(true);
+                    match do_flush(wb, &wopts) {
+                        Ok(()) => {
+                            wb.clear();
+                            return Ok(());
+                        }
+                        Err(e) => Some(e),
+                    }
+                }
+                Either::Right(_) => None,
+            };
+
+            let wb = mem::replace(&mut self.write_batch, DeleteBatch::new(&self.engine));
+            self.orphan_versions += wb.count();
+            let id = ORPHAN_VERSIONS_ID.fetch_add(1, Ordering::Relaxed);
+            let region_info_provider = self.regions_provider.1.clone();
+            let task = GcTask::OrphanVersions {
+                wb,
+                id,
+                region_info_provider,
+            };
+            if let Some(e) = &err {
                 warn!(
-                   "compaction filter flush fail, dispatch to gc worker";
-                   "task" => %task, "err" => ?e,
+                    "compaction filter flush fail, dispatch to gc worker";
+                    "task" => %task, "err" => ?e,
                 );
-                self.schedule_gc_task(task, true);
-                return Err(e);
             }
-            self.write_batch.clear();
+            self.schedule_gc_task(task, true);
+            if let Some(err) = err {
+                return Err(err);
+            }
         }
         Ok(())
     }
@@ -607,7 +671,9 @@ impl Drop for WriteCompactionFilter {
         if let Err(e) = self.flush_pending_writes_if_need(true) {
             error!("compaction filter flush writes fail"; "err" => ?e);
         }
-        self.engine.sync_wal().unwrap();
+        if let Some(engine) = &self.engine {
+            engine.sync_wal().unwrap();
+        }
 
         self.switch_key_metrics();
         self.flush_metrics();
@@ -685,6 +751,15 @@ pub fn check_need_gc(
     context: &CompactionFilterContext,
 ) -> bool {
     let check_props = |props: &MvccProperties| -> (bool, bool /* skip_more_checks */) {
+        // Disable GC directly once the config is negative or +inf.
+        // Disabling GC is useful in some abnormal scenarios where the transaction model
+        // would be break (e.g. writes with higher commit TS would be written BEFORE
+        // writes with lower commit TS, or write data with TS lower than current GC safe
+        // point). Use this at your own risk.
+        if ratio_threshold.is_sign_negative() || ratio_threshold.is_infinite() {
+            return (false, false);
+        }
+
         if props.min_ts > safe_point {
             return (false, false);
         }
@@ -822,7 +897,7 @@ pub mod test_utils {
 
             let mut gc_context_opt = GC_CONTEXT.lock().unwrap();
             *gc_context_opt = Some(GcContext {
-                db: engine.clone(),
+                db: Some(engine.clone()),
                 store_id: 1,
                 safe_point,
                 cfg_tracker,
@@ -970,6 +1045,13 @@ pub mod tests {
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
+
+        // If the ratio threshold is less than 0, GC would be skipped.
+        must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 210);
+        must_commit(&mut engine, b"zkey", 210, 220);
+        gc_runner.ratio_threshold = Some(-1.0);
+        gc_runner.safe_point(256).gc(&raw_engine);
+        must_get(&mut engine, b"zkey", 210, &value);
     }
 
     // Test dirty versions before a deletion mark can be handled correctly.

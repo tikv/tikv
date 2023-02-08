@@ -672,12 +672,13 @@ impl<K: PrewriteKind> Prewriter<K> {
                 old_values: self.old_values,
                 // Set one_pc flag in TxnExtra to let CDC skip handling the resolver.
                 one_pc: self.try_one_pc,
-                for_flashback: false,
+                allowed_in_flashback: false,
             };
             // Here the lock guards are taken and will be released after the write finishes.
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
             // are dropped along with `txn` automatically.
             let lock_guards = txn.take_guards();
+            let new_acquired_locks = txn.take_new_locks();
             let mut to_be_write = WriteData::new(txn.into_modifies(), extra);
             to_be_write.set_disk_full_opt(self.ctx.get_disk_full_opt());
 
@@ -688,6 +689,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 pr,
                 lock_info: vec![],
                 released_locks,
+                new_acquired_locks,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -707,6 +709,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 pr,
                 lock_info: vec![],
                 released_locks: ReleasedLocks::new(),
+                new_acquired_locks: vec![],
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -870,8 +873,9 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
 
 /// Change all 1pc locks in txn to 2pc locks.
 pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
-    for (key, lock, _) in std::mem::take(&mut txn.locks_for_1pc) {
-        txn.put_lock(key, &lock);
+    for (key, lock, remove_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
+        let is_new_lock = !remove_pessimistic_lock;
+        txn.put_lock(key, &lock, is_new_lock);
     }
 }
 

@@ -153,7 +153,9 @@ pub fn prewrite<S: Snapshot>(
         OldValue::Unspecified
     };
 
-    let final_min_commit_ts = mutation.write_lock(lock_status, txn)?;
+    let is_new_lock = !matches!(pessimistic_action, DoPessimisticCheck) || lock_amended;
+
+    let final_min_commit_ts = mutation.write_lock(lock_status, txn, is_new_lock)?;
 
     fail_point!("after_prewrite_one_key");
 
@@ -448,7 +450,12 @@ impl<'a> PrewriteMutation<'a> {
         Ok(None)
     }
 
-    fn write_lock(self, lock_status: LockStatus, txn: &mut MvccTxn) -> Result<TimeStamp> {
+    fn write_lock(
+        self,
+        lock_status: LockStatus,
+        txn: &mut MvccTxn,
+        is_new_lock: bool,
+    ) -> Result<TimeStamp> {
         let mut try_one_pc = self.try_one_pc();
 
         let mut lock = Lock::new(
@@ -506,7 +513,7 @@ impl<'a> PrewriteMutation<'a> {
         if try_one_pc {
             txn.put_locks_for_1pc(self.key, lock, lock_status.has_pessimistic_lock());
         } else {
-            txn.put_lock(self.key, &lock);
+            txn.put_lock(self.key, &lock, is_new_lock);
         }
 
         final_min_commit_ts

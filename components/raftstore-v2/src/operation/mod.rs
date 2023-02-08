@@ -5,11 +5,20 @@ mod life;
 mod pd;
 mod query;
 mod ready;
+mod txn_ext;
 
 pub use command::{
-    AdminCmdResult, CommittedEntries, ProposalControl, SimpleWriteDecoder, SimpleWriteEncoder,
+    AdminCmdResult, ApplyFlowControl, CommittedEntries, CompactLogContext, ProposalControl,
+    RequestSplit, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
+    SimpleWriteReqEncoder, SplitFlowControl, SPLIT_PREFIX,
 };
-pub use life::DestroyProgress;
-pub use ready::{AsyncWriter, GenSnapTask, SnapState};
+pub use life::{DestroyProgress, GcPeerContext};
+pub use ready::{
+    write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, SnapState, StateStorage,
+};
 
-pub(crate) use self::{command::SplitInit, query::LocalReader};
+pub(crate) use self::{
+    command::SplitInit,
+    query::{LocalReader, ReadDelegatePair, SharedReadTablet},
+    txn_ext::TxnContext,
+};

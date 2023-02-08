@@ -7,10 +7,11 @@ use std::{
 use ::tracker::{
     set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
 };
+use api_version::{dispatch_api_version, KvFormat};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
-use futures::{channel::mpsc, prelude::*};
+use futures::{channel::mpsc, future::Either, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
@@ -148,6 +149,21 @@ impl<E: Engine> Endpoint<E> {
     /// It also checks if there are locks in memory blocking this read request.
     fn parse_request_and_check_memory_locks(
         &self,
+        req: coppb::Request,
+        peer: Option<String>,
+        is_streaming: bool,
+    ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
+        dispatch_api_version!(req.get_context().get_api_version(), {
+            self.parse_request_and_check_memory_locks_impl::<API>(req, peer, is_streaming)
+        })
+    }
+
+    /// Parse the raw `Request` to create `RequestHandlerBuilder` and
+    /// `ReqContext`. Returns `Err` if fails.
+    ///
+    /// It also checks if there are locks in memory blocking this read request.
+    fn parse_request_and_check_memory_locks_impl<F: KvFormat>(
+        &self,
         mut req: coppb::Request,
         peer: Option<String>,
         is_streaming: bool,
@@ -171,7 +187,7 @@ impl<E: Engine> Endpoint<E> {
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
 
-        let req_ctx: ReqContext;
+        let mut req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
         match req.get_tp() {
@@ -232,7 +248,7 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
-                    dag::DagHandlerBuilder::new(
+                    dag::DagHandlerBuilder::<_, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
                         store,
@@ -281,7 +297,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
-                    statistics::analyze::AnalyzeContext::new(
+                    statistics::analyze::AnalyzeContext::<_, F>::new(
                         analyze,
                         req_ctx.ranges.clone(),
                         start_ts,
@@ -316,6 +332,9 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                // Checksum is allowed during the flashback period to make sure the tool such
+                // like BR can work.
+                req_ctx.allowed_in_flashback = true;
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorChecksum;
                     tracker.req_info.start_ts = start_ts;
@@ -358,6 +377,7 @@ impl<E: Engine> Endpoint<E> {
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx.context,
             start_ts: Some(ctx.txn_start_ts),
+            allowed_in_flashback: ctx.allowed_in_flashback,
             ..Default::default()
         };
         // need to pass start_ts and ranges to check memory locks for replica read
@@ -466,6 +486,11 @@ impl<E: Engine> Endpoint<E> {
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
+        let group_name = req_ctx
+            .context
+            .get_resource_group_name()
+            .as_bytes()
+            .to_owned();
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -476,6 +501,7 @@ impl<E: Engine> Endpoint<E> {
                     .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
+                group_name,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded);
         async move { res.await? }
@@ -490,6 +516,16 @@ impl<E: Engine> Endpoint<E> {
         mut req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+        // Check the load of the read pool. If it's too busy, generate and return
+        // error in the gRPC thread to avoid waiting in the queue of the read pool.
+        if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
+            req.get_context().get_busy_threshold_ms() as u64,
+        )) {
+            let mut resp = coppb::Response::default();
+            resp.mut_region_error().set_server_is_busy(busy_err);
+            return Either::Left(async move { resp.into() });
+        }
+
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
             req.get_context(),
             RequestType::Unknown,
@@ -500,7 +536,7 @@ impl<E: Engine> Endpoint<E> {
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
-        async move {
+        let fut = async move {
             let res = match result_of_future {
                 Err(e) => {
                     let mut res = make_error_response(e);
@@ -520,7 +556,8 @@ impl<E: Engine> Endpoint<E> {
             };
             GLOBAL_TRACKERS.remove(tracker);
             res
-        }
+        };
+        Either::Right(fut)
     }
 
     // process_batch_tasks process the input batched coprocessor tasks if any,
@@ -574,6 +611,8 @@ impl<E: Engine> Endpoint<E> {
                                     response.set_locked(lock_info);
                                 }
                                 response.set_other_error(resp.take_other_error());
+                                // keep the exec details already generated.
+                                response.set_exec_details_v2(resp.take_exec_details_v2());
                                 GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
                                     tracker.write_scan_detail(
                                         response.mut_exec_details_v2().mut_scan_detail_v2(),
@@ -686,6 +725,11 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
+        let group_name = req_ctx
+            .context
+            .get_resource_group_name()
+            .as_bytes()
+            .to_owned();
         let key_ranges = req_ctx
             .ranges
             .iter()
@@ -708,6 +752,7 @@ impl<E: Engine> Endpoint<E> {
                     }),
                 priority,
                 task_id,
+                group_name,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx)

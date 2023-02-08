@@ -598,3 +598,33 @@ fn calculated_commit_ts_after_commit() {
         commit_ts
     });
 }
+
+#[test]
+fn test_backup_in_flashback() {
+    let mut suite = TestSuite::new(3, 144 * 1024 * 1024, ApiVersion::V1);
+    suite.must_kv_put(3, 1);
+    // Prepare the flashback.
+    let region = suite.cluster.get_region(b"key_0");
+    suite.cluster.must_send_wait_flashback_msg(
+        region.get_id(),
+        kvproto::raft_cmdpb::AdminCmdType::PrepareFlashback,
+    );
+    // Start the backup.
+    let tmp = Builder::new().tempdir().unwrap();
+    let backup_ts = suite.alloc_ts();
+    let storage_path = make_unique_dir(tmp.path());
+    let rx = suite.backup(
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
+        backup_ts,
+        &storage_path,
+    );
+    let resp = block_on(rx.collect::<Vec<_>>());
+    assert!(!resp[0].has_error());
+    // Finish the flashback.
+    suite.cluster.must_send_wait_flashback_msg(
+        region.get_id(),
+        kvproto::raft_cmdpb::AdminCmdType::FinishFlashback,
+    );
+}

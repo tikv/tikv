@@ -7,7 +7,10 @@ use std::{path::Path, process};
 use clap::{crate_authors, App, Arg};
 use serde_json::{Map, Value};
 use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
-use tikv::config::{to_flatten_config_info, TikvConfig};
+use tikv::{
+    config::{to_flatten_config_info, TikvConfig},
+    storage::config::EngineType,
+};
 
 fn main() {
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
@@ -207,5 +210,8 @@ fn main() {
         process::exit(0);
     }
 
-    server::server::run_tikv(config);
+    match config.storage.engine {
+        EngineType::RaftKv => server::server::run_tikv(config),
+        EngineType::RaftKv2 => server::server2::run_tikv(config),
+    }
 }

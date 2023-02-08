@@ -12,7 +12,6 @@ use std::{
 
 use api_version::{ApiV1, ApiV2, KvFormat};
 use collections::HashMap;
-use engine_traits::DummyFactory;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use grpcio::*;
@@ -262,13 +261,12 @@ fn test_scale_scheduler_pool() {
         rx,
     )));
 
-    let cfg_controller = ConfigController::new(cfg.clone());
+    let cfg_controller = ConfigController::new(cfg);
     let (scheduler, _receiver) = dummy_scheduler();
     cfg_controller.register(
         Module::Storage,
         Box::new(StorageConfigManger::new(
-            Arc::new(DummyFactory::new(Some(kv_engine), "".to_string())),
-            cfg.storage.block_cache.shared,
+            kv_engine,
             scheduler,
             flow_controller,
             storage.get_scheduler(),
@@ -314,10 +312,7 @@ fn test_scale_scheduler_pool() {
             .update_config("storage.scheduler-worker-pool-size", &format!("{}", size))
             .unwrap();
         assert_eq!(
-            scheduler
-                .get_sched_pool(CommandPri::Normal)
-                .pool
-                .get_pool_size(),
+            scheduler.get_sched_pool().get_pool_size(CommandPri::Normal),
             size
         );
     };
@@ -1450,12 +1445,17 @@ fn test_before_propose_deadline() {
             }),
         )
         .unwrap();
-    assert!(matches!(
-        rx.recv().unwrap(),
-        Err(StorageError(box StorageErrorInner::Kv(KvError(
-            box KvErrorInner::Request(_),
-        ))))
-    ));
+    let res = rx.recv().unwrap();
+    assert!(
+        matches!(
+            res,
+            Err(StorageError(box StorageErrorInner::Kv(KvError(
+                box KvErrorInner::Request(_),
+            ))))
+        ),
+        "actual: {:?}",
+        res
+    );
 }
 
 #[test]

@@ -1,20 +1,23 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::BinaryHeap, ptr::NonNull, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tidb_query_common::{storage::IntervalRange, Result};
 use tidb_query_datatype::{
-    codec::{
-        batch::{LazyBatchColumn, LazyBatchColumnVec},
-        data_type::*,
-    },
+    codec::{batch::LazyBatchColumnVec, data_type::*},
     expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use tipb::{Expr, FieldType, TopN};
 
-use crate::{interface::*, util::*};
+use crate::{
+    interface::*,
+    util::{
+        top_n_heap::{HeapItemSourceData, HeapItemUnsafe, TopNHeap},
+        *,
+    },
+};
 
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// The heap, which contains N rows at most.
@@ -22,7 +25,7 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// This field is placed before `eval_columns_buffer_unsafe`, `order_exprs`,
     /// `order_is_desc` and `src` because it relies on data in those fields
     /// and we want this field to be dropped first.
-    heap: BinaryHeap<HeapItemUnsafe>,
+    heap: TopNHeap,
 
     /// A collection of all evaluated columns. This is to avoid repeated
     /// allocations in each `next_batch()`.
@@ -97,7 +100,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Self {
-            heap: BinaryHeap::new(),
+            heap: TopNHeap::new(n),
             eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
@@ -126,7 +129,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Self {
-            heap: BinaryHeap::new(),
+            heap: TopNHeap::new(n),
             eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
@@ -140,7 +143,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     }
 
     pub fn new(
-        config: std::sync::Arc<EvalConfig>,
+        config: Arc<EvalConfig>,
         src: Src,
         order_exprs_def: Vec<Expr>,
         order_is_desc: Vec<bool>,
@@ -163,8 +166,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .collect();
 
         Ok(Self {
-            // Avoid large N causing OOM
-            heap: BinaryHeap::with_capacity(n.min(1024)),
+            heap: TopNHeap::new(n),
             // Simply large enough to avoid repeated allocations
             eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
             order_exprs: order_exprs.into_boxed_slice(),
@@ -182,7 +184,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     async fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
         // Use max batch size from the beginning because top N
         // always needs to calculate over all data.
-        let src_result = self.src.next_batch(crate::runner::BATCH_MAX_SIZE).await;
+        let src_result = self.src.next_batch(BATCH_MAX_SIZE).await;
 
         self.context.warnings = src_result.warnings;
 
@@ -193,7 +195,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         }
 
         if src_is_drained {
-            Ok(Some(self.heap_take_all()))
+            Ok(Some(self.heap.take_all()))
         } else {
             Ok(None)
         }
@@ -240,83 +242,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                 eval_columns_offset: eval_offset,
                 logical_row_index,
             };
-            self.heap_add_row(row)?;
+            self.heap.add_row(row)?;
         }
 
         Ok(())
-    }
-
-    fn heap_add_row(&mut self, row: HeapItemUnsafe) -> Result<()> {
-        if self.heap.len() < self.n {
-            // HeapItemUnsafe must be checked valid to compare in advance, or else it may
-            // panic inside BinaryHeap.
-            row.cmp_sort_key(&row)?;
-
-            // Push into heap when heap is not full.
-            self.heap.push(row);
-        } else {
-            // Swap the greatest row in the heap if this row is smaller than that row.
-            let mut greatest_row = self.heap.peek_mut().unwrap();
-            if row.cmp_sort_key(&greatest_row)? == Ordering::Less {
-                *greatest_row = row;
-            }
-        }
-
-        Ok(())
-    }
-
-    #[allow(clippy::clone_on_copy)]
-    fn heap_take_all(&mut self) -> LazyBatchColumnVec {
-        let heap = std::mem::take(&mut self.heap);
-        let sorted_items = heap.into_sorted_vec();
-        if sorted_items.is_empty() {
-            return LazyBatchColumnVec::empty();
-        }
-
-        let mut result = sorted_items[0]
-            .source_data
-            .physical_columns
-            .clone_empty(sorted_items.len());
-
-        for (column_index, result_column) in result.as_mut_slice().iter_mut().enumerate() {
-            match result_column {
-                LazyBatchColumn::Raw(dest_column) => {
-                    for item in &sorted_items {
-                        let src = item.source_data.physical_columns[column_index].raw();
-                        dest_column
-                            .push(&src[item.source_data.logical_rows[item.logical_row_index]]);
-                    }
-                }
-                LazyBatchColumn::Decoded(dest_vector_value) => {
-                    match_template::match_template! {
-                        TT = [
-                            Int,
-                            Real,
-                            Duration,
-                            Decimal,
-                            DateTime,
-                            Bytes => BytesRef,
-                            Json => JsonRef,
-                            Enum => EnumRef,
-                            Set => SetRef,
-                        ],
-                        match dest_vector_value {
-                            VectorValue::TT(dest_column) => {
-                                for item in &sorted_items {
-                                    let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
-                                    let src_ref = TT::borrow_vector_value(src);
-                                    // TODO: This clone is not necessary.
-                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.into_owned_value()));
-                                }
-                            },
-                        }
-                    }
-                }
-            }
-        }
-
-        result.assert_columns_equal_length();
-        result
     }
 }
 
@@ -401,111 +330,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
         self.src.can_be_cached()
     }
 }
-
-struct HeapItemSourceData {
-    physical_columns: LazyBatchColumnVec,
-    logical_rows: Vec<usize>,
-}
-
-/// The item in the heap of `BatchTopNExecutor`.
-///
-/// WARN: The content of this structure is valid only if `BatchTopNExecutor` is
-/// valid (i.e. not dropped). Thus it is called unsafe.
-struct HeapItemUnsafe {
-    /// A pointer to the `order_is_desc` field in `BatchTopNExecutor`.
-    order_is_desc_ptr: NonNull<[bool]>,
-
-    /// A pointer to the `order_exprs_field_type` field in `order_exprs`.
-    order_exprs_field_type_ptr: NonNull<[FieldType]>,
-
-    /// The source data that evaluated column in this structure is using.
-    source_data: Arc<HeapItemSourceData>,
-
-    /// A pointer to the `eval_columns_buffer` field in `BatchTopNExecutor`.
-    eval_columns_buffer_ptr: NonNull<Vec<RpnStackNode<'static>>>,
-
-    /// The begin offset of the evaluated columns stored in the buffer.
-    ///
-    /// The length of evaluated columns in the buffer is `order_is_desc.len()`.
-    eval_columns_offset: usize,
-
-    /// Which logical row in the evaluated columns this heap item is
-    /// representing.
-    logical_row_index: usize,
-}
-
-impl HeapItemUnsafe {
-    fn get_order_is_desc(&self) -> &[bool] {
-        unsafe { self.order_is_desc_ptr.as_ref() }
-    }
-
-    fn get_order_exprs_field_type(&self) -> &[FieldType] {
-        unsafe { self.order_exprs_field_type_ptr.as_ref() }
-    }
-
-    fn get_eval_columns(&self, len: usize) -> &[RpnStackNode<'_>] {
-        let offset_begin = self.eval_columns_offset;
-        let offset_end = offset_begin + len;
-        let vec_buf = unsafe { self.eval_columns_buffer_ptr.as_ref() };
-        &vec_buf[offset_begin..offset_end]
-    }
-
-    fn cmp_sort_key(&self, other: &Self) -> Result<Ordering> {
-        // Only debug assert because this function is called pretty frequently.
-        debug_assert_eq!(self.get_order_is_desc(), other.get_order_is_desc());
-
-        let order_is_desc = self.get_order_is_desc();
-        let order_exprs_field_type = self.get_order_exprs_field_type();
-        let columns_len = order_is_desc.len();
-        let eval_columns_lhs = self.get_eval_columns(columns_len);
-        let eval_columns_rhs = other.get_eval_columns(columns_len);
-
-        for column_idx in 0..columns_len {
-            let lhs_node = &eval_columns_lhs[column_idx];
-            let rhs_node = &eval_columns_rhs[column_idx];
-            let lhs = lhs_node.get_logical_scalar_ref(self.logical_row_index);
-            let rhs = rhs_node.get_logical_scalar_ref(other.logical_row_index);
-
-            // There is panic inside, but will never panic, since the data type of
-            // corresponding column should be consistent for each
-            // `HeapItemUnsafe`.
-            let ord = lhs.cmp_sort_key(&rhs, &order_exprs_field_type[column_idx])?;
-
-            if ord == Ordering::Equal {
-                continue;
-            }
-            if !order_is_desc[column_idx] {
-                return Ok(ord);
-            } else {
-                return Ok(ord.reverse());
-            }
-        }
-
-        Ok(Ordering::Equal)
-    }
-}
-
-/// WARN: HeapItemUnsafe implements partial ordering. It panics when Collator
-/// fails to parse. So make sure that it is valid before putting it into a heap.
-impl Ord for HeapItemUnsafe {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.cmp_sort_key(other).unwrap()
-    }
-}
-
-impl PartialOrd for HeapItemUnsafe {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for HeapItemUnsafe {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl Eq for HeapItemUnsafe {}
 
 #[cfg(test)]
 mod tests {
