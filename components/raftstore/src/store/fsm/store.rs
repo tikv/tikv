@@ -71,7 +71,7 @@ use crate::{
     store::{
         async_io::{
             read::{ReadRunner, ReadTask},
-            write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+            write::{StoreWriters, StoreWritersContext, Worker as WriteWorker, WriteMsg},
             write_router::WriteSenders,
         },
         config::Config,
@@ -907,6 +907,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             self.poll_ctx.update_ticks_timeout();
             update_cfg(&incoming.store_batch_system);
         }
+        // update store writers if necessary
+        self.poll_ctx.write_senders.refresh();
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
@@ -1052,7 +1054,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
         } else {
-            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
+            // Use the valid size of async-ios for generating `writer_id` when the local
+            // senders haven't been updated by `poller.begin().
+            let writer_id = rand::random::<usize>()
+                % std::cmp::min(
+                    self.poll_ctx.cfg.store_io_pool_size,
+                    self.poll_ctx.write_senders.size(),
+                );
             if let Err(err) = self.poll_ctx.write_senders[writer_id].try_send(
                 WriteMsg::LatencyInspect {
                     send_time: write_begin,
@@ -1733,6 +1741,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let refresh_config_runner = RefreshConfigRunner::new(
+            StoreWritersContext {
+                store_id: store.get_id(),
+                notifier: self.router.clone(),
+                raft_engine: raft_builder.engines.raft.clone(),
+                kv_engine: Some(raft_builder.engines.kv.clone()),
+                transfer: raft_builder.trans.clone(),
+                cfg: raft_builder.cfg.clone(),
+            },
+            self.store_writers.clone(),
             self.apply_router.router.clone(),
             self.router.router.clone(),
             self.apply_system.build_pool_state(apply_builder),
