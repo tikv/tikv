@@ -78,7 +78,6 @@ impl ResourceManagerService {
                 Err(PdError::DataCompacted(msg)) => {
                     error!("required revision has been compacted"; "err" => ?msg);
                     // If the etcd revision is compacted, we need to reload all resouce groups.
-                    self.manager.remove_all_resource_groups();
                     self.load_resource_groups().await;
                 }
                 Err(err) => {
@@ -100,6 +99,8 @@ impl ResourceManagerService {
                 .await
             {
                 Ok((items, revision)) => {
+                    self.manager
+                        .retain(|name, _g| items.iter().any(|i| &i.name == name));
                     items
                         .into_iter()
                         .filter_map(|g| protobuf::parse_from_bytes(g.get_payload()).ok())
@@ -188,9 +189,8 @@ pub mod tests {
         let group = new_resource_group("TEST2".into(), false, 100, 100);
         add_resource_group(s.pd_client.clone(), group);
         delete_resource_group(s.pd_client.clone(), "TEST");
-        s.manager.remove_all_resource_groups();
         block_on(s.load_resource_groups());
-        assert_eq!(get_resource_groups_len(&s.manager), 2);
+        assert_eq!(get_resource_groups_len(&s.manager), 1);
         assert_eq!(s.revision, 3);
 
         server.stop();

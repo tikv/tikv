@@ -89,11 +89,22 @@ impl ResourceGroupManager {
         self.resource_groups.iter().map(|g| g.clone()).collect()
     }
 
-    pub fn remove_all_resource_groups(&self) {
-        self.resource_groups
-            .iter()
-            .filter(|g| DEFAULT_RESOURCE_GROUP_NAME == g.name)
-            .for_each(|g| self.remove_resource_group(&g.name))
+    pub fn retain(&self, mut f: impl FnMut(&String, &ResourceGroup) -> bool) {
+        let mut removed_names = vec![];
+        self.resource_groups.retain(|k, v| {
+            let ret = f(k, v);
+            if !ret {
+                removed_names.push(k.clone());
+            }
+            ret
+        });
+        if !removed_names.is_empty() {
+            self.registry.lock().unwrap().iter().for_each(|controller| {
+                for name in &removed_names {
+                    controller.remove_resource_group(name.as_bytes());
+                }
+            });
+        }
     }
 
     pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
