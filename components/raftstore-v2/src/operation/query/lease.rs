@@ -112,7 +112,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let time = monotonic_raw_now();
         for (_, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
-                GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
                         .to_std()
                         .unwrap()
@@ -150,7 +150,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub(crate) fn maybe_renew_leader_lease(
         &mut self,
         ts: Timespec,
-        store_meta: &Mutex<StoreMeta>,
+        store_meta: &Mutex<StoreMeta<EK>>,
         progress: Option<ReadProgress>,
     ) {
         // A nonleader peer should never has leader lease.
@@ -170,12 +170,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         if let Some(progress) = progress {
             let mut meta = store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            let reader = &mut meta.readers.get_mut(&self.region_id()).unwrap().0;
             self.maybe_update_read_progress(reader, progress);
         }
         if let Some(progress) = read_progress {
             let mut meta = store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            let reader = &mut meta.readers.get_mut(&self.region_id()).unwrap().0;
             self.maybe_update_read_progress(reader, progress);
         }
     }

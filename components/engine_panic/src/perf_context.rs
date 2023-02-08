@@ -8,7 +8,7 @@ use crate::engine::PanicEngine;
 impl PerfContextExt for PanicEngine {
     type PerfContext = PanicPerfContext;
 
-    fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext {
+    fn get_perf_context(level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext {
         panic!()
     }
 }

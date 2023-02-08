@@ -1,121 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{thread, time::Duration};
+use std::time::Duration;
 
-use engine_traits::{RaftEngineReadOnly, CF_DEFAULT, CF_RAFT};
-use futures::executor::block_on;
-use kvproto::{
-    metapb, pdpb,
-    raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, SplitRequest},
-};
+use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
 use raftstore::store::{INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX};
-use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 use tikv_util::store::new_peer;
 use txn_types::{Key, TimeStamp};
 
-use crate::cluster::{Cluster, TestRouter};
-
-fn new_batch_split_region_request(
-    split_keys: Vec<Vec<u8>>,
-    ids: Vec<pdpb::SplitId>,
-    right_derive: bool,
-) -> AdminRequest {
-    let mut req = AdminRequest::default();
-    req.set_cmd_type(AdminCmdType::BatchSplit);
-    req.mut_splits().set_right_derive(right_derive);
-    let mut requests = Vec::with_capacity(ids.len());
-    for (mut id, key) in ids.into_iter().zip(split_keys) {
-        let mut split = SplitRequest::default();
-        split.set_split_key(key);
-        split.set_new_region_id(id.get_new_region_id());
-        split.set_new_peer_ids(id.take_new_peer_ids());
-        requests.push(split);
-    }
-    req.mut_splits().set_requests(requests.into());
-    req
-}
-
-fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
-    let (msg, sub) = PeerMsg::admin_command(req);
-    router.send(region_id, msg).unwrap();
-    block_on(sub.result()).unwrap();
-
-    // TODO: when persistent implementation is ready, we can use tablet index of
-    // the parent to check whether the split is done. Now, just sleep a second.
-    thread::sleep(Duration::from_secs(1));
-}
-
-fn put(router: &mut TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
-    let header = Box::new(router.new_request_for(region_id).take_header());
-    let mut put = SimpleWriteEncoder::with_capacity(64);
-    put.put(CF_DEFAULT, key, b"v1");
-    router.simple_write(region_id, header, put).unwrap()
-}
-
-// Split the region according to the parameters
-// return the updated original region
-fn split_region(
-    router: &mut TestRouter,
-    region: metapb::Region,
-    peer: metapb::Peer,
-    split_region_id: u64,
-    split_peer: metapb::Peer,
-    left_key: &[u8],
-    right_key: &[u8],
-    propose_key: &[u8],
-    split_key: &[u8],
-    right_derive: bool,
-) -> (metapb::Region, metapb::Region) {
-    let region_id = region.id;
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_region_id(region_id);
-    req.mut_header()
-        .set_region_epoch(region.get_region_epoch().clone());
-    req.mut_header().set_peer(peer);
-
-    let mut split_id = pdpb::SplitId::new();
-    split_id.new_region_id = split_region_id;
-    split_id.new_peer_ids = vec![split_peer.id];
-    let admin_req =
-        new_batch_split_region_request(vec![propose_key.to_vec()], vec![split_id], right_derive);
-    req.mut_requests().clear();
-    req.set_admin_request(admin_req);
-
-    must_split(region_id, req, router);
-
-    let (left, right) = if !right_derive {
-        (
-            router.region_detail(region_id),
-            router.region_detail(split_region_id),
-        )
-    } else {
-        (
-            router.region_detail(split_region_id),
-            router.region_detail(region_id),
-        )
-    };
-
-    // The end key of left region is `split_key`
-    // So writing `right_key` will fail
-    let resp = put(router, left.id, right_key);
-    assert!(resp.get_header().has_error(), "{:?}", resp);
-    // But `left_key` should succeed
-    let resp = put(router, left.id, left_key);
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-
-    // Mirror of above case
-    let resp = put(router, right.id, left_key);
-    assert!(resp.get_header().has_error(), "{:?}", resp);
-    let resp = put(router, right.id, right_key);
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-
-    assert_eq!(left.get_end_key(), split_key);
-    assert_eq!(right.get_start_key(), split_key);
-    assert_eq!(region.get_start_key(), left.get_start_key());
-    assert_eq!(region.get_end_key(), right.get_end_key());
-
-    (left, right)
-}
+use crate::cluster::{split_helper::split_region, Cluster};
 
 #[test]
 fn test_split() {
@@ -141,8 +33,8 @@ fn test_split() {
         peer.clone(),
         1000,
         new_peer(store_id, 10),
-        b"k11",
-        b"k33",
+        Some(b"k11"),
+        Some(b"k33"),
         b"k22",
         b"k22",
         false,
@@ -174,8 +66,8 @@ fn test_split() {
         peer,
         1001,
         new_peer(store_id, 11),
-        b"k00",
-        b"k11",
+        Some(b"k00"),
+        Some(b"k11"),
         b"k11",
         b"k11",
         false,
@@ -215,8 +107,8 @@ fn test_split() {
         new_peer(store_id, 10),
         1002,
         new_peer(store_id, 12),
-        b"k22",
-        b"k33",
+        Some(b"k22"),
+        Some(b"k33"),
         b"k33",
         b"k33",
         false,
@@ -251,12 +143,32 @@ fn test_split() {
         new_peer(store_id, 12),
         1003,
         new_peer(store_id, 13),
-        b"k33",
-        b"k55",
+        Some(b"k33"),
+        Some(b"k55"),
         split_key.as_encoded(),
         actual_split_key.as_encoded(),
         false,
     );
+
+    // Split should survive restart.
+    drop(raft_engine);
+    cluster.restart(0);
+    let region_and_key = vec![
+        (2, b"k00"),
+        (1000, b"k22"),
+        (1001, b"k11"),
+        (1002, b"k33"),
+        (1003, b"k55"),
+    ];
+    for (region_id, key) in region_and_key {
+        let snapshot = cluster.routers[0].stale_snapshot(region_id);
+        assert!(
+            snapshot.get_value(key).unwrap().is_some(),
+            "{} {:?}",
+            region_id,
+            key
+        );
+    }
 }
 
 // TODO: test split race with

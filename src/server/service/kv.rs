@@ -76,7 +76,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
     // For handling `CheckLeader` request.
-    check_leader_scheduler: Option<Scheduler<CheckLeaderTask>>,
+    check_leader_scheduler: Scheduler<CheckLeaderTask>,
 
     enable_req_batch: bool,
 
@@ -115,7 +115,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
         snap_scheduler: Scheduler<SnapTask>,
-        check_leader_scheduler: Option<Scheduler<CheckLeaderTask>>,
+        check_leader_scheduler: Scheduler<CheckLeaderTask>,
         grpc_thread_load: Arc<ThreadLoadPool>,
         enable_req_batch: bool,
         proxy: Proxy,
@@ -171,6 +171,10 @@ macro_rules! handle_request {
             let begin_instant = Instant::now();
 
             let source = req.mut_context().take_request_source();
+            let resource_group_name = req.get_context().get_resource_group_name();
+            GRPC_RESOURCE_GROUP_COUNTER_VEC
+                    .with_label_values(&[resource_group_name])
+                    .inc();
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
@@ -909,7 +913,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
-            let Some(check_leader_scheduler) = check_leader_scheduler else { return Err(box_err!("check leader is not supported")) };
             check_leader_scheduler
                 .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
                 .map_err(|e| Error::Other(format!("{}", e).into()))?;
@@ -945,11 +948,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) {
         let key_range = request.take_key_range();
         let (cb, resp) = paired_future_callback();
-        let check_leader_scheduler = match self.check_leader_scheduler.clone() {
-            Some(s) => s,
-            // Avoid print errors if it's not supported.
-            None => return,
-        };
+        let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
             check_leader_scheduler
                 .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
@@ -1048,6 +1047,10 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default());
                 },
                 Some(batch_commands_request::request::Cmd::Get(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
@@ -1062,6 +1065,10 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
@@ -1076,6 +1083,10 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
@@ -1103,6 +1114,10 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
+                    let resource_group_name = req.get_context().get_resource_group_name();
+                    GRPC_RESOURCE_GROUP_COUNTER_VEC
+                            .with_label_values(&[resource_group_name])
+                            .inc();
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
                     let resp = $future_fn($($arg,)* req)
@@ -1435,7 +1450,9 @@ fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
 ) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
     let storage = storage.clone();
     async move {
-        let f = storage.get_engine().start_flashback(req.get_context());
+        let f = storage
+            .get_engine()
+            .start_flashback(req.get_context(), req.get_start_ts());
         let mut res = f.await.map_err(storage::Error::from);
         if matches!(res, Ok(())) {
             // After the region is put into the flashback state, we need to do a special
@@ -1473,10 +1490,7 @@ fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
             res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
         }
         if matches!(res, Ok(())) {
-            // Only finish flashback when Flashback executed successfully.
-            fail_point!("skip_finish_flashback_to_version", |_| {
-                Ok(FlashbackToVersionResponse::default())
-            });
+            // Only finish when flashback executed successfully.
             let f = storage.get_engine().end_flashback(req.get_context());
             res = f.await.map_err(storage::Error::from);
         }

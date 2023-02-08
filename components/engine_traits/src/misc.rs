@@ -97,8 +97,16 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn sync_wal(&self) -> Result<()>;
 
+    /// Depending on the implementation, some on-going manual compactions may be
+    /// aborted.
+    fn pause_background_work(&self) -> Result<()>;
+
+    fn continue_background_work(&self) -> Result<()>;
+
     /// Check whether a database exists at a given path
     fn exists(path: &str) -> bool;
+
+    fn locked(path: &str) -> Result<bool>;
 
     /// Dump stats about the database into a string.
     ///
@@ -110,6 +118,8 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     fn get_oldest_snapshot_sequence_number(&self) -> Option<u64>;
 
     fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>>;
+
+    fn get_num_keys(&self) -> Result<u64>;
 
     fn get_range_entries_and_versions(
         &self,

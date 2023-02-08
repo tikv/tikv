@@ -301,9 +301,9 @@ fn test_destroy_clean_up_logs_with_unfinished_log_gc() {
     // Disable default max peer number check.
     pd_client.disable_default_operator();
     cluster.run();
-    // Simulate raft log gc are pending in queue.
+    // Simulate raft log gc tasks are lost during shutdown.
     let fp = "worker_gc_raft_log";
-    fail::cfg(fp, "return(0)").unwrap();
+    fail::cfg(fp, "return").unwrap();
 
     let state = cluster.truncated_state(1, 3);
     for i in 0..30 {

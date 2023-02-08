@@ -1,19 +1,23 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod compact_log;
 mod conf_change;
 mod split;
 mod transfer_leader;
 
+pub use compact_log::CompactLogContext;
+use compact_log::CompactLogResult;
+use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
-pub use split::{RequestSplit, SplitFlowControl, SplitInit, SplitResult, SPLIT_PREFIX};
-use tikv_util::box_err;
+use split::SplitResult;
+pub use split::{temp_split_path, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
+use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;
 
-use self::conf_change::ConfChangeResult;
 use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
 
 #[derive(Debug)]
@@ -23,6 +27,8 @@ pub enum AdminCmdResult {
     SplitRegion(SplitResult),
     ConfChange(ConfChangeResult),
     TransferLeader(u64),
+    CompactLog(CompactLogResult),
+    UpdateGcPeers(UpdateGcPeersResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -38,7 +44,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         if !req.has_admin_request() {
-            let e = box_err!("{:?} expect only execute admin command", self.logger.list());
+            let e = box_err!(
+                "{} expect only execute admin command",
+                SlogFormat(&self.logger)
+            );
             let resp = cmd_resp::new_error(e);
             ch.report_error(resp);
             return;
@@ -62,8 +71,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // checker.
         if !self.applied_to_current_term() {
             let e = box_err!(
-                "{:?} peer has not applied to current term, applied_term {}, current_term {}",
-                self.logger.list(),
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
+                SlogFormat(&self.logger),
                 self.storage().entry_storage().applied_term(),
                 self.term()
             );
@@ -93,7 +102,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL)
                     {
                         let data = req.write_to_bytes().unwrap();
-                        self.propose_with_ctx(ctx, data, vec![])
+                        self.propose(ctx, data)
                     } else {
                         if self.propose_transfer_leader(ctx, req, ch) {
                             self.set_has_ready();
@@ -101,13 +110,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         return;
                     }
                 }
+                AdminCmdType::CompactLog => self.propose_compact_log(ctx, req),
+                AdminCmdType::UpdateGcPeer => {
+                    let data = req.write_to_bytes().unwrap();
+                    self.propose(ctx, data)
+                }
                 _ => unimplemented!(),
             }
         };
         match &res {
-            Ok(index) => self
-                .proposal_control_mut()
-                .record_proposed_admin(cmd_type, *index),
+            Ok(index) => {
+                self.proposal_control_mut()
+                    .record_proposed_admin(cmd_type, *index);
+                if self.proposal_control_mut().has_uncommitted_admin() {
+                    self.raft_group_mut().skip_bcast_commit(false);
+                }
+            }
             Err(e) => {
                 info!(
                     self.logger,

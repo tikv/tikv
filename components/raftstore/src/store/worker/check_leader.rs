@@ -1,27 +1,25 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::Bound::{Excluded, Unbounded},
     fmt,
     sync::{Arc, Mutex},
 };
 
 use engine_traits::KvEngine;
 use fail::fail_point;
-use keys::{data_end_key, data_key, enc_start_key};
 use kvproto::kvrpcpb::{KeyRange, LeaderInfo};
 use tikv_util::worker::Runnable;
 
 use crate::{
     coprocessor::CoprocessorHost,
-    store::{fsm::store::StoreMeta, util::RegionReadProgressRegistry},
+    store::{fsm::store::StoreRegionMeta, util::RegionReadProgressRegistry},
 };
 
-pub struct Runner<E>
+pub struct Runner<S, E>
 where
     E: KvEngine,
 {
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Arc<Mutex<S>>,
     region_read_progress: RegionReadProgressRegistry,
     coprocessor: CoprocessorHost<E>,
 }
@@ -55,12 +53,13 @@ impl fmt::Display for Task {
     }
 }
 
-impl<E> Runner<E>
+impl<S, E> Runner<S, E>
 where
+    S: StoreRegionMeta,
     E: KvEngine,
 {
-    pub fn new(store_meta: Arc<Mutex<StoreMeta>>, coprocessor: CoprocessorHost<E>) -> Runner<E> {
-        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
+    pub fn new(store_meta: Arc<Mutex<S>>, coprocessor: CoprocessorHost<E>) -> Self {
+        let region_read_progress = store_meta.lock().unwrap().region_read_progress().clone();
         Runner {
             region_read_progress,
             store_meta,
@@ -82,48 +81,39 @@ where
                 .unwrap_or(0)
             })
         } else {
-            let (start_key, end_key) = (
-                data_key(key_range.get_start_key()),
-                data_end_key(key_range.get_end_key()),
-            );
             // `store_safe_ts` won't be accessed frequently (like per-request or
             // per-transaction), also this branch won't entry because the request key range
             // is empty currently (in v5.1) keep this branch for robustness and future use,
             // so it is okay getting `store_safe_ts` from `store_meta` (behide a mutex)
             let meta = self.store_meta.lock().unwrap();
-            meta.region_read_progress.with(|registry| {
-                meta.region_ranges
-                // get overlapped regions
-                .range((Excluded(start_key), Unbounded))
-                .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[*id]))
-                // get the min `safe_ts`
-                .map(|(_, id)| {
-                    registry.get(id).unwrap().safe_ts()
-                })
-                .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
-                .min()
-                .unwrap_or(0)
+            meta.region_read_progress().with(|registry| {
+                let mut min_ts = u64::MAX;
+                meta.search_region(key_range.get_start_key(), key_range.get_end_key(), |r| {
+                    let ts = registry.get(&r.get_id()).unwrap().safe_ts();
+                    // ts == 0 means the peer is uninitialized
+                    if ts != 0 && ts < min_ts {
+                        min_ts = ts;
+                    }
+                });
+                if min_ts == u64::MAX { 0 } else { min_ts }
             })
         }
     }
 }
 
-impl<E> Runnable for Runner<E>
-where
-    E: KvEngine,
-{
+impl<S: StoreRegionMeta, E: KvEngine> Runnable for Runner<S, E> {
     type Task = Task;
     fn run(&mut self, task: Task) {
         match task {
             Task::CheckLeader { leaders, cb } => {
                 fail_point!(
                     "before_check_leader_store_2",
-                    self.store_meta.lock().unwrap().store_id == Some(2),
+                    self.store_meta.lock().unwrap().store_id() == 2,
                     |_| {}
                 );
                 fail_point!(
                     "before_check_leader_store_3",
-                    self.store_meta.lock().unwrap().store_id == Some(3),
+                    self.store_meta.lock().unwrap().store_id() == 3,
                     |_| {}
                 );
                 let regions = self
@@ -146,7 +136,7 @@ mod tests {
     use kvproto::metapb::Region;
 
     use super::*;
-    use crate::store::util::RegionReadProgress;
+    use crate::store::{fsm::StoreMeta, util::RegionReadProgress};
 
     #[test]
     fn test_get_range_min_safe_ts() {

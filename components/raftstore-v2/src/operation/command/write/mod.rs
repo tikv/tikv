@@ -11,6 +11,7 @@ use raftstore::{
     },
     Result,
 };
+use tikv_util::slog_panic;
 
 use crate::{
     batch::StoreContext,
@@ -150,13 +151,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 .put_cf(cf, &self.key_buffer, value)
         };
         res.unwrap_or_else(|e| {
-            panic!(
-                "{:?} failed to write ({}, {}) {}: {:?}",
-                self.logger.list(),
-                log_wrappers::Value::key(key),
-                log_wrappers::Value::value(value),
-                cf,
-                e
+            slog_panic!(
+                self.logger,
+                "failed to write";
+                "key" => %log_wrappers::Value::key(key),
+                "value" => %log_wrappers::Value::value(value),
+                "cf" => cf,
+                "error" => ?e
             );
         });
         fail::fail_point!("APPLY_PUT", |_| Err(raftstore::Error::Other(
@@ -177,6 +178,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         }
         util::check_key_in_region(key, self.region_state().get_region())?;
         keys::data_key_with_buffer(key, &mut self.key_buffer);
+        self.ensure_write_buffer();
         let res = if cf.is_empty() || cf == CF_DEFAULT {
             // TODO: use write_vector
             self.write_batch.as_mut().unwrap().delete(&self.key_buffer)
@@ -187,12 +189,12 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 .delete_cf(cf, &self.key_buffer)
         };
         res.unwrap_or_else(|e| {
-            panic!(
-                "{:?} failed to delete {} {}: {:?}",
-                self.logger.list(),
-                log_wrappers::Value::key(key),
-                cf,
-                e
+            slog_panic!(
+                self.logger,
+                "failed to delete";
+                "key" => %log_wrappers::Value::key(key),
+                "cf" => cf,
+                "error" => ?e
             );
         });
         self.metrics.size_diff_hint -= self.key_buffer.len() as i64;

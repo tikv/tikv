@@ -33,6 +33,7 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     ) -> Result<Option<RaftApplyState>>;
     /// Get the flushed index of the given CF.
     fn get_flushed_index(&self, raft_group_id: u64, cf: &str) -> Result<Option<u64>>;
+    fn get_dirty_mark(&self, raft_group_id: u64, tablet_index: u64) -> Result<bool>;
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
@@ -66,18 +67,12 @@ pub trait RaftEngineDebug: RaftEngine + Sync + Send + 'static {
             Ok(true)
         })
         .unwrap();
-        batch.append(region_id, entries).unwrap();
+        batch.append(region_id, None, entries).unwrap();
         if let Some(state) = self.get_raft_state(region_id).unwrap() {
             batch.put_raft_state(region_id, &state).unwrap();
         }
         batch
     }
-}
-
-pub struct RaftLogGcTask {
-    pub raft_group_id: u64,
-    pub from: u64,
-    pub to: u64,
 }
 
 // TODO: Refactor common methods between Kv and Raft engine into a shared trait.
@@ -110,17 +105,17 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
         batch: &mut Self::LogBatch,
     ) -> Result<()>;
 
-    /// Like `cut_logs` but the range could be very large. Return the deleted
-    /// count. Generally, `from` can be passed in `0`.
-    fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
+    /// Like `cut_logs` but the range could be very large.
+    fn gc(&self, raft_group_id: u64, from: u64, to: u64, batch: &mut Self::LogBatch) -> Result<()>;
 
-    fn batch_gc(&self, tasks: Vec<RaftLogGcTask>) -> Result<usize> {
-        let mut total = 0;
-        for task in tasks {
-            total += self.gc(task.raft_group_id, task.from, task.to)?;
-        }
-        Ok(total)
-    }
+    /// Delete all but the latest one of states that are associated with smaller
+    /// apply_index.
+    fn delete_all_but_one_states_before(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()>;
 
     fn need_manual_purge(&self) -> bool {
         false
@@ -156,11 +151,19 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
 }
 
 pub trait RaftLogBatch: Send {
-    /// Note: `RaftLocalState` won't be updated in this call.
-    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()>;
-
-    /// Remove Raft logs in [`from`, `to`) which will be overwritten later.
-    fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64);
+    /// Append continuous entries to the batch.
+    ///
+    /// All existing entries with same index will be overwritten. If
+    /// `overwrite_to` is set to a larger value, then entries in
+    /// `[entries.last().get_index(), overwrite_to)` will be deleted.
+    /// Nothing will be deleted if entries is empty. Note: `RaftLocalState`
+    /// won't be updated in this call.
+    fn append(
+        &mut self,
+        raft_group_id: u64,
+        overwrite_to: Option<u64>,
+        entries: Vec<Entry>,
+    ) -> Result<()>;
 
     fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()>;
 
@@ -198,6 +201,9 @@ pub trait RaftLogBatch: Send {
         tablet_index: u64,
         apply_index: u64,
     ) -> Result<()>;
+
+    /// Mark a tablet may contain data that is not supposed to be in its range.
+    fn put_dirty_mark(&mut self, raft_group_id: u64, tablet_index: u64, dirty: bool) -> Result<()>;
 
     /// Indicate whether region states should be recovered from raftdb and
     /// replay raft logs.

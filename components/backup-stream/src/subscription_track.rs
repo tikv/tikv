@@ -1,10 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::collections::HashSet, sync::Arc;
 
 use dashmap::{
-    mapref::{entry::Entry, one::RefMut as DashRefMut},
+    
+    mapref::{entry::Entry, {entry::Entry, one::RefMut as DashRefMut}},
+   
     DashMap,
+,
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
@@ -229,14 +232,29 @@ impl SubscriptionTracer {
         }
     }
 
+    pub fn current_regions(&self) -> Vec<u64> {
+        self.0.iter().map(|s| *s.key()).collect()
+    }
+
     /// try advance the resolved ts with the min ts of in-memory locks.
     /// returns the regions and theirs resolved ts.
-    pub fn resolve_with(&self, min_ts: TimeStamp) -> Vec<ResolveResult> {
+    pub fn resolve_with(
+        &self,
+        min_ts: TimeStamp,
+        regions: impl IntoIterator<Item = u64>,
+    ) -> Vec<ResolveResult> {
+        let rs = regions.into_iter().collect::<HashSet<_>>();
         self.0
             .iter_mut()
             // Don't advance the checkpoint ts of pending region.
             .filter_map(|mut s| match s.value_mut() {
-                SubscribeState::Running(sub) => Some(ResolveResult::resolve(sub, min_ts)),
+                SubscribeState::Running(sub) => {
+                let contains = rs.contains(s.key());
+                if !contains {
+                    crate::metrics::LOST_LEADER_REGION.inc();
+                }    
+                contains.then(|| ResolveResult::resolve(&mut sub, min_ts))
+                }
                 SubscribeState::Pending(r) => {warn!("pending region, skip resolving"; utils::slog_region(r)); None},
             })
             .collect()
@@ -634,7 +652,7 @@ mod test {
         drop(region4_sub);
 
         let mut rs = subs
-            .resolve_with(TimeStamp::new(1000))
+            .resolve_with(TimeStamp::new(1000), vec![1, 2, 3, 4])
             .into_iter()
             .map(|r| (r.region, r.checkpoint, r.checkpoint_type))
             .collect::<Vec<_>>();

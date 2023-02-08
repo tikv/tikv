@@ -6,6 +6,7 @@ publish = false
 description = "Data type of a query engine to run TiDB pushed down executors"
 
 [dependencies]
+api_version = { workspace = true }
 base64 = "0.13"
 bitfield = "0.13.2"
 bitflags = "1.0.1"

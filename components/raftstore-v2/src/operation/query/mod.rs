@@ -19,7 +19,7 @@ use kvproto::{
     errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType},
 };
-use raft::Ready;
+use raft::{Ready, StateRole};
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
@@ -29,8 +29,8 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::info;
-use tikv_util::box_err;
+use slog::{debug, info};
+use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;
 
 use crate::{
@@ -46,7 +46,7 @@ mod lease;
 mod local;
 mod replica;
 
-pub(crate) use self::local::LocalReader;
+pub(crate) use self::local::{LocalReader, ReadDelegatePair, SharedReadTablet};
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     PeerFsmDelegate<'a, EK, ER, T>
@@ -363,7 +363,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             StatusCmdType::InvalidStatus => {
-                return Err(box_err!("{:?} invalid status command!", self.logger.list()));
+                return Err(box_err!(
+                    "{} invalid status command!",
+                    SlogFormat(&self.logger)
+                ));
             }
         }
 
@@ -375,11 +378,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Query internal states for debugging purpose.
     pub fn on_query_debug_info(&self, ch: DebugInfoChannel) {
         let entry_storage = self.storage().entry_storage();
+        let mut status = self.raft_group().status();
+        status
+            .progress
+            .get_or_insert_with(|| self.raft_group().raft.prs());
         let mut meta = RegionMeta::new(
             self.storage().region_state(),
             entry_storage.apply_state(),
             GroupState::Ordered,
-            self.raft_group().status(),
+            status,
+            self.raft_group().raft.raft_log.last_index(),
+            self.raft_group().raft.raft_log.persisted,
         );
         // V2 doesn't persist commit index and term, fill them with in-memory values.
         meta.raft_apply.commit_index = cmp::min(
@@ -392,6 +401,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .raft_log
             .term(meta.raft_apply.commit_index)
             .unwrap();
+        debug!(self.logger, "on query debug info";
+            "tick" => self.raft_group().raft.election_elapsed,
+            "election_timeout" => self.raft_group().raft.randomized_election_timeout(),
+        );
         ch.set_result(meta);
     }
 
@@ -420,10 +433,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Only leaders need to update applied_term.
         if progress_to_be_updated && self.is_leader() {
-            // TODO: add coprocessor_host hook
+            if applied_term == self.term() {
+                ctx.coprocessor_host
+                    .on_applied_current_term(StateRole::Leader, self.region());
+            }
             let progress = ReadProgress::applied_term(applied_term);
             let mut meta = ctx.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            let reader = &mut meta.readers.get_mut(&self.region_id()).unwrap().0;
             self.maybe_update_read_progress(reader, progress);
         }
     }
