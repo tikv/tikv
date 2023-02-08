@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{error::Error as StdError, result, sync::Arc, thread, time::Duration};
+use std::{cmp, error::Error as StdError, i32, result, sync::Arc, thread, time::Duration};
 
 use encryption_export::data_key_manager_from_config;
 use engine_rocks::{util::new_engine_opt, RocksEngine};
@@ -14,7 +14,10 @@ use tikv::{
     config::TikvConfig,
     server::{config::Config as ServerConfig, KvEngineFactoryBuilder},
 };
-use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+use tikv_util::{
+    config::{ReadableDuration, ReadableSize, VersionTrack},
+    sys::SysQuota,
+};
 
 const CLUSTER_BOOTSTRAPPED_MAX_RETRY: u64 = 60;
 const CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
@@ -88,7 +91,9 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     config.rocksdb.lockcf.disable_auto_compactions = true;
     config.rocksdb.raftcf.disable_auto_compactions = true;
 
-    config.rocksdb.max_background_jobs = 32;
+    // for cpu = 1, take a reasonable value min[32, maxValue].
+    let limit = (SysQuota::cpu_cores_quota() * 10.0) as i32;
+    config.rocksdb.max_background_jobs = cmp::min(32, limit);
     // disable resolve ts during the recovery
     config.resolved_ts.enable = false;
 
@@ -100,7 +105,7 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
 
     // Disable region split during recovering.
     config.coprocessor.region_max_size = Some(ReadableSize::gb(MAX_REGION_SIZE));
-    config.coprocessor.region_split_size = ReadableSize::gb(MAX_REGION_SIZE);
+    config.coprocessor.region_split_size = Some(ReadableSize::gb(MAX_REGION_SIZE));
     config.coprocessor.region_max_keys = Some(MAX_SPLIT_KEY);
     config.coprocessor.region_split_keys = Some(MAX_SPLIT_KEY);
 }
@@ -314,7 +319,10 @@ pub fn create_local_engine_service(
     let env = config
         .build_shared_rocks_env(key_manager.clone(), None)
         .map_err(|e| format!("build shared rocks env: {}", e))?;
-    let block_cache = config.storage.block_cache.build_shared_cache();
+    let block_cache = config
+        .storage
+        .block_cache
+        .build_shared_cache(config.storage.engine);
 
     // init rocksdb / kv db
     let factory = KvEngineFactoryBuilder::new(env.clone(), config, block_cache)
