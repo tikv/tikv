@@ -345,8 +345,6 @@ where
     ) -> Result<()> {
         let mut revision_new = revision;
         loop {
-            info!("watch the task"; "revision" => revision_new);
-
             let watcher = meta_client.events_from(revision_new).await;
             let mut watcher = match watcher {
                 Ok(w) => w,
@@ -398,8 +396,6 @@ where
         let mut revision_new = revision;
 
         loop {
-            info!("watch the task"; "revision" => revision_new);
-
             let watcher = meta_client.events_from_pause(revision_new).await;
             let mut watcher = match watcher {
                 Ok(w) => w,
