@@ -18,6 +18,7 @@ use raft::{eraftpb::Snapshot, GetEntriesContext};
 use tikv_util::{error, info, time::Instant, worker::Runnable};
 
 use crate::store::{
+    metrics::SNAPSHOT_SIZE_HISTOGRAM,
     snap::TABLET_SNAPSHOT_VERSION,
     util,
     worker::metrics::{SNAP_COUNTER, SNAP_HISTOGRAM},
@@ -225,6 +226,7 @@ where
                 // create checkpointer.
                 let snap_key = TabletSnapKey::from_region_snap(region_id, to_peer, &snapshot);
                 let mut res = None;
+                let total_size = tablet.get_engine_used_size().unwrap_or(0);
                 if let Err(e) = self.generate_snap(&snap_key, tablet) {
                     error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
                     SNAP_COUNTER.generate.fail.inc();
@@ -232,6 +234,7 @@ where
                     let elapsed = start.saturating_elapsed_secs();
                     SNAP_COUNTER.generate.success.inc();
                     SNAP_HISTOGRAM.generate.observe(elapsed);
+                    SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
                     info!("snapshot generated"; "region_id" => region_id, "elapsed" => elapsed, "key" => ?snap_key, "for_balance" => for_balance);
                     res = Some(Box::new((snapshot, to_peer)))
                 }
