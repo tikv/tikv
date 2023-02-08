@@ -18,7 +18,6 @@ use raftstore::{
 };
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use test_raftstore_v2::{put_cf_till_size, put_till_size, ClusterType};
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::config::*;
 use txn_types::{Key, PessimisticLock};
@@ -26,80 +25,76 @@ use txn_types::{Key, PessimisticLock};
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
 
-fn test_base_split_region(mut cluster: ClusterType<'_>, right_derive: bool) {
-    cluster.mut_config().raft_store.right_derive_when_split = right_derive;
-    cluster.run();
-
-    let pd_client = Arc::clone(cluster.pd_client());
-
-    let tbls = vec![
-        (b"k22", b"k11", b"k33"),
-        (b"k11", b"k00", b"k11"),
-        (b"k33", b"k22", b"k33"),
-    ];
-
-    for (split_key, left_key, right_key) in tbls {
-        cluster.must_put(left_key, b"v1");
-        cluster.must_put(right_key, b"v3");
-
-        // Left and right key must be in same region before split.
-        let region = pd_client.get_region(left_key).unwrap();
-        let region2 = pd_client.get_region(right_key).unwrap();
-        assert_eq!(region.get_id(), region2.get_id());
-
-        // Split with split_key, so left_key must in left, and right_key in right.
-        cluster.must_split(&region, split_key);
-
-        let left = pd_client.get_region(left_key).unwrap();
-        let right = pd_client.get_region(right_key).unwrap();
-
-        assert_eq!(
-            region.get_id(),
-            if right_derive {
-                right.get_id()
-            } else {
-                left.get_id()
-            }
-        );
-        assert_eq!(region.get_start_key(), left.get_start_key());
-        assert_eq!(left.get_end_key(), right.get_start_key());
-        assert_eq!(region.get_end_key(), right.get_end_key());
-
-        cluster.must_put(left_key, b"vv1");
-        assert_eq!(cluster.get(left_key).unwrap(), b"vv1".to_vec());
-
-        cluster.must_put(right_key, b"vv3");
-        assert_eq!(cluster.get(right_key).unwrap(), b"vv3".to_vec());
-
-        let epoch = left.get_region_epoch().clone();
-        let get = new_request(left.get_id(), epoch, vec![new_get_cmd(right_key)], false);
-        debug!("requesting {:?}", get);
-        let resp = cluster
-            .call_command_on_leader(get, Duration::from_secs(5))
-            .unwrap();
-        assert!(resp.get_header().has_error(), "{:?}", resp);
-        assert!(
-            resp.get_header().get_error().has_key_not_in_region(),
-            "{:?}",
-            resp
-        );
-    }
-}
-
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-fn test_server_base_split_region_left_derive() {
-    let count = 5;
-    let mut cluster = new_cluster(0, count);
-    test_base_split_region((&mut cluster).into(), false);
-}
+fn test_server_base_split_region() {
+    let test_base_split_region = |right_derive| {
+        let count = 5;
+        let mut cluster = new_cluster(0, count);
 
-#[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
-fn test_server_base_split_region_right_derive() {
-    let count = 5;
-    let mut cluster = new_cluster(0, count);
-    test_base_split_region((&mut cluster).into(), true);
+        cluster.cfg.raft_store.right_derive_when_split = right_derive;
+        cluster.run();
+
+        let pd_client = Arc::clone(&cluster.pd_client);
+
+        let tbls = vec![
+            (b"k22", b"k11", b"k33"),
+            (b"k11", b"k00", b"k11"),
+            (b"k33", b"k22", b"k33"),
+        ];
+
+        for (split_key, left_key, right_key) in tbls {
+            cluster.must_put(left_key, b"v1");
+            cluster.must_put(right_key, b"v3");
+
+            // Left and right key must be in same region before split.
+            let region = pd_client.get_region(left_key).unwrap();
+            let region2 = pd_client.get_region(right_key).unwrap();
+            assert_eq!(region.get_id(), region2.get_id());
+
+            // Split with split_key, so left_key must in left, and right_key in right.
+            cluster.must_split(&region, split_key);
+
+            let left = pd_client.get_region(left_key).unwrap();
+            let right = pd_client.get_region(right_key).unwrap();
+
+            assert_eq!(
+                region.get_id(),
+                if right_derive {
+                    right.get_id()
+                } else {
+                    left.get_id()
+                }
+            );
+            assert_eq!(region.get_start_key(), left.get_start_key());
+            assert_eq!(left.get_end_key(), right.get_start_key());
+            assert_eq!(region.get_end_key(), right.get_end_key());
+
+            cluster.must_put(left_key, b"vv1");
+            assert_eq!(cluster.get(left_key).unwrap(), b"vv1".to_vec());
+
+            cluster.must_put(right_key, b"vv3");
+            assert_eq!(cluster.get(right_key).unwrap(), b"vv3".to_vec());
+
+            let epoch = left.get_region_epoch().clone();
+            let get = new_request(left.get_id(), epoch, vec![new_get_cmd(right_key)], false);
+            debug!("requesting {:?}", get);
+            let resp = cluster
+                .call_command_on_leader(get, Duration::from_secs(5))
+                .unwrap();
+            assert!(resp.get_header().has_error(), "{:?}", resp);
+            assert!(
+                resp.get_header().get_error().has_key_not_in_region(),
+                "{:?}",
+                resp
+            );
+        }
+    };
+
+    // left derive
+    test_base_split_region(false);
+    // right derive
+    test_base_split_region(true);
 }
 
 #[test_case(test_raftstore::new_server_cluster)]
@@ -172,7 +167,7 @@ fn test_auto_split_region() {
 
     let region = pd_client.get_region(b"").unwrap();
 
-    let last_key = put_till_size((&mut cluster).into(), REGION_SPLIT_SIZE, &mut range);
+    let last_key = put_till_size(&mut cluster, REGION_SPLIT_SIZE, &mut range);
 
     // it should be finished in millis if split.
     thread::sleep(Duration::from_millis(300));
@@ -182,7 +177,7 @@ fn test_auto_split_region() {
     assert_eq!(region, target);
 
     let max_key = put_cf_till_size(
-        (&mut cluster).into(),
+        &mut cluster,
         CF_WRITE,
         REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
         &mut range,
@@ -251,7 +246,12 @@ impl Filter for EraseHeartbeatCommit {
     }
 }
 
-fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_committed: bool) {
+fn check_cluster(
+    cluster: &mut test_raftstore::Cluster<impl test_raftstore::Simulator>,
+    k: &[u8],
+    v: &[u8],
+    all_committed: bool,
+) {
     let region = cluster.pd_client.get_region(k).unwrap();
     let mut tried_cnt = 0;
     let leader = loop {
@@ -289,7 +289,7 @@ fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_
 /// sure broadcast commit is disabled when split.
 #[test]
 fn test_delay_split_region() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = test_raftstore::new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(500);
     cluster.cfg.raft_store.merge_max_log_gap = 100;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
@@ -396,7 +396,9 @@ fn test_node_split_overlap_snapshot() {
     must_get_equal(&engine3, b"k3", b"v3");
 }
 
-fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_apply_new_version_snapshot<T: test_raftstore::Simulator>(
+    cluster: &mut test_raftstore::Cluster<T>,
+) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
@@ -451,19 +453,19 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
 #[test]
 fn test_node_apply_new_version_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = test_raftstore::new_node_cluster(0, 3);
     test_apply_new_version_snapshot(&mut cluster);
 }
 
 #[test]
 fn test_server_apply_new_version_snapshot() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = test_raftstore::new_server_cluster(0, 3);
     test_apply_new_version_snapshot(&mut cluster);
 }
 
 #[test]
 fn test_server_split_with_stale_peer() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = test_raftstore::new_server_cluster(0, 3);
     // disable raft log gc.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
@@ -553,7 +555,7 @@ fn test_split_region_diff_check() {
     // The default size index distance is too large for small data, we flush
     // multiple times to generate more size index handles.
     for _ in 0..10 {
-        put_till_size((&mut cluster).into(), region_max_size, &mut range);
+        put_till_size(&mut cluster, region_max_size, &mut range);
     }
 
     // Peer will split when size of region meet region_max_size, so assume the last
@@ -587,7 +589,7 @@ fn test_split_region_diff_check() {
 #[test]
 fn test_node_split_region_after_reboot_with_config_change() {
     let count = 1;
-    let mut cluster = new_server_cluster(0, count);
+    let mut cluster = test_raftstore::new_server_cluster(0, count);
     let region_max_size = 2000;
     let region_split_size = 2000;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
@@ -602,7 +604,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
     let pd_client = Arc::clone(&cluster.pd_client);
 
     let mut range = 1..;
-    put_till_size((&mut cluster).into(), region_max_size / 2, &mut range);
+    put_till_size(&mut cluster, region_max_size / 2, &mut range);
 
     // there should be 1 region
     sleep_ms(200);
@@ -628,7 +630,10 @@ fn test_node_split_region_after_reboot_with_config_change() {
     }
 }
 
-fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
+fn test_split_epoch_not_match<T: test_raftstore::Simulator>(
+    cluster: &mut test_raftstore::Cluster<T>,
+    right_derive: bool,
+) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -700,25 +705,25 @@ fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_deri
 
 #[test]
 fn test_server_split_epoch_not_match_left_derive() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = test_raftstore::new_server_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, false);
 }
 
 #[test]
 fn test_server_split_epoch_not_match_right_derive() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = test_raftstore::new_server_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, true);
 }
 
 #[test]
 fn test_node_split_epoch_not_match_left_derive() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = test_raftstore::new_node_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, false);
 }
 
 #[test]
 fn test_node_split_epoch_not_match_right_derive() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = test_raftstore::new_node_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, true);
 }
 
@@ -763,7 +768,7 @@ fn test_node_quick_election_after_split() {
 #[test]
 fn test_node_split_region() {
     let count = 5;
-    let mut cluster = new_node_cluster(0, count);
+    let mut cluster = test_raftstore::new_node_cluster(0, count);
     // length of each key+value
     let item_len = 74;
     // make bucket's size to item_len, which means one row one bucket
@@ -772,8 +777,8 @@ fn test_node_split_region() {
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"").unwrap();
-    let mid_key = put_till_size((&mut cluster).into(), 11 * item_len, &mut range);
-    let max_key = put_till_size((&mut cluster).into(), 9 * item_len, &mut range);
+    let mid_key = put_till_size(&mut cluster, 11 * item_len, &mut range);
+    let max_key = put_till_size(&mut cluster, 9 * item_len, &mut range);
     let target = pd_client.get_region(&max_key).unwrap();
     assert_eq!(region, target);
     pd_client.must_split_region(target, pdpb::CheckPolicy::Scan, vec![]);
@@ -968,7 +973,7 @@ fn test_split_with_in_memory_pessimistic_locks() {
 #[test]
 fn test_refresh_region_bucket_keys() {
     let count = 5;
-    let mut cluster = new_server_cluster(0, count);
+    let mut cluster = test_raftstore::new_server_cluster(0, count);
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
 
@@ -1154,7 +1159,7 @@ fn test_refresh_region_bucket_keys() {
 #[test]
 fn test_gen_split_check_bucket_ranges() {
     let count = 5;
-    let mut cluster = new_server_cluster(0, count);
+    let mut cluster = test_raftstore::new_server_cluster(0, count);
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(5);
     cluster.cfg.coprocessor.enable_region_bucket = true;
     // disable report buckets; as it will reset the user traffic stats to randomize

@@ -27,7 +27,6 @@ use raftstore::{
     Result,
 };
 use test_raftstore::*;
-use test_raftstore_v2::{put_cf_till_size, put_till_size};
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
@@ -182,12 +181,12 @@ fn gen_split_region() -> (Region, Region, Region) {
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"").unwrap();
-    let last_key = put_till_size((&mut cluster).into(), region_split_size, &mut range);
+    let last_key = put_till_size(&mut cluster, region_split_size, &mut range);
     let target = pd_client.get_region(&last_key).unwrap();
 
     assert_eq!(region, target);
 
-    let max_key = put_cf_till_size((&mut cluster).into(), CF_WRITE, region_max_size, &mut range);
+    let max_key = put_cf_till_size(&mut cluster, CF_WRITE, region_max_size, &mut range);
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();

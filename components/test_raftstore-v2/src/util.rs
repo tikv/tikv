@@ -14,7 +14,7 @@ use test_raftstore::{new_put_cf_cmd, Config};
 use tikv::{server::KvEngineFactoryBuilder, storage::config::EngineType};
 use tikv_util::{config::ReadableDuration, worker::LazyWorker};
 
-use crate::{bootstrap_store, cluster::Cluster, ClusterType, Simulator};
+use crate::{bootstrap_store, cluster::Cluster, Simulator};
 
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
@@ -76,16 +76,16 @@ pub fn create_test_engine(
 }
 
 /// Keep putting random kvs until specified size limit is reached.
-pub fn put_till_size(
-    cluster: ClusterType<'_>,
+pub fn put_till_size<T: Simulator>(
+    cluster: &mut Cluster<T>,
     limit: u64,
     range: &mut dyn Iterator<Item = u64>,
 ) -> Vec<u8> {
     put_cf_till_size(cluster, CF_DEFAULT, limit, range)
 }
 
-pub fn put_cf_till_size(
-    mut cluster: ClusterType<'_>,
+pub fn put_cf_till_size<T: Simulator>(
+    cluster: &mut Cluster<T>,
     cf: &'static str,
     limit: u64,
     range: &mut dyn Iterator<Item = u64>,

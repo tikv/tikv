@@ -13,7 +13,6 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
-use test_raftstore_v2::put_cf_till_size;
 use tikv::storage::{
     kv::{SnapContext, SnapshotExt},
     Engine, Snapshot,
@@ -589,8 +588,8 @@ fn test_merge_approximate_size_and_keys() {
     cluster.run();
 
     let mut range = 1..;
-    let middle_key = put_cf_till_size((&mut cluster).into(), CF_WRITE, 100, &mut range);
-    let max_key = put_cf_till_size((&mut cluster).into(), CF_WRITE, 100, &mut range);
+    let middle_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
+    let max_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"").unwrap();

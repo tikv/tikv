@@ -73,7 +73,7 @@ fn render_test_cases(test_cases: Vec<TokenStream2>, fn_item: ItemFn) -> TokenStr
             0,
             syn::parse(
                 quote! {
-                    use #package::#method as new_cluster;
+                    use #package::{util::*, #method as new_cluster};
                 }
                 .into(),
             )
