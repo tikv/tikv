@@ -330,6 +330,8 @@ mod tests {
             // Try to "disable" keys split
             region_max_keys: Some(2000000000),
             region_split_keys: Some(1000000000),
+            // Disable region bucket.
+            enable_region_bucket: false,
             ..Default::default()
         };
 

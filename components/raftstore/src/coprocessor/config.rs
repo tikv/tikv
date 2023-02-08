@@ -232,6 +232,7 @@ mod tests {
         cfg = Config::default();
         cfg.region_max_size = None;
         cfg.region_split_size = Some(ReadableSize(20));
+        cfg.region_bucket_size = ReadableSize(1);
         cfg.validate().unwrap();
         assert_eq!(cfg.region_max_size, Some(ReadableSize(30)));
 
@@ -254,6 +255,7 @@ mod tests {
 
         cfg = Config::default();
         cfg.region_split_size = Some(ReadableSize::mb(20));
+        cfg.region_bucket_size = ReadableSize(1);
         cfg.validate().unwrap();
         assert_eq!(cfg.region_split_keys, Some(200000));
     }
