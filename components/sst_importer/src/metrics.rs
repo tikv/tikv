@@ -109,12 +109,12 @@ lazy_static! {
     // NOTE: perhaps we'd better make a counter and add it when adding new caches.
     pub static ref IMPORTER_PITR_LOCAL_CACHE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_import_pitr_local_cache",
-        "The current cached file (or bytes-in-memory) during PITR."
-        &["place"],
+        "The current cached file (or bytes-in-memory) during PITR.",
+        &["place"]
     ).unwrap();
     pub static ref IMPORTER_PITR_LOCAL_CACHE_RELEASE: IntCounterVec = register_int_counter_vec!(
         "tikv_import_pitr_local_cache",
-        "The local cached file (or bytes-in-memory) has been released during PITR."
-        &["place"],
+        "The local cached file (or bytes-in-memory) has been released during PITR.",
+        &["place"]
     ).unwrap();
 }
