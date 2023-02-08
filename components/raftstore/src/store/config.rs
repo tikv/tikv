@@ -206,7 +206,6 @@ pub struct Config {
     pub store_batch_system: BatchSystemConfig,
 
     /// If it is 0, it means io tasks are handled in store threads.
-    #[online_config(skip)]
     pub store_io_pool_size: usize,
 
     #[online_config(skip)]
@@ -1049,8 +1048,25 @@ impl ConfigManager for RaftstoreConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.config
-                .update(move |cfg: &mut Config| cfg.update(change))?;
+            self.config.update(move |cfg: &mut Config| {
+                // Currently, it's forbidden to modify the write mode either from `async` to
+                // `sync` or from `sync` to `async`.
+                if let Some(ConfigValue::Usize(resized_io_size)) = change.get("store_io_pool_size")
+                {
+                    if cfg.store_io_pool_size == 0 && *resized_io_size > 0 {
+                        return Err(
+                            "SYNC mode, not allowed to resize the size of store-io-pool-size"
+                                .into(),
+                        );
+                    } else if cfg.store_io_pool_size > 0 && *resized_io_size == 0 {
+                        return Err(
+                            "ASYNC mode, not allowed to be set to SYNC mode by resizing store-io-pool-size to 0"
+                                .into(),
+                        );
+                    }
+                }
+                cfg.update(change)
+            })?;
         }
         if let Some(ConfigValue::Module(raft_batch_system_change)) =
             change.get("store_batch_system")
@@ -1061,6 +1077,12 @@ impl ConfigManager for RaftstoreConfigManager {
             change.get("apply_batch_system")
         {
             self.schedule_config_change(RaftStoreBatchComponent::Apply, apply_batch_system_change);
+        }
+        if let Some(ConfigValue::Usize(resized_io_size)) = change.get("store_io_pool_size") {
+            let resize_io_task = RefreshConfigTask::ScaleWriters(*resized_io_size);
+            if let Err(e) = self.scheduler.schedule(resize_io_task) {
+                error!("raftstore configuration manager schedule to resize store-io-pool-size work task failed"; "err"=> ?e);
+            }
         }
         info!(
             "raftstore config changed";
