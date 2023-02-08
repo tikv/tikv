@@ -433,10 +433,10 @@ impl SstImporter {
             debug!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
             IMPORTER_PITR_LOCAL_CACHE
                 .with_label_values(&["disk"])
-                .set(retain_file_count);
+                .set(retain_file_count as _);
             IMPORTER_PITR_LOCAL_CACHE_RELEASE
                 .with_label_values(&["disk"])
-                .add(shrink_file_count);
+                .inc_by(shrink_file_count as _);
             for f in shrink_files {
                 if let Err(e) = file_system::remove_file(&f) {
                     warn!("failed to remove file"; "filename" => ?f, "error" => ?e);
@@ -448,10 +448,10 @@ impl SstImporter {
             self.dec_mem(shrink_buff_size as _);
             IMPORTER_PITR_LOCAL_CACHE
                 .with_label_values(&["mem"])
-                .set(retain_buff_size);
+                .set(retain_buff_size as _);
             IMPORTER_PITR_LOCAL_CACHE_RELEASE
                 .with_label_values(&["mem"])
-                .add(shrink_buff_size);
+                .inc_by(shrink_buff_size as _);
             shrink_buff_size
         }
     }
