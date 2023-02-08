@@ -1,13 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashSet, sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use dashmap::{
-    
-    mapref::{entry::Entry, {entry::Entry, one::RefMut as DashRefMut}},
-   
+    mapref::{entry::Entry, one::RefMut as DashRefMut},
     DashMap,
-,
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
@@ -247,15 +244,18 @@ impl SubscriptionTracer {
         self.0
             .iter_mut()
             // Don't advance the checkpoint ts of pending region.
-            .filter_map(|mut s| match s.value_mut() {
+            .filter_map(|mut s| {
+                let region_id = *s.key();
+                match s.value_mut() {
                 SubscribeState::Running(sub) => {
-                let contains = rs.contains(s.key());
-                if !contains {
-                    crate::metrics::LOST_LEADER_REGION.inc();
-                }    
-                contains.then(|| ResolveResult::resolve(&mut sub, min_ts))
+                    let contains = rs.contains(&region_id);
+                    if !contains {
+                        crate::metrics::LOST_LEADER_REGION.inc();
+                    }    
+                    contains.then(|| ResolveResult::resolve(sub, min_ts))
                 }
                 SubscribeState::Pending(r) => {warn!("pending region, skip resolving"; utils::slog_region(r)); None},
+            }
             })
             .collect()
     }

@@ -490,7 +490,7 @@ where
                         .with_label_values(&["region-changed"])
                         .inc();
                     let r = async {
-                        self.subs.add_pending_region(&region);
+                        self.subs.add_pending_region(region);
                         self.observe_over_with_initial_data_from_checkpoint(
                             region,
                             self.get_last_checkpoint_of(&for_task, region).await?,
@@ -512,7 +512,7 @@ where
                 } else {
                     warn!(
                         "BUG: the region {:?} is register to no task but being observed",
-                        utils::debug_region(&region)
+                        utils::debug_region(region)
                     );
                 }
             }
