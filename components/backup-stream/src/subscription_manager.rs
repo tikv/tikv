@@ -392,7 +392,7 @@ where
 
     /// the handler loop.
     async fn region_operator_loop(
-        self,
+        mut self,
         mut message_box: Receiver<ObserveOp>,
         mut leader_checker: LeadershipResolver,
     ) {
@@ -460,7 +460,7 @@ where
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
                     let regions = leader_checker
-                        .resolve(self.subs.current_regions(), min_ts)
+                        .resolve(&mut self.pd_client, self.subs.current_regions(), min_ts)
                         .await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);

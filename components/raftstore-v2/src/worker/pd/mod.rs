@@ -175,7 +175,8 @@ where
     region_buckets: HashMap<u64, region::ReportBucket>,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
-    region_heartbeat_transport: Option<region::Transport>,
+    region_heartbeat_transport: Option<region::HeartbeatTransport>,
+    region_bucket_transport: Option<region::BucketTransport>,
 
     // For update_max_timestamp.
     concurrency_manager: ConcurrencyManager,
@@ -237,6 +238,7 @@ where
             region_buckets: HashMap::default(),
             region_cpu_records: HashMap::default(),
             region_heartbeat_transport: None,
+            region_bucket_transport: None,
             concurrency_manager,
             causal_ts_provider,
             tso_transport: None,

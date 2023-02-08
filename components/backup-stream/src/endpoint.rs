@@ -1,6 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashSet, fmt, marker::PhantomData, path::PathBuf, time::Duration};
+use std::{
+    collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration,
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
@@ -155,7 +157,6 @@ where
         let subs = SubscriptionTracer::default();
         let leadership_resolver = LeadershipResolver::new(
             store_id,
-            Arc::clone(&pd_client) as _,
             env,
             security_mgr,
             region_read_progress,
@@ -806,7 +807,7 @@ async fn starts_flush_ticks(router: Router) {
 }
 
 // TODO find a proper way to exit watch tasks
-async fn start_and_watch_tasks(
+async fn start_and_watch_tasks<S: MetaStore + 'static>(
     meta_client: MetadataClient<S>,
     scheduler: Scheduler<Task>,
 ) -> Result<()> {
@@ -842,15 +843,13 @@ async fn start_and_watch_tasks(
     let scheduler_clone = scheduler.clone();
 
     Handle::current().spawn(async move {
-        if let Err(err) =
-            Self::starts_watch_task(meta_client_clone, scheduler_clone, revision).await
-        {
+        if let Err(err) = starts_watch_task(meta_client_clone, scheduler_clone, revision).await {
             err.report("failed to start watch tasks");
         }
     });
 
     Handle::current().spawn(async move {
-        if let Err(err) = Self::starts_watch_pause(meta_client, scheduler, revision).await {
+        if let Err(err) = starts_watch_pause(meta_client, scheduler, revision).await {
             err.report("failed to start watch pause");
         }
     });
@@ -858,7 +857,7 @@ async fn start_and_watch_tasks(
     Ok(())
 }
 
-async fn starts_watch_task(
+async fn starts_watch_task<S: MetaStore + 'static>(
     meta_client: MetadataClient<S>,
     scheduler: Scheduler<Task>,
     revision: i64,
@@ -908,7 +907,7 @@ async fn starts_watch_task(
     }
 }
 
-async fn starts_watch_pause(
+async fn starts_watch_pause<S: MetaStore + 'static>(
     meta_client: MetadataClient<S>,
     scheduler: Scheduler<Task>,
     revision: i64,

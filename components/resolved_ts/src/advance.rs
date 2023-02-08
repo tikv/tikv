@@ -20,7 +20,7 @@ use kvproto::{
     metapb::{Peer, PeerRole},
     tikvpb::TikvClient,
 };
-use pd_client::PdClient;
+use pd_client::{PdClient, PdClientCommon};
 use protobuf::Message;
 use raftstore::{
     router::RaftStoreRouter,
@@ -251,7 +251,7 @@ impl LeadershipResolver {
     // This function broadcasts a special message to all stores, gets the leader id
     // of them to confirm whether current peer has a quorum which accepts its
     // leadership.
-    pub async fn resolve<P: PdClient + Clone>(
+    pub async fn resolve<P: PdClientCommon + Clone>(
         &mut self,
         pd_client: &mut P,
         regions: Vec<u64>,
@@ -504,7 +504,7 @@ static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 async fn get_tikv_client(
     store_id: u64,
-    pd_client: &mut dyn PdClient,
+    pd_client: &mut dyn PdClientCommon,
     security_mgr: &SecurityManager,
     env: Arc<Environment>,
     tikv_clients: &Mutex<HashMap<u64, TikvClient>>,
@@ -547,7 +547,6 @@ mod tests {
 
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder};
     use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
-    use pd_client::PdClient;
     use raftstore::store::util::RegionReadProgress;
     use tikv_util::store::new_peer;
 
@@ -572,8 +571,9 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct MockPdClient {}
-    impl PdClient for MockPdClient {}
+    impl PdClientCommon for MockPdClient {}
 
     fn new_rpc_suite(env: Arc<Environment>) -> (Server, TikvClient, Receiver<CheckLeaderRequest>) {
         let (tx, rx) = channel();
@@ -609,12 +609,12 @@ mod tests {
 
         let mut leader_resolver = LeadershipResolver::new(
             1, // store id
-            Arc::new(MockPdClient {}),
             env.clone(),
             Arc::new(SecurityManager::default()),
             RegionReadProgressRegistry::new(),
             Duration::from_secs(1),
         );
+        let mut pd_client = MockPdClient {};
         leader_resolver
             .tikv_clients
             .lock()
@@ -627,17 +627,23 @@ mod tests {
             .region_read_progress
             .insert(2, Arc::new(progress2));
 
-        leader_resolver.resolve(vec![1, 2], TimeStamp::new(1)).await;
+        leader_resolver
+            .resolve(&mut pd_client, vec![1, 2], TimeStamp::new(1))
+            .await;
         let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(req.regions.len(), 2);
 
         // Checking one region only send 1 region in request.
-        leader_resolver.resolve(vec![1], TimeStamp::new(1)).await;
+        leader_resolver
+            .resolve(&mut pd_client, vec![1], TimeStamp::new(1))
+            .await;
         let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(req.regions.len(), 1);
 
         // Checking zero region does not send request.
-        leader_resolver.resolve(vec![], TimeStamp::new(1)).await;
+        leader_resolver
+            .resolve(&mut pd_client, vec![], TimeStamp::new(1))
+            .await;
         rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
 
         let _ = server.shutdown().await;

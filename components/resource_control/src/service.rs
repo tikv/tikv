@@ -4,26 +4,23 @@ use std::{sync::Arc, time::Duration};
 
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
-use pd_client::{Error as PdError, PdClientCommon, RpcClient, RESOURCE_CONTROL_CONFIG_PATH};
+use pd_client::{Error as PdError, PdClientCommon, RESOURCE_CONTROL_CONFIG_PATH};
 use tikv_util::{error, timer::GLOBAL_TIMER_HANDLE};
 
 use crate::ResourceGroupManager;
 
 #[derive(Clone)]
-pub struct ResourceManagerService {
+pub struct ResourceManagerService<P: PdClientCommon + Clone> {
     manager: Arc<ResourceGroupManager>,
-    pd_client: Arc<RpcClient>,
+    pd_client: P,
     // record watch revision
     revision: i64,
 }
 
-impl ResourceManagerService {
+impl<P: PdClientCommon + Clone> ResourceManagerService<P> {
     /// Constructs a new `Service` with `ResourceGroupManager` and a `RpcClient`
-    pub fn new(
-        manager: Arc<ResourceGroupManager>,
-        pd_client: Arc<RpcClient>,
-    ) -> ResourceManagerService {
-        ResourceManagerService {
+    pub fn new(manager: Arc<ResourceGroupManager>, pd_client: P) -> Self {
+        Self {
             pd_client,
             manager,
             revision: 0,
@@ -33,7 +30,7 @@ impl ResourceManagerService {
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
 
-impl ResourceManagerService {
+impl<P: PdClientCommon + Clone> ResourceManagerService<P> {
     pub async fn watch_resource_groups(&mut self) {
         // Firstly, load all resource groups as of now.
         let (groups, revision) = self.list_resource_groups().await;

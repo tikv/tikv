@@ -1619,7 +1619,7 @@ pub mod tests {
 
     #[test]
     fn test_backup_replica_read() {
-        let (_tmp, endpoint) = new_endpoint();
+        let (_tmp, mut endpoint) = new_endpoint();
 
         endpoint.region_info.add_region(
             1,

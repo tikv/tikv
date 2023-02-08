@@ -11,13 +11,14 @@ use pd_client::{
 };
 use raftstore::store::{ReadStats, WriteStats};
 use resource_metering::RawRecords;
-use slog::{debug, error, info, Logger};
+use slog::{error, info, Logger};
 use tikv_util::{mpsc::future as mpsc, store::QueryStats, time::UnixSecs};
 
 use super::{requests::*, Runner};
 use crate::batch::StoreRouter;
 
-pub type Transport = mpsc::Sender<pdpb::RegionHeartbeatRequest>;
+pub type HeartbeatTransport = mpsc::Sender<pdpb::RegionHeartbeatRequest>;
+pub type BucketTransport = mpsc::Sender<pdpb::ReportBucketsRequest>;
 
 pub struct RegionHeartbeatTask {
     pub term: u64,
@@ -112,9 +113,6 @@ where
     T: PdClientV2 + Clone + 'static,
 {
     pub fn handle_region_heartbeat(&mut self, task: RegionHeartbeatTask) {
-        if !self.maybe_create_region_heartbeat_transport() {
-            return;
-        }
         // HACK! In order to keep the compatible of protos, we use 0 to identify
         // the size uninitialized regions, and use 1 to identify the empty regions.
         //
@@ -218,7 +216,8 @@ where
         interval.set_start_timestamp(region_stat.last_report_ts.into_inner());
         interval.set_end_timestamp(UnixSecs::now().into_inner());
         req.set_interval(interval);
-        let _ = self.region_heartbeat_transport.as_mut().unwrap().send(req);
+        let Some(transport) = self.get_or_create_region_heartbeat_transport() else { return };
+        let _ = transport.send(req);
     }
 
     fn handle_response(
@@ -290,36 +289,37 @@ where
         }
     }
 
-    fn maybe_create_region_heartbeat_transport(&mut self) -> bool {
-        if self.region_heartbeat_transport.is_some() {
-            return true;
-        }
-        match self
-            .pd_client
-            .create_region_heartbeat_stream(mpsc::WakePolicy::Immediately)
-        {
-            Err(e) => error!(self.logger, "failed to create region heartbeat stream"; "err" => %e),
-            Ok((tx, mut rx)) => {
-                let router = self.router.clone();
-                let store_id = self.store_id;
-                let logger = self.logger.clone();
-                self.remote.spawn(async move {
-                    while let Some(resp) = rx.next().await {
-                        match resp {
-                            Ok(resp) => Self::handle_response(&logger, &router, resp),
-                            Err(e) => error!(logger, "unexpected error"; "err" => %e),
+    fn get_or_create_region_heartbeat_transport(&mut self) -> Option<&mut HeartbeatTransport> {
+        if self.region_heartbeat_transport.is_none() {
+            match self
+                .pd_client
+                .create_region_heartbeat_stream(mpsc::WakePolicy::Immediately)
+            {
+                Err(e) => {
+                    error!(self.logger, "failed to create region heartbeat stream"; "err" => %e)
+                }
+                Ok((tx, mut rx)) => {
+                    let router = self.router.clone();
+                    let store_id = self.store_id;
+                    let logger = self.logger.clone();
+                    self.remote.spawn(async move {
+                        while let Some(resp) = rx.next().await {
+                            match resp {
+                                Ok(resp) => Self::handle_response(&logger, &router, resp),
+                                Err(e) => error!(logger, "unexpected error"; "err" => %e),
+                            }
                         }
-                    }
-                    info!(
-                        logger,
-                        "region heartbeat response handler exit";
-                        "store_id" => store_id,
-                    );
-                });
-                self.region_heartbeat_transport = Some(tx);
-            }
-        };
-        self.region_heartbeat_transport.is_some()
+                        info!(
+                            logger,
+                            "region heartbeat response handler exit";
+                            "store_id" => store_id,
+                        );
+                    });
+                    self.region_heartbeat_transport = Some(tx);
+                }
+            };
+        }
+        self.region_heartbeat_transport.as_mut()
     }
 
     pub fn handle_report_region_buckets(&mut self, region_buckets: BucketStat) {
@@ -334,23 +334,35 @@ where
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - last_report_ts.into_inner();
         let delta = report_buckets.report(now);
-        let resp = self
-            .pd_client
-            .report_region_buckets(&delta, Duration::from_secs(interval_second));
-        let logger = self.logger.clone();
-        let f = async move {
-            if let Err(e) = resp.await {
-                debug!(
-                    logger,
-                    "failed to send buckets";
-                    "region_id" => region_id,
-                    "version" => delta.meta.version,
-                    "region_epoch" => ?delta.meta.region_epoch,
-                    "err" => ?e
-                );
+
+        let mut buckets = metapb::Buckets::default();
+        buckets.set_region_id(delta.meta.region_id);
+        buckets.set_version(delta.meta.version);
+        buckets.set_keys(delta.meta.keys.clone().into());
+        buckets.set_period_in_ms(Duration::from_secs(interval_second).as_millis() as u64);
+        buckets.set_stats(delta.stats.clone());
+        let mut req = pdpb::ReportBucketsRequest::default();
+        // req.set_header(self.header());
+        req.set_buckets(buckets);
+        req.set_region_epoch(delta.meta.region_epoch.clone());
+
+        let Some(transport) = self.get_or_create_region_bucket_transport() else { return };
+        let _ = transport.send(req);
+    }
+
+    fn get_or_create_region_bucket_transport(&mut self) -> Option<&mut BucketTransport> {
+        if self.region_bucket_transport.is_none() {
+            match self
+                .pd_client
+                .create_report_region_buckets_stream(mpsc::WakePolicy::Immediately)
+            {
+                Err(e) => {
+                    error!(self.logger, "failed to create region heartbeat stream"; "err" => %e)
+                }
+                Ok(tx) => self.region_bucket_transport = Some(tx),
             }
-        };
-        self.remote.spawn(f);
+        }
+        self.region_bucket_transport.as_mut()
     }
 
     pub fn handle_update_read_stats(&mut self, mut stats: ReadStats) {

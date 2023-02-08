@@ -6,6 +6,10 @@ use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftApplyState;
 use pd_client::PdClientCommon;
+use test_raftstore::{
+    get_raft_msg_or_default, must_get_equal, must_get_none, new_get_cmd, new_request,
+    new_server_cluster,
+};
 use tikv_util::{config::ReadableDuration, store::find_peer};
 
 // Test the case local reader works well with witness peer.
@@ -252,7 +256,7 @@ fn test_request_snapshot_after_reboot() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -304,7 +308,7 @@ fn test_request_snapshot_after_term_change() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -353,7 +357,7 @@ fn test_non_witness_availability(fp: &str) {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -409,7 +413,7 @@ fn test_non_witness_replica_read() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k0", b"v0");
