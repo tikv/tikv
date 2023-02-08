@@ -14,6 +14,9 @@ pub use future::ControlledFuture;
 mod service;
 pub use service::ResourceManagerService;
 
+pub mod channel;
+pub use channel::ResourceMetered;
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, Default)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]

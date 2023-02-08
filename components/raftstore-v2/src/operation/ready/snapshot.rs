@@ -49,6 +49,7 @@ use crate::{
     operation::{command::temp_split_path, SharedReadTablet},
     raft::{Apply, Peer, Storage},
     router::ApplyTask,
+    worker::tablet_gc,
     Result, StoreContext,
 };
 
@@ -274,6 +275,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.post_split_init(ctx, init);
             }
             self.schedule_apply_fsm(ctx);
+            if self.remove_tombstone_tablets(snapshot_index) {
+                let _ = ctx
+                    .schedulers
+                    .tablet_gc
+                    .schedule(tablet_gc::Task::destroy(region_id, snapshot_index));
+            }
         }
     }
 }
@@ -546,6 +553,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap.get_data())?;
         let region = snap_data.take_region();
+        let removed_records = snap_data.take_removed_records();
+        let merged_records = snap_data.take_merged_records();
         if region.get_id() != region_id {
             return Err(box_err!(
                 "mismatch region id {}!={}",
@@ -586,6 +595,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let region_state = self.region_state_mut();
         region_state.set_state(PeerState::Normal);
         region_state.set_region(region);
+        region_state.set_removed_records(removed_records);
+        region_state.set_merged_records(merged_records);
         region_state.set_tablet_index(last_index);
         let entry_storage = self.entry_storage_mut();
         entry_storage.raft_state_mut().set_last_index(last_index);

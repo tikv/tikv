@@ -12,7 +12,9 @@ use engine_traits::{KvEngine, RaftEngine};
 use futures::{compat::Future01CompatExt, FutureExt};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
-use raftstore::store::{fsm::store::StoreRegionMeta, Config, RegionReadProgressRegistry};
+use raftstore::store::{
+    fsm::store::StoreRegionMeta, Config, RegionReadProgressRegistry, Transport,
+};
 use slog::{info, o, Logger};
 use tikv_util::{
     future::poll_future_notify,
@@ -255,7 +257,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         }
     }
 
-    pub fn handle_msgs(&mut self, store_msg_buf: &mut Vec<StoreMsg>) {
+    pub fn handle_msgs(&mut self, store_msg_buf: &mut Vec<StoreMsg>)
+    where
+        T: Transport,
+    {
         for msg in store_msg_buf.drain(..) {
             match msg {
                 StoreMsg::Start => self.on_start(),

@@ -326,7 +326,7 @@ mod tests {
             split_region_on_table: true,
             // Try to "disable" size split.
             region_max_size: Some(ReadableSize::gb(2)),
-            region_split_size: ReadableSize::gb(1),
+            region_split_size: Some(ReadableSize::gb(1)),
             // Try to "disable" keys split
             region_max_keys: Some(2000000000),
             region_split_keys: Some(1000000000),
