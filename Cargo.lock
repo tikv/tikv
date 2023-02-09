@@ -5031,6 +5031,7 @@ dependencies = [
  "collections",
  "encryption",
  "grpcio",
+ "kvproto",
  "serde",
  "serde_derive",
  "serde_json",

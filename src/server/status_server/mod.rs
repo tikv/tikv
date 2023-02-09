@@ -32,6 +32,7 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, StatusCode,
 };
+use kvproto::resource_manager::ResourceGroup;
 use online_config::OnlineConfig;
 use openssl::{
     ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
@@ -44,7 +45,9 @@ pub use profile::{
 };
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
+use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
+use serde::Serialize;
 use serde_json::Value;
 use tikv_kv::RaftExtension;
 use tikv_util::{
@@ -89,6 +92,7 @@ pub struct StatusServer<R> {
     router: R,
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<R> StatusServer<R>
@@ -101,6 +105,7 @@ where
         security_config: Arc<SecurityConfig>,
         router: R,
         store_path: PathBuf,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -120,6 +125,7 @@ where
             router,
             security_config,
             store_path,
+            resource_manager,
         })
     }
 
@@ -518,6 +524,7 @@ where
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
         let store_path = self.store_path.clone();
+        let resource_manager = self.resource_manager.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -525,6 +532,7 @@ where
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             let store_path = store_path.clone();
+            let resource_manager = resource_manager.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -533,6 +541,7 @@ where
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
                     let store_path = store_path.clone();
+                    let resource_manager = resource_manager.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -607,6 +616,9 @@ where
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }
+                            (Method::GET, "/resource_groups") => {
+                                Self::handle_get_all_resource_groups(resource_manager.as_ref())
+                            }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
                     }
@@ -643,6 +655,63 @@ where
             self.start_serve(server);
         }
         Ok(())
+    }
+
+    pub fn handle_get_all_resource_groups(
+        mgr: Option<&Arc<ResourceGroupManager>>,
+    ) -> hyper::Result<Response<Body>> {
+        let groups = if let Some(mgr) = mgr {
+            mgr.get_all_resource_groups()
+                .into_iter()
+                .map(into_debug_request_group)
+                .collect()
+        } else {
+            vec![]
+        };
+        let body = match serde_json::to_vec(&groups) {
+            Ok(body) => body,
+            Err(err) => {
+                return Ok(make_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("fails to json: {}", err),
+                ));
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ResouceGroupSetting {
+    name: String,
+    ru: u64,
+    burst_limit: i64,
+}
+
+fn into_debug_request_group(rg: ResourceGroup) -> ResouceGroupSetting {
+    ResouceGroupSetting {
+        name: rg.name,
+        ru: rg
+            .r_u_settings
+            .get_ref()
+            .get_r_u()
+            .get_settings()
+            .get_fill_rate(),
+        burst_limit: rg
+            .r_u_settings
+            .get_ref()
+            .get_r_u()
+            .get_settings()
+            .get_burst_limit(),
     }
 }
 
@@ -957,6 +1026,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1005,6 +1075,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1050,6 +1121,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1166,6 +1238,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1210,6 +1283,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1246,6 +1320,7 @@ mod tests {
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1319,6 +1394,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1349,6 +1425,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1382,6 +1459,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1437,6 +1515,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
