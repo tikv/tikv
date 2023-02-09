@@ -192,6 +192,16 @@ impl Key {
         Ok(number::decode_u64_desc(&mut ts)?.into())
     }
 
+    /// Decode the timestamp from a ts encoded key and return in bytes.
+    #[inline]
+    pub fn decode_ts_bytes_from(key: &[u8]) -> Result<&[u8], codec::Error> {
+        let len = key.len();
+        if len < number::U64_SIZE {
+            return Err(codec::Error::KeyLength);
+        }
+        Ok(&key[key.len() - number::U64_SIZE..])
+    }
+
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to
     /// the encoded user key `user_key`.
     ///

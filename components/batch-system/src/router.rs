@@ -12,12 +12,7 @@ use std::{
 
 use collections::HashMap;
 use crossbeam::channel::{SendError, TrySendError};
-use tikv_util::{
-    debug, info,
-    lru::LruCache,
-    time::{duration_to_sec, Instant},
-    Either,
-};
+use tikv_util::{debug, info, lru::LruCache, time::Instant, Either};
 
 use crate::{
     fsm::{Fsm, FsmScheduler, FsmState},
@@ -322,7 +317,7 @@ where
         for mailbox in mailboxes.map.values() {
             let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
         }
-        BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()));
+        BROADCAST_NORMAL_DURATION.observe(timer.saturating_elapsed_secs());
     }
 
     /// Try to notify all FSMs that the cluster is being shutdown.
@@ -342,7 +337,7 @@ where
 
     /// Close the mailbox of address.
     pub fn close(&self, addr: u64) {
-        info!("[region {}] shutdown mailbox", addr);
+        info!("shutdown mailbox"; "region_id" => addr);
         unsafe { &mut *self.caches.as_ptr() }.remove(&addr);
         let mut mailboxes = self.normals.lock().unwrap();
         if let Some(mb) = mailboxes.map.remove(&addr) {

@@ -97,7 +97,11 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn sync_wal(&self) -> Result<()>;
 
+    /// Depending on the implementation, some on-going manual compactions may be
+    /// aborted.
     fn pause_background_work(&self) -> Result<()>;
+
+    fn continue_background_work(&self) -> Result<()>;
 
     /// Check whether a database exists at a given path
     fn exists(path: &str) -> bool;

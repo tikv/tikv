@@ -94,6 +94,14 @@ impl QueryStats {
         mem::swap(&mut self.0, &mut query_stats);
         query_stats
     }
+
+    pub fn get_all_query_num(&self) -> u64 {
+        let mut sum: u64 = 0;
+        for kind in QUERY_KINDS {
+            sum += QueryStats::get_query_num(&self.0, *kind);
+        }
+        sum
+    }
 }
 
 pub fn is_read_query(kind: QueryKind) -> bool {

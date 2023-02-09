@@ -1450,7 +1450,9 @@ fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
 ) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
     let storage = storage.clone();
     async move {
-        let f = storage.get_engine().start_flashback(req.get_context());
+        let f = storage
+            .get_engine()
+            .start_flashback(req.get_context(), req.get_start_ts());
         let mut res = f.await.map_err(storage::Error::from);
         if matches!(res, Ok(())) {
             // After the region is put into the flashback state, we need to do a special
@@ -1488,10 +1490,7 @@ fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
             res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
         }
         if matches!(res, Ok(())) {
-            // Only finish flashback when Flashback executed successfully.
-            fail_point!("skip_finish_flashback_to_version", |_| {
-                Ok(FlashbackToVersionResponse::default())
-            });
+            // Only finish when flashback executed successfully.
             let f = storage.get_engine().end_flashback(req.get_context());
             res = f.await.map_err(storage::Error::from);
         }

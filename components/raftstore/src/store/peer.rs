@@ -2335,6 +2335,7 @@ where
                     prev_lead_transferee: self.lead_transferee,
                     vote: self.raft_group.raft.vote,
                     initialized: self.is_initialized(),
+                    peer_id: self.peer.get_id(),
                 },
             );
             self.cmd_epoch_checker.maybe_update_term(self.term());

@@ -233,6 +233,7 @@ pub fn check_flashback_commit(
     key_to_commit: &Key,
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
+    region_id: u64,
 ) -> TxnResult<bool> {
     match reader.load_lock(key_to_commit)? {
         // If the lock exists, it means the flashback hasn't been finished.
@@ -241,7 +242,7 @@ pub fn check_flashback_commit(
                 return Ok(false);
             }
             error!(
-                "check flashback commit exception: lock not found";
+                "check flashback commit exception: lock record mismatched";
                 "key_to_commit" => log_wrappers::Value::key(key_to_commit.as_encoded()),
                 "flashback_start_ts" => flashback_start_ts,
                 "flashback_commit_ts" => flashback_commit_ts,
@@ -266,11 +267,11 @@ pub fn check_flashback_commit(
             );
         }
     }
-    Err(txn::Error::from_mvcc(mvcc::ErrorInner::TxnLockNotFound {
-        start_ts: flashback_start_ts,
-        commit_ts: flashback_commit_ts,
-        key: key_to_commit.to_raw()?,
-    }))
+    // If both the flashback lock and commit records are mismatched, it means
+    // the current region is not in the flashback state.
+    Err(txn::Error::from(txn::ErrorInner::FlashbackNotPrepared(
+        region_id,
+    )))
 }
 
 pub fn get_first_user_key(
