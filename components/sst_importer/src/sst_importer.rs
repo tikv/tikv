@@ -9,12 +9,12 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Condvar, Mutex,
     },
     time::Duration,
 };
 
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
@@ -71,17 +71,83 @@ impl<'a> DownloadExt<'a> {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Debug)]
 pub enum CacheKvFile {
-    Mem(Arc<Vec<u8>>),
+    Mem(FileCache<Arc<[u8]>>),
     Fs(Arc<PathBuf>),
+}
+
+#[derive(Clone, Debug)]
+pub struct FileCache<T>(Arc<(Mutex<FileCacheInner<T>>, Condvar)>);
+
+pub struct DownloadPromise<T>(Arc<(Mutex<FileCacheInner<T>>, Condvar)>);
+
+impl<T> DownloadPromise<T> {
+    pub fn fulfill(self, item: T) -> FileCache<T> {
+        let mut l = self.0.as_ref().0.lock().unwrap();
+        debug_assert!(matches!(*l, FileCacheInner::Downloading));
+        *l = FileCacheInner::Cached(item);
+        self.0.as_ref().1.notify_all();
+        drop(l);
+        FileCache(Arc::clone(&self.0))
+    }
+}
+
+impl<T> Drop for DownloadPromise<T> {
+    fn drop(&mut self) {
+        let mut l = self.0.as_ref().0.lock().unwrap();
+        if matches!(*l, FileCacheInner::Downloading) {
+            *l = FileCacheInner::Leaked;
+            self.0.as_ref().1.notify_all();
+        }
+    }
+}
+
+impl<T> FileCache<T> {
+    pub fn download() -> (Self, DownloadPromise<T>) {
+        let inner = Arc::new((Mutex::new(FileCacheInner::Downloading), Condvar::new()));
+        (Self(Arc::clone(&inner)), DownloadPromise(inner))
+    }
+
+    pub fn wait_until_fill(&self) -> Option<DownloadPromise<T>> {
+        let mut l = self.0.as_ref().0.lock().unwrap();
+        loop {
+            match *l {
+                FileCacheInner::Downloading => {
+                    l = self.0.as_ref().1.wait(l).unwrap();
+                }
+                FileCacheInner::Leaked => {
+                    *l = FileCacheInner::Downloading;
+                    return Some(DownloadPromise(Arc::clone(&self.0)));
+                }
+                FileCacheInner::Cached(_) => return None,
+            }
+        }
+    }
+}
+
+impl<T: Clone> FileCache<T> {
+    fn get(&self) -> Option<T> {
+        let l = self.0.as_ref().0.lock().unwrap();
+        match *l {
+            FileCacheInner::Downloading | FileCacheInner::Leaked => None,
+            FileCacheInner::Cached(ref t) => Some(Clone::clone(t)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FileCacheInner<T> {
+    Downloading,
+    Leaked,
+    Cached(T),
 }
 
 impl CacheKvFile {
     // get the ref count of item.
     pub fn ref_count(&self) -> usize {
         match self {
-            CacheKvFile::Mem(buff) => Arc::strong_count(buff),
+            CacheKvFile::Mem(buff) => Arc::strong_count(&buff.0),
             CacheKvFile::Fs(path) => Arc::strong_count(path),
         }
     }
@@ -412,7 +478,7 @@ impl SstImporter {
             let mut need_retain = true;
             match c {
                 CacheKvFile::Mem(buff) => {
-                    let buflen = buff.len();
+                    let buflen = buff.get().map(|v| v.len()).unwrap_or_default();
                     // The term of recycle memeory is 60s.
                     if c.ref_count() == 1 && c.is_expired(start) {
                         need_retain = false;
@@ -486,24 +552,39 @@ impl SstImporter {
         let start = Instant::now();
         let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
 
-        let mut lock = self
-            .file_locks
-            .entry(dst_name)
-            .or_insert((CacheKvFile::Mem(Arc::default()), Instant::now()));
-        IMPORTER_APPLY_DURATION
-            .with_label_values(&["download-get-lock"])
-            .observe(start.saturating_elapsed().as_secs_f64());
-
-        if let CacheKvFile::Mem(buff) = &lock.0 {
-            if !buff.is_empty() {
-                lock.1 = Instant::now();
-                return Ok(lock.0.clone());
-            }
-        }
-
+        // TODO: handle the resource leakage once the download failed.
         if !self.inc_mem_and_check(meta) {
             return Err(Error::ResourceNotEnough(String::from("memory is limited")));
         }
+
+        let cache_entry = {
+            let lock = self.file_locks.entry(dst_name);
+            IMPORTER_APPLY_DURATION
+                .with_label_values(&["download-get-lock"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            match lock {
+                Entry::Occupied(mut ent) => match ent.get_mut() {
+                    (CacheKvFile::Mem(buff), last_used) => {
+                        *last_used = Instant::now();
+                        match buff.wait_until_fill() {
+                            Some(handle) => handle,
+                            None => return Ok(ent.get().0.clone()),
+                        }
+                    }
+                    _ => panic!(concat!(
+                        "using both read-to-memory and download-to-file is unacceptable for now.",
+                        "(If you think it is possible for now, please change this line to `return item.get.0.clone()`)",
+                        "(Please also check the state transform is OK too.)"
+                    )),
+                },
+                Entry::Vacant(ent) => {
+                    let (cache, handle) = FileCache::download();
+                    ent.insert((CacheKvFile::Mem(cache), Instant::now()));
+                    handle
+                }
+            }
+        };
 
         let expected_sha256 = {
             let sha256 = meta.get_sha256().to_vec();
@@ -543,8 +624,9 @@ impl SstImporter {
             .observe(start.saturating_elapsed().as_secs_f64());
 
         let rewrite_buff = self.rewrite_kv_file(buff, rewrite_rule)?;
-        *lock = (CacheKvFile::Mem(Arc::new(rewrite_buff)), Instant::now());
-        Ok(lock.0.clone())
+        Ok(CacheKvFile::Mem(
+            cache_entry.fulfill(Arc::from(rewrite_buff.into_boxed_slice())),
+        ))
     }
 
     pub fn wrap_kms(
@@ -618,7 +700,7 @@ impl SstImporter {
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         backend: &StorageBackend,
         speed_limiter: &Limiter,
-    ) -> Result<Arc<Vec<u8>>> {
+    ) -> Result<Arc<[u8]>> {
         let c = if self.import_support_download() {
             self.do_download_kv_file(meta, backend, speed_limiter)?
         } else {
@@ -626,7 +708,7 @@ impl SstImporter {
         };
         match c {
             // If cache memroy, it has been rewrite, return buffer directly.
-            CacheKvFile::Mem(buff) => Ok(buff),
+            CacheKvFile::Mem(buff) => Ok(buff.get().expect("invalid state: empty cache")),
             // If cache file name, it need to read and rewrite.
             CacheKvFile::Fs(path) => {
                 let file = File::open(path.as_ref())?;
@@ -635,7 +717,7 @@ impl SstImporter {
                 reader.read_to_end(&mut buffer)?;
 
                 let rewrite_buff = self.rewrite_kv_file(buffer, rewrite_rule)?;
-                Ok(Arc::new(rewrite_buff))
+                Ok(Arc::from(rewrite_buff.into_boxed_slice()))
             }
         }
     }
@@ -773,10 +855,10 @@ impl SstImporter {
         end_key: &[u8],
         start_ts: u64,
         restore_ts: u64,
-        file_buff: Arc<Vec<u8>>,
+        file_buff: Arc<[u8]>,
         mut build_fn: impl FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
-        let mut event_iter = EventIterator::new(file_buff.as_slice());
+        let mut event_iter = EventIterator::new(file_buff.as_ref());
         let mut smallest_key = None;
         let mut largest_key = None;
         let mut total_key = 0;
