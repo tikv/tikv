@@ -36456,6 +36456,190 @@
             "align": false,
             "alignLevel": null
           }
+        },
+        {
+          "aliasColors": {},
+          "dashLength": 10,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "editable": true,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 75
+          },
+          "id": 23763573091,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": false,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true
+          },
+          "pluginVersion": "7.5.11",
+          "pointradius": 5,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "targets": [
+            {
+              "expr": "sum(tikv_lock_wait_queue_entries_gauge_vec{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (type)",
+              "legendFormat": "{{type}}",
+              "interval": "",
+              "exemplar": true,
+              "format": "time_series",
+              "intervalFactor": 2,
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "thresholds": [],
+          "timeRegions": [],
+          "title": "Pessimistic lock activities",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          },
+          "bars": false,
+          "dashes": false,
+          "error": false,
+          "fillGradient": 0,
+          "hiddenSeries": false,
+          "percentage": false,
+          "points": false,
+          "stack": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null,
+          "description": "The number of active keys and waiters."
+        },
+        {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 83
+          },
+          "id": 23763573092,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "pluginVersion": "7.5.11",
+          "targets": [
+            {
+              "expr": "sum(increase(tikv_lock_wait_queue_length_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le)",
+              "legendFormat": "{{le}}",
+              "interval": "",
+              "exemplar": true,
+              "format": "heatmap",
+              "intervalFactor": 2,
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "title": "Lengths of lock wait queues when transaction enqueues",
+          "tooltip": {
+            "show": true,
+            "showHistogram": false
+          },
+          "type": "heatmap",
+          "timeFrom": null,
+          "timeShift": null,
+          "description": "The length includes the entering transaction itself",
+          "heatmap": {},
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "mode": "spectrum",
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "exponent": 0.5,
+            "colorScheme": "interpolateOranges"
+          },
+          "dataFormat": "tsbuckets",
+          "yBucketBound": "auto",
+          "reverseYBuckets": false,
+          "xAxis": {
+            "show": true
+          },
+          "yAxis": {
+            "show": true,
+            "format": "short",
+            "decimals": null,
+            "logBase": 1,
+            "splitFactor": null,
+            "min": null,
+            "max": null
+          },
+          "xBucketSize": null,
+          "xBucketNumber": null,
+          "yBucketSize": null,
+          "yBucketNumber": null,
+          "highlightCards": true,
+          "hideZeroBuckets": true
         }
       ],
       "title": "Pessimistic Locking",
