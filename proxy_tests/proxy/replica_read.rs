@@ -191,7 +191,6 @@ fn test_read_index() {
     cluster.must_put(b"k0", b"v0");
     cluster.pd_client.must_none_pending_peer(p2.clone());
     cluster.pd_client.must_none_pending_peer(p3.clone());
-
     let region = cluster.get_region(b"k0");
     assert_eq!(cluster.leader_of_region(region.get_id()).unwrap(), p1);
 

@@ -4,13 +4,12 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicU8, Ordering},
-        Arc,
+        Arc, RwLock,
     },
     time,
 };
 
 use encryption::DataKeyManager;
-use engine_traits::Peekable;
 use kvproto::kvrpcpb;
 use protobuf::Message;
 
@@ -21,98 +20,13 @@ use super::{
     engine_store_helper_impls::*,
     interfaces_ffi,
     interfaces_ffi::{
-        BaseBuffView, ConstRawVoidPtr, CppStrVecView, KVGetStatus, RaftProxyStatus,
-        RaftStoreProxyFFIHelper, RaftStoreProxyPtr, RawCppPtr, RawCppStringPtr, RawRustPtr,
-        RawVoidPtr, SSTReaderInterfaces,
+        BaseBuffView, CppStrVecView, KVGetStatus, RaftProxyStatus, RaftStoreProxyFFIHelper,
+        RaftStoreProxyPtr, RawCppPtr, RawCppStringPtr, RawRustPtr, RawVoidPtr, SSTReaderInterfaces,
     },
+    read_index_helper,
     sst_reader_impls::*,
-    UnwrapExternCFunc,
+    utils, UnwrapExternCFunc,
 };
-use crate::{read_index_helper, utils, TiFlashEngine};
-
-pub trait RaftStoreProxyFFI: Sync {
-    fn set_status(&mut self, s: RaftProxyStatus);
-    fn get_value_cf<F>(&self, cf: &str, key: &[u8], cb: F)
-    where
-        F: FnOnce(Result<Option<&[u8]>, String>);
-    fn set_kv_engine(&mut self, kv_engine: Option<TiFlashEngine>);
-}
-
-pub struct RaftStoreProxy {
-    pub status: AtomicU8,
-    pub key_manager: Option<Arc<DataKeyManager>>,
-    pub read_index_client: Option<Box<dyn read_index_helper::ReadIndex>>,
-    pub kv_engine: std::sync::RwLock<Option<TiFlashEngine>>,
-}
-
-impl RaftStoreProxy {
-    pub fn new(
-        status: AtomicU8,
-        key_manager: Option<Arc<DataKeyManager>>,
-        read_index_client: Option<Box<dyn read_index_helper::ReadIndex>>,
-        kv_engine: std::sync::RwLock<Option<TiFlashEngine>>,
-    ) -> Self {
-        RaftStoreProxy {
-            status,
-            key_manager,
-            read_index_client,
-            kv_engine,
-        }
-    }
-}
-
-impl RaftStoreProxyFFI for RaftStoreProxy {
-    fn set_kv_engine(&mut self, kv_engine: Option<TiFlashEngine>) {
-        let mut lock = self.kv_engine.write().unwrap();
-        *lock = kv_engine;
-    }
-
-    fn set_status(&mut self, s: RaftProxyStatus) {
-        self.status.store(s as u8, Ordering::SeqCst);
-    }
-
-    fn get_value_cf<F>(&self, cf: &str, key: &[u8], cb: F)
-    where
-        F: FnOnce(Result<Option<&[u8]>, String>),
-    {
-        let kv_engine_lock = self.kv_engine.read().unwrap();
-        let kv_engine = kv_engine_lock.as_ref();
-        if kv_engine.is_none() {
-            cb(Err("KV engine is not initialized".to_string()));
-            return;
-        }
-        let value = kv_engine.unwrap().get_value_cf(cf, key);
-        match value {
-            Ok(v) => {
-                if let Some(x) = v {
-                    cb(Ok(Some(&x)));
-                } else {
-                    cb(Ok(None));
-                }
-            }
-            Err(e) => {
-                cb(Err(format!("{}", e)));
-            }
-        }
-    }
-}
-
-impl RaftStoreProxyPtr {
-    pub unsafe fn as_ref(&self) -> &RaftStoreProxy {
-        &*(self.inner as *const RaftStoreProxy)
-    }
-    pub fn is_null(&self) -> bool {
-        self.inner.is_null()
-    }
-}
-
-impl From<&RaftStoreProxy> for RaftStoreProxyPtr {
-    fn from(ptr: &RaftStoreProxy) -> Self {
-        Self {
-            inner: ptr as *const _ as ConstRawVoidPtr,
-        }
-    }
-}
 
 impl Clone for RaftStoreProxyPtr {
     fn clone(&self) -> RaftStoreProxyPtr {
@@ -124,10 +38,24 @@ impl Clone for RaftStoreProxyPtr {
 
 impl Copy for RaftStoreProxyPtr {}
 
+pub trait RaftStoreProxyFFI<EK: engine_traits::KvEngine>: Sync {
+    fn status(&self) -> &AtomicU8;
+    fn maybe_key_manager(&self) -> &Option<Arc<DataKeyManager>>;
+    fn maybe_read_index_client(&self) -> &Option<Box<dyn read_index_helper::ReadIndex>>;
+    // Only for test.
+    fn set_read_index_client(&mut self, _: Option<Box<dyn read_index_helper::ReadIndex>>);
+    fn set_status(&mut self, s: RaftProxyStatus);
+    fn get_value_cf<F>(&self, cf: &str, key: &[u8], cb: F)
+    where
+        F: FnOnce(Result<Option<&[u8]>, String>);
+    fn set_kv_engine(&mut self, kv_engine: Option<EK>);
+    fn kv_engine(&self) -> &RwLock<Option<EK>>;
+}
+
 impl RaftStoreProxyFFIHelper {
-    pub fn new(proxy: &RaftStoreProxy) -> Self {
+    pub fn new(proxy: RaftStoreProxyPtr) -> Self {
         RaftStoreProxyFFIHelper {
-            proxy_ptr: proxy.into(),
+            proxy_ptr: proxy,
             fn_handle_get_proxy_status: Some(ffi_handle_get_proxy_status),
             fn_is_encryption_enabled: Some(ffi_is_encryption_enabled),
             fn_encryption_method: Some(ffi_encryption_method),
@@ -195,7 +123,7 @@ unsafe extern "C" fn ffi_get_region_local_state(
 
 pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: RaftStoreProxyPtr) -> RaftProxyStatus {
     unsafe {
-        let r = proxy_ptr.as_ref().status.load(Ordering::SeqCst);
+        let r = proxy_ptr.as_ref().status().load(Ordering::SeqCst);
         std::mem::transmute(r)
     }
 }
@@ -209,7 +137,7 @@ pub extern "C" fn ffi_batch_read_index(
 ) {
     assert!(!proxy_ptr.is_null());
     unsafe {
-        if proxy_ptr.as_ref().read_index_client.is_none() {
+        if proxy_ptr.as_ref().maybe_read_index_client().is_none() {
             return;
         }
     }
@@ -229,7 +157,7 @@ pub extern "C" fn ffi_batch_read_index(
         }
         let resp = proxy_ptr
             .as_ref()
-            .read_index_client
+            .maybe_read_index_client()
             .as_ref()
             .unwrap()
             .batch_read_index(req_vec, time::Duration::from_millis(timeout_ms));
@@ -247,7 +175,7 @@ pub extern "C" fn ffi_make_read_index_task(
 ) -> RawRustPtr {
     assert!(!proxy_ptr.is_null());
     unsafe {
-        if proxy_ptr.as_ref().read_index_client.is_none() {
+        if proxy_ptr.as_ref().maybe_read_index_client().is_none() {
             return RawRustPtr::default();
         }
     }
@@ -256,7 +184,7 @@ pub extern "C" fn ffi_make_read_index_task(
     let task = unsafe {
         proxy_ptr
             .as_ref()
-            .read_index_client
+            .maybe_read_index_client()
             .as_ref()
             .unwrap()
             .make_read_index_task(req)
@@ -306,7 +234,7 @@ pub extern "C" fn ffi_poll_read_index_task(
 ) -> u8 {
     assert!(!proxy_ptr.is_null());
     unsafe {
-        if proxy_ptr.as_ref().read_index_client.is_none() {
+        if proxy_ptr.as_ref().maybe_read_index_client().is_none() {
             return 0;
         }
     }
@@ -319,7 +247,7 @@ pub extern "C" fn ffi_poll_read_index_task(
     if let Some(res) = unsafe {
         proxy_ptr
             .as_ref()
-            .read_index_client
+            .maybe_read_index_client()
             .as_ref()
             .unwrap()
             .poll_read_index_task(task, waker)

@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use std::pin::Pin;
 
-pub use super::interfaces_ffi::BaseBuffView;
+use super::interfaces_ffi::BaseBuffView;
 
 impl From<&[u8]> for BaseBuffView {
     fn from(s: &[u8]) -> Self {

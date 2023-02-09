@@ -6,8 +6,6 @@ pub mod core;
 pub mod engine;
 pub mod ffi;
 pub mod observer;
-pub mod read_index_helper;
-mod utils;
 
 // Be discreet when expose inner mods by pub use.
 // engine_store_ffi crate includes too many mods here.

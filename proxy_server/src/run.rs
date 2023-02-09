@@ -35,9 +35,9 @@ use engine_store_ffi::{
             EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus,
             RaftStoreProxyFFIHelper,
         },
+        read_index_helper::ReadIndexClient,
         RaftStoreProxy, RaftStoreProxyFFI,
     },
-    read_index_helper::ReadIndexClient,
     TiFlashEngine,
 };
 use engine_traits::{
@@ -149,8 +149,9 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
         std::sync::RwLock::new(None),
     );
 
+    let proxy_ref = &proxy;
     let proxy_helper = {
-        let mut proxy_helper = RaftStoreProxyFFIHelper::new(&proxy);
+        let mut proxy_helper = RaftStoreProxyFFIHelper::new(proxy_ref.into());
         proxy_helper.fn_server_info = Some(ffi_server_info);
         proxy_helper
     };
@@ -254,8 +255,9 @@ fn run_impl_only_for_decryption<CER: ConfiguredRaftEngine, F: KvFormat>(
         std::sync::RwLock::new(None),
     );
 
+    let proxy_ref = &proxy;
     let proxy_helper = {
-        let mut proxy_helper = RaftStoreProxyFFIHelper::new(&proxy);
+        let mut proxy_helper = RaftStoreProxyFFIHelper::new(proxy_ref.into());
         proxy_helper.fn_server_info = Some(ffi_server_info);
         proxy_helper
     };

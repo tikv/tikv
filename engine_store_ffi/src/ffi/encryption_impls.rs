@@ -8,6 +8,7 @@ use super::{
         BaseBuffView, EncryptionMethod as EncryptionMethodImpl, FileEncryptionInfoRaw,
         FileEncryptionRes, RaftStoreProxyPtr, RawCppStringPtr,
     },
+    RaftStoreProxyFFI,
 };
 
 impl From<EncryptionMethod> for EncryptionMethodImpl {
@@ -17,14 +18,14 @@ impl From<EncryptionMethod> for EncryptionMethodImpl {
 }
 
 pub extern "C" fn ffi_is_encryption_enabled(proxy_ptr: RaftStoreProxyPtr) -> u8 {
-    unsafe { proxy_ptr.as_ref().key_manager.is_some().into() }
+    unsafe { proxy_ptr.as_ref().maybe_key_manager().is_some().into() }
 }
 
 pub extern "C" fn ffi_encryption_method(proxy_ptr: RaftStoreProxyPtr) -> EncryptionMethodImpl {
     unsafe {
         proxy_ptr
             .as_ref()
-            .key_manager
+            .maybe_key_manager()
             .as_ref()
             .map_or(EncryptionMethod::Plaintext, |x| x.encryption_method())
             .into()
@@ -68,7 +69,7 @@ pub extern "C" fn ffi_handle_get_file(
     name: BaseBuffView,
 ) -> FileEncryptionInfoRaw {
     unsafe {
-        proxy_ptr.as_ref().key_manager.as_ref().map_or(
+        proxy_ptr.as_ref().maybe_key_manager().as_ref().map_or(
             FileEncryptionInfoRaw::new(FileEncryptionRes::Disabled),
             |key_manager| {
                 let p = key_manager.get_file(std::str::from_utf8_unchecked(name.to_slice()));
@@ -92,7 +93,7 @@ pub extern "C" fn ffi_handle_new_file(
     name: BaseBuffView,
 ) -> FileEncryptionInfoRaw {
     unsafe {
-        proxy_ptr.as_ref().key_manager.as_ref().map_or(
+        proxy_ptr.as_ref().maybe_key_manager().as_ref().map_or(
             FileEncryptionInfoRaw::new(FileEncryptionRes::Disabled),
             |key_manager| {
                 let p = key_manager.new_file(std::str::from_utf8_unchecked(name.to_slice()));
@@ -116,7 +117,7 @@ pub extern "C" fn ffi_handle_delete_file(
     name: BaseBuffView,
 ) -> FileEncryptionInfoRaw {
     unsafe {
-        proxy_ptr.as_ref().key_manager.as_ref().map_or(
+        proxy_ptr.as_ref().maybe_key_manager().as_ref().map_or(
             FileEncryptionInfoRaw::new(FileEncryptionRes::Disabled),
             |key_manager| {
                 let p = key_manager.delete_file(std::str::from_utf8_unchecked(name.to_slice()));
@@ -142,7 +143,7 @@ pub extern "C" fn ffi_handle_link_file(
     dst: BaseBuffView,
 ) -> FileEncryptionInfoRaw {
     unsafe {
-        proxy_ptr.as_ref().key_manager.as_ref().map_or(
+        proxy_ptr.as_ref().maybe_key_manager().as_ref().map_or(
             FileEncryptionInfoRaw::new(FileEncryptionRes::Disabled),
             |key_manager| {
                 let p = key_manager.link_file(
