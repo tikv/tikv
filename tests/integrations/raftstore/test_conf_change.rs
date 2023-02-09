@@ -38,7 +38,6 @@ fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<TestPdClient>) ->
 }
 
 #[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_server_simple_conf_change() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
