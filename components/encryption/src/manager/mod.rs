@@ -27,7 +27,7 @@ use crate::{
     config::EncryptionConfig,
     crypter::{self, Iv},
     encrypted_file::EncryptedFile,
-    file_dict_file::{DataKeyDictionaryItem, DictionaryFile},
+    file_dict_file::{DataKeyDictionaryItem, DataKeyDictionaryItemV2, DictionaryFile},
     io::{DecrypterReader, EncrypterWriter},
     master_key::Backend,
     metrics::*,
@@ -48,6 +48,8 @@ struct Dicts {
     // The reasons for having a whitelist instead of treating all directories this way:
     // (1) keep v1 data keys file backward compatible.
     // (2) make it easy to find the right prefix of a file path to locate its Dir ID.
+    //
+    // The string should not contain trailing slash.
     v2_directory_whitelist: Vec<String>,
 
     // File Full Path -> FileInfo.
@@ -78,11 +80,12 @@ impl Dicts {
         rotation_period: Duration,
         enable_file_dictionary_log: bool,
         file_dictionary_rewrite_threshold: u64,
+        v2_directory_whitelist: Vec<String>,
     ) -> Result<Dicts> {
         Ok(Dicts {
             base: Path::new(path).to_owned(),
             rotation_period,
-            v2_directory_whitelist: Vec::new(),
+            v2_directory_whitelist,
             file_dict: Mutex::new(FileDictionary::default()),
             file_dict_file: Mutex::new(DictionaryFile::<FileDictionary>::new(
                 Path::new(path),
@@ -93,7 +96,7 @@ impl Dicts {
             file_dict_v2: Mutex::new(FileDictionaryV2::default()),
             file_dict_file_v2: Mutex::new(DictionaryFile::<FileDictionaryV2>::new(
                 Path::new(path),
-                FILE_DICT_NAME,
+                FILE_DICT_V2_NAME,
                 enable_file_dictionary_log,
                 file_dictionary_rewrite_threshold,
             )?),
@@ -112,6 +115,7 @@ impl Dicts {
         master_key: &dyn Backend,
         enable_file_dictionary_log: bool,
         file_dictionary_rewrite_threshold: u64,
+        v2_directory_whitelist: Vec<String>,
     ) -> Result<Option<Dicts>> {
         let base = Path::new(path);
 
@@ -128,7 +132,8 @@ impl Dicts {
             // Both files are found.
             (Ok(file_dict_file), Ok(key_bytes)) => {
                 info!("encryption: found both of key dictionary and file dictionary.");
-                let mut key_dict: KeyDictionary = parse_from_bytes(&key_bytes)?;
+                println!("found both of key dict and file dict");
+                let key_dict: KeyDictionary = parse_from_bytes(&key_bytes)?;
                 let current_key_id = AtomicU64::new(key_dict.current_key_id);
                 ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
 
@@ -143,7 +148,9 @@ impl Dicts {
                     false,
                 ) {
                     Ok(d) => d,
+                    // Upgraded from an older version.
                     Err(Error::Io(e)) if e.kind() == ErrorKind::NotFound => {
+                        println!("create v2 file dict");
                         DictionaryFile::<FileDictionaryV2>::new(
                             base,
                             FILE_DICT_V2_NAME,
@@ -156,6 +163,7 @@ impl Dicts {
                 let file_dict_v2 = file_dict_file_v2.dict().clone();
                 let mut max_dir_id = 0;
                 for (dir_id, files) in &file_dict_v2.dir_files {
+                    println!("getting dir id {dir_id}");
                     max_dir_id = std::cmp::max(*dir_id, max_dir_id);
                     total_files += files.files.len();
                 }
@@ -164,7 +172,7 @@ impl Dicts {
                 Ok(Some(Dicts {
                     base: base.to_owned(),
                     rotation_period,
-                    v2_directory_whitelist: Vec::new(),
+                    v2_directory_whitelist,
                     file_dict: Mutex::new(file_dict),
                     file_dict_file: Mutex::new(file_dict_file),
                     file_dict_v2: Mutex::new(file_dict_v2),
@@ -244,16 +252,21 @@ impl Dicts {
     }
 
     // Returns Dir, Relative Path.
-    fn parse_v2(&self, fname: &str) -> Option<(String, String)> {
-        debug_assert!(Path::new(fname).is_file());
+    #[inline]
+    fn parse_v2(&self, full_name: &str) -> Option<(String, String)> {
         for p in &self.v2_directory_whitelist {
-            if let Some(name) = fname.strip_prefix(p)
+            if let Some(name) = full_name.strip_prefix(p)
+                && let len = name.len()
                 && let name = name.trim_start_matches('/')
-                && let Some(root) = name.find('/')
+                && name.len() < len
             {
-                let dir = p.to_string() + &name[..root];
-                let relative_path = name[root + 1..].trim_start_matches('/');
-                return Some((dir, relative_path.to_string()))
+                if let Some(fname_start) = name.find('/') {
+                    let dir = p.to_string() + &name[..fname_start];
+                    let relative_path = name[fname_start + 1..].trim_start_matches('/');
+                    return Some((dir, relative_path.to_string()))
+                } else {
+                    return Some((p.to_string() + name, String::new()))
+                }
             }
         }
         None
@@ -266,10 +279,10 @@ impl Dicts {
         };
         if info.is_none() {
             if let Some((dir, relative_path)) = self.parse_v2(fname) {
-                let mut dict = self.file_dict_v2.lock().unwrap();
+                let dict = self.file_dict_v2.lock().unwrap();
                 return dict.dirs.get(&dir).and_then(|dir_id| {
                     dict.dir_files
-                        .get(&dir_id)
+                        .get(dir_id)
                         .and_then(|files| files.files.get(&relative_path).cloned())
                 });
             }
@@ -290,16 +303,29 @@ impl Dicts {
             ..Default::default()
         };
         if let Some((dir, relative_path)) = self.parse_v2(fname) {
-            let mut dict = self.file_dict_v2.lock().unwrap();
-            let dir_id = *dict
-                .dirs
-                .entry(dir)
-                .or_insert_with(|| self.next_dir_id.fetch_add(1, Ordering::Relaxed));
-            dict.dir_files
-                .entry(dir_id)
-                .or_default()
-                .files
-                .insert(relative_path, file.clone());
+            let mut dict_file = self.file_dict_file_v2.lock().unwrap();
+            let mut new_dir_id = None;
+            let dir_id = {
+                let mut dict = self.file_dict_v2.lock().unwrap();
+                let dir_id = *dict.dirs.entry(dir.clone()).or_insert_with(|| {
+                    new_dir_id = Some(self.next_dir_id.fetch_add(1, Ordering::Relaxed));
+                    new_dir_id.unwrap()
+                });
+                dict.dir_files
+                    .entry(dir_id)
+                    .or_default()
+                    .files
+                    .insert(relative_path.clone(), file.clone());
+                dir_id
+            };
+            if let Some(id) = new_dir_id {
+                dict_file.add(DataKeyDictionaryItemV2::InsertDir(id, &dir))?;
+            }
+            dict_file.add(DataKeyDictionaryItemV2::InsertFile(
+                dir_id,
+                &relative_path,
+                &file,
+            ))?;
             return Ok(file);
         }
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
@@ -309,10 +335,7 @@ impl Dicts {
             file_dict.files.len() as _
         };
 
-        file_dict_file.add(&DataKeyDictionaryItem::Insert(
-            fname.to_owned(),
-            file.clone(),
-        ))?;
+        file_dict_file.add(DataKeyDictionaryItem::Insert(fname, &file))?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -346,7 +369,7 @@ impl Dicts {
             }
         };
 
-        file_dict_file.add(&DataKeyDictionaryItem::Remove(fname.to_owned()))?;
+        file_dict_file.add(DataKeyDictionaryItem::Remove(fname))?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
         if file.method != EncryptionMethod::Plaintext {
             debug!("delete encrypted file"; "fname" => fname);
@@ -383,7 +406,7 @@ impl Dicts {
                     "Clean stale file information in file dictionary: {:?}",
                     dst_fname
                 );
-                file_dict_file.add(&DataKeyDictionaryItem::Remove(dst_fname.to_owned()))?;
+                file_dict_file.add(DataKeyDictionaryItem::Remove(dst_fname))?;
                 let _ = file_dict.files.remove(dst_fname);
             }
 
@@ -392,10 +415,7 @@ impl Dicts {
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
         };
-        file_dict_file.add(&DataKeyDictionaryItem::Insert(
-            dst_fname.to_owned(),
-            file.clone(),
-        ))?;
+        file_dict_file.add(DataKeyDictionaryItem::Insert(dst_fname, &file))?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -469,30 +489,38 @@ impl Dicts {
 
     fn rename_dir(&self, src_name: &str, dst_name: &str) -> Result<()> {
         if let Some((dir, relative_path)) = self.parse_v2(src_name) {
-            let mut dict = self.file_dict_v2.lock().unwrap();
-            if let Some(&dir_id) = dict.dirs.get(&dir) {
-                if !relative_path.is_empty() {
-                    return Err(box_err!("Renaming from nested directory is not supported."));
-                }
-                if let Some((dst_dir, dst_relative)) = self.parse_v2(dst_name) {
-                    if !dst_relative.is_empty() {
-                        return Err(box_err!("Renaming to nested directory is not supported."));
-                    }
-                    dict.dirs.remove(&dir);
-                    dict.dirs.insert(dst_dir, dir_id);
-                } else {
-                    return Err(box_err!(
-                        "Renaming to non whitelisted directory is not supported."
-                    ));
-                }
+            if !relative_path.is_empty() {
+                return Err(box_err!("Renaming from nested directory is not supported."));
             }
-            // The directory doesn't contain any encrypted file.
+            if let Some((dst_dir, dst_relative)) = self.parse_v2(dst_name) {
+                if !dst_relative.is_empty() {
+                    return Err(box_err!("Renaming to nested directory is not supported."));
+                }
+                let mut dict_file = self.file_dict_file_v2.lock().unwrap();
+                let dir_id = {
+                    let mut dict = self.file_dict_v2.lock().unwrap();
+                    if let Some(&dir_id) = dict.dirs.get(&dir) {
+                        dict.dirs.remove(&dir);
+                        dict.dirs.insert(dst_dir.clone(), dir_id);
+                        dir_id
+                    } else {
+                        // The directory doesn't contain any encrypted file.
+                        return Ok(());
+                    }
+                };
+                dict_file.add(DataKeyDictionaryItemV2::InsertDir(dir_id, &dst_dir))?;
+                dict_file.add(DataKeyDictionaryItemV2::RemoveDirMapping(dir_id, &dir))?;
+                Ok(())
+            } else {
+                Err(box_err!(
+                    "Renaming to non whitelisted directory is not supported."
+                ))
+            }
         } else {
-            return Err(box_err!(
+            Err(box_err!(
                 "Renaming from non whitelisted directory is not supported."
-            ));
+            ))
         }
-        Ok(())
     }
 }
 
@@ -539,13 +567,14 @@ pub struct DataKeyManager {
     background_worker: Option<JoinHandle<()>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataKeyManagerArgs {
     pub method: EncryptionMethod,
     pub rotation_period: Duration,
     pub enable_file_dictionary_log: bool,
     pub file_dictionary_rewrite_threshold: u64,
     pub dict_path: String,
+    pub v2_directory_whitelist: Vec<String>,
 }
 
 impl DataKeyManagerArgs {
@@ -559,6 +588,7 @@ impl DataKeyManagerArgs {
             rotation_period: config.data_key_rotation_period.into(),
             enable_file_dictionary_log: config.enable_file_dictionary_log,
             file_dictionary_rewrite_threshold: config.file_dictionary_rewrite_threshold,
+            v2_directory_whitelist: Vec::new(),
         }
     }
 }
@@ -605,7 +635,7 @@ impl DataKeyManager {
                 let retain = f(fname);
                 if !retain {
                     file_dict_file
-                        .add(&DataKeyDictionaryItem::Remove(fname.clone()))
+                        .add(DataKeyDictionaryItem::Remove(fname))
                         .unwrap();
                 }
                 retain
@@ -628,6 +658,7 @@ impl DataKeyManager {
                 master_key,
                 args.enable_file_dictionary_log,
                 args.file_dictionary_rewrite_threshold,
+                args.v2_directory_whitelist.clone(),
             ),
             args.method,
         ) {
@@ -644,6 +675,7 @@ impl DataKeyManager {
                     args.rotation_period,
                     args.enable_file_dictionary_log,
                     args.file_dictionary_rewrite_threshold,
+                    args.v2_directory_whitelist.clone(),
                 )?))
             }
             // Encryption was enabled and master key didn't change.
@@ -677,6 +709,7 @@ impl DataKeyManager {
             previous_master_key,
             args.enable_file_dictionary_log,
             args.file_dictionary_rewrite_threshold,
+            args.v2_directory_whitelist.clone(),
         )
         .map_err(|e| {
             if let Error::WrongMasterKey(e_previous) = e {
@@ -860,6 +893,12 @@ impl DataKeyManager {
         Ok(Some(encrypted_file))
     }
 
+    #[allow(dead_code)]
+    fn rename_dir(&self, src_dname: &str, dst_dname: &str) -> IoResult<()> {
+        self.dicts.rename_dir(src_dname, dst_dname)?;
+        Ok(())
+    }
+
     /// Return which method this manager is using.
     pub fn encryption_method(&self) -> engine_traits::EncryptionMethod {
         crypter::to_engine_encryption_method(self.method)
@@ -938,9 +977,12 @@ mod tests {
     use test_util::create_test_key_file;
 
     use super::*;
-    use crate::master_key::{
-        tests::{decrypt_called, encrypt_called, MockBackend},
-        FileBackend, PlaintextBackend,
+    use crate::{
+        master_key::{
+            tests::{decrypt_called, encrypt_called, MockBackend},
+            FileBackend, PlaintextBackend,
+        },
+        to_engine_encryption_method,
     };
 
     lazy_static::lazy_static! {
@@ -978,6 +1020,7 @@ mod tests {
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 2,
             dict_path: tmp_dir.path().as_os_str().to_str().unwrap().to_string(),
+            v2_directory_whitelist: Vec::new(),
         }
     }
 
@@ -1551,8 +1594,6 @@ mod tests {
 
             generate_mock_file(Some(&manager), &path_to_file1, &content1);
             check_mock_file_content(Some(&manager), &path_to_file1, &content1);
-            // Close old manager
-            drop(manager);
         }
 
         // re-open with new encryption/plaintext algorithm.
@@ -1584,6 +1625,92 @@ mod tests {
             for to in method_list {
                 test_change_method(from, to)
             }
+        }
+    }
+
+    #[test]
+    fn test_rename_encrypted_directory() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let mut args = def_data_key_args(&tmp_dir);
+        let path = tmp_dir.path();
+        let (key_path, _tmp_key_dir) = create_key_file("key");
+        args.v2_directory_whitelist = vec![path.to_str().unwrap().to_owned()];
+        let method = to_engine_encryption_method(args.method);
+
+        {
+            let master_key_backend =
+                Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
+            let previous = new_mock_backend() as Box<dyn Backend>;
+            let manager = DataKeyManager::new(
+                master_key_backend,
+                Box::new(move || Ok(previous)),
+                args.clone(),
+            )
+            .unwrap()
+            .unwrap();
+            manager
+                .new_file(path.join("dir").join("foo").to_str().unwrap())
+                .unwrap();
+            manager
+                .new_file(path.join("dir").join("bar").to_str().unwrap())
+                .unwrap();
+            manager
+                .rename_dir(
+                    path.join("dir").to_str().unwrap(),
+                    path.join("dir1").to_str().unwrap(),
+                )
+                .unwrap();
+            assert_eq!(
+                manager
+                    .get_file(path.join("dir1").join("foo").to_str().unwrap())
+                    .unwrap()
+                    .method,
+                method
+            );
+            assert_eq!(
+                manager
+                    .get_file(path.join("dir1").join("bar").to_str().unwrap())
+                    .unwrap()
+                    .method,
+                method
+            );
+            assert_eq!(
+                manager
+                    .get_file_exists(path.join("dir").join("bar").to_str().unwrap())
+                    .unwrap(),
+                None
+            );
+        }
+        {
+            println!("reopen");
+            let master_key_backend =
+                Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
+            let previous = new_mock_backend() as Box<dyn Backend>;
+            let manager =
+                DataKeyManager::new(master_key_backend, Box::new(move || Ok(previous)), args)
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(
+                manager
+                    .get_file(path.join("dir1").join("foo").to_str().unwrap())
+                    .unwrap()
+                    .method,
+                method
+            );
+            assert_eq!(
+                manager
+                    .get_file(path.join("dir1").join("bar").to_str().unwrap())
+                    .unwrap()
+                    .method,
+                method
+            );
+            assert_eq!(
+                manager
+                    .get_file_exists(path.join("dir").join("bar").to_str().unwrap())
+                    .unwrap(),
+                None
+            );
         }
     }
 }

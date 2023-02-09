@@ -20,7 +20,7 @@ pub use self::{
     },
     encrypted_file::EncryptedFile,
     errors::{Error, Result, RetryCodedError},
-    file_dict_file::DictionaryFile,
+    file_dict_file::{DataKeyDictionaryItem, DictionaryFile},
     io::{
         create_aes_ctr_crypter, DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter,
     },
