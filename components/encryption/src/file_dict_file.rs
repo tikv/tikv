@@ -8,7 +8,7 @@ use std::{
 use byteorder::{BigEndian, ByteOrder};
 use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileDictionaryV2, FileInfo};
-use protobuf::Message;
+use protobuf::{parse_from_bytes, Message};
 use rand::{thread_rng, RngCore};
 use tikv_util::{box_err, set_panic_mark, warn};
 
@@ -19,28 +19,26 @@ use crate::{
 };
 
 pub trait DictionaryItem: Sized + Clone {
+    fn parse(buf: &mut &[u8]) -> Result<Self>;
+
     fn as_bytes(&self) -> Result<Vec<u8>>;
 
     fn is_tombstone(&self) -> bool;
 }
 
 pub trait ProtobufDictionary: Default + Message {
-    type Item<'a>: DictionaryItem;
+    type Item: DictionaryItem + std::fmt::Debug;
 
-    fn apply(&mut self, item: Self::Item<'_>) -> Result<()>;
-
-    // Consume the parsed item immediately. This makes it possible to only hold
-    // references in item.
-    fn parse_and_apply(&mut self, buf: &mut &[u8]) -> Result<()>;
+    fn apply(&mut self, item: Self::Item) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
-pub enum DataKeyDictionaryItem<'a> {
-    Insert(&'a str, &'a FileInfo),
-    Remove(&'a str),
+pub enum DataKeyDictionaryItem {
+    Insert(String, FileInfo),
+    Remove(String),
 }
 
-impl DataKeyDictionaryItem<'_> {
+impl DataKeyDictionaryItem {
     /// Header of record.
     ///
     /// ```text
@@ -58,7 +56,62 @@ impl DataKeyDictionaryItem<'_> {
     const RECORD_HEADER_SIZE: usize = 4 + 2 + 2 + 1;
 }
 
-impl DictionaryItem for DataKeyDictionaryItem<'_> {
+impl DictionaryItem for DataKeyDictionaryItem {
+    fn parse(buf: &mut &[u8]) -> Result<Self> {
+        if buf.len() < Self::RECORD_HEADER_SIZE {
+            warn!(
+                "file corrupted! record header size is too small, discarded the tail record";
+                "size" => buf.len(),
+            );
+            return Err(Error::TailRecordParseIncomplete);
+        }
+
+        // parse header
+        let crc32 = BigEndian::read_u32(&buf[0..4]);
+        let name_len = BigEndian::read_u16(&buf[4..6]) as usize;
+        let info_len = BigEndian::read_u16(&buf[6..8]) as usize;
+        let mode = buf[Self::RECORD_HEADER_SIZE - 1];
+        buf.consume(Self::RECORD_HEADER_SIZE);
+        if buf.len() < name_len + info_len {
+            warn!(
+                "file corrupted! record content size is too small, discarded the tail record";
+                "content size" => buf.len(),
+                "expected name length" => name_len,
+                "expected content length" =>info_len,
+            );
+            return Err(Error::TailRecordParseIncomplete);
+        }
+
+        // checksum crc32
+        let mut digest = crc32fast::Hasher::new();
+        digest.update(&buf[0..name_len + info_len]);
+        let crc32_checksum = digest.finalize();
+        if crc32_checksum != crc32 {
+            warn!(
+                "file corrupted! crc32 mismatch, discarded the tail record";
+                "expected crc32" => crc32,
+                "checksum crc32" => crc32_checksum,
+            );
+            return Err(Error::TailRecordParseIncomplete);
+        }
+
+        // read file name
+        let ret: Result<String> = String::from_utf8(buf[0..name_len].to_owned())
+            .map_err(|e| box_err!("parse file name failed: {:?}", e));
+        let file_name = ret?;
+        buf.consume(name_len);
+
+        let record = match mode {
+            2 => Self::Remove(file_name),
+            1 => {
+                let file_info = parse_from_bytes(&buf[0..info_len])?;
+                Self::Insert(file_name, file_info)
+            }
+            _ => return Err(box_err!("file corrupted! record type is unknown: {}", mode)),
+        };
+        Ok(record)
+    }
+
     fn as_bytes(&self) -> Result<Vec<u8>> {
         let mut header = vec![0; Self::RECORD_HEADER_SIZE];
         let mut content = Vec::new();
@@ -96,17 +149,15 @@ impl DictionaryItem for DataKeyDictionaryItem<'_> {
 }
 
 impl ProtobufDictionary for FileDictionary {
-    type Item<'a> = DataKeyDictionaryItem<'a>;
+    type Item = DataKeyDictionaryItem;
 
-    fn apply(&mut self, item: Self::Item<'_>) -> Result<()> {
+    fn apply(&mut self, item: Self::Item) -> Result<()> {
         match item {
             Self::Item::Insert(name, info) => {
-                println!("apply v1 insert {name}");
-                self.files.insert(name.to_owned(), info.clone());
+                self.files.insert(name, info);
             }
             Self::Item::Remove(name) => {
-                println!("apply v1 remove {name}");
-                let original = self.files.remove(name);
+                let original = self.files.remove(&name);
                 if original.is_none() {
                     return Err(box_err!(
                         "Try to recovery from log file but remove a null entry, file name: {}",
@@ -117,75 +168,18 @@ impl ProtobufDictionary for FileDictionary {
         }
         Ok(())
     }
-
-    fn parse_and_apply(&mut self, buf: &mut &[u8]) -> Result<()> {
-        if buf.len() < Self::Item::RECORD_HEADER_SIZE {
-            warn!(
-                "file corrupted! record header size is too small, discarded the tail record";
-                "size" => buf.len(),
-            );
-            return Err(Error::TailRecordParseIncomplete);
-        }
-
-        // parse header
-        let crc32 = BigEndian::read_u32(&buf[0..4]);
-        let name_len = BigEndian::read_u16(&buf[4..6]) as usize;
-        let info_len = BigEndian::read_u16(&buf[6..8]) as usize;
-        let mode = buf[Self::Item::RECORD_HEADER_SIZE - 1];
-        buf.consume(Self::Item::RECORD_HEADER_SIZE);
-        if buf.len() < name_len + info_len {
-            warn!(
-                "file corrupted! record content size is too small, discarded the tail record";
-                "content size" => buf.len(),
-                "expected name length" => name_len,
-                "expected content length" =>info_len,
-            );
-            return Err(Error::TailRecordParseIncomplete);
-        }
-
-        // checksum crc32
-        let mut digest = crc32fast::Hasher::new();
-        digest.update(&buf[0..name_len + info_len]);
-        let crc32_checksum = digest.finalize();
-        if crc32_checksum != crc32 {
-            warn!(
-                "file corrupted! crc32 mismatch, discarded the tail record";
-                "expected crc32" => crc32,
-                "checksum crc32" => crc32_checksum,
-            );
-            return Err(Error::TailRecordParseIncomplete);
-        }
-
-        // read file name
-        let ret: Result<String> = String::from_utf8(buf[0..name_len].to_owned())
-            .map_err(|e| box_err!("parse file name failed: {:?}", e));
-        let file_name = ret?;
-        buf.consume(name_len);
-
-        let mut file_info = FileInfo::default();
-        let record = match mode {
-            2 => Self::Item::Remove(&file_name),
-            1 => {
-                file_info.merge_from_bytes(&buf[0..info_len])?;
-                Self::Item::Insert(&file_name, &file_info)
-            }
-            _ => return Err(box_err!("file corrupted! record type is unknown: {}", mode)),
-        };
-
-        self.apply(record)
-    }
 }
 
-#[derive(Clone)]
-pub enum DataKeyDictionaryItemV2<'a> {
-    InsertFile(u64, &'a str, &'a FileInfo),
-    RemoveFile(u64, &'a str),
-    InsertDir(u64, &'a str),
-    RemoveDir(u64, &'a str),
-    RemoveDirMapping(u64, &'a str),
+#[derive(Debug, Clone)]
+pub enum DataKeyDictionaryItemV2 {
+    InsertFile(u64, String, FileInfo),
+    RemoveFile(u64, String),
+    InsertDir(u64, String),
+    RemoveDir(u64, String),
+    RemoveDirMapping(u64, String),
 }
 
-impl DataKeyDictionaryItemV2<'_> {
+impl DataKeyDictionaryItemV2 {
     /// Header of record.
     ///
     /// ```text
@@ -203,7 +197,77 @@ impl DataKeyDictionaryItemV2<'_> {
     const RECORD_HEADER_SIZE: usize = 4 + 1 + 8 + 2 + 2;
 }
 
-impl<'a> DictionaryItem for DataKeyDictionaryItemV2<'a> {
+impl DictionaryItem for DataKeyDictionaryItemV2 {
+    fn parse(buf: &mut &[u8]) -> Result<Self> {
+        if buf.len() < Self::RECORD_HEADER_SIZE {
+            warn!(
+                "file corrupted! record header size is too small, discarded the tail record";
+                "size" => buf.len(),
+            );
+            return Err(Error::TailRecordParseIncomplete);
+        }
+
+        // parse header
+        let crc32 = BigEndian::read_u32(&buf[0..4]);
+        let op = buf[4];
+        let dir_id = BigEndian::read_u64(&buf[5..13]);
+        let name_len = BigEndian::read_u16(&buf[13..15]) as usize;
+        let info_len = BigEndian::read_u16(&buf[15..17]) as usize;
+        let total_len = Self::RECORD_HEADER_SIZE + name_len + info_len;
+        if buf.len() < total_len {
+            warn!(
+                "file corrupted! record content size is too small, discarded the tail record";
+                "content size" => buf.len(),
+                "expected name length" => name_len,
+                "expected content length" => info_len,
+            );
+            return Err(Error::TailRecordParseIncomplete);
+        }
+        // checksum crc32
+        let mut digest = crc32fast::Hasher::new();
+        digest.update(&buf[4..total_len]);
+        let crc32_checksum = digest.finalize();
+        if crc32_checksum != crc32 {
+            warn!(
+                "file corrupted! crc32 mismatch, discarded the tail record";
+                "expected crc32" => crc32,
+                "checksum crc32" => crc32_checksum,
+            );
+            return Err(Error::TailRecordParseIncomplete);
+        }
+        buf.consume(Self::RECORD_HEADER_SIZE);
+        // read file/dir name
+        let name = String::from_utf8(buf[0..name_len].to_owned())
+            .map_err(|e| -> Error { box_err!("parse file name failed: {:?}", e) })?;
+        buf.consume(name_len);
+        let item = match op {
+            1 => {
+                assert!(!name.is_empty());
+                let file_info = parse_from_bytes(&buf[0..info_len])?;
+                buf.consume(info_len);
+                Self::InsertFile(dir_id, name, file_info)
+            }
+            2 => {
+                assert!(!name.is_empty() && info_len == 0);
+                Self::RemoveFile(dir_id, name)
+            }
+            3 => {
+                assert!(!name.is_empty() && info_len == 0);
+                Self::InsertDir(dir_id, name)
+            }
+            4 => {
+                assert!(!name.is_empty() && info_len == 0);
+                Self::RemoveDir(dir_id, name)
+            }
+            5 => {
+                assert!(!name.is_empty() && info_len == 0);
+                Self::RemoveDirMapping(dir_id, name)
+            }
+            _ => return Err(box_err!("file corrupted! record type is unknown: {}", op)),
+        };
+        Ok(item)
+    }
+
     fn as_bytes(&self) -> Result<Vec<u8>> {
         let mut buf = vec![0; Self::RECORD_HEADER_SIZE];
         let (name_len, info_len) = match self {
@@ -264,114 +328,36 @@ impl<'a> DictionaryItem for DataKeyDictionaryItemV2<'a> {
 }
 
 impl ProtobufDictionary for FileDictionaryV2 {
-    type Item<'a> = DataKeyDictionaryItemV2<'a>;
-    fn apply(&mut self, item: Self::Item<'_>) -> Result<()> {
+    type Item = DataKeyDictionaryItemV2;
+
+    fn apply(&mut self, item: Self::Item) -> Result<()> {
         match item {
             Self::Item::InsertFile(dir_id, name, info) => {
-                println!("apply v2 insert {dir_id} {name}");
                 self.dir_files
                     .entry(dir_id)
                     .or_default()
                     .files
-                    .insert(name.to_owned(), info.clone());
+                    .insert(name, info);
             }
             Self::Item::RemoveFile(dir_id, name) => {
-                println!("apply v2 remove {dir_id} {name}");
                 if let Some(files) = self.dir_files.get_mut(&dir_id) {
-                    files.files.remove(name);
+                    files.files.remove(&name);
                 } else {
                     return Err(box_err!("directory not found: {dir_id} {name}"));
                 }
             }
             Self::Item::InsertDir(dir_id, name) => {
-                println!("apply v2 insert dir {dir_id} {name}");
-                self.dirs.insert(name.to_owned(), dir_id);
+                self.dirs.insert(name, dir_id);
             }
             Self::Item::RemoveDir(dir_id, name) => {
-                println!("apply v2 remove dir {dir_id} {name}");
-                self.dirs.remove(name);
+                self.dirs.remove(&name);
                 self.dir_files.remove(&dir_id);
             }
-            Self::Item::RemoveDirMapping(dir_id, name) => {
-                println!("apply v2 remove dir mapping {dir_id} {name}");
-                self.dirs.remove(name);
+            Self::Item::RemoveDirMapping(_dir_id, name) => {
+                self.dirs.remove(&name);
             }
         }
         Ok(())
-    }
-
-    fn parse_and_apply(&mut self, buf: &mut &[u8]) -> Result<()> {
-        if buf.len() < Self::Item::RECORD_HEADER_SIZE {
-            warn!(
-                "file corrupted! record header size is too small, discarded the tail record";
-                "size" => buf.len(),
-            );
-            println!("exit 1");
-            return Err(Error::TailRecordParseIncomplete);
-        }
-
-        // parse header
-        let crc32 = BigEndian::read_u32(&buf[0..4]);
-        let op = buf[4];
-        let dir_id = BigEndian::read_u64(&buf[5..13]);
-        let name_len = BigEndian::read_u16(&buf[13..15]) as usize;
-        let info_len = BigEndian::read_u16(&buf[15..17]) as usize;
-        let total_len = Self::Item::RECORD_HEADER_SIZE + name_len + info_len;
-        if buf.len() < total_len {
-            warn!(
-                "file corrupted! record content size is too small, discarded the tail record";
-                "content size" => buf.len(),
-                "expected name length" => name_len,
-                "expected content length" => info_len,
-            );
-            println!("exit 2");
-            return Err(Error::TailRecordParseIncomplete);
-        }
-        // checksum crc32
-        let mut digest = crc32fast::Hasher::new();
-        digest.update(&buf[4..total_len]);
-        let crc32_checksum = digest.finalize();
-        if crc32_checksum != crc32 {
-            warn!(
-                "file corrupted! crc32 mismatch, discarded the tail record";
-                "expected crc32" => crc32,
-                "checksum crc32" => crc32_checksum,
-            );
-            println!("exit 3");
-            return Err(Error::TailRecordParseIncomplete);
-        }
-        buf.consume(Self::Item::RECORD_HEADER_SIZE);
-        // read file/dir name
-        let name = String::from_utf8(buf[0..name_len].to_owned())
-            .map_err(|e| -> Error { box_err!("parse file name failed: {:?}", e) })?;
-        buf.consume(name_len);
-        let mut file_info = FileInfo::default();
-        let item = match op {
-            1 => {
-                assert!(!name.is_empty());
-                file_info.merge_from_bytes(&buf[0..info_len])?;
-                buf.consume(info_len);
-                Self::Item::InsertFile(dir_id, &name, &file_info)
-            }
-            2 => {
-                assert!(!name.is_empty() && info_len == 0);
-                Self::Item::RemoveFile(dir_id, &name)
-            }
-            3 => {
-                assert!(!name.is_empty() && info_len == 0);
-                Self::Item::InsertDir(dir_id, &name)
-            }
-            4 => {
-                assert!(!name.is_empty() && info_len == 0);
-                Self::Item::RemoveDir(dir_id, &name)
-            }
-            5 => {
-                assert!(!name.is_empty() && info_len == 0);
-                Self::Item::RemoveDirMapping(dir_id, &name)
-            }
-            _ => return Err(box_err!("file corrupted! record type is unknown: {}", op)),
-        };
-        self.apply(item)
     }
 }
 
@@ -499,7 +485,6 @@ impl<T: ProtobufDictionary> DictionaryFile<T> {
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         self.file_size = buf.len();
-        println!("recover got {} bytes", self.file_size);
 
         // parse the file dictionary
         let (header, content, mut remained) = Header::parse(buf.as_slice())?;
@@ -513,17 +498,19 @@ impl<T: ProtobufDictionary> DictionaryFile<T> {
             }
             Version::V2 => {
                 dict.merge_from_bytes(content)?;
-                let mut last_record_name = String::new();
+                let mut last_item = None;
                 // parse the remained records
                 while !remained.is_empty() {
                     // If the parsing get errors, manual intervention is required to recover.
-                    match dict.parse_and_apply(&mut remained) {
+                    match T::Item::parse(&mut remained).and_then(|item| {
+                        last_item = Some(item.clone());
+                        dict.apply(item)
+                    }) {
                         Err(e @ Error::TailRecordParseIncomplete) => {
                             warn!(
-                                "{:?} occurred and the last complete filename is {}",
-                                e, last_record_name
+                                "{:?} occurred and the last complete filename is {:?}",
+                                e, last_item
                             );
-                            println!("tail incomplete");
                             break;
                         }
                         Err(e) => {
@@ -545,7 +532,7 @@ impl<T: ProtobufDictionary> DictionaryFile<T> {
     ///
     /// Warning: `self.write(file_dict)` must be called before.
     // pub fn insert(&mut self, name: &str, info: &FileInfo) -> Result<()> {
-    pub fn add(&mut self, item: T::Item<'_>) -> Result<()> {
+    pub fn add(&mut self, item: T::Item) -> Result<()> {
         self.dict.apply(item.clone())?;
         if self.enable_log {
             let file = self.append_file.as_mut().unwrap();
@@ -606,13 +593,22 @@ mod tests {
         let info5 = create_file_info(3, EncryptionMethod::Aes128Ctr);
 
         file_dict_file
-            .add(DataKeyDictionaryItem::Insert("info1", &info1))
+            .add(DataKeyDictionaryItem::Insert(
+                "info1".to_owned(),
+                info1.clone(),
+            ))
             .unwrap();
         file_dict_file
-            .add(DataKeyDictionaryItem::Insert("info2", &info2))
+            .add(DataKeyDictionaryItem::Insert(
+                "info2".to_owned(),
+                info2.clone(),
+            ))
             .unwrap();
         file_dict_file
-            .add(DataKeyDictionaryItem::Insert("info3", &info3))
+            .add(DataKeyDictionaryItem::Insert(
+                "info3".to_owned(),
+                info3.clone(),
+            ))
             .unwrap();
 
         file_dict_file.recovery().unwrap();
@@ -623,13 +619,16 @@ mod tests {
         assert_eq!(file_dict_file.dict().files.len(), 3);
 
         file_dict_file
-            .add(DataKeyDictionaryItem::Remove("info2"))
+            .add(DataKeyDictionaryItem::Remove("info2".to_owned()))
             .unwrap();
         file_dict_file
-            .add(DataKeyDictionaryItem::Remove("info1"))
+            .add(DataKeyDictionaryItem::Remove("info1".to_owned()))
             .unwrap();
         file_dict_file
-            .add(DataKeyDictionaryItem::Insert("info2", &info4))
+            .add(DataKeyDictionaryItem::Insert(
+                "info2".to_owned(),
+                info4.clone(),
+            ))
             .unwrap();
 
         file_dict_file.recovery().unwrap();
@@ -639,10 +638,13 @@ mod tests {
         assert_eq!(file_dict_file.dict().files.len(), 2);
 
         file_dict_file
-            .add(DataKeyDictionaryItem::Insert("info5", &info5))
+            .add(DataKeyDictionaryItem::Insert(
+                "info5".to_owned(),
+                info5.clone(),
+            ))
             .unwrap();
         file_dict_file
-            .add(DataKeyDictionaryItem::Remove("info3"))
+            .add(DataKeyDictionaryItem::Remove("info3".to_owned()))
             .unwrap();
 
         file_dict_file.recovery().unwrap();
@@ -675,7 +677,10 @@ mod tests {
 
         let info = create_file_info(1, EncryptionMethod::Aes256Ctr);
         file_dict_file
-            .add(DataKeyDictionaryItem::Insert("info", &info))
+            .add(DataKeyDictionaryItem::Insert(
+                "info".to_owned(),
+                info.clone(),
+            ))
             .unwrap();
 
         let file = DictionaryFile::<FileDictionary>::open(
@@ -767,21 +772,37 @@ mod tests {
             .unwrap();
 
             file_dict
-                .add(DataKeyDictionaryItem::Insert("f1", &info1))
+                .add(DataKeyDictionaryItem::Insert(
+                    "f1".to_owned(),
+                    info1.clone(),
+                ))
                 .unwrap();
             file_dict
-                .add(DataKeyDictionaryItem::Insert("f2", &info2))
+                .add(DataKeyDictionaryItem::Insert(
+                    "f2".to_owned(),
+                    info2
+                ))
                 .unwrap();
             file_dict
-                .add(DataKeyDictionaryItem::Insert("f3", &info3))
+                .add(DataKeyDictionaryItem::Insert(
+                    "f3".to_owned(),
+                    info3
+                ))
                 .unwrap();
 
             file_dict
-                .add(DataKeyDictionaryItem::Insert("f4", &info4))
+                .add(DataKeyDictionaryItem::Insert(
+                    "f4".to_owned(),
+                    info4.clone(),
+                ))
                 .unwrap();
-            file_dict.add(DataKeyDictionaryItem::Remove("f3")).unwrap();
+            file_dict
+                .add(DataKeyDictionaryItem::Remove("f3".to_owned()))
+                .unwrap();
 
-            file_dict.add(DataKeyDictionaryItem::Remove("f2")).unwrap();
+            file_dict
+                .add(DataKeyDictionaryItem::Remove("f2".to_owned()))
+                .unwrap();
         }
         // Try open as v1 file. Should fail.
         {

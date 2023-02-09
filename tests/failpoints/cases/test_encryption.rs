@@ -20,11 +20,11 @@ fn test_file_dict_file_record_corrupted() {
     // Log type (1 bytes)
     fail::cfg("file_dict_log_append_incomplete", "return(9)").unwrap();
     file_dict_file
-        .add(DataKeyDictionaryItem::Insert("info1", &info1))
+        .add(DataKeyDictionaryItem::Insert("info1".to_owned(), info1))
         .unwrap();
     fail::remove("file_dict_log_append_incomplete");
     file_dict_file
-        .add(DataKeyDictionaryItem::Insert("info2", &info2))
+        .add(DataKeyDictionaryItem::Insert("info2".to_owned(), info2))
         .unwrap();
     // Intermediate record damage is not allowed.
     file_dict_file.recovery().unwrap_err();
@@ -39,11 +39,11 @@ fn test_file_dict_file_record_corrupted() {
     let info1 = create_file_info(1, EncryptionMethod::Aes256Ctr);
     let info2 = create_file_info(2, EncryptionMethod::Unknown);
     file_dict_file
-        .add(DataKeyDictionaryItem::Insert("info1", &info1))
+        .add(DataKeyDictionaryItem::Insert("info1".to_owned(), info1.clone()))
         .unwrap();
     fail::cfg("file_dict_log_append_incomplete", "return(9)").unwrap();
     file_dict_file
-        .add(DataKeyDictionaryItem::Insert("info2", &info2))
+        .add(DataKeyDictionaryItem::Insert("info2".to_owned(), info2))
         .unwrap();
     fail::remove("file_dict_log_append_incomplete");
     // The ending record can be discarded.

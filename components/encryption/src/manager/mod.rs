@@ -132,7 +132,6 @@ impl Dicts {
             // Both files are found.
             (Ok(file_dict_file), Ok(key_bytes)) => {
                 info!("encryption: found both of key dictionary and file dictionary.");
-                println!("found both of key dict and file dict");
                 let key_dict: KeyDictionary = parse_from_bytes(&key_bytes)?;
                 let current_key_id = AtomicU64::new(key_dict.current_key_id);
                 ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
@@ -150,7 +149,6 @@ impl Dicts {
                     Ok(d) => d,
                     // Upgraded from an older version.
                     Err(Error::Io(e)) if e.kind() == ErrorKind::NotFound => {
-                        println!("create v2 file dict");
                         DictionaryFile::<FileDictionaryV2>::new(
                             base,
                             FILE_DICT_V2_NAME,
@@ -163,7 +161,6 @@ impl Dicts {
                 let file_dict_v2 = file_dict_file_v2.dict().clone();
                 let mut max_dir_id = 0;
                 for (dir_id, files) in &file_dict_v2.dir_files {
-                    println!("getting dir id {dir_id}");
                     max_dir_id = std::cmp::max(*dir_id, max_dir_id);
                     total_files += files.files.len();
                 }
@@ -319,12 +316,12 @@ impl Dicts {
                 dir_id
             };
             if let Some(id) = new_dir_id {
-                dict_file.add(DataKeyDictionaryItemV2::InsertDir(id, &dir))?;
+                dict_file.add(DataKeyDictionaryItemV2::InsertDir(id, dir))?;
             }
             dict_file.add(DataKeyDictionaryItemV2::InsertFile(
                 dir_id,
-                &relative_path,
-                &file,
+                relative_path,
+                file.clone(),
             ))?;
             return Ok(file);
         }
@@ -335,7 +332,10 @@ impl Dicts {
             file_dict.files.len() as _
         };
 
-        file_dict_file.add(DataKeyDictionaryItem::Insert(fname, &file))?;
+        file_dict_file.add(DataKeyDictionaryItem::Insert(
+            fname.to_owned(),
+            file.clone(),
+        ))?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -369,7 +369,7 @@ impl Dicts {
             }
         };
 
-        file_dict_file.add(DataKeyDictionaryItem::Remove(fname))?;
+        file_dict_file.add(DataKeyDictionaryItem::Remove(fname.to_owned()))?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
         if file.method != EncryptionMethod::Plaintext {
             debug!("delete encrypted file"; "fname" => fname);
@@ -406,7 +406,7 @@ impl Dicts {
                     "Clean stale file information in file dictionary: {:?}",
                     dst_fname
                 );
-                file_dict_file.add(DataKeyDictionaryItem::Remove(dst_fname))?;
+                file_dict_file.add(DataKeyDictionaryItem::Remove(dst_fname.to_owned()))?;
                 let _ = file_dict.files.remove(dst_fname);
             }
 
@@ -415,7 +415,7 @@ impl Dicts {
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
         };
-        file_dict_file.add(DataKeyDictionaryItem::Insert(dst_fname, &file))?;
+        file_dict_file.add(DataKeyDictionaryItem::Insert(dst_fname.to_owned(), file))?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -508,8 +508,8 @@ impl Dicts {
                         return Ok(());
                     }
                 };
-                dict_file.add(DataKeyDictionaryItemV2::InsertDir(dir_id, &dst_dir))?;
-                dict_file.add(DataKeyDictionaryItemV2::RemoveDirMapping(dir_id, &dir))?;
+                dict_file.add(DataKeyDictionaryItemV2::InsertDir(dir_id, dst_dir))?;
+                dict_file.add(DataKeyDictionaryItemV2::RemoveDirMapping(dir_id, dir))?;
                 Ok(())
             } else {
                 Err(box_err!(
@@ -635,7 +635,7 @@ impl DataKeyManager {
                 let retain = f(fname);
                 if !retain {
                     file_dict_file
-                        .add(DataKeyDictionaryItem::Remove(fname))
+                        .add(DataKeyDictionaryItem::Remove(fname.to_owned()))
                         .unwrap();
                 }
                 retain
@@ -1683,7 +1683,6 @@ mod tests {
             );
         }
         {
-            println!("reopen");
             let master_key_backend =
                 Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
             let previous = new_mock_backend() as Box<dyn Backend>;
