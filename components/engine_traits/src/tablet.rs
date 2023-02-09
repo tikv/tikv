@@ -146,7 +146,7 @@ pub trait TabletFactory<EK>: Send + Sync {
     /// Check if the tablet with specified path exists
     fn exists(&self, path: &Path) -> bool;
 
-    /// Test only
+    #[cfg(any(test, feature = "testexport"))]
     fn set_state_storage(&self, _: Arc<dyn StateStorage>) {
         unimplemented!()
     }

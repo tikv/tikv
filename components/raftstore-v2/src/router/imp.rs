@@ -157,7 +157,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
         self.local_reader.snapshot(req)
     }
 
-    // test only
+    #[cfg(any(test, feature = "testexport"))]
     pub fn new_with_store_meta(
         router: StoreRouter<EK, ER>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,

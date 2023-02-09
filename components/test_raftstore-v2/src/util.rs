@@ -1,20 +1,28 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Write, sync::Arc, time::Duration};
+use std::{fmt::Write, sync::Arc, thread, time::Duration};
 
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
+use kvproto::kvrpcpb::Context;
 use rand::RngCore;
 use server::server2::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_raftstore::{new_put_cf_cmd, Config};
-use tikv::{server::KvEngineFactoryBuilder, storage::config::EngineType};
+use tikv::{
+    server::KvEngineFactoryBuilder,
+    storage::{
+        config::EngineType,
+        kv::{SnapContext, SnapshotExt},
+        Engine, Snapshot,
+    },
+};
 use tikv_util::{config::ReadableDuration, worker::LazyWorker};
 
-use crate::{bootstrap_store, cluster::Cluster, Simulator};
+use crate::{bootstrap_store, cluster::Cluster, ServerCluster, Simulator};
 
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
@@ -150,4 +158,35 @@ pub fn configure_for_lease_read_v2<T: Simulator>(
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
 
     election_timeout
+}
+
+pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64) {
+    let mut storage = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&node_id)
+        .unwrap()
+        .clone();
+    let region_id = 1;
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let epoch = cluster.get_region_epoch(region_id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader);
+    ctx.set_region_epoch(epoch);
+    let snap_ctx = SnapContext {
+        pb_ctx: &ctx,
+        ..Default::default()
+    };
+    let snapshot = storage.snapshot(snap_ctx).unwrap();
+    let txn_ext = snapshot.txn_ext.clone().unwrap();
+    for retry in 0..10 {
+        if txn_ext.is_max_ts_synced() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1 << retry));
+    }
+    assert!(snapshot.ext().is_max_ts_synced());
 }

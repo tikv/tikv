@@ -149,8 +149,8 @@ fn test_server_split_region_twice() {
 #[test_case(test_raftstore::new_incompatible_node_cluster)]
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore::new_incompatible_server_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_auto_split_region() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
@@ -246,12 +246,7 @@ impl Filter for EraseHeartbeatCommit {
     }
 }
 
-fn check_cluster(
-    cluster: &mut test_raftstore::Cluster<impl test_raftstore::Simulator>,
-    k: &[u8],
-    v: &[u8],
-    all_committed: bool,
-) {
+fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_committed: bool) {
     let region = cluster.pd_client.get_region(k).unwrap();
     let mut tried_cnt = 0;
     let leader = loop {

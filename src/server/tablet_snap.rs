@@ -462,7 +462,7 @@ impl<R: RaftExtension> Runnable for TabletRunner<R> {
 }
 
 // A helper function to copy snapshot.
-// Only used in tests.
+#[cfg(any(test, feature = "testexport"))]
 pub fn copy_tablet_snapshot(
     key: TabletSnapKey,
     msg: RaftMessage,

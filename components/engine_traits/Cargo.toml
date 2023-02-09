@@ -6,6 +6,7 @@ publish = false
 
 [features]
 failpoints = ["fail/failpoints"]
+testexport = []
 
 [dependencies]
 case_macros = { workspace = true }

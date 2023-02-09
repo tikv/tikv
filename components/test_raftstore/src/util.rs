@@ -46,7 +46,14 @@ use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
+use tikv::{
+    config::*,
+    server::KvEngineFactoryBuilder,
+    storage::{
+        kv::{SnapContext, SnapshotExt},
+        point_key_range, Engine, Snapshot,
+    },
+};
 pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
 use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
 use txn_types::Key;
@@ -1382,4 +1389,35 @@ pub fn peer_on_store(region: &metapb::Region, store_id: u64) -> metapb::Peer {
         .find(|p| p.get_store_id() == store_id)
         .unwrap()
         .clone()
+}
+
+pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64) {
+    let mut storage = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&node_id)
+        .unwrap()
+        .clone();
+    let region_id = 1;
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let epoch = cluster.get_region_epoch(region_id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader);
+    ctx.set_region_epoch(epoch);
+    let snap_ctx = SnapContext {
+        pb_ctx: &ctx,
+        ..Default::default()
+    };
+    let snapshot = storage.snapshot(snap_ctx).unwrap();
+    let txn_ext = snapshot.txn_ext.clone().unwrap();
+    for retry in 0..10 {
+        if txn_ext.is_max_ts_synced() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1 << retry));
+    }
+    assert!(snapshot.ext().is_max_ts_synced());
 }

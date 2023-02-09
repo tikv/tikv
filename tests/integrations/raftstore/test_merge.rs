@@ -5,7 +5,6 @@ use std::{iter::*, sync::*, thread, time::*};
 use api_version::{test_kv_format_impl, KvFormat};
 use engine_traits::{Peekable, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::{
-    kvrpcpb::Context,
     raft_cmdpb::CmdType,
     raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
 };
@@ -13,10 +12,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
-use tikv::storage::{
-    kv::{SnapContext, SnapshotExt},
-    Engine, Snapshot,
-};
+use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, HandyRwLock};
 use txn_types::{Key, PessimisticLock};
 
@@ -1166,45 +1162,14 @@ fn test_sync_max_ts_after_region_merge_impl<F: KvFormat>() {
     let right = cluster.get_region(b"k3");
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    let mut storage = cluster
-        .sim
-        .read()
-        .unwrap()
-        .storages
-        .get(&1)
-        .unwrap()
-        .clone();
-    let mut wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
-        let region_id = right.get_id();
-        let leader = cluster.leader_of_region(region_id).unwrap();
-        let epoch = cluster.get_region_epoch(region_id);
-        let mut ctx = Context::default();
-        ctx.set_region_id(region_id);
-        ctx.set_peer(leader);
-        ctx.set_region_epoch(epoch);
-        let snap_ctx = SnapContext {
-            pb_ctx: &ctx,
-            ..Default::default()
-        };
-        let snapshot = storage.snapshot(snap_ctx).unwrap();
-        let txn_ext = snapshot.txn_ext.clone().unwrap();
-        for retry in 0..10 {
-            if txn_ext.is_max_ts_synced() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(1 << retry));
-        }
-        assert!(snapshot.ext().is_max_ts_synced());
-    };
-
-    wait_for_synced(&mut cluster);
+    wait_for_synced(&mut cluster, 1);
     let max_ts = cm.max_ts();
 
     cluster.pd_client.trigger_tso_failure();
     // Merge left to right
     cluster.pd_client.must_merge(left.get_id(), right.get_id());
 
-    wait_for_synced(&mut cluster);
+    wait_for_synced(&mut cluster, 1);
     let new_max_ts = cm.max_ts();
     assert!(new_max_ts > max_ts);
 }
