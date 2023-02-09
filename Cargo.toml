@@ -13,7 +13,7 @@ publish = false
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
-trace-tablet-lifetime = ["engine_rocks/trace-lifetime", "lazy_static"]
+trace-tablet-lifetime = ["engine_rocks/trace-lifetime"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -109,7 +109,7 @@ itertools = "0.10"
 keyed_priority_queue = "0.4"
 keys = { workspace = true }
 kvproto = { workspace = true }
-lazy_static = { version = "1.3", optional = true }
+lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
