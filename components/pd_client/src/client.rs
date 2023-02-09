@@ -273,7 +273,7 @@ fn get_region_resp_by_id(
     pd_client: Arc<Client>,
     header: pdpb::RequestHeader,
     region_id: u64,
-) -> PdFuture<Option<pdpb::GetRegionResponse>> {
+) -> PdFuture<pdpb::GetRegionResponse> {
     let timer = Instant::now();
     let mut req = pdpb::GetRegionByIdRequest::default();
     req.set_header(header);
@@ -295,7 +295,7 @@ fn get_region_resp_by_id(
                 .get_region_by_id
                 .observe(timer.saturating_elapsed_secs());
             check_resp_header(resp.get_header())?;
-            Ok(Some(resp))
+            Ok(resp)
         }) as PdFuture<_>
     };
 
@@ -566,12 +566,11 @@ impl PdClient for RpcClient {
         let pd_client = self.pd_client.clone();
         Box::pin(async move {
             let mut resp = get_region_resp_by_id(pd_client, header, region_id).await?;
-            if let Some(r) = resp.as_mut() {
-                if r.has_buckets() {
-                    return Ok(Some(r.take_buckets()));
-                }
+            if resp.has_buckets() {
+                Ok(Some(resp.take_buckets()))
+            } else {
+                Ok(None)
             }
-            Ok(None)
         }) as PdFuture<Option<_>>
     }
 
@@ -580,12 +579,11 @@ impl PdClient for RpcClient {
         let pd_client = self.pd_client.clone();
         Box::pin(async move {
             let mut resp = get_region_resp_by_id(pd_client, header, region_id).await?;
-            if let Some(r) = resp.as_mut() {
-                if r.has_region() {
-                    return Ok(Some(r.take_region()));
-                }
+            if resp.has_region() {
+                Ok(Some(resp.take_region()))
+            } else {
+                Ok(None)
             }
-            Ok(None)
         })
     }
 
@@ -596,13 +594,12 @@ impl PdClient for RpcClient {
         let header = self.header();
         let pd_client = self.pd_client.clone();
         Box::pin(async move {
-            let mut r = get_region_resp_by_id(pd_client, header, region_id).await?;
-            if let Some(resp) = r.as_mut() {
-                if resp.has_region() && resp.has_leader() {
-                    return Ok(Some((resp.take_region(), resp.take_leader())));
-                }
+            let mut resp = get_region_resp_by_id(pd_client, header, region_id).await?;
+            if resp.has_region() && resp.has_leader() {
+                Ok(Some((resp.take_region(), resp.take_leader())))
+            } else {
+                Ok(None)
             }
-            Ok(None)
         })
     }
 
