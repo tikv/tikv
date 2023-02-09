@@ -13,7 +13,9 @@ use collections::HashMap;
 use kvproto::metapb::Region;
 use tikv_util::box_err;
 
-use crate::{Error, FlushState, Result, StateStorage};
+#[cfg(any(test, feature = "testexport"))]
+use crate::StateStorage;
+use crate::{Error, FlushState, Result};
 
 #[derive(Debug)]
 struct LatestTablet<EK> {

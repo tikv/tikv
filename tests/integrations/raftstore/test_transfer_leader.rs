@@ -230,7 +230,7 @@ fn test_sync_max_ts_after_leader_transfer() {
         cluster.must_transfer_leader(1, new_peer(1, 1));
         // Give some time for leader to commit the first entry
         thread::sleep(Duration::from_millis(100));
-        wait_for_synced(&mut cluster, 1);
+        wait_for_synced(&mut cluster, 1, 1);
         let max_ts = cm.max_ts();
 
         cluster.pd_client.trigger_tso_failure();
@@ -238,7 +238,7 @@ fn test_sync_max_ts_after_leader_transfer() {
         cluster.must_transfer_leader(1, new_peer(2, 2));
         cluster.must_transfer_leader(1, new_peer(1, 1));
 
-        wait_for_synced(&mut cluster, 1);
+        wait_for_synced(&mut cluster, 1, 1);
         let new_max_ts = cm.max_ts();
         assert!(new_max_ts > max_ts);
     }

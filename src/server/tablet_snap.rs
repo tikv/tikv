@@ -1,9 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[cfg(any(test, feature = "testexport"))]
+use std::io;
 use std::{
     convert::{TryFrom, TryInto},
     fs::{self, File},
-    io::{self, Read, Write},
+    io::{Read, Write},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,

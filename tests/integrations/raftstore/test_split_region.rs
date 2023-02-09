@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{Peekable, CF_DEFAULT, CF_WRITE};
+use engine_traits::{Iterable, Peekable, CF_DEFAULT, CF_WRITE};
 use keys::data_key;
 use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
@@ -145,15 +145,7 @@ fn test_server_split_region_twice() {
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore::new_incompatible_node_cluster)]
-#[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore::new_incompatible_server_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_server_cluster)]
-fn test_auto_split_region() {
-    let count = 5;
-    let mut cluster = new_cluster(0, count);
+fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(REGION_MAX_SIZE));
     cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(REGION_SPLIT_SIZE));
@@ -167,7 +159,7 @@ fn test_auto_split_region() {
 
     let region = pd_client.get_region(b"").unwrap();
 
-    let last_key = put_till_size(&mut cluster, REGION_SPLIT_SIZE, &mut range);
+    let last_key = put_till_size(cluster, REGION_SPLIT_SIZE, &mut range);
 
     // it should be finished in millis if split.
     thread::sleep(Duration::from_millis(300));
@@ -177,7 +169,7 @@ fn test_auto_split_region() {
     assert_eq!(region, target);
 
     let max_key = put_cf_till_size(
-        &mut cluster,
+        cluster,
         CF_WRITE,
         REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
         &mut range,
@@ -203,9 +195,9 @@ fn test_auto_split_region() {
     let leader = cluster.leader_of_region(left.get_id()).unwrap();
     let store_id = leader.get_store_id();
     let mut size = 0;
-    cluster
+    cluster.engines[&store_id]
+        .kv
         .scan(
-            store_id,
             CF_DEFAULT,
             &data_key(b""),
             &data_key(middle_key),
@@ -229,6 +221,34 @@ fn test_auto_split_region() {
         .unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
+}
+
+#[test]
+fn test_node_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
+fn test_incompatible_node_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_node_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
+fn test_server_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
+fn test_incompatible_server_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_server_cluster(0, count);
+    test_auto_split_region(&mut cluster);
 }
 
 // A filter that disable commitment by heartbeat.

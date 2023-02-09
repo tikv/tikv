@@ -628,8 +628,7 @@ fn test_conf_change_remove_leader() {
     cluster.must_put(b"k1", b"v1");
 
     // Try to remove leader, which should be ignored.
-    let res =
-        call_conf_change!(&mut cluster, r1, ConfChangeType::RemoveNode, new_peer(1, 1)).unwrap();
+    let res = call_conf_change!(cluster, r1, ConfChangeType::RemoveNode, new_peer(1, 1)).unwrap();
     assert!(
         res.get_header()
             .get_error()

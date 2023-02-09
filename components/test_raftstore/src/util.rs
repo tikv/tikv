@@ -1391,7 +1391,7 @@ pub fn peer_on_store(region: &metapb::Region, store_id: u64) -> metapb::Peer {
         .clone()
 }
 
-pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64) {
+pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64, region_id: u64) {
     let mut storage = cluster
         .sim
         .read()
@@ -1400,7 +1400,6 @@ pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64) {
         .get(&node_id)
         .unwrap()
         .clone();
-    let region_id = 1;
     let leader = cluster.leader_of_region(region_id).unwrap();
     let epoch = cluster.get_region_epoch(region_id);
     let mut ctx = Context::default();

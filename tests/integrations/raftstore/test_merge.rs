@@ -1162,14 +1162,14 @@ fn test_sync_max_ts_after_region_merge_impl<F: KvFormat>() {
     let right = cluster.get_region(b"k3");
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    wait_for_synced(&mut cluster, 1);
+    wait_for_synced(&mut cluster, 1, 1);
     let max_ts = cm.max_ts();
 
     cluster.pd_client.trigger_tso_failure();
     // Merge left to right
     cluster.pd_client.must_merge(left.get_id(), right.get_id());
 
-    wait_for_synced(&mut cluster, 1);
+    wait_for_synced(&mut cluster, 1, 1);
     let new_max_ts = cm.max_ts();
     assert!(new_max_ts > max_ts);
 }
