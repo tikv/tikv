@@ -109,9 +109,10 @@ use crate::{
 };
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
-const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
 // 1s
+const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
 const REGION_READ_PROGRESS_CAP: usize = 128;
+const MIN_NOTIFY_RESOLVED_TS_INTERVAL: Duration = Duration::from_millis(200);
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
@@ -1030,6 +1031,7 @@ where
     pub region_merge_proposal_index: u64,
 
     pub read_progress: Arc<RegionReadProgress>,
+    last_notify_resolved_ts_time: Instant,
 
     pub memtrace_raft_entries: usize,
     /// Used for sending write msg.
@@ -1184,6 +1186,7 @@ where
                 REGION_READ_PROGRESS_CAP,
                 peer_id,
             )),
+            last_notify_resolved_ts_time: Instant::now(),
             memtrace_raft_entries: 0,
             write_router: WriteRouter::new(tag),
             unpersisted_readies: VecDeque::default(),
@@ -3318,7 +3321,7 @@ where
     }
 
     fn response_read<T>(
-        &self,
+        &mut self,
         read: &mut ReadIndexRequest<Callback<EK::Snapshot>>,
         ctx: &mut PollContext<EK, ER, T>,
         replica_read: bool,
@@ -4771,7 +4774,7 @@ where
     }
 
     fn handle_read<E: ReadExecutor<Tablet = EK>>(
-        &self,
+        &mut self,
         reader: &mut E,
         req: RaftCmdRequest,
         check_epoch: bool,
@@ -4795,7 +4798,13 @@ where
             let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
             let safe_ts = self.read_progress.safe_ts();
             if safe_ts < read_ts {
-                self.read_progress.notify_advance_resolved_ts();
+                let now = Instant::now();
+                if now.saturating_duration_since(self.last_notify_resolved_ts_time)
+                    > MIN_NOTIFY_RESOLVED_TS_INTERVAL
+                {
+                    self.read_progress.notify_advance_resolved_ts();
+                    self.last_notify_resolved_ts_time = now;
+                }
                 warn!(
                     "read rejected by safe timestamp";
                     "safe ts" => safe_ts,
