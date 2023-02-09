@@ -435,6 +435,10 @@ impl<T: Simulator> Cluster<T> {
         debug!("stopping node {}", node_id);
         self.group_props[&node_id].mark_shutdown();
 
+        // Simulate shutdown behavior of server shutdown. It's not enough to just set
+        // the map above as current thread may also query properties during shutdown.
+        let previous_prop = tikv_util::thread_group::current_properties();
+        tikv_util::thread_group::set_properties(Some(self.group_props[&node_id].clone()));
         match self.sim.write() {
             Ok(mut sim) => sim.stop_node(node_id),
             Err(_) => safe_panic!("failed to acquire write lock."),
@@ -458,17 +462,13 @@ impl<T: Simulator> Cluster<T> {
                         thread::sleep(Duration::from_millis(10));
                         tried += 1;
                     }
-                    // println!(
-                    //     "Ref Count {}, path {:?}",
-                    //     Arc::strong_count(tablet.as_inner()),
-                    //     tablet.path()
-                    // );
                 }
             }
             reg.remove(region_id);
         }
 
         debug!("node {} stopped", node_id);
+        tikv_util::thread_group::set_properties(previous_prop);
     }
 
     /// Multiple nodes with fixed node id, like node 1, 2, .. 5,
