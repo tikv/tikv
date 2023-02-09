@@ -1702,7 +1702,7 @@ dependencies = [
 [[package]]
 name = "etcd-client"
 version = "0.10.2"
-source = "git+https://github.com/pingcap/etcd-client?rev=14a6f8731f1890d5fd2f6e16a9f0d0a306b0599e#14a6f8731f1890d5fd2f6e16a9f0d0a306b0599e"
+source = "git+https://github.com/pingcap/etcd-client?rev=41d393c32a7a7c728550cee1d9a138dafe6f3e27#41d393c32a7a7c728550cee1d9a138dafe6f3e27"
 dependencies = [
  "http",
  "hyper",
@@ -2732,7 +2732,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#eccad3776d7b076da68d6c51fb7506b8562b9802"
+source = "git+https://github.com/pingcap/kvproto.git#0561adc3754362675cc08b5203d8b6444e645395"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5031,6 +5031,7 @@ dependencies = [
  "collections",
  "encryption",
  "grpcio",
+ "kvproto",
  "serde",
  "serde_derive",
  "serde_json",

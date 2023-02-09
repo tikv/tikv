@@ -47,7 +47,7 @@ use tikv_util::{
 };
 
 pub use self::{
-    apply_trace::{cf_offset, write_initial_states, ApplyTrace, DataTrace, StateStorage},
+    apply_trace::{write_initial_states, ApplyTrace, DataTrace, StateStorage},
     async_writer::AsyncWriter,
     snapshot::{GenSnapTask, SnapState},
 };
