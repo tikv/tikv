@@ -166,6 +166,10 @@ impl RaftEngineReadOnly for RocksEngine {
         panic!()
     }
 
+    fn get_dirty_mark(&self, _raft_group_id: u64, _tablet_index: u64) -> Result<bool> {
+        panic!()
+    }
+
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
         self.get_msg_cf(CF_DEFAULT, keys::RECOVER_STATE_KEY)
     }
@@ -361,19 +365,24 @@ impl RaftEngine for RocksEngine {
 }
 
 impl RaftLogBatch for RocksWriteBatchVec {
-    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
+    fn append(
+        &mut self,
+        raft_group_id: u64,
+        overwrite_to: Option<u64>,
+        entries: Vec<Entry>,
+    ) -> Result<()> {
+        let overwrite_to = overwrite_to.unwrap_or(0);
+        if let Some(last) = entries.last() && last.get_index() + 1 < overwrite_to {
+            for index in last.get_index() + 1..overwrite_to {
+                let key = keys::raft_log_key(raft_group_id, index);
+                self.delete(&key).unwrap();
+            }
+        }
         if let Some(max_size) = entries.iter().map(|e| e.compute_size()).max() {
             let ser_buf = Vec::with_capacity(max_size as usize);
             return self.append_impl(raft_group_id, &entries, ser_buf);
         }
         Ok(())
-    }
-
-    fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64) {
-        for index in from..to {
-            let key = keys::raft_log_key(raft_group_id, index);
-            self.delete(&key).unwrap();
-        }
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
@@ -430,6 +439,15 @@ impl RaftLogBatch for RocksWriteBatchVec {
         _cf: &str,
         _tablet_index: u64,
         _apply_index: u64,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_dirty_mark(
+        &mut self,
+        _raft_group_id: u64,
+        _tablet_index: u64,
+        _dirty: bool,
     ) -> Result<()> {
         panic!()
     }

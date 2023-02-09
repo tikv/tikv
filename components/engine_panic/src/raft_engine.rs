@@ -67,6 +67,10 @@ impl RaftEngineReadOnly for PanicEngine {
         panic!()
     }
 
+    fn get_dirty_mark(&self, raft_group_id: u64, tablet_index: u64) -> Result<bool> {
+        panic!()
+    }
+
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
         panic!()
     }
@@ -167,11 +171,12 @@ impl RaftEngine for PanicEngine {
 }
 
 impl RaftLogBatch for PanicWriteBatch {
-    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
-        panic!()
-    }
-
-    fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64) {
+    fn append(
+        &mut self,
+        raft_group_id: u64,
+        overwrite_to: Option<u64>,
+        entries: Vec<Entry>,
+    ) -> Result<()> {
         panic!()
     }
 
@@ -228,6 +233,10 @@ impl RaftLogBatch for PanicWriteBatch {
         tablet_index: u64,
         apply_index: u64,
     ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_dirty_mark(&mut self, raft_group_id: u64, tablet_index: u64, dirty: bool) -> Result<()> {
         panic!()
     }
 

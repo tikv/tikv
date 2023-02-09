@@ -214,7 +214,7 @@ mod tests {
         for i in 0..100 {
             let mut e = Entry::new();
             e.set_index(i);
-            raft_wb.append(region_id, vec![e]).unwrap();
+            raft_wb.append(region_id, None, vec![e]).unwrap();
         }
         raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
 

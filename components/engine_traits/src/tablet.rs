@@ -31,6 +31,13 @@ pub struct CachedTablet<EK> {
     version: u64,
 }
 
+impl<EK> CachedTablet<EK> {
+    fn release(&mut self) {
+        self.cache = None;
+        self.version = 0;
+    }
+}
+
 impl<EK: Clone> CachedTablet<EK> {
     #[inline]
     fn new(data: Option<EK>) -> Self {
@@ -44,13 +51,11 @@ impl<EK: Clone> CachedTablet<EK> {
         }
     }
 
-    pub fn set(&mut self, data: EK) {
-        self.version = {
-            let mut latest_data = self.latest.data.lock().unwrap();
-            *latest_data = Some(data.clone());
-            self.latest.version.fetch_add(1, Ordering::Relaxed) + 1
-        };
-        self.cache = Some(data);
+    pub fn set(&mut self, data: EK) -> Option<EK> {
+        self.cache = Some(data.clone());
+        let mut latest_data = self.latest.data.lock().unwrap();
+        self.version = self.latest.version.fetch_add(1, Ordering::Relaxed) + 1;
+        latest_data.replace(data)
     }
 
     /// Get the tablet from cache without checking if it's up to date.
@@ -68,19 +73,6 @@ impl<EK: Clone> CachedTablet<EK> {
             self.cache = latest_data.clone();
         }
         self.cache()
-    }
-
-    /// Returns how many versions has passed.
-    #[inline]
-    pub fn refresh(&mut self) -> u64 {
-        let old_version = self.version;
-        if self.latest.version.load(Ordering::Relaxed) > old_version {
-            let latest_data = self.latest.data.lock().unwrap();
-            self.version = self.latest.version.load(Ordering::Relaxed);
-            self.cache = latest_data.clone();
-            return self.version - old_version;
-        }
-        0
     }
 }
 
@@ -317,8 +309,10 @@ impl<EK> TabletRegistry<EK> {
         let mut tablets = self.tablets.tablets.lock().unwrap();
         for (id, tablet) in tablets.iter_mut() {
             if !f(*id, tablet) {
+                tablet.release();
                 return;
             }
+            tablet.release();
         }
     }
 }

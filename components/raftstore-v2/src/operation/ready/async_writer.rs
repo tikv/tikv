@@ -9,6 +9,7 @@ use raftstore::store::{
     WriteSenders, WriteTask,
 };
 use slog::{warn, Logger};
+use tikv_util::slog_panic;
 
 use crate::{
     batch::{StoreContext, StoreRouter},
@@ -117,11 +118,11 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
 
         let last_unpersisted = self.unpersisted_readies.back();
         if last_unpersisted.map_or(true, |u| u.number < ready_number) {
-            panic!(
-                "{:?} ready number is too large {:?} vs {}",
-                logger.list(),
-                last_unpersisted,
-                ready_number
+            slog_panic!(
+                logger,
+                "ready number is too large";
+                "last_unpersisted" => ?last_unpersisted,
+                "ready_number" => ready_number
             );
         }
 
@@ -130,15 +131,15 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
         // There must be a match in `self.unpersisted_readies`.
         loop {
             let Some(v) = self.unpersisted_readies.pop_front() else {
-                panic!("{:?} ready number not found {}", logger.list(), ready_number);
+                slog_panic!(logger, "ready number not found"; "ready_number" => ready_number);
             };
             has_snapshot |= v.has_snapshot;
             if v.number > ready_number {
-                panic!(
-                    "{:?} ready number not matched {:?} vs {}",
-                    logger.list(),
-                    v,
-                    ready_number
+                slog_panic!(
+                    logger,
+                    "ready number not matched";
+                    "ready" => ?v,
+                    "ready_number" => ready_number
                 );
             }
             if raft_messages.is_empty() {

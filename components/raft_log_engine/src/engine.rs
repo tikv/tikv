@@ -366,7 +366,7 @@ impl RaftLogEngine {
 impl PerfContextExt for RaftLogEngine {
     type PerfContext = RaftEnginePerfContext;
 
-    fn get_perf_context(&self, _level: PerfLevel, _kind: PerfContextKind) -> Self::PerfContext {
+    fn get_perf_context(_level: PerfLevel, _kind: PerfContextKind) -> Self::PerfContext {
         RaftEnginePerfContext
     }
 }
@@ -381,19 +381,21 @@ const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
 const RECOVER_STATE_KEY: &[u8] = &[0x05];
 const FLUSH_STATE_KEY: &[u8] = &[0x06];
+const DIRTY_MARK_KEY: &[u8] = &[0x07];
 // All keys are of the same length.
 const KEY_PREFIX_LEN: usize = RAFT_LOG_STATE_KEY.len();
 
 impl RaftLogBatchTrait for RaftLogBatch {
-    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
+    fn append(
+        &mut self,
+        raft_group_id: u64,
+        _overwrite_to: Option<u64>,
+        entries: Vec<Entry>,
+    ) -> Result<()> {
+        // overwrite is handled within raft log engine.
         self.0
             .add_entries::<MessageExtTyped>(raft_group_id, &entries)
             .map_err(transfer_error)
-    }
-
-    fn cut_logs(&mut self, _: u64, _: u64, _: u64) {
-        // It's unnecessary because overlapped entries can be handled in
-        // `append`.
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
@@ -470,8 +472,21 @@ impl RaftLogBatchTrait for RaftLogBatch {
         let key = encode_flushed_key(cf, tablet_index);
         let mut value = vec![0; 8];
         NumberCodec::encode_u64(&mut value, apply_index);
-        self.0.put(raft_group_id, key.to_vec(), value);
-        Ok(())
+        self.0
+            .put(raft_group_id, key.to_vec(), value)
+            .map_err(transfer_error)
+    }
+
+    fn put_dirty_mark(&mut self, raft_group_id: u64, tablet_index: u64, dirty: bool) -> Result<()> {
+        let key = encode_key(DIRTY_MARK_KEY, tablet_index);
+        if dirty {
+            self.0
+                .put(raft_group_id, key.to_vec(), vec![])
+                .map_err(transfer_error)
+        } else {
+            self.0.delete(raft_group_id, key.to_vec());
+            Ok(())
+        }
     }
 
     fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {
@@ -598,6 +613,11 @@ impl RaftEngineReadOnly for RaftLogEngine {
             })
             .map_err(transfer_error)?;
         Ok(index)
+    }
+
+    fn get_dirty_mark(&self, raft_group_id: u64, tablet_index: u64) -> Result<bool> {
+        let key = encode_key(DIRTY_MARK_KEY, tablet_index);
+        Ok(self.0.get(raft_group_id, &key).is_some())
     }
 
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
