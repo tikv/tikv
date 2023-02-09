@@ -36437,7 +36437,7 @@
           },
           "yaxes": [
             {
-              "format": "ops",
+              "format": "none",
               "label": null,
               "logBase": 1,
               "max": null,
