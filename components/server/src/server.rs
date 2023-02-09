@@ -1693,6 +1693,7 @@ where
                 Arc::new(self.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.store_path.clone(),
+                self.resource_manager.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {

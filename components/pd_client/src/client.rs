@@ -249,7 +249,13 @@ impl PdClientCommon for Arc<RpcClient> {
                 let resp = grpc_response.await?;
                 Ok((Vec::from(resp.get_items()), resp.get_revision()))
             }) as PdFuture<_>,
-            Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
+            Err(err) => Box::pin(async move {
+                Err(box_err!(
+                    "load global config failed, path: '{}', err:  {:?}",
+                    req.get_config_path(),
+                    err
+                ))
+            }) as PdFuture<_>,
         };
         self.pd_client
             .request(req, executor, LEADER_CHANGE_RETRY)
