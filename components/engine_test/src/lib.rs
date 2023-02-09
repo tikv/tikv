@@ -129,8 +129,8 @@ pub mod kv {
         }
 
         fn destroy_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<()> {
-            let tombstone_path = path.join(TOMBSTONE_SUFFIX);
-            std::fs::remove_dir_all(&tombstone_path)?;
+            let tombstone_path = path.with_extension(TOMBSTONE_SUFFIX);
+            let _ = std::fs::remove_dir_all(&tombstone_path);
             std::fs::rename(path, &tombstone_path)?;
             std::fs::remove_dir_all(tombstone_path)?;
             Ok(())
