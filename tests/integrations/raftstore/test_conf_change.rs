@@ -38,7 +38,6 @@ fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<TestPdClient>) ->
 }
 
 #[test_case(test_raftstore::new_server_cluster)]
-// #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_server_simple_conf_change() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
@@ -347,7 +346,8 @@ macro_rules! find_leader_response_header {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore::new_server_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_after_remove_itself() {
     let count = 3;
     let mut cluster = new_cluster(0, count);
@@ -734,7 +734,6 @@ fn test_node_learner_conf_change() {
 }
 
 #[test_case(test_raftstore::new_server_cluster)]
-// #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_learner_with_slow_snapshot() {
     let mut cluster = new_cluster(0, 3);
     configure_for_snapshot(&mut cluster.cfg);
