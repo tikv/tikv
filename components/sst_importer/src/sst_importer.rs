@@ -490,6 +490,9 @@ impl SstImporter {
             .file_locks
             .entry(dst_name)
             .or_insert((CacheKvFile::Mem(Arc::default()), Instant::now()));
+        IMPORTER_APPLY_DURATION
+            .with_label_values(&["download-get-lock"])
+            .observe(start.saturating_elapsed().as_secs_f64());
 
         if let CacheKvFile::Mem(buff) = &lock.0 {
             if !buff.is_empty() {
