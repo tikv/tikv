@@ -1702,7 +1702,7 @@ dependencies = [
 [[package]]
 name = "etcd-client"
 version = "0.10.2"
-source = "git+https://github.com/pingcap/etcd-client?rev=14a6f8731f1890d5fd2f6e16a9f0d0a306b0599e#14a6f8731f1890d5fd2f6e16a9f0d0a306b0599e"
+source = "git+https://github.com/pingcap/etcd-client?rev=41d393c32a7a7c728550cee1d9a138dafe6f3e27#41d393c32a7a7c728550cee1d9a138dafe6f3e27"
 dependencies = [
  "http",
  "hyper",
@@ -5031,6 +5031,7 @@ dependencies = [
  "collections",
  "encryption",
  "grpcio",
+ "kvproto",
  "serde",
  "serde_derive",
  "serde_json",
@@ -6649,7 +6650,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#c6b7a5a1623bb2766a502301ecc3ac8f98cc7c79"
+source = "git+https://github.com/pingcap/tipb.git#614f3ffd42ddc84b78ff59d65f105f2099a6f1b1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

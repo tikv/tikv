@@ -1324,6 +1324,10 @@ impl DbConfig {
         if let Some(r) = &shared.write_buffer_manager {
             opts.set_write_buffer_manager(r);
         }
+        if for_engine == EngineType::RaftKv2 {
+            // Historical stats are not used.
+            opts.set_stats_persist_period_sec(0);
+        }
         opts
     }
 
@@ -3240,7 +3244,8 @@ impl TikvConfig {
             self.coprocessor.enable_region_bucket,
             self.coprocessor.region_bucket_size,
         )?;
-        self.security.validate()?;
+        self.security
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.import.validate()?;
         self.backup.validate()?;
         self.backup_stream.validate()?;
