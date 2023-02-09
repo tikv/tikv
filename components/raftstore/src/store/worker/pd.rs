@@ -45,6 +45,7 @@ use tikv_util::{
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,
+    trend::{RequestPerSecRecorder, Trend},
     warn,
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
 };
@@ -921,6 +922,9 @@ where
     snap_mgr: SnapManager,
     remote: Remote<yatp::task::future::TaskCell>,
     slow_score: SlowScore,
+    slow_trend_cause: Trend,
+    slow_trend_result: Trend,
+    slow_trend_result_recorder: RequestPerSecRecorder,
 
     // The health status of the store is updated by the slow score mechanism.
     health_service: Option<HealthService>,
@@ -984,6 +988,39 @@ where
             snap_mgr,
             remote,
             slow_score: SlowScore::new(cfg.inspect_interval.0),
+            slow_trend_cause: Trend::new(
+                // Disable SpikeFilter for now
+                Duration::from_secs(0),
+                STORE_SLOW_TREND_MISC_GAUGE_VEC.with_label_values(&["spike_filter_value"]),
+                STORE_SLOW_TREND_MISC_GAUGE_VEC.with_label_values(&["spike_filter_count"]),
+                Duration::from_secs(180),
+                Duration::from_secs(30),
+                Duration::from_secs(120),
+                Duration::from_secs(600),
+                1,
+                tikv_util::time::duration_to_us(Duration::from_micros(500)),
+                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L1"]),
+                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L2"]),
+                cfg.slow_trend_unsensitive_cause,
+            ),
+            slow_trend_result: Trend::new(
+                // Disable SpikeFilter for now
+                Duration::from_secs(0),
+                STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC.with_label_values(&["spike_filter_value"]),
+                STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC.with_label_values(&["spike_filter_count"]),
+                Duration::from_secs(120),
+                Duration::from_secs(15),
+                Duration::from_secs(60),
+                Duration::from_secs(300),
+                1,
+                2000,
+                STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                    .with_label_values(&["L1"]),
+                STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                    .with_label_values(&["L2"]),
+                cfg.slow_trend_unsensitive_result,
+            ),
+            slow_trend_result_recorder: RequestPerSecRecorder::new(),
             health_service,
             curr_health_status: ServingStatus::Serving,
             coprocessor_host,
@@ -1254,6 +1291,9 @@ where
             .store_stat
             .engine_total_query_num
             .sub_query_stats(&self.store_stat.engine_last_query_num);
+        let total_query_num = self
+            .slow_trend_result_recorder
+            .record_and_get_current_rps(res.get_all_query_num(), Instant::now());
         stats.set_query_stats(res.0);
 
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
@@ -1293,6 +1333,7 @@ where
 
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
+        self.set_slow_trend_to_store_stats(&mut stats, total_query_num);
 
         let router = self.router.clone();
         let resp = self
@@ -1377,6 +1418,51 @@ where
             }
         };
         self.remote.spawn(f);
+    }
+
+    fn set_slow_trend_to_store_stats(
+        &mut self,
+        stats: &mut pdpb::StoreStats,
+        total_query_num: Option<f64>,
+    ) {
+        let slow_trend_cause_rate = self.slow_trend_cause.increasing_rate();
+        STORE_SLOW_TREND_GAUGE.set(slow_trend_cause_rate);
+        let mut slow_trend = pdpb::SlowTrend::default();
+        slow_trend.set_cause_rate(slow_trend_cause_rate);
+        slow_trend.set_cause_value(self.slow_trend_cause.l0_avg());
+        if let Some(total_query_num) = total_query_num {
+            self.slow_trend_result
+                .record(total_query_num as u64, Instant::now());
+            slow_trend.set_result_value(self.slow_trend_result.l0_avg());
+            let slow_trend_result_rate = self.slow_trend_result.increasing_rate();
+            slow_trend.set_result_rate(slow_trend_result_rate);
+            STORE_SLOW_TREND_RESULT_GAUGE.set(slow_trend_result_rate);
+            STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(total_query_num);
+        } else {
+            // Just to mark the invalid range on the graphic
+            STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(-100.0);
+        }
+        stats.set_slow_trend(slow_trend);
+        self.write_slow_trend_metrics();
+    }
+
+    fn write_slow_trend_metrics(&mut self) {
+        STORE_SLOW_TREND_L0_GAUGE.set(self.slow_trend_cause.l0_avg());
+        STORE_SLOW_TREND_L1_GAUGE.set(self.slow_trend_cause.l1_avg());
+        STORE_SLOW_TREND_L2_GAUGE.set(self.slow_trend_cause.l2_avg());
+        STORE_SLOW_TREND_L0_L1_GAUGE.set(self.slow_trend_cause.l0_l1_rate());
+        STORE_SLOW_TREND_L1_L2_GAUGE.set(self.slow_trend_cause.l1_l2_rate());
+        STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE.set(self.slow_trend_cause.l1_margin_error_base());
+        STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE.set(self.slow_trend_cause.l2_margin_error_base());
+        STORE_SLOW_TREND_RESULT_L0_GAUGE.set(self.slow_trend_result.l0_avg());
+        STORE_SLOW_TREND_RESULT_L1_GAUGE.set(self.slow_trend_result.l1_avg());
+        STORE_SLOW_TREND_RESULT_L2_GAUGE.set(self.slow_trend_result.l2_avg());
+        STORE_SLOW_TREND_RESULT_L0_L1_GAUGE.set(self.slow_trend_result.l0_l1_rate());
+        STORE_SLOW_TREND_RESULT_L1_L2_GAUGE.set(self.slow_trend_result.l1_l2_rate());
+        STORE_SLOW_TREND_RESULT_L1_MARGIN_ERROR_GAUGE
+            .set(self.slow_trend_result.l1_margin_error_base());
+        STORE_SLOW_TREND_RESULT_L2_MARGIN_ERROR_GAUGE
+            .set(self.slow_trend_result.l2_margin_error_base());
     }
 
     fn handle_report_batch_split(&self, regions: Vec<metapb::Region>) {
@@ -2097,7 +2183,13 @@ where
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
-            Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
+            Task::UpdateSlowScore { id, duration } => {
+                self.slow_score.record(id, duration.sum());
+                self.slow_trend_cause.record(
+                    tikv_util::time::duration_to_us(duration.store_wait_duration.unwrap()),
+                    Instant::now(),
+                );
+            }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTs {
                 store_id,
@@ -2121,6 +2213,9 @@ where
     T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
+        // Record a fairly great value when timeout
+        self.slow_trend_cause.record(500_000, Instant::now());
+
         // The health status is recovered to serving as long as any tick
         // does not timeout.
         if self.curr_health_status == ServingStatus::ServiceUnknown

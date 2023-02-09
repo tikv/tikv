@@ -1324,6 +1324,10 @@ impl DbConfig {
         if let Some(r) = &shared.write_buffer_manager {
             opts.set_write_buffer_manager(r);
         }
+        if for_engine == EngineType::RaftKv2 {
+            // Historical stats are not used.
+            opts.set_stats_persist_period_sec(0);
+        }
         opts
     }
 
@@ -1960,7 +1964,7 @@ impl UnifiedReadPoolConfig {
         }
         let limit = cmp::max(
             UNIFIED_READPOOL_MIN_CONCURRENCY,
-            SysQuota::cpu_cores_quota() as usize,
+            SysQuota::cpu_cores_quota() as usize * 10, // at most 10 threads per core
         );
         if self.max_thread_count > limit {
             return Err(format!(
@@ -2050,11 +2054,7 @@ mod unified_read_pool_tests {
         };
         invalid_cfg.validate().unwrap_err();
         let invalid_cfg = UnifiedReadPoolConfig {
-            min_thread_count: 1,
-            max_thread_count: cmp::max(
-                UNIFIED_READPOOL_MIN_CONCURRENCY,
-                SysQuota::cpu_cores_quota() as usize,
-            ) + 1,
+            max_thread_count: SysQuota::cpu_cores_quota() as usize * 10 + 1,
             ..cfg
         };
         invalid_cfg.validate().unwrap_err();
@@ -3244,7 +3244,8 @@ impl TikvConfig {
             self.coprocessor.enable_region_bucket,
             self.coprocessor.region_bucket_size,
         )?;
-        self.security.validate()?;
+        self.security
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.import.validate()?;
         self.backup.validate()?;
         self.backup_stream.validate()?;
