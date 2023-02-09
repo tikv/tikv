@@ -188,7 +188,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         if !self.serving() {
-            println!("[{:?}] Dropping the msg {:?}", msg.get_to_peer(), msg);
             return;
         }
         if util::is_vote_msg(msg.get_message()) && self.maybe_gc_sender(&msg) {
