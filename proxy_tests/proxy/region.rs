@@ -112,13 +112,16 @@ fn test_get_region_local_state() {
 
                 ffi_set
                     .proxy
-                    .get_value_cf("none_cf", "123".as_bytes(), |value| {
+                    .get_value_cf("none_cf", "123".as_bytes(), &mut |value: Result<Option<&[u8]>, String>| {
                         let msg = value.unwrap_err();
                         assert_eq!(msg, "Storage Engine Status { code: IoError, sub_code: None, sev: NoError, state: \"cf none_cf not found\" }");
                     });
                 ffi_set
                     .proxy
-                    .get_value_cf("raft", "123".as_bytes(), |value| {
+                    .get_value_cf("raft", "123".as_bytes(), &mut |value: Result<
+                        Option<&[u8]>,
+                        String,
+                    >| {
                         let res = value.unwrap();
                         assert!(res.is_none());
                     });

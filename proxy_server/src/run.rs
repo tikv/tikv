@@ -146,7 +146,7 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
             tikv.router.clone(),
             SysQuota::cpu_cores_quota() as usize * 2,
         ))),
-        std::sync::RwLock::new(None),
+        None,
     );
 
     let proxy_ref = &proxy;
@@ -183,7 +183,9 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
         tikv.init_tiflash_engines(listener, engine_store_server_helper_ptr);
     tikv.init_engines(engines.clone());
     {
-        proxy.set_kv_engine(Some(engines.kv.clone()));
+        proxy.set_kv_engine(
+            engine_store_ffi::ffi::RaftStoreProxyEngine::from_tiflash_engine(engines.kv.clone()),
+        );
     }
     let server_config = tikv.init_servers::<F>();
     tikv.register_services();
@@ -252,7 +254,7 @@ fn run_impl_only_for_decryption<CER: ConfiguredRaftEngine, F: KvFormat>(
         AtomicU8::new(RaftProxyStatus::Idle as u8),
         encryption_key_manager.clone(),
         Option::None,
-        std::sync::RwLock::new(None),
+        None,
     );
 
     let proxy_ref = &proxy;

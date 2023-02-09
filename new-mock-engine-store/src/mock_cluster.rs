@@ -187,7 +187,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 )),
                 None => None,
             },
-            std::sync::RwLock::new(Some(engines.kv.clone())),
+            engine_store_ffi::ffi::RaftStoreProxyEngine::from_tiflash_engine(engines.kv.clone()),
         ));
 
         let proxy_ref = proxy.as_ref();
@@ -211,7 +211,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             .unwrap()
             .as_mut()
             .unwrap()
-            .engine_store_server_helper = engine_store_server_helper_ptr;
+            .set_engine_store_server_helper(engine_store_server_helper_ptr);
         let ffi_helper_set = FFIHelperSet {
             proxy,
             proxy_helper,
@@ -326,7 +326,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 .unwrap()
                 .as_mut()
                 .unwrap()
-                .engine_store_server_helper;
+                .engine_store_server_helper();
 
             let helper = engine_store_ffi::ffi::gen_engine_store_server_helper(helper_ptr);
             let ffi_hub = Arc::new(engine_store_ffi::engine::TiFlashFFIHub {

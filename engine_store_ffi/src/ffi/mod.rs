@@ -18,6 +18,7 @@ pub mod engine_store_helper_impls;
 pub(crate) mod lock_cf_reader;
 // FFI directly related with RaftStoreProxyFFIHelper.
 pub mod raftstore_proxy;
+pub mod raftstore_proxy_engine;
 pub mod raftstore_proxy_helper_impls;
 pub mod read_index_helper;
 pub mod sst_reader_impls;
@@ -28,7 +29,7 @@ pub use engine_tiflash::EngineStoreConfig;
 pub use self::{
     basic_ffi_impls::*, domain_impls::*, encryption_impls::*, engine_store_helper_impls::*,
     interfaces::root::DB as interfaces_ffi, lock_cf_reader::*, raftstore_proxy::*,
-    raftstore_proxy_helper_impls::*, sst_reader_impls::*,
+    raftstore_proxy_engine::*, raftstore_proxy_helper_impls::*, sst_reader_impls::*,
 };
 
 #[allow(clippy::wrong_self_convention)]
