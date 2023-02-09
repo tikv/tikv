@@ -3244,7 +3244,8 @@ impl TikvConfig {
             self.coprocessor.enable_region_bucket,
             self.coprocessor.region_bucket_size,
         )?;
-        self.security.validate()?;
+        self.security
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.import.validate()?;
         self.backup.validate()?;
         self.backup_stream.validate()?;
