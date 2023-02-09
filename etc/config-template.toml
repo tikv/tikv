@@ -679,7 +679,7 @@
 ## The data block size. RocksDB compresses data based on the unit of block.
 ## Similar to page in other databases, block is the smallest unit cached in block-cache. Note that
 ## the block size specified here corresponds to uncompressed data.
-# block-size = "64KB"
+# block-size = "16KB"
 
 ## If you're doing point lookups you definitely want to turn bloom filters on. We use bloom filters
 ## to avoid unnecessary disk reads. Default bits_per_key is 10, which yields ~1% false positive
@@ -915,7 +915,7 @@
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
-# block-size = "64KB"
+# block-size = "16KB"
 
 ## Recommend to set it the same as `rocksdb.defaultcf.write-buffer-size`.
 # write-buffer-size = "128MB"

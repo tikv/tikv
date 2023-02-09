@@ -472,18 +472,21 @@ impl RaftLogBatchTrait for RaftLogBatch {
         let key = encode_flushed_key(cf, tablet_index);
         let mut value = vec![0; 8];
         NumberCodec::encode_u64(&mut value, apply_index);
-        self.0.put(raft_group_id, key.to_vec(), value);
-        Ok(())
+        self.0
+            .put(raft_group_id, key.to_vec(), value)
+            .map_err(transfer_error)
     }
 
     fn put_dirty_mark(&mut self, raft_group_id: u64, tablet_index: u64, dirty: bool) -> Result<()> {
         let key = encode_key(DIRTY_MARK_KEY, tablet_index);
         if dirty {
-            self.0.put(raft_group_id, key.to_vec(), vec![]);
+            self.0
+                .put(raft_group_id, key.to_vec(), vec![])
+                .map_err(transfer_error)
         } else {
             self.0.delete(raft_group_id, key.to_vec());
+            Ok(())
         }
-        Ok(())
     }
 
     fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {
