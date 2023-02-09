@@ -430,28 +430,21 @@ impl SstImporter {
 
         if self.import_support_download() {
             let shrink_file_count = shrink_files.len();
-            debug!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
-            IMPORTER_PITR_LOCAL_CACHE
-                .with_label_values(&["disk"])
-                .set(retain_file_count as _);
-            IMPORTER_PITR_LOCAL_CACHE_RELEASE
-                .with_label_values(&["disk"])
-                .inc_by(shrink_file_count as _);
+            if shrink_file_count > 0 || retain_file_count > 0 {
+                info!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
+            }
+
             for f in shrink_files {
                 if let Err(e) = file_system::remove_file(&f) {
-                    warn!("failed to remove file"; "filename" => ?f, "error" => ?e);
+                    info!("failed to remove file"; "filename" => ?f, "error" => ?e);
                 }
             }
             shrink_file_count
         } else {
-            debug!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
+            if shrink_buff_size > 0 || retain_buff_size > 0 {
+                info!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
+            }
             self.dec_mem(shrink_buff_size as _);
-            IMPORTER_PITR_LOCAL_CACHE
-                .with_label_values(&["mem"])
-                .set(retain_buff_size as _);
-            IMPORTER_PITR_LOCAL_CACHE_RELEASE
-                .with_label_values(&["mem"])
-                .inc_by(shrink_buff_size as _);
             shrink_buff_size
         }
     }
