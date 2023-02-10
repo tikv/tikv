@@ -130,8 +130,12 @@ impl Config {
 
     pub fn optimize_for(&mut self, raftstore_v2: bool) {
         // overwrite the default region_split_size when it's multi-rocksdb
-        if raftstore_v2 && self.region_split_size.is_none() {
-            self.region_split_size = Some(ReadableSize::mb(RAFTSTORE_V2_SPLIT_SIZE_MB));
+        if self.region_split_size.is_none() {
+            if raftstore_v2 {
+                self.region_split_size = Some(ReadableSize::mb(RAFTSTORE_V2_SPLIT_SIZE_MB));
+            } else {
+                self.region_split_size = Some(self.region_split_size());
+            }
         }
     }
 
