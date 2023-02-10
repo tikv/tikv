@@ -351,9 +351,16 @@ pub unsafe fn run_tikv_proxy(
                 engine_store_server_helper,
             )
         } else {
-            run_impl::<PSEngine, API>(config, proxy_config, engine_store_server_helper)
-            // run_impl::<RaftLogEngine, API>(config, proxy_config,
-            // engine_store_server_helper)
+            #[cfg(feature = "enable-pagestorage")]
+            {
+                tikv_util::info!("bootstrap with pagestorage");
+                run_impl::<PSEngine, API>(config, proxy_config, engine_store_server_helper)
+            }
+            #[cfg(not(feature = "enable-pagestorage"))]
+            {
+                tikv_util::info!("bootstrap with origin tikv");
+                run_impl::<RaftLogEngine, API>(config, proxy_config, engine_store_server_helper)
+            }
         }
     })
 }
