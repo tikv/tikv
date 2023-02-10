@@ -1,3 +1,5 @@
+use proxy_ffi::interfaces_ffi;
+
 use crate::util::get_cf_handle;
 
 pub fn do_write(cf: &str, key: &[u8]) -> bool {
@@ -93,4 +95,27 @@ impl Default for EngineStoreConfig {
 #[derive(Default, Debug)]
 pub struct ProxyConfigSet {
     pub engine_store: EngineStoreConfig,
+}
+
+impl From<interfaces_ffi::RawCppPtr> for crate::RawPSWriteBatchWrapper {
+    fn from(src: interfaces_ffi::RawCppPtr) -> Self {
+        let result = crate::RawPSWriteBatchWrapper {
+            ptr: src.ptr,
+            type_: src.type_,
+        };
+        let mut src = src;
+        src.ptr = std::ptr::null_mut();
+        result
+    }
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<crate::FsStatsExt> for interfaces_ffi::StoreStats {
+    fn into(self) -> crate::FsStatsExt {
+        crate::FsStatsExt {
+            available: self.fs_stats.avail_size,
+            capacity: self.fs_stats.capacity_size,
+            used: self.fs_stats.used_size,
+        }
+    }
 }

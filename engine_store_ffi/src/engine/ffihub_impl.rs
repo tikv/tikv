@@ -1,10 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use engine_tiflash::{FsStatsExt, RawPSWriteBatchPtr, RawPSWriteBatchWrapper};
+use engine_tiflash::{RawPSWriteBatchPtr, RawPSWriteBatchWrapper};
 
-use crate::ffi::{
-    interfaces_ffi,
-    interfaces_ffi::{EngineStoreServerHelper, PageAndCppStrWithView, RawCppPtr},
-};
+use crate::ffi::interfaces_ffi::{EngineStoreServerHelper, PageAndCppStrWithView};
 
 pub struct TiFlashFFIHub {
     pub engine_store_server_helper: &'static EngineStoreServerHelper,
@@ -85,29 +82,6 @@ impl engine_tiflash::FFIHubInner for TiFlashFFIHub {
             if value.page_view.len != 0 {
                 f(value.key_view.to_slice(), value.page_view.to_slice()).unwrap();
             }
-        }
-    }
-}
-
-impl From<RawCppPtr> for RawPSWriteBatchWrapper {
-    fn from(src: RawCppPtr) -> Self {
-        let result = RawPSWriteBatchWrapper {
-            ptr: src.ptr,
-            type_: src.type_,
-        };
-        let mut src = src;
-        src.ptr = std::ptr::null_mut();
-        result
-    }
-}
-
-#[allow(clippy::from_over_into)]
-impl Into<engine_tiflash::FsStatsExt> for interfaces_ffi::StoreStats {
-    fn into(self) -> FsStatsExt {
-        FsStatsExt {
-            available: self.fs_stats.avail_size,
-            capacity: self.fs_stats.capacity_size,
-            used: self.fs_stats.used_size,
         }
     }
 }

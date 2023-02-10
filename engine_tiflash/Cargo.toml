@@ -46,6 +46,7 @@ portable-atomic = "0.3"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2"
+proxy_ffi = { workspace = true, default-features = false }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 regex = "1"
 serde = "1.0"

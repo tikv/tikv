@@ -1617,6 +1617,7 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
+ "proxy_ffi",
  "raft",
  "raft-proto",
  "raftstore",
@@ -1681,6 +1682,7 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
+ "proxy_ffi",
  "raft",
  "rand 0.8.5",
  "regex",
@@ -4418,6 +4420,30 @@ checksum = "00993dc5fbbfcf9d8a005f6b6c29fd29fd6d86deba3ae3f41fd20c624c414616"
 dependencies = [
  "protobuf",
  "protobuf-codegen",
+]
+
+[[package]]
+name = "proxy_ffi"
+version = "0.0.1"
+dependencies = [
+ "encryption",
+ "engine_rocks",
+ "engine_traits",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "futures-util",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "protobuf",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "tokio",
+ "tokio-timer",
+ "tracker",
 ]
 
 [[package]]

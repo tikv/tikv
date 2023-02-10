@@ -301,6 +301,7 @@ members = [
   "fuzz/fuzzer-honggfuzz",
   "fuzz/fuzzer-libfuzzer",
   "gen-proxy-ffi",
+  "proxy_ffi",
   "proxy_tests",
   "raftstore-proxy",
   "tests",
@@ -388,6 +389,7 @@ engine_store_ffi = { path = "engine_store_ffi", default-features = false }
 new-mock-engine-store = { path = "new-mock-engine-store", default-features = false }
 proxy_server = { path = "proxy_server", default-features = false }
 engine_tiflash = { path = "engine_tiflash", default-features = false }
+proxy_ffi = { path = "proxy_ffi", default-features = false }
 
 [profile.dev.package.grpcio-sys]
 debug = false
