@@ -23,6 +23,10 @@ pub struct EncryptionConfig {
     pub master_key: MasterKeyConfig,
     #[online_config(skip)]
     pub previous_master_key: MasterKeyConfig,
+    #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub v2_directory_whitelist: Vec<String>,
 }
 
 impl Default for EncryptionConfig {
@@ -35,6 +39,7 @@ impl Default for EncryptionConfig {
             file_dictionary_rewrite_threshold: 1000000,
             master_key: MasterKeyConfig::default(),
             previous_master_key: MasterKeyConfig::default(),
+            v2_directory_whitelist: Vec::new(),
         }
     }
 }
@@ -181,6 +186,7 @@ mod tests {
             previous_master_key: MasterKeyConfig::Plaintext,
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 1000000,
+            v2_directory_whitelist: Vec::new(),
         };
         let kms_str = r#"
         data-encryption-method = "aes128-ctr"

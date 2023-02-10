@@ -175,8 +175,8 @@ pub enum DataKeyDictionaryItemV2 {
     InsertFile(u64, String, FileInfo),
     RemoveFile(u64, String),
     InsertDir(u64, String),
-    RemoveDir(u64, String),
     RemoveDirMapping(u64, String),
+    RemoveDirFiles(u64),
 }
 
 impl DataKeyDictionaryItemV2 {
@@ -257,11 +257,11 @@ impl DictionaryItem for DataKeyDictionaryItemV2 {
             }
             4 => {
                 assert!(!name.is_empty() && info_len == 0);
-                Self::RemoveDir(dir_id, name)
+                Self::RemoveDirMapping(dir_id, name)
             }
             5 => {
-                assert!(!name.is_empty() && info_len == 0);
-                Self::RemoveDirMapping(dir_id, name)
+                assert!(name.is_empty() && info_len == 0);
+                Self::RemoveDirFiles(dir_id)
             }
             _ => return Err(box_err!("file corrupted! record type is unknown: {}", op)),
         };
@@ -294,19 +294,18 @@ impl DictionaryItem for DataKeyDictionaryItemV2 {
                 buf.extend_from_slice(name.as_bytes());
                 (name.len(), 0)
             }
-            Self::RemoveDir(dir_id, name) => {
+            Self::RemoveDirMapping(dir_id, name) => {
                 buf[4] = 4;
                 BigEndian::write_u64(&mut buf[5..13], *dir_id);
 
                 buf.extend_from_slice(name.as_bytes());
                 (name.len(), 0)
             }
-            Self::RemoveDirMapping(dir_id, name) => {
+            Self::RemoveDirFiles(dir_id) => {
                 buf[4] = 5;
                 BigEndian::write_u64(&mut buf[5..13], *dir_id);
 
-                buf.extend_from_slice(name.as_bytes());
-                (name.len(), 0)
+                (0, 0)
             }
         };
         BigEndian::write_u16(&mut buf[13..15], name_len as u16);
@@ -322,7 +321,7 @@ impl DictionaryItem for DataKeyDictionaryItemV2 {
     fn is_tombstone(&self) -> bool {
         matches!(
             self,
-            Self::RemoveFile(..) | Self::RemoveDir(..) | Self::RemoveDirMapping(..)
+            Self::RemoveFile(..) | Self::RemoveDirMapping(..) | Self::RemoveDirFiles(..)
         )
     }
 }
@@ -349,12 +348,11 @@ impl ProtobufDictionary for FileDictionaryV2 {
             Self::Item::InsertDir(dir_id, name) => {
                 self.dirs.insert(name, dir_id);
             }
-            Self::Item::RemoveDir(dir_id, name) => {
-                self.dirs.remove(&name);
-                self.dir_files.remove(&dir_id);
-            }
             Self::Item::RemoveDirMapping(_dir_id, name) => {
                 self.dirs.remove(&name);
+            }
+            Self::Item::RemoveDirFiles(dir_id) => {
+                self.dir_files.remove(&dir_id);
             }
         }
         Ok(())
@@ -778,16 +776,10 @@ mod tests {
                 ))
                 .unwrap();
             file_dict
-                .add(DataKeyDictionaryItem::Insert(
-                    "f2".to_owned(),
-                    info2
-                ))
+                .add(DataKeyDictionaryItem::Insert("f2".to_owned(), info2))
                 .unwrap();
             file_dict
-                .add(DataKeyDictionaryItem::Insert(
-                    "f3".to_owned(),
-                    info3
-                ))
+                .add(DataKeyDictionaryItem::Insert("f3".to_owned(), info3))
                 .unwrap();
 
             file_dict

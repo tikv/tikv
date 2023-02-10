@@ -21,7 +21,9 @@ use kvproto::encryptionpb::{
     DataKey, EncryptionMethod, FileDictionary, FileDictionaryV2, FileInfo, KeyDictionary,
 };
 use protobuf::{parse_from_bytes, Message};
-use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, thd_name, warn};
+use tikv_util::{
+    box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, thd_name, warn, Either,
+};
 
 use crate::{
     config::EncryptionConfig,
@@ -258,11 +260,11 @@ impl Dicts {
                 && name.len() < len
             {
                 if let Some(fname_start) = name.find('/') {
-                    let dir = p.to_string() + &name[..fname_start];
+                    let dir = p.to_string() + "/" + &name[..fname_start];
                     let relative_path = name[fname_start + 1..].trim_start_matches('/');
                     return Some((dir, relative_path.to_string()))
                 } else {
-                    return Some((p.to_string() + name, String::new()))
+                    return Some((p.to_string() + "/" + name, String::new()))
                 }
             }
         }
@@ -270,6 +272,7 @@ impl Dicts {
     }
 
     fn get_file(&self, fname: &str) -> Option<FileInfo> {
+        // Try v1 map first. It could contain files from an older verison.
         let info = {
             let dict = self.file_dict.lock().unwrap();
             dict.files.get(fname).cloned()
@@ -278,29 +281,34 @@ impl Dicts {
             if let Some((dir, relative_path)) = self.parse_v2(fname) {
                 let dict = self.file_dict_v2.lock().unwrap();
                 return dict.dirs.get(&dir).and_then(|dir_id| {
-                    dict.dir_files
-                        .get(dir_id)
-                        .and_then(|files| files.files.get(&relative_path).cloned())
+                    dict.dir_files.get(dir_id).and_then(|files| {
+                        let i = files.files.get(&relative_path).cloned();
+                        i
+                    })
                 });
             }
         }
         info
     }
 
-    fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
-        let iv = if method != EncryptionMethod::Plaintext {
-            Iv::new_ctr()
-        } else {
-            Iv::Empty
-        };
-        let file = FileInfo {
-            iv: iv.as_slice().to_vec(),
-            key_id: self.current_key_id.load(Ordering::SeqCst),
-            method,
-            ..Default::default()
-        };
+    // Returns number of files. The `FileInfo` can be either directly provided or
+    // retrieved from dict after acquiring write lock. In the latter case, if dict
+    // doesn't contains the file, returns `Ok(None)`.
+    #[inline]
+    fn new_file_imp(&self, fname: &str, file: Either<FileInfo, &str>) -> Result<Option<i64>> {
         if let Some((dir, relative_path)) = self.parse_v2(fname) {
             let mut dict_file = self.file_dict_file_v2.lock().unwrap();
+            let file = match file {
+                Either::Left(f) => f,
+                Either::Right(s) => {
+                    if let Some(f) = self.get_file(s) {
+                        f
+                    } else {
+                        return Ok(None);
+                    }
+                }
+            };
+
             let mut new_dir_id = None;
             let dir_id = {
                 let mut dict = self.file_dict_v2.lock().unwrap();
@@ -321,23 +329,48 @@ impl Dicts {
             dict_file.add(DataKeyDictionaryItemV2::InsertFile(
                 dir_id,
                 relative_path,
-                file.clone(),
+                file,
             ))?;
-            return Ok(file);
+            Ok(Some(0))
+        } else {
+            let mut file_dict_file = self.file_dict_file.lock().unwrap();
+            let file = match file {
+                Either::Left(f) => f,
+                Either::Right(s) => {
+                    if let Some(f) = self.get_file(s) {
+                        f
+                    } else {
+                        return Ok(None);
+                    }
+                }
+            };
+
+            let file_num = {
+                let mut file_dict = self.file_dict.lock().unwrap();
+                file_dict.files.insert(fname.to_owned(), file.clone());
+                file_dict.files.len() as _
+            };
+            file_dict_file.add(DataKeyDictionaryItem::Insert(fname.to_owned(), file))?;
+            Ok(Some(file_num))
         }
-        let mut file_dict_file = self.file_dict_file.lock().unwrap();
-        let file_num = {
-            let mut file_dict = self.file_dict.lock().unwrap();
-            file_dict.files.insert(fname.to_owned(), file.clone());
-            file_dict.files.len() as _
+    }
+
+    fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
+        let iv = if method != EncryptionMethod::Plaintext {
+            Iv::new_ctr()
+        } else {
+            Iv::Empty
         };
-
-        file_dict_file.add(DataKeyDictionaryItem::Insert(
-            fname.to_owned(),
-            file.clone(),
-        ))?;
+        let file = FileInfo {
+            iv: iv.as_slice().to_vec(),
+            key_id: self.current_key_id.load(Ordering::SeqCst),
+            method,
+            ..Default::default()
+        };
+        let file_num = self
+            .new_file_imp(fname, Either::Left(file.clone()))?
+            .unwrap();
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
-
         if method != EncryptionMethod::Plaintext {
             debug!("new encrypted file";
                   "fname" => fname,
@@ -352,24 +385,49 @@ impl Dicts {
     // If the file does not exist, return Ok(())
     // In either case the intent that the file not exist is achieved.
     fn delete_file(&self, fname: &str) -> Result<()> {
-        let mut file_dict_file = self.file_dict_file.lock().unwrap();
-        let (file, file_num) = {
-            let mut file_dict = self.file_dict.lock().unwrap();
+        // This map only contains legacy and out-of-scope files. The overhead should be
+        // small.
+        let is_v1 = self.file_dict.lock().unwrap().files.contains_key(fname);
 
-            match file_dict.files.remove(fname) {
-                Some(file_info) => {
-                    let file_num = file_dict.files.len() as _;
-                    (file_info, file_num)
-                }
-                None => {
+        let (file, file_num) = if !is_v1 && let Some((dir, relative_path)) = self.parse_v2(fname) {
+            let mut file_dict_file = self.file_dict_file_v2.lock().unwrap();
+            let (dir_id, info, file_num) = {
+                let mut dict = self.file_dict_v2.lock().unwrap();
+                if let Some(&dir_id) = dict.dirs.get(&dir)
+                    && let Some(files) = dict.dir_files.get_mut(&dir_id)
+                    && let Some(info) = files.files.remove(&relative_path)
+                {
+                    (dir_id, info, 0)
+                } else {
                     // Could be a plaintext file not tracked by file dictionary.
+                    // There's no need to check v1 again. Even if there's a race between `new_file` and getting `is_v1`, the created file should be a v2.
                     info!("delete untracked plaintext file"; "fname" => fname);
                     return Ok(());
                 }
-            }
+            };
+            file_dict_file.add(DataKeyDictionaryItemV2::RemoveFile(dir_id, fname.to_owned()))?;
+            (info, file_num)
+        } else {
+            // Still enter this branch if `is_v1`. There's could be a race between `new_file` and `delete_file`.
+            let mut file_dict_file = self.file_dict_file.lock().unwrap();
+            let r = {
+                let mut file_dict = self.file_dict.lock().unwrap();
+                match file_dict.files.remove(fname) {
+                    Some(file_info) => {
+                        let file_num = file_dict.files.len() as _;
+                        (file_info, file_num)
+                    }
+                    None => {
+                        // Could be a plaintext file not tracked by file dictionary.
+                        info!("delete untracked plaintext file"; "fname" => fname);
+                        return Ok(());
+                    }
+                }
+            };
+            file_dict_file.add(DataKeyDictionaryItem::Remove(fname.to_owned()))?;
+            r
         };
 
-        file_dict_file.add(DataKeyDictionaryItem::Remove(fname.to_owned()))?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
         if file.method != EncryptionMethod::Plaintext {
             debug!("delete encrypted file"; "fname" => fname);
@@ -380,50 +438,92 @@ impl Dicts {
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<Option<()>> {
-        let mut file_dict_file = self.file_dict_file.lock().unwrap();
-        let (method, file, file_num) = {
-            let mut file_dict = self.file_dict.lock().unwrap();
-            let file = match file_dict.files.get(src_fname) {
-                Some(file_info) => file_info.clone(),
-                None => {
-                    // Could be a plaintext file not tracked by file dictionary.
-                    info!("link untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
-                    return Ok(None);
-                }
-            };
+        if let Some(file_num) = self.new_file_imp(dst_fname, Either::Right(src_fname))? {
+            ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
+            info!("link file"; "src" => src_fname, "dst" => dst_fname);
+            Ok(Some(()))
+        } else {
+            info!("link untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
+            Ok(None)
+        }
+    }
 
-            // When an encrypted file exists in the file system, the file_dict must have
-            // info about this file. But the opposite is not true, this is because the
-            // actual file operation and file_dict operation are not atomic.
-            if file_dict.files.get(dst_fname).is_some() {
-                if Path::new(dst_fname).exists() {
-                    return Err(Error::Io(IoError::new(
-                        ErrorKind::AlreadyExists,
-                        format!("file already exists, {}", dst_fname),
+    fn link_dir(&self, src_name: &str, dst_name: &str) -> Result<()> {
+        if let Some((dir, relative_path)) = self.parse_v2(src_name) {
+            if !relative_path.is_empty() {
+                return Err(box_err!(format!(
+                    "Linking nested directory {src_name} is not supported."
+                )));
+            }
+            if let Some((dst_dir, dst_relative)) = self.parse_v2(dst_name) {
+                if !dst_relative.is_empty() {
+                    return Err(box_err!(format!(
+                        "Linking nested directory {dst_name} is not supported."
                     )));
                 }
-                info!(
-                    "Clean stale file information in file dictionary: {:?}",
-                    dst_fname
-                );
-                file_dict_file.add(DataKeyDictionaryItem::Remove(dst_fname.to_owned()))?;
-                let _ = file_dict.files.remove(dst_fname);
+                let mut dict_file = self.file_dict_file_v2.lock().unwrap();
+                let dir_id = {
+                    let mut dict = self.file_dict_v2.lock().unwrap();
+                    if let Some(&dir_id) = dict.dirs.get(&dir) {
+                        dict.dirs.insert(dst_dir.clone(), dir_id);
+                        dir_id
+                    } else {
+                        // The directory doesn't contain any encrypted file.
+                        return Ok(());
+                    }
+                };
+                dict_file.add(DataKeyDictionaryItemV2::InsertDir(dir_id, dst_dir))?;
+                Ok(())
+            } else {
+                Err(box_err!(format!(
+                    "Linking non whitelisted directory {dst_name} is not supported."
+                )))
             }
-
-            let method = file.method;
-            file_dict.files.insert(dst_fname.to_owned(), file.clone());
-            let file_num = file_dict.files.len() as _;
-            (method, file, file_num)
-        };
-        file_dict_file.add(DataKeyDictionaryItem::Insert(dst_fname.to_owned(), file))?;
-        ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
-
-        if method != EncryptionMethod::Plaintext {
-            info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
         } else {
-            info!("link plaintext file"; "src" => src_fname, "dst" => dst_fname);
+            Err(box_err!(format!(
+                "Linking non whitelisted directory {src_name} is not supported."
+            )))
         }
-        Ok(Some(()))
+    }
+
+    fn delete_dir(&self, dname: &str, includes_files: bool) -> Result<()> {
+        if let Some((dir, relative_path)) = self.parse_v2(dname) {
+            if !relative_path.is_empty() {
+                return Err(box_err!("Deleting nested directory is not supported."));
+            }
+            let mut dict_file = self.file_dict_file_v2.lock().unwrap();
+            let dir_id = {
+                let mut dict = self.file_dict_v2.lock().unwrap();
+                if let Some(&dir_id) = dict.dirs.get(&dir) {
+                    dict.dirs.remove(&dir);
+                    if includes_files {
+                        dict.dir_files.remove(&dir_id);
+                    }
+                    dir_id
+                } else {
+                    // The directory doesn't contain any encrypted file.
+                    return Ok(());
+                }
+            };
+            dict_file.add(DataKeyDictionaryItemV2::RemoveDirMapping(dir_id, dir))?;
+            if includes_files {
+                dict_file.add(DataKeyDictionaryItemV2::RemoveDirFiles(dir_id))?;
+            }
+            Ok(())
+        } else {
+            Err(box_err!(
+                "Deleting non whitelisted directory is not supported."
+            ))
+        }
+    }
+
+    #[inline]
+    fn is_v2_dir(&self, name: &str) -> bool {
+        if let Some((_, relative_path)) = self.parse_v2(name) {
+            relative_path.is_empty()
+        } else {
+            false
+        }
     }
 
     fn rotate_key(&self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<()> {
@@ -485,42 +585,6 @@ impl Dicts {
             ..Default::default()
         };
         self.rotate_key(key_id, data_key, master_key)
-    }
-
-    fn rename_dir(&self, src_name: &str, dst_name: &str) -> Result<()> {
-        if let Some((dir, relative_path)) = self.parse_v2(src_name) {
-            if !relative_path.is_empty() {
-                return Err(box_err!("Renaming from nested directory is not supported."));
-            }
-            if let Some((dst_dir, dst_relative)) = self.parse_v2(dst_name) {
-                if !dst_relative.is_empty() {
-                    return Err(box_err!("Renaming to nested directory is not supported."));
-                }
-                let mut dict_file = self.file_dict_file_v2.lock().unwrap();
-                let dir_id = {
-                    let mut dict = self.file_dict_v2.lock().unwrap();
-                    if let Some(&dir_id) = dict.dirs.get(&dir) {
-                        dict.dirs.remove(&dir);
-                        dict.dirs.insert(dst_dir.clone(), dir_id);
-                        dir_id
-                    } else {
-                        // The directory doesn't contain any encrypted file.
-                        return Ok(());
-                    }
-                };
-                dict_file.add(DataKeyDictionaryItemV2::InsertDir(dir_id, dst_dir))?;
-                dict_file.add(DataKeyDictionaryItemV2::RemoveDirMapping(dir_id, dir))?;
-                Ok(())
-            } else {
-                Err(box_err!(
-                    "Renaming to non whitelisted directory is not supported."
-                ))
-            }
-        } else {
-            Err(box_err!(
-                "Renaming from non whitelisted directory is not supported."
-            ))
-        }
     }
 }
 
@@ -588,7 +652,7 @@ impl DataKeyManagerArgs {
             rotation_period: config.data_key_rotation_period.into(),
             enable_file_dictionary_log: config.enable_file_dictionary_log,
             file_dictionary_rewrite_threshold: config.file_dictionary_rewrite_threshold,
-            v2_directory_whitelist: Vec::new(),
+            v2_directory_whitelist: config.v2_directory_whitelist.clone(),
         }
     }
 }
@@ -893,10 +957,17 @@ impl DataKeyManager {
         Ok(Some(encrypted_file))
     }
 
-    #[allow(dead_code)]
-    fn rename_dir(&self, src_dname: &str, dst_dname: &str) -> IoResult<()> {
-        self.dicts.rename_dir(src_dname, dst_dname)?;
+    // We didn't (yet) handle RocksDB's internal `DeleteDir` call. This should be
+    // called manually to fully destroy a directory.
+    pub fn delete_dir(&self, dname: &str, includes_files: bool) -> IoResult<()> {
+        self.dicts.delete_dir(dname, includes_files)?;
         Ok(())
+    }
+
+    // #[cfg(test)]
+    pub fn rename_dir(&self, src_dname: &str, dst_dname: &str) -> IoResult<()> {
+        self.link_file(src_dname, dst_dname)?;
+        self.delete_file(src_dname)
     }
 
     /// Return which method this manager is using.
@@ -952,20 +1023,33 @@ impl EncryptionKeyManager for DataKeyManager {
         fail_point!("key_manager_fails_before_delete_file", |_| IoResult::Err(
             std::io::ErrorKind::Other.into()
         ));
-        self.dicts.delete_file(fname)?;
+        // The file (or dir) is already deleted from file system.
+        if self.dicts.is_v2_dir(fname) {
+            // This is only called during rename, we don't delete files.
+            self.dicts.delete_dir(fname, false)?;
+        } else {
+            // Files under non-whitelisted directories will be leaked forever.
+            self.dicts.delete_file(fname)?;
+        }
         Ok(())
     }
 
+    // Instead of directly renaming files. We first use this method to link `dst` to
+    // `src`, then rename the directory on file system, finally remove `src`. This
+    // makes sure the whole operation is atomic. Even if there's a panic, we'll only
+    // get a phantom key mapping after recovering.
+    //
+    // RocksDB uses `RenameFile` to rename both file and directory. As a result,
+    // both `link_file` and `delete_file` needs to detect if the path points to a
+    // file or a directory.
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        self.dicts.link_file(src_fname, dst_fname)?;
+        if Path::new(src_fname).is_dir() {
+            self.dicts.link_dir(src_fname, dst_fname)?;
+        } else {
+            self.dicts.link_file(src_fname, dst_fname)?;
+        }
         Ok(())
     }
-
-    // fn create_dir(&self, dname: &str) -> IoResult<()> {}
-
-    // fn rename_dir(&self, src_dname: &str, dst_dname: &str) -> IoResult<()> {}
-
-    // fn delete_dir(&self, dname: &str) -> IoResult<()> {}
 }
 
 #[cfg(test)]
@@ -1629,7 +1713,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rename_encrypted_directory() {
+    fn test_encrypted_directory_basic() {
         let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let mut args = def_data_key_args(&tmp_dir);
@@ -1650,16 +1734,24 @@ mod tests {
             .unwrap()
             .unwrap();
             manager
-                .new_file(path.join("dir").join("foo").to_str().unwrap())
+                .new_file(path.join("dir0").join("foo").to_str().unwrap())
                 .unwrap();
             manager
-                .new_file(path.join("dir").join("bar").to_str().unwrap())
+                .new_file(path.join("dir0").join("bar").to_str().unwrap())
                 .unwrap();
+            manager
+                .new_file(path.join("dir2").join("foo").to_str().unwrap())
+                .unwrap();
+            // Manager needs to detect whether it's file or directory.
+            std::fs::create_dir(path.join("dir0")).unwrap();
             manager
                 .rename_dir(
-                    path.join("dir").to_str().unwrap(),
+                    path.join("dir0").to_str().unwrap(),
                     path.join("dir1").to_str().unwrap(),
                 )
+                .unwrap();
+            manager
+                .delete_dir(path.join("dir2").to_str().unwrap(), false)
                 .unwrap();
             assert_eq!(
                 manager
@@ -1677,7 +1769,13 @@ mod tests {
             );
             assert_eq!(
                 manager
-                    .get_file_exists(path.join("dir").join("bar").to_str().unwrap())
+                    .get_file_exists(path.join("dir0").join("bar").to_str().unwrap())
+                    .unwrap(),
+                None
+            );
+            assert_eq!(
+                manager
+                    .get_file_exists(path.join("dir2").join("foo").to_str().unwrap())
                     .unwrap(),
                 None
             );
@@ -1706,7 +1804,13 @@ mod tests {
             );
             assert_eq!(
                 manager
-                    .get_file_exists(path.join("dir").join("bar").to_str().unwrap())
+                    .get_file_exists(path.join("dir0").join("bar").to_str().unwrap())
+                    .unwrap(),
+                None
+            );
+            assert_eq!(
+                manager
+                    .get_file_exists(path.join("dir2").join("foo").to_str().unwrap())
                     .unwrap(),
                 None
             );

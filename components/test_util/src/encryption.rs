@@ -32,6 +32,7 @@ pub fn new_file_security_config(dir: &tempfile::TempDir) -> EncryptionConfig {
         file_dictionary_rewrite_threshold: 100000,
         master_key: master_key_cfg.clone(),
         previous_master_key: master_key_cfg,
+        v2_directory_whitelist: Vec::new(),
     }
 }
 
