@@ -338,7 +338,13 @@ impl PdClient for RpcClient {
                     Err(err) => Err(box_err!("{:?}", err)),
                 }
             }) as PdFuture<_>,
-            Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
+            Err(err) => Box::pin(async move {
+                Err(box_err!(
+                    "load global config failed, path: '{}', err:  {:?}",
+                    req.get_config_path(),
+                    err
+                ))
+            }) as PdFuture<_>,
         };
         self.pd_client
             .request(req, executor, LEADER_CHANGE_RETRY)

@@ -4,7 +4,10 @@ use std::{self, time::Duration};
 
 use engine_traits::{Peekable, RaftEngineReadOnly, CF_DEFAULT};
 use futures::executor::block_on;
-use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::PeerState};
+use kvproto::{
+    raft_cmdpb::{AdminCmdType, RaftCmdRequest},
+    raft_serverpb::PeerState,
+};
 use raft::prelude::ConfChangeType;
 use raftstore_v2::{
     router::{PeerMsg, PeerTick},
@@ -17,58 +20,18 @@ use crate::cluster::{check_skip_wal, Cluster};
 #[test]
 fn test_simple_change() {
     let mut cluster = Cluster::with_node_count(2, None);
-    let region_id = 2;
-    let mut req = cluster.routers[0].new_request_for(2);
-    let admin_req = req.mut_admin_request();
-    admin_req.set_cmd_type(AdminCmdType::ChangePeer);
-    admin_req
-        .mut_change_peer()
-        .set_change_type(ConfChangeType::AddLearnerNode);
-    let store_id = cluster.node(1).id();
-    let new_peer = new_learner_peer(store_id, 10);
-    admin_req.mut_change_peer().set_peer(new_peer.clone());
-    let resp = cluster.routers[0].admin_command(2, req.clone()).unwrap();
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-    let epoch = req.get_header().get_region_epoch();
-    let new_conf_ver = epoch.get_conf_ver() + 1;
-    let leader_peer = req.get_header().get_peer().clone();
+    let (region_id, peer_id, offset_id) = (2, 10, 1);
+
+    // 1. add learner on store-2
+    add_learner(&cluster, offset_id, region_id, peer_id);
     let meta = cluster.routers[0]
-        .must_query_debug_info(2, Duration::from_secs(3))
+        .must_query_debug_info(region_id, Duration::from_secs(3))
         .unwrap();
     let match_index = meta.raft_apply.applied_index;
-    assert_eq!(meta.region_state.epoch.version, epoch.get_version());
-    assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
-    assert_eq!(meta.region_state.peers, vec![leader_peer, new_peer.clone()]);
 
-    // So heartbeat will create a learner.
-    cluster.dispatch(2, vec![]);
-    let meta = cluster.routers[1]
-        .must_query_debug_info(2, Duration::from_secs(3))
-        .unwrap();
-    assert_eq!(meta.raft_status.id, 10, "{:?}", meta);
-    assert_eq!(meta.region_state.epoch.version, epoch.get_version());
-    assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
-    assert_eq!(
-        meta.raft_status.soft_state.leader_id,
-        req.get_header().get_peer().get_id()
-    );
-    // Trigger the raft tick to replica the log to the learner and execute the
-    // snapshot task.
-    cluster.routers[0]
-        .send(region_id, PeerMsg::Tick(PeerTick::Raft))
-        .unwrap();
-    cluster.dispatch(region_id, vec![]);
-
-    // write one kv after snapshot
+    // 2. write one kv after snapshot
     let (key, val) = (b"key", b"value");
-    let header = Box::new(cluster.routers[0].new_request_for(region_id).take_header());
-    let mut put = SimpleWriteEncoder::with_capacity(64);
-    put.put(CF_DEFAULT, key, val);
-    let (msg, _) = PeerMsg::simple_write(header, put.encode());
-    cluster.routers[0].send(region_id, msg).unwrap();
-    std::thread::sleep(Duration::from_millis(1000));
-    cluster.dispatch(region_id, vec![]);
-
+    write_kv(&cluster, region_id, key, val);
     let meta = cluster.routers[1]
         .must_query_debug_info(region_id, Duration::from_secs(3))
         .unwrap();
@@ -76,67 +39,29 @@ fn test_simple_change() {
     // read the new written kv.
     assert_eq!(match_index, meta.raft_apply.truncated_state.index);
     assert!(meta.raft_apply.applied_index >= match_index);
-    let snap = cluster.routers[1].stale_snapshot(2);
+    let snap = cluster.routers[offset_id].stale_snapshot(region_id);
     assert_eq!(snap.get_value(key).unwrap().unwrap(), val);
+    // 3. remove peer from store-2
+    remove_peer(&cluster, offset_id, region_id, peer_id);
 
-    req.mut_header()
-        .mut_region_epoch()
-        .set_conf_ver(new_conf_ver);
-    req.mut_admin_request()
-        .mut_change_peer()
-        .set_change_type(ConfChangeType::RemoveNode);
-    let resp = cluster.routers[0].admin_command(2, req.clone()).unwrap();
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-    let epoch = req.get_header().get_region_epoch();
-    let new_conf_ver = epoch.get_conf_ver() + 1;
-    let leader_peer = req.get_header().get_peer().clone();
-    let meta = cluster.routers[0]
-        .must_query_debug_info(2, Duration::from_secs(3))
-        .unwrap();
-    assert_eq!(meta.region_state.epoch.version, epoch.get_version());
-    assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
-    assert_eq!(meta.region_state.peers, vec![leader_peer]);
-    cluster.routers[0].wait_flush(region_id, Duration::from_millis(300));
-    let raft_engine = &cluster.node(0).running_state().unwrap().raft_engine;
-    let region_state = raft_engine
-        .get_region_state(region_id, u64::MAX)
-        .unwrap()
-        .unwrap();
-    assert!(
-        region_state.get_removed_records().contains(&new_peer),
-        "{:?}",
-        region_state
-    );
+    // To avaid that some status doesn't clear after destroying, it can support to
+    // create peer by many times.
+    let repeat = 3;
+    for i in 1..repeat {
+        add_learner(&cluster, offset_id, region_id, peer_id + i);
+        write_kv(&cluster, region_id, key, val);
+        remove_peer(&cluster, offset_id, region_id, peer_id + i);
+    }
 
-    // If adding a peer on the same store, removed_records should be cleaned.
-    req.mut_header()
-        .mut_region_epoch()
-        .set_conf_ver(new_conf_ver);
-    req.mut_admin_request()
-        .mut_change_peer()
-        .set_change_type(ConfChangeType::AddLearnerNode);
-    req.mut_admin_request()
-        .mut_change_peer()
-        .mut_peer()
-        .set_id(11);
-    let resp = cluster.routers[0].admin_command(2, req.clone()).unwrap();
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-    cluster.routers[0].wait_flush(region_id, Duration::from_millis(300));
-    let region_state = raft_engine
-        .get_region_state(region_id, u64::MAX)
-        .unwrap()
-        .unwrap();
-    assert!(
-        region_state.get_removed_records().is_empty(),
-        "{:?}",
-        region_state
-    );
+    add_learner(&cluster, offset_id, region_id, peer_id + repeat);
+    write_kv(&cluster, region_id, key, val);
+    let snap = cluster.routers[offset_id].stale_snapshot(region_id);
+    assert_eq!(snap.get_value(key).unwrap().unwrap(), val);
 
     // TODO: check if the peer is removed once life trace is implemented or
     // snapshot is implemented.
-
     // Check if WAL is skipped for admin command.
-    let mut cached = cluster.node(0).tablet_registry().get(2).unwrap();
+    let mut cached = cluster.node(0).tablet_registry().get(region_id).unwrap();
     check_skip_wal(cached.latest().unwrap().as_inner().path());
 }
 
@@ -145,38 +70,12 @@ fn test_simple_change() {
 #[test]
 fn test_remove_by_conf_change() {
     let cluster = Cluster::with_node_count(2, None);
-    let region_id = 2;
-    let mut req = cluster.routers[0].new_request_for(2);
-    let admin_req = req.mut_admin_request();
-    admin_req.set_cmd_type(AdminCmdType::ChangePeer);
-    admin_req
-        .mut_change_peer()
-        .set_change_type(ConfChangeType::AddLearnerNode);
-    let store_id = cluster.node(1).id();
-    let new_peer = new_learner_peer(store_id, 10);
-    admin_req.mut_change_peer().set_peer(new_peer);
-    let resp = cluster.routers[0].admin_command(2, req.clone()).unwrap();
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-    // So heartbeat will create a learner.
-    cluster.dispatch(2, vec![]);
-    // Trigger the raft tick to replica the log to the learner and execute the
-    // snapshot task.
-    cluster.routers[0]
-        .send(region_id, PeerMsg::Tick(PeerTick::Raft))
-        .unwrap();
-    cluster.dispatch(region_id, vec![]);
-    // Wait some time so snapshot can be generated.
-    std::thread::sleep(Duration::from_millis(100));
-    cluster.dispatch(region_id, vec![]);
+    let (region_id, peer_id, offset_id) = (2, 10, 1);
+    let mut req = add_learner(&cluster, offset_id, region_id, peer_id);
 
     // write one kv to make flow control replicated.
     let (key, val) = (b"key", b"value");
-    let header = Box::new(cluster.routers[0].new_request_for(region_id).take_header());
-    let mut put = SimpleWriteEncoder::with_capacity(64);
-    put.put(CF_DEFAULT, key, val);
-    let (msg, _) = PeerMsg::simple_write(header, put.encode());
-    cluster.routers[0].send(region_id, msg).unwrap();
-    cluster.dispatch(region_id, vec![]);
+    write_kv(&cluster, region_id, key, val);
 
     let new_conf_ver = req.get_header().get_region_epoch().get_conf_ver() + 1;
     req.mut_header()
@@ -207,6 +106,92 @@ fn test_remove_by_conf_change() {
     // Wait for apply.
     std::thread::sleep(Duration::from_millis(100));
     let raft_engine = &cluster.node(1).running_state().unwrap().raft_engine;
+    let region_state = raft_engine
+        .get_region_state(region_id, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state.get_state(), PeerState::Tombstone);
+    assert_eq!(raft_engine.get_raft_state(region_id).unwrap(), None);
+}
+
+fn add_learner(
+    cluster: &Cluster,
+    offset_id: usize,
+    region_id: u64,
+    peer_id: u64,
+) -> RaftCmdRequest {
+    let store_id = cluster.node(offset_id).id();
+    let mut req = cluster.routers[0].new_request_for(region_id);
+    let admin_req = req.mut_admin_request();
+    admin_req.set_cmd_type(AdminCmdType::ChangePeer);
+    admin_req
+        .mut_change_peer()
+        .set_change_type(ConfChangeType::AddLearnerNode);
+    let new_peer = new_learner_peer(store_id, peer_id);
+    admin_req.mut_change_peer().set_peer(new_peer.clone());
+    let resp = cluster.routers[0]
+        .admin_command(region_id, req.clone())
+        .unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    let epoch = req.get_header().get_region_epoch();
+    let new_conf_ver = epoch.get_conf_ver() + 1;
+    let leader_peer = req.get_header().get_peer().clone();
+    let meta = cluster.routers[0]
+        .must_query_debug_info(region_id, Duration::from_secs(3))
+        .unwrap();
+    assert_eq!(meta.region_state.epoch.version, epoch.get_version());
+    assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
+    assert_eq!(meta.region_state.peers, vec![leader_peer, new_peer]);
+
+    // heartbeat will create a learner.
+    cluster.dispatch(region_id, vec![]);
+    cluster.routers[0]
+        .send(region_id, PeerMsg::Tick(PeerTick::Raft))
+        .unwrap();
+    let meta = cluster.routers[offset_id]
+        .must_query_debug_info(region_id, Duration::from_secs(3))
+        .unwrap();
+    assert_eq!(meta.raft_status.id, peer_id, "{:?}", meta);
+
+    // Wait some time so snapshot can be generated.
+    std::thread::sleep(Duration::from_millis(100));
+    cluster.dispatch(region_id, vec![]);
+    req
+}
+
+fn write_kv(cluster: &Cluster, region_id: u64, key: &[u8], val: &[u8]) {
+    let header = Box::new(cluster.routers[0].new_request_for(region_id).take_header());
+    let mut put = SimpleWriteEncoder::with_capacity(64);
+    put.put(CF_DEFAULT, key, val);
+    let (msg, _) = PeerMsg::simple_write(header, put.encode());
+    cluster.routers[0].send(region_id, msg).unwrap();
+    std::thread::sleep(Duration::from_millis(1000));
+    cluster.dispatch(region_id, vec![]);
+}
+
+fn remove_peer(cluster: &Cluster, offset_id: usize, region_id: u64, peer_id: u64) {
+    let store_id = cluster.node(offset_id).id();
+    let mut req = cluster.routers[0].new_request_for(region_id);
+    let admin_req = req.mut_admin_request();
+    admin_req.set_cmd_type(AdminCmdType::ChangePeer);
+    admin_req
+        .mut_change_peer()
+        .set_change_type(ConfChangeType::RemoveNode);
+    admin_req
+        .mut_change_peer()
+        .set_peer(new_learner_peer(store_id, peer_id));
+    let resp = cluster.routers[0]
+        .admin_command(region_id, req.clone())
+        .unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+    cluster.routers[offset_id]
+        .send(region_id, PeerMsg::Tick(PeerTick::Raft))
+        .unwrap();
+    cluster.dispatch(region_id, vec![]);
+    std::thread::sleep(Duration::from_millis(100));
+
+    let raft_engine = &cluster.node(offset_id).running_state().unwrap().raft_engine;
     let region_state = raft_engine
         .get_region_state(region_id, u64::MAX)
         .unwrap()

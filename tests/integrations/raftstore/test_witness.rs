@@ -12,7 +12,7 @@ use kvproto::{
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
-use tikv_util::store::find_peer;
+use tikv_util::{config::ReadableDuration, store::find_peer};
 
 // Test the case that region split or merge with witness peer
 #[test]
@@ -555,4 +555,46 @@ fn test_witness_leader_down() {
         nodes[2],
     );
     assert_eq!(cluster.must_get(b"k9"), Some(b"v9".to_vec()));
+}
+
+// Test the case that witness ignore consistency check as it has no data
+#[test]
+fn test_witness_ignore_consistency_check() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
+    // disable compact log to make test more stable.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.consistency_check_interval = ReadableDuration::secs(1);
+    cluster.run();
+
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k1", b"v1");
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+
+    // nonwitness -> witness
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
+
+    // make sure the peer_on_store3 has completed applied to witness
+    std::thread::sleep(Duration::from_millis(200));
+
+    for i in 0..300 {
+        cluster.must_put(
+            format!("k{:06}", i).as_bytes(),
+            format!("k{:06}", i).as_bytes(),
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }

@@ -87,7 +87,7 @@ pub struct ClientSuite {
 
 impl SecurityConfig {
     /// Validates ca, cert and private key.
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&self, raftstore_v2: bool) -> Result<(), Box<dyn Error>> {
         check_key_file("ca key", &self.ca_path)?;
         check_key_file("cert key", &self.cert_path)?;
         check_key_file("private key", &self.key_path)?;
@@ -96,6 +96,12 @@ impl SecurityConfig {
             && (self.ca_path.is_empty() || self.cert_path.is_empty() || self.key_path.is_empty())
         {
             return Err("ca, cert and private key should be all configured.".into());
+        }
+        if raftstore_v2
+            && self.encryption.data_encryption_method
+                != kvproto::encryptionpb::EncryptionMethod::Plaintext
+        {
+            return Err("encryption is not supported for partitioned-raft-kv".into());
         }
 
         Ok(())
@@ -298,7 +304,7 @@ mod tests {
     fn test_security() {
         let cfg = SecurityConfig::default();
         // default is disable secure connection.
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
         let mgr = SecurityManager::new(&cfg).unwrap();
         assert!(mgr.cfg.ca_path.is_empty());
         assert!(mgr.cfg.cert_path.is_empty());
@@ -307,7 +313,7 @@ mod tests {
         let assert_cfg = |c: fn(&mut SecurityConfig), valid: bool| {
             let mut invalid_cfg = cfg.clone();
             c(&mut invalid_cfg);
-            assert_eq!(invalid_cfg.validate().is_ok(), valid);
+            assert_eq!(invalid_cfg.validate(false).is_ok(), valid);
         };
 
         // invalid path should be rejected.
@@ -335,11 +341,11 @@ mod tests {
         c.cert_path = format!("{}", example_cert.display());
         c.key_path = format!("{}", example_key.display());
         // incomplete configuration.
-        c.validate().unwrap_err();
+        c.validate(false).unwrap_err();
 
         // data should be loaded from file after validating.
         c.ca_path = format!("{}", example_ca.display());
-        c.validate().unwrap();
+        c.validate(false).unwrap();
 
         let (ca, cert, key) = c.load_certs().unwrap_or_default();
         assert_eq!(ca, vec![0]);
