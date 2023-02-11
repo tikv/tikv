@@ -69,7 +69,6 @@ use std::{
         atomic::{self, AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
@@ -79,7 +78,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{
     raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
-use futures::{future::Either, prelude::*};
+use futures::prelude::*;
 use kvproto::{
     kvrpcpb::{
         ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
@@ -606,13 +605,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
-        let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
 
-        self.read_pool_spawn_with_busy_check(
-            busy_threshold,
+        let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now();
                 tls_collect_query(
@@ -666,13 +663,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             false,
                         );
                         snap_store
-                    .get(&key, &mut statistics)
-                    // map storage::txn::Error -> storage::Error
-                    .map_err(Error::from)
-                    .map(|r| {
-                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                        r
-                    })
+                        .get(&key, &mut statistics)
+                        // map storage::txn::Error -> storage::Error
+                        .map_err(Error::from)
+                        .map(|r| {
+                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                            r
+                        })
                     });
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
@@ -735,7 +732,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
-        )
+        );
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Get values of a set of keys with separate context from a snapshot,
@@ -761,8 +762,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .to_owned();
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
-        let busy_threshold =
-            Duration::from_millis(requests[0].get_context().busy_threshold_ms as u64);
 
         // The resource tags of these batched requests are not the same, and it is quite
         // expensive to distinguish them, so we can find random one of them as a
@@ -776,8 +775,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Unset the TLS tracker because the future below does not belong to any
         // specific request
         clear_tls_tracker_token();
-        self.read_pool_spawn_with_busy_check(
-            busy_threshold,
+        let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -923,7 +921,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
-        )
+        );
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Get values of a set of keys in a batch from the snapshot.
@@ -949,11 +951,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .new_tag_with_key_ranges(&ctx, key_ranges);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
-        let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
-        self.read_pool_spawn_with_busy_check(
-            busy_threshold,
+        let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now();
                 let mut key_ranges = vec![];
@@ -1095,7 +1095,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
-        )
+        );
+
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the
@@ -1131,10 +1136,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
-        let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
-        self.read_pool_spawn_with_busy_check(
-            busy_threshold,
+        let res = self.read_pool.spawn_handle(
             async move {
                 {
                     let end_key = match &end_key {
@@ -1270,7 +1273,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
-        )
+        );
+
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     pub fn scan_lock(
@@ -1597,10 +1605,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .resource_tag_factory
             .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
         let api_version = self.api_version;
-        let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
-        self.read_pool_spawn_with_busy_check(
-            busy_threshold,
+        let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -1657,7 +1663,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
-        )
+        );
+
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Get the values of a set of raw keys, return a list of `Result`s.
@@ -1677,7 +1688,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .to_owned();
         let priority_tag = get_priority_tag(priority);
         let api_version = self.api_version;
-        let busy_threshold = Duration::from_millis(gets[0].get_context().busy_threshold_ms as u64);
 
         // The resource tags of these batched requests are not the same, and it is quite
         // expensive to distinguish them, so we can find random one of them as a
@@ -1689,8 +1699,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .resource_tag_factory
             .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
-        self.read_pool_spawn_with_busy_check(
-            busy_threshold,
+        let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -1791,7 +1800,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
-        )
+        );
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Get the values of some raw keys in a batch.
@@ -1810,10 +1823,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .resource_tag_factory
             .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
-        let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
-        self.read_pool_spawn_with_busy_check(
-            busy_threshold,
+        let res = self.read_pool.spawn_handle(
             async move {
                 let mut key_ranges = vec![];
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -1887,7 +1898,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
-        )
+        );
+
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     async fn check_causal_ts_flushed(ctx: &mut Context, tag: CommandKind) -> Result<()> {
@@ -2303,10 +2319,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
-        let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
-        self.read_pool_spawn_with_busy_check(
-            busy_threshold,
+        let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -2411,7 +2425,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
-        )
+        );
+
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Scan raw keys in multiple ranges in a batch.
@@ -2436,10 +2455,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .resource_tag_factory
             .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
-        let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
-        self.read_pool_spawn_with_busy_check(
-            busy_threshold,
+        let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -2566,7 +2583,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
-        )
+        );
+
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Get the value of a raw key.
@@ -2584,10 +2606,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .resource_tag_factory
             .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
         let api_version = self.api_version;
-        let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
-        self.read_pool_spawn_with_busy_check(
-            busy_threshold,
+        let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -2644,7 +2664,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
-        )
+        );
+
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     pub fn raw_compare_and_swap_atomic(
@@ -2831,31 +2856,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
         }
-    }
-
-    fn read_pool_spawn_with_busy_check<Fut, T>(
-        &self,
-        busy_threshold: Duration,
-        future: Fut,
-        priority: CommandPri,
-        task_id: u64,
-        group_meta: Vec<u8>,
-    ) -> impl Future<Output = Result<T>>
-    where
-        Fut: Future<Output = Result<T>> + Send + 'static,
-        T: Send + 'static,
-    {
-        if let Err(busy_err) = self.read_pool.check_busy_threshold(busy_threshold) {
-            let mut err = kvproto::errorpb::Error::default();
-            err.set_server_is_busy(busy_err);
-            return Either::Left(future::err(Error::from(ErrorInner::Kv(err.into()))));
-        }
-        Either::Right(
-            self.read_pool
-                .spawn_handle(future, priority, task_id, group_meta)
-                .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .and_then(|res| future::ready(res)),
-        )
     }
 }
 

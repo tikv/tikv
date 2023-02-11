@@ -1445,17 +1445,12 @@ fn test_before_propose_deadline() {
             }),
         )
         .unwrap();
-    let res = rx.recv().unwrap();
-    assert!(
-        matches!(
-            res,
-            Err(StorageError(box StorageErrorInner::Kv(KvError(
-                box KvErrorInner::Request(_),
-            ))))
-        ),
-        "actual: {:?}",
-        res
-    );
+    assert!(matches!(
+        rx.recv().unwrap(),
+        Err(StorageError(box StorageErrorInner::Kv(KvError(
+            box KvErrorInner::Request(_),
+        ))))
+    ));
 }
 
 #[test]
