@@ -1910,7 +1910,11 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(CacheKvFile::Mem(Arc::new(buff.clone())), output);
+        assert!(
+            matches!(output.clone(), CacheKvFile::Mem(rc) if &*rc.get().unwrap() == buff.as_slice()),
+            "{:?}",
+            output
+        );
 
         // Do not shrint nothing.
         let shrink_size = importer.shrink_by_tick();
@@ -2923,11 +2927,11 @@ mod tests {
             length: 100,
             ..Default::default()
         };
-        let check = importer.inc_mem_and_check(&meta);
-        assert!(check);
+        let check = importer.request_memory(&meta);
+        assert!(check.is_some());
         assert_eq!(importer.mem_use.load(Ordering::SeqCst), meta.get_length());
 
-        importer.dec_mem(meta.get_length());
+        drop(check);
         assert_eq!(importer.mem_use.load(Ordering::SeqCst), 0);
 
         // test inc_mem_and_check() failed.
@@ -2935,8 +2939,8 @@ mod tests {
             length: u64::MAX,
             ..Default::default()
         };
-        let check = importer.inc_mem_and_check(&meta);
-        assert!(!check);
+        let check = importer.request_memory(&meta);
+        assert!(check.is_none());
     }
 
     #[test]
@@ -2946,7 +2950,8 @@ mod tests {
             SstImporter::new(&Config::default(), import_dir, None, ApiVersion::V1).unwrap();
 
         let key = "file1";
-        let value = (CacheKvFile::Mem(Arc::default()), Instant::now());
+        let (r, _) = Remote::download();
+        let value = (CacheKvFile::Mem(r), Instant::now());
         let lock = importer.file_locks.entry(key.to_string()).or_insert(value);
 
         // test locked by try_entry()
