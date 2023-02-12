@@ -135,7 +135,7 @@ impl<T> Drop for DownloadPromise<T> {
         let mut l = self.0.as_ref().0.lock().unwrap();
         if matches!(*l, FileCacheInner::Downloading) {
             *l = FileCacheInner::Leaked;
-            self.0.as_ref().1.notify_all();
+            self.0.as_ref().1.notify_one();
         }
     }
 }
@@ -2967,5 +2967,64 @@ mod tests {
 
         let _buff = v.0.clone();
         assert_eq!(v.0.ref_count(), 2);
+    }
+
+    #[test]
+    fn test_remote_waiting() {
+        let (r, dl) = Remote::download();
+        let r2 = r.clone();
+        let js = (0..2)
+            .map(|_| {
+                let r = r.clone();
+                std::thread::spawn(move || {
+                    assert!(r.wait_until_fill().is_none());
+                    r.get()
+                })
+            })
+            .collect::<Vec<_>>();
+        dl.fulfill(42);
+        for j in js {
+            assert!(matches!(j.join(), Ok(Some(42))));
+        }
+        assert_eq!(r2.get(), Some(42));
+    }
+
+    #[test]
+    fn test_remote_drop_in_one_thread() {
+        let (r, dl) = Remote::download();
+        drop(dl);
+        let p = r.wait_until_fill();
+        assert!(p.is_some());
+        p.unwrap().fulfill("Kitty");
+        assert_eq!(r.get(), Some("Kitty"));
+    }
+
+    #[test]
+    fn test_remote_take_duty() {
+        let (r, dl) = Remote::download();
+        let js = (0..4).map(|i| {
+            let r = r.clone();
+            std::thread::Builder::new()
+                .name(format!("rd-{}", i))
+                .spawn(move || {
+                    loop {
+                        match r.wait_until_fill() {
+                            Some(x) => {
+                                if i == 2 {
+                                    return x.fulfill(42).get();
+                                } else {
+                                    drop(x);
+                                }
+                            }
+                            None => return r.get(),
+                        }
+                    }
+                })
+                .unwrap()
+        });
+        drop(dl);
+        for j in js {
+            assert!(matches!(j.join(), Ok(Some(42))));
+        }
     }
 }
