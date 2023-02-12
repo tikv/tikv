@@ -488,7 +488,6 @@ struct BaseRowSampleCollector {
     fm_sketches: Vec<FmSketch>,
     rng: StdRng,
     total_sizes: Vec<i64>,
-    row_buf: Vec<u8>,
     memory_usage: usize,
     reported_memory_usage: usize,
 }
@@ -501,7 +500,6 @@ impl Default for BaseRowSampleCollector {
             fm_sketches: vec![],
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
-            row_buf: Vec::new(),
             memory_usage: 0,
             reported_memory_usage: 0,
         }
@@ -516,7 +514,6 @@ impl BaseRowSampleCollector {
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
-            row_buf: Vec::new(),
             memory_usage: 0,
             reported_memory_usage: 0,
         }
@@ -530,7 +527,6 @@ impl BaseRowSampleCollector {
     ) {
         let col_len = columns_val.len();
         for i in 0..column_groups.len() {
-            self.row_buf.clear();
             let offsets = column_groups[i].get_column_offsets();
             let mut has_null = true;
             for j in offsets {
@@ -545,16 +541,15 @@ impl BaseRowSampleCollector {
                 self.null_count[col_len + i] += 1;
                 continue;
             }
-            // Use a in place murmur3 to replace this memory copy.
+            let mut values: Vec<&[u8]> = Vec::with_capacity(offsets.len());
             for j in offsets {
                 if columns_info[*j as usize].as_accessor().is_string_like() {
-                    self.row_buf
-                        .extend_from_slice(&collation_keys_val[*j as usize]);
+                    values.push(&collation_keys_val[*j as usize]);
                 } else {
-                    self.row_buf.extend_from_slice(&columns_val[*j as usize]);
+                    values.push(&columns_val[*j as usize]);
                 }
             }
-            self.fm_sketches[col_len + i].insert(&self.row_buf);
+            self.fm_sketches[col_len + i].insert_multi_values(values);
         }
     }
 
@@ -1355,5 +1350,91 @@ mod tests {
             }
             assert_eq!(collector.samples.len(), 0);
         }
+    }
+
+
+}
+
+#[cfg(test)]
+mod benches {
+    use tidb_query_datatype::{
+        codec::{
+            batch::LazyBatchColumn,
+            collation::{Collator, collator::CollatorUtf8Mb4Bin}
+        }, 
+        EvalType, FieldTypeTp
+    };
+
+    use super::*;
+
+    #[bench]
+    fn bench_collect_column_group(b: &mut test::Bencher) {
+        let mut collector = BaseRowSampleCollector::new(10000, 4);
+        let columns_info = vec![
+            {
+                let mut col_info = tipb::ColumnInfo::default();
+                col_info.set_column_id(1);
+                col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                col_info
+            },
+            {
+                let mut col_info = tipb::ColumnInfo::default();
+                col_info.set_column_id(2);
+                col_info.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
+                col_info.as_mut_accessor().set_collation(Collation::Utf8Mb4Bin);
+                col_info
+            },
+            {
+                let mut col_info = tipb::ColumnInfo::default();
+                col_info.set_column_id(3);
+                col_info.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
+                col_info.as_mut_accessor().set_collation(Collation::Utf8Mb4Bin);
+                col_info
+            },
+        ];
+        let columns_slice = vec![
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+                col.mut_decoded().push_int(Some(1));
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
+                col.mut_decoded().push_bytes(Some(b"abcdefghijklmnopqrstuvwxyz0123456789".to_vec()));
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
+                col.mut_decoded().push_bytes(Some(b"abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789".to_vec()));
+                col
+            }
+        ];
+        let mut column_vals = Vec::new();
+        let mut collation_key_vals = Vec::new();
+        for i in 0..columns_info.len() {
+            let mut val = vec![];
+            columns_slice[i].encode(
+                0,
+                &columns_info[i],
+                &mut EvalContext::default(),
+                &mut val,
+            ).unwrap();
+            if columns_info[i].as_accessor().is_string_like() {
+                let mut mut_val = &val[..];
+                let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &columns_info[i]).unwrap();
+                let decoded_sorted_val = CollatorUtf8Mb4Bin::sort_key(&decoded_val.as_string().unwrap().unwrap().into_owned()).unwrap();
+                collation_key_vals.push(decoded_sorted_val);
+            } else {
+                collation_key_vals.push(Vec::new());
+            }
+            column_vals.push(val);
+        }
+        let mut column_group = tipb::AnalyzeColumnGroup::default();
+        column_group.set_column_offsets(vec![0, 1, 2]);
+        column_group.set_prefix_lengths(vec![-1, -1, -1]);
+        let column_groups = vec![column_group];
+        b.iter(|| {
+            collector.collect_column_group(&column_vals, &collation_key_vals, &columns_info, &column_groups);
+        })
     }
 }
