@@ -3006,19 +3006,9 @@ mod tests {
             let r = r.clone();
             std::thread::Builder::new()
                 .name(format!("rd-{}", i))
-                .spawn(move || {
-                    loop {
-                        match r.wait_until_fill() {
-                            Some(x) => {
-                                if i == 2 {
-                                    return x.fulfill(42).get();
-                                } else {
-                                    drop(x);
-                                }
-                            }
-                            None => return r.get(),
-                        }
-                    }
+                .spawn(move || match r.wait_until_fill() {
+                    Some(x) => x.fulfill(42).get(),
+                    None => r.get(),
                 })
                 .unwrap()
         });
