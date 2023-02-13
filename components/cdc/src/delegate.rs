@@ -1093,10 +1093,9 @@ impl ObservedRange {
     pub fn update_region_key_range(&mut self, region: &Region) {
         // Check observed key range in region.
         if self.start_key_encoded <= region.start_key {
-            if self.end_key_encoded.is_empty() {
-                // Observed range covers the region.
-                self.all_key_covered = true;
-            } else if region.end_key <= self.end_key_encoded && !region.end_key.is_empty() {
+            if self.end_key_encoded.is_empty()
+                || (region.end_key <= self.end_key_encoded && !region.end_key.is_empty())
+            {
                 // Observed range covers the region.
                 self.all_key_covered = true;
             }
@@ -1110,7 +1109,7 @@ impl ObservedRange {
         if start_key <= key && (key < end_key || end_key.is_empty()) {
             return true;
         }
-        return false;
+        false
     }
 
     pub fn contains_encoded_key(&self, key: &[u8]) -> bool {

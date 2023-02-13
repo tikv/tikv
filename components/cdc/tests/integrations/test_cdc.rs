@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{assert_matches::assert_matches, sync::*, time::Duration};
+use std::{sync::*, time::Duration};
 
 use api_version::{test_kv_format_impl, KvFormat};
 use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
