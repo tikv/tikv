@@ -100,7 +100,6 @@ fn test_merge() {
     let region_4 = merge_region(router, region_3, peer_3, region_4);
     let region_5 = merge_region(router, region_4, peer_4, region_5);
 
-    println!("reboot");
     cluster.restart(0);
     let router = &mut cluster.routers[0];
     let snapshot = router.stale_snapshot(region_5.get_id());
