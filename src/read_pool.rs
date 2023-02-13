@@ -15,7 +15,7 @@ use file_system::{set_io_type, IoType};
 use futures::{channel::oneshot, future::TryFutureExt};
 use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
-use prometheus::{Histogram, IntCounter, IntGauge};
+use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
 use resource_control::{ControlledFuture, ResourceController};
 use thiserror::Error;
 use tikv_util::{
@@ -355,11 +355,15 @@ impl TimeSliceInspector {
         // Now, we simplify the problem by merging samples from all levels. If we want
         // more accurate answer in the future, calculate for each level separately.
         for hist in &inner.time_slice_hist {
-            new_sum += Duration::from_secs_f64(hist.get_sample_sum());
-            new_count += hist.get_sample_count();
+            // Call `metric` to get a consistent snapshot of sum and count.
+            let metric_proto = hist.metric();
+            let hist_proto = metric_proto.get_histogram();
+            new_sum += Duration::from_secs_f64(hist_proto.get_sample_sum());
+            new_count += hist_proto.get_sample_count();
         }
-        let time_diff = new_sum - inner.last_sum;
-        if time_diff < MIN_TIME_DIFF {
+        let time_diff = new_sum.saturating_sub(inner.last_sum);
+        let count_diff = new_count.saturating_sub(inner.last_count);
+        if time_diff < MIN_TIME_DIFF || count_diff == 0 {
             return;
         }
         let new_val = time_diff / ((new_count - inner.last_count) as u32);
