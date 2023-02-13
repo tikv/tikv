@@ -24,7 +24,7 @@ use super::{
 };
 use crate::{
     annotate,
-    errors::Result,
+    errors::{Error, EtcdErrorExt, Result},
     metadata::{
         keys::{KeyValue, MetaKey},
         metrics::METADATA_KEY_OPERATION,
@@ -299,17 +299,32 @@ impl MetaStore for EtcdStore {
                 |events| -> Pin<Box<dyn Stream<Item = Result<KvEvent>> + Send>> {
                     match events {
                         Err(err) => Box::pin(tokio_stream::once(Err(err.into()))),
-                        Ok(events) => Box::pin(tokio_stream::iter(
-                            // TODO: remove the copy here via access the protobuf field directly.
-                            #[allow(clippy::unnecessary_to_owned)]
-                            events.events().to_owned().into_iter().filter_map(|event| {
-                                let kv = event.kv()?;
-                                Some(Ok(KvEvent {
-                                    kind: event.event_type().into(),
-                                    pair: kv.clone().into(),
-                                }))
-                            }),
-                        )),
+                        Ok(events) => {
+                            if events.compact_revision() > 0 && events.canceled() {
+                                return Box::pin(tokio_stream::once(Err(Error::Etcd(
+                                    EtcdErrorExt::RevisionCompacted {
+                                        current: events.compact_revision(),
+                                    },
+                                ))));
+                            }
+                            if events.canceled() {
+                                return Box::pin(tokio_stream::once(Err(Error::Etcd(
+                                    EtcdErrorExt::WatchCanceled,
+                                ))));
+                            }
+                            Box::pin(tokio_stream::iter(
+                                // TODO: remove the copy here via access the protobuf field
+                                // directly.
+                                #[allow(clippy::unnecessary_to_owned)]
+                                events.events().to_owned().into_iter().filter_map(|event| {
+                                    let kv = event.kv()?;
+                                    Some(Ok(KvEvent {
+                                        kind: event.event_type().into(),
+                                        pair: kv.clone().into(),
+                                    }))
+                                }),
+                            ))
+                        }
                     }
                 },
             )),
