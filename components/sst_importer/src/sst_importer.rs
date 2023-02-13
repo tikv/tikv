@@ -229,6 +229,16 @@ impl<T: ShareOwned> Remote<T> {
     }
 }
 
+/// returns a error indices that we are going to panic in a invalid state.
+/// (Rust panic information cannot be send to BR, hence client cannot know
+/// what happens, so we pack it into a `Result`.)
+fn bug(message: impl std::fmt::Display) -> Error {
+    Error::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!("BUG in TiKV: {}", message),
+    ))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FileCacheInner<T> {
     Downloading,
@@ -667,12 +677,14 @@ impl SstImporter {
                             None => return Ok(ent.get().0.clone()),
                         }
                     }
-                    _ => panic!(concat!(
-                        "using both read-to-memory and download-to-file is unacceptable for now.",
-                        "(If you think it is possible in the future you are reading this, ",
-                        "please change this line to `return item.get.0.clone()`)",
-                        "(Please also check the state transform is OK too.)"
-                    )),
+                    _ => {
+                        return Err(bug(concat!(
+                            "using both read-to-memory and download-to-file is unacceptable for now.",
+                            "(If you think it is possible in the future you are reading this, ",
+                            "please change this line to `return item.get.0.clone()`)",
+                            "(Please also check the state transform is OK too.)",
+                        )));
+                    }
                 },
                 Entry::Vacant(ent) => {
                     let (cache, handle) = Remote::download();
@@ -809,7 +821,7 @@ impl SstImporter {
         };
         match c {
             // If cache memroy, it has been rewrite, return buffer directly.
-            CacheKvFile::Mem(buff) => Ok(buff.get().expect("invalid state: empty cache")),
+            CacheKvFile::Mem(buff) => buff.get().ok_or_else(|| bug("invalid cache state")),
             // If cache file name, it need to read and rewrite.
             CacheKvFile::Fs(path) => {
                 let file = File::open(path.as_ref())?;
