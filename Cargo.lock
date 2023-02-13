@@ -1616,6 +1616,7 @@ dependencies = [
  "file_system",
  "keys",
  "kvproto",
+ "lazy_static",
  "log_wrappers",
  "protobuf",
  "raft",
