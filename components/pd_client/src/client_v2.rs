@@ -522,7 +522,6 @@ fn get_region_resp_by_id(
     let timer = Instant::now_coarse();
     let mut req = pdpb::GetRegionByIdRequest::default();
     req.set_region_id(region_id);
-    // let mut raw_client=client.clone();
     Box::pin(async move {
         raw_client.wait_for_ready().await?;
         req.set_header(raw_client.header());

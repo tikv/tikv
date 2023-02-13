@@ -293,7 +293,7 @@ impl RunningState {
 
         let mut coprocessor = raftstore::coprocessor::Config::default();
         coprocessor.enable_region_bucket = true;
-        coprocessor.region_bucket_size = ReadableSize::mb(1);
+        coprocessor.region_bucket_size = ReadableSize::kb(1);
         let coprocessor_host = CoprocessorHost::new(router.store_router().clone(), coprocessor);
 
         let background = Worker::new("background");

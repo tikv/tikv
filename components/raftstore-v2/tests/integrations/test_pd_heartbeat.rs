@@ -93,7 +93,7 @@ fn test_report_buckets() {
     for _ in 0..200 {
         suffix.push_str("fake ");
     }
-    for i in 0..10000 {
+    for i in 0..10 {
         let mut put = SimpleWriteEncoder::with_capacity(64);
         let mut key = format!("key-{}", i);
         key.push_str(&suffix);

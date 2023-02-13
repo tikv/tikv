@@ -209,18 +209,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
             RegionChangeEvent::UpdateBuckets(buckets_count),
             self.fsm.peer().state_role(),
         );
+        let meta = region_buckets.meta.clone();
         self.fsm.peer_mut().set_region_buckets(region_buckets);
         let mut store_meta = self.store_ctx.store_meta.lock().unwrap();
         if let Some(reader) = store_meta.readers.get_mut(&self.fsm.peer().region_id()) {
-            reader.0.update(ReadProgress::region_buckets(
-                self.fsm
-                    .peer()
-                    .region_buckets()
-                    .as_ref()
-                    .unwrap()
-                    .meta
-                    .clone(),
-            ));
+            reader.0.update(ReadProgress::region_buckets(meta));
         }
     }
 
