@@ -326,8 +326,8 @@ fn test_delay_split_region() {
     cluster.must_put(b"k3", b"v3");
 
     // Although skip bcast is enabled, but heartbeat will commit the log in period.
-    check_cluster!(&mut cluster, b"k1", b"v1", true);
-    check_cluster!(&mut cluster, b"k3", b"v3", true);
+    check_cluster!(cluster, b"k1", b"v1", true);
+    check_cluster!(cluster, b"k3", b"v3", true);
     cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
 
     cluster.add_send_filter(CloneFilterFactory(EraseHeartbeatCommit));
@@ -336,14 +336,14 @@ fn test_delay_split_region() {
     sleep_ms(100);
     // skip bcast is enabled by default, so all followers should not commit
     // the log.
-    check_cluster!(&mut cluster, b"k4", b"v4", false);
+    check_cluster!(cluster, b"k4", b"v4", false);
 
     cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
     // New leader should flush old committed entries eagerly.
-    check_cluster!(&mut cluster, b"k4", b"v4", true);
+    check_cluster!(cluster, b"k4", b"v4", true);
     cluster.must_put(b"k5", b"v5");
     // New committed entries should be broadcast lazily.
-    check_cluster!(&mut cluster, b"k5", b"v5", false);
+    check_cluster!(cluster, b"k5", b"v5", false);
     cluster.add_send_filter(CloneFilterFactory(EraseHeartbeatCommit));
 
     let k2 = b"k2";
@@ -355,7 +355,7 @@ fn test_delay_split_region() {
     sleep_ms(100);
     // After split, skip bcast is enabled again, so all followers should not
     // commit the log.
-    check_cluster!(&mut cluster, b"k6", b"v6", false);
+    check_cluster!(cluster, b"k6", b"v6", false);
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
