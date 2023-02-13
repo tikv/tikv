@@ -411,9 +411,7 @@ fn test_node_split_overlap_snapshot() {
     must_get_equal(&engine3, b"k3", b"v3");
 }
 
-fn test_apply_new_version_snapshot<T: Simulator>(
-    cluster: &mut Cluster<T>,
-) {
+fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
@@ -645,10 +643,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
     }
 }
 
-fn test_split_epoch_not_match<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    right_derive: bool,
-) {
+fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
