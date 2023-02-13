@@ -44,10 +44,11 @@ impl<EK: Clone> CachedTablet<EK> {
         CachedTablet {
             latest: Arc::new(LatestTablet {
                 data: Mutex::new(data.clone()),
-                version: AtomicU64::new(0),
+                version: AtomicU64::new(1),
             }),
             cache: data,
-            version: 0,
+            // We use 0 in release, so it needs to be intialized to 1.
+            version: 1,
         }
     }
 
