@@ -9,7 +9,7 @@ publish = false
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 failpoints = ["fail/failpoints"]
-testexport = []
+testexport = ["proxy_ffi/testexport"]
 test-engine-kv-rocksdb = [
   "engine_test/test-engine-kv-rocksdb"
 ]

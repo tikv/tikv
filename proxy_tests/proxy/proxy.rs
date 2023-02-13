@@ -24,7 +24,7 @@ pub use kvproto::{
     raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, Request},
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
 };
-pub use new_mock_engine_store::{
+pub use mock_engine_store::{
     config::Config,
     general_get_apply_state, general_get_region_local_state, get_raft_local_state, make_new_region,
     mock_cluster::{new_put_cmd, new_request, FFIHelperSet},
@@ -164,7 +164,7 @@ pub fn must_get_mem(
     value: Option<&[u8]>,
 ) {
     let last_res: Option<&Vec<u8>> = None;
-    let cf = new_mock_engine_store::interfaces_ffi::ColumnFamilyType::Default;
+    let cf = mock_engine_store::interfaces_ffi::ColumnFamilyType::Default;
     for _ in 1..300 {
         let mut ok = false;
         {

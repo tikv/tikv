@@ -8,7 +8,7 @@ use collections::HashMap;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
-use new_mock_engine_store::{
+use mock_engine_store::{
     server::{new_server_cluster, ServerCluster},
     *,
 };

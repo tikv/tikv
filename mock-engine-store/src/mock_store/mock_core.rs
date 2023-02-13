@@ -1,21 +1,81 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-#![feature(vec_into_raw_parts)]
-#![feature(slice_take)]
-pub mod config;
-pub mod mock_cluster;
-pub mod mock_page_storage;
-pub mod mock_store;
-pub mod node;
-pub mod server;
-pub mod transport_simulate;
+use std::{collections::BTreeMap, sync::atomic::AtomicU64};
 
-pub use mock_store::*;
+use super::common::*;
+
+pub type RegionId = u64;
+#[derive(Default, Clone)]
+pub struct MockRegion {
+    pub region: kvproto::metapb::Region,
+    // Which peer is me?
+    pub peer: kvproto::metapb::Peer,
+    // in-memory data
+    pub data: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
+    // If we a key is deleted, it will immediately be removed from data,
+    // We will record the key in pending_delete, so we can delete it from disk when flushing.
+    pub pending_delete: [HashSet<Vec<u8>>; 3],
+    pub pending_write: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
+    pub apply_state: kvproto::raft_serverpb::RaftApplyState,
+    pub applied_term: u64,
+}
+
+impl MockRegion {
+    pub fn set_applied(&mut self, index: u64, term: u64) {
+        self.apply_state.set_applied_index(index);
+        self.applied_term = term;
+    }
+
+    pub fn new(meta: kvproto::metapb::Region) -> Self {
+        MockRegion {
+            region: meta,
+            peer: Default::default(),
+            data: Default::default(),
+            pending_delete: Default::default(),
+            pending_write: Default::default(),
+            apply_state: Default::default(),
+            applied_term: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct RegionStats {
+    pub pre_handle_count: AtomicU64,
+    pub fast_add_peer_count: AtomicU64,
+}
+
+// In case of newly added cfs.
+#[allow(unreachable_patterns)]
+pub fn cf_to_name(cf: interfaces_ffi::ColumnFamilyType) -> &'static str {
+    match cf {
+        interfaces_ffi::ColumnFamilyType::Lock => CF_LOCK,
+        interfaces_ffi::ColumnFamilyType::Write => CF_WRITE,
+        interfaces_ffi::ColumnFamilyType::Default => CF_DEFAULT,
+        _ => unreachable!(),
+    }
+}
+
+pub fn write_kv_in_mem(region: &mut MockRegion, cf_index: usize, k: &[u8], v: &[u8]) {
+    let data = &mut region.data[cf_index];
+    let pending_delete = &mut region.pending_delete[cf_index];
+    let pending_write = &mut region.pending_write[cf_index];
+    pending_delete.remove(k);
+    data.insert(k.to_vec(), v.to_vec());
+    pending_write.insert(k.to_vec(), v.to_vec());
+}
+
+pub fn delete_kv_in_mem(region: &mut MockRegion, cf_index: usize, k: &[u8]) {
+    let data = &mut region.data[cf_index];
+    let pending_delete = &mut region.pending_delete[cf_index];
+    pending_delete.insert(k.to_vec());
+    data.remove(k);
+}
 
 pub fn copy_meta_from<EK: engine_traits::KvEngine, ER: RaftEngine + engine_traits::Peekable>(
     source_engines: &Engines<EK, ER>,
     target_engines: &Engines<EK, ER>,
-    source: &Region,
-    target: &mut Region,
+    source: &MockRegion,
+    target: &mut MockRegion,
     new_region_meta: kvproto::metapb::Region,
     copy_region_state: bool,
     copy_apply_state: bool,
@@ -67,8 +127,8 @@ pub fn copy_meta_from<EK: engine_traits::KvEngine, ER: RaftEngine + engine_trait
 pub fn copy_data_from(
     source_engines: &Engines<impl KvEngine, impl RaftEngine + engine_traits::Peekable>,
     target_engines: &Engines<impl KvEngine, impl RaftEngine>,
-    source: &Region,
-    target: &mut Region,
+    source: &MockRegion,
+    target: &mut MockRegion,
 ) -> raftstore::Result<()> {
     let region_id = source.region.get_id();
 
@@ -139,4 +199,43 @@ pub fn get_raft_local_state<ER: engine_traits::RaftEngine>(
         Ok(Some(x)) => Some(x),
         _ => None,
     }
+}
+
+pub fn set_new_region_peer(new_region: &mut MockRegion, store_id: u64) {
+    if let Some(peer) = new_region
+        .region
+        .get_peers()
+        .iter()
+        .find(|&peer| peer.get_store_id() == store_id)
+    {
+        new_region.peer = peer.clone();
+    } else {
+        // This happens when region is not found.
+    }
+}
+
+pub fn make_new_region(
+    maybe_from_region: Option<kvproto::metapb::Region>,
+    maybe_store_id: Option<u64>,
+) -> MockRegion {
+    let mut region = MockRegion {
+        region: maybe_from_region.unwrap_or_default(),
+        ..Default::default()
+    };
+    if let Some(store_id) = maybe_store_id {
+        set_new_region_peer(&mut region, store_id);
+    }
+    region
+        .apply_state
+        .mut_truncated_state()
+        .set_index(raftstore::store::RAFT_INIT_LOG_INDEX);
+    region
+        .apply_state
+        .mut_truncated_state()
+        .set_term(raftstore::store::RAFT_INIT_LOG_TERM);
+    region.set_applied(
+        raftstore::store::RAFT_INIT_LOG_INDEX,
+        raftstore::store::RAFT_INIT_LOG_TERM,
+    );
+    region
 }

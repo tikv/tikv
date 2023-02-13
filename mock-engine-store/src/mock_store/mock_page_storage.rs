@@ -6,11 +6,10 @@ use std::{
     sync::{atomic::AtomicU64, Arc, RwLock},
 };
 
-pub use engine_store_ffi::ffi::{
+use engine_store_ffi::ffi::{
     interfaces_ffi,
     interfaces_ffi::{
-        BaseBuffView, CppStrWithView, EngineStoreServerHelper, PageAndCppStrWithView,
-        RaftStoreProxyFFIHelper, RawCppPtr, RawCppPtrCarr, RawVoidPtr,
+        BaseBuffView, CppStrWithView, PageAndCppStrWithView, RawCppPtr, RawCppPtrCarr, RawVoidPtr,
     },
 };
 

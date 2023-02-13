@@ -3322,6 +3322,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "mock-engine-store"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "assert-type-eq",
+ "causal_ts",
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_store_ffi",
+ "engine_test",
+ "engine_tiflash",
+ "engine_traits",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "grpcio",
+ "grpcio-health",
+ "int-enum",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "pd_client",
+ "protobuf",
+ "proxy_server",
+ "raft",
+ "raftstore",
+ "rand 0.8.5",
+ "resolved_ts",
+ "resource_control",
+ "resource_metering",
+ "security",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_pd_client",
+ "test_raftstore",
+ "test_util",
+ "tikv",
+ "tikv_util",
+ "tokio",
+ "tokio-timer",
+ "txn_types",
+]
+
+[[package]]
 name = "more-asserts"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3389,56 +3439,6 @@ dependencies = [
  "cfg-if 0.1.10",
  "libc 0.2.139",
  "winapi 0.3.9",
-]
-
-[[package]]
-name = "new-mock-engine-store"
-version = "0.0.1"
-dependencies = [
- "api_version",
- "assert-type-eq",
- "causal_ts",
- "collections",
- "concurrency_manager",
- "crossbeam",
- "encryption",
- "encryption_export",
- "engine_rocks",
- "engine_store_ffi",
- "engine_test",
- "engine_tiflash",
- "engine_traits",
- "fail",
- "file_system",
- "futures 0.3.15",
- "grpcio",
- "grpcio-health",
- "int-enum",
- "keys",
- "kvproto",
- "lazy_static",
- "log_wrappers",
- "pd_client",
- "protobuf",
- "proxy_server",
- "raft",
- "raftstore",
- "rand 0.8.5",
- "resolved_ts",
- "resource_control",
- "resource_metering",
- "security",
- "slog",
- "slog-global",
- "tempfile",
- "test_pd_client",
- "test_raftstore",
- "test_util",
- "tikv",
- "tikv_util",
- "tokio",
- "tokio-timer",
- "txn_types",
 ]
 
 [[package]]
@@ -4560,8 +4560,8 @@ dependencies = [
  "kvproto",
  "libc 0.2.139",
  "log_wrappers",
+ "mock-engine-store",
  "more-asserts",
- "new-mock-engine-store",
  "online_config",
  "panic_hook",
  "paste",

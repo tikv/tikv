@@ -79,8 +79,11 @@ use tokio::runtime::Builder as TokioBuilder;
 use transport_simulate::SimulateTransport;
 use txn_types::TxnExtraScheduler;
 
-use super::*;
-use crate::config::Config;
+use super::{common::*, *};
+use crate::{
+    config::Config,
+    mock_cluster::{Cluster, ProxyConfig, Simulator, TestPdClient},
+};
 
 type SimulateStoreTransport =
     SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, engine_rocks::RocksEngine>>;

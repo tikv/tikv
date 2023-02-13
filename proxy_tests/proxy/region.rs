@@ -82,7 +82,7 @@ fn test_get_region_local_state() {
             &mut |_id: u64, _, ffi_set: &mut FFIHelperSet| {
                 let f = ffi_set.proxy_helper.fn_get_region_local_state.unwrap();
                 let mut state = kvproto::raft_serverpb::RegionLocalState::default();
-                let mut error_msg = new_mock_engine_store::RawCppStringPtrGuard::default();
+                let mut error_msg = mock_engine_store::RawCppStringPtrGuard::default();
 
                 assert_eq!(
                     f(
@@ -373,7 +373,7 @@ fn test_add_delayed_started_learner_by_joint() {
     cluster.shutdown();
 }
 
-use new_mock_engine_store::{copy_data_from, copy_meta_from};
+use mock_engine_store::{copy_data_from, copy_meta_from};
 
 fn recover_from_peer(cluster: &Cluster<NodeCluster>, from: u64, to: u64, region_id: u64) {
     let mut maybe_source_region = None;

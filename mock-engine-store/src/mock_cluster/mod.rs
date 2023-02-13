@@ -1,5 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod common;
+pub mod node;
+pub mod server;
+pub mod transport_simulate;
+
 use std::{
     collections::hash_map::Entry as MapEntry,
     result,
@@ -9,16 +14,13 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
+pub use common::*;
 use encryption::DataKeyManager;
 // mock cluster
-pub use engine_store_ffi::ffi::{
-    interfaces_ffi,
-    interfaces_ffi::{
-        EngineStoreServerHelper, RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr,
-    },
-    RaftStoreProxy, RaftStoreProxyFFI, UnwrapExternCFunc,
+use engine_store_ffi::ffi::{
+    interfaces_ffi::{EngineStoreServerHelper, RaftProxyStatus, RaftStoreProxyFFIHelper},
+    RaftStoreProxyFFI,
 };
-pub use engine_store_ffi::TiFlashEngine;
 use engine_tiflash::DB;
 use engine_traits::{Engines, KvEngine, Peekable, CF_DEFAULT};
 use file_system::IoRateLimiter;
@@ -30,7 +32,6 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use pd_client::PdClient;
-pub use proxy_server::config::ProxyConfig;
 use raftstore::{
     router::RaftStoreRouter,
     store::{
@@ -70,8 +71,8 @@ use txn_types::WriteBatchFlags;
 
 pub use crate::config::Config;
 use crate::{
-    gen_engine_store_server_helper, transport_simulate::Filter, EngineStoreServer,
-    EngineStoreServerWrap, MockConfig,
+    config::MockConfig, gen_engine_store_server_helper, transport_simulate::Filter,
+    EngineStoreServer, EngineStoreServerWrap,
 };
 
 pub struct FFIHelperSet {

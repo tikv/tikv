@@ -386,7 +386,7 @@ tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hot
 
 # TiFlash libs
 engine_store_ffi = { path = "engine_store_ffi", default-features = false }
-new-mock-engine-store = { path = "new-mock-engine-store", default-features = false }
+mock-engine-store = { path = "mock-engine-store", default-features = false }
 proxy_server = { path = "proxy_server", default-features = false }
 engine_tiflash = { path = "engine_tiflash", default-features = false }
 proxy_ffi = { path = "proxy_ffi", default-features = false }

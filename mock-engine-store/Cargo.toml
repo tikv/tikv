@@ -1,12 +1,12 @@
 [package]
-name = "new-mock-engine-store"
+name = "mock-engine-store"
 version = "0.0.1"
 license = "Apache-2.0"
 edition = "2018"
 publish = false
 
 [lib]
-name = "new_mock_engine_store"
+name = "mock_engine_store"
 
 [features]
 default = ["protobuf-codec"]

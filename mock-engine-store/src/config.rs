@@ -7,7 +7,7 @@ use std::{
 
 use tikv::config::TikvConfig;
 
-use crate::ProxyConfig;
+use crate::mock_cluster::ProxyConfig;
 
 #[derive(Clone, Default)]
 pub struct MockConfig {

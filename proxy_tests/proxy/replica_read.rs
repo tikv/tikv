@@ -73,7 +73,7 @@ struct Waker {
 
 impl Waker {
     pub fn new() -> Self {
-        let notifier = new_mock_engine_store::ProxyNotifier::new_raw();
+        let notifier = mock_engine_store::ProxyNotifier::new_raw();
         let ptr = notifier.ptr;
         let notifier = ffi_make_async_waker(Some(ffi_wake), notifier);
         Self {
@@ -87,8 +87,8 @@ impl Waker {
         self.get_notifier().blocked_wait_for(timeout)
     }
 
-    fn get_notifier(&self) -> &new_mock_engine_store::ProxyNotifier {
-        unsafe { &*(self.notifier as *mut new_mock_engine_store::ProxyNotifier) }
+    fn get_notifier(&self) -> &mock_engine_store::ProxyNotifier {
+        unsafe { &*(self.notifier as *mut mock_engine_store::ProxyNotifier) }
     }
 
     fn get_raw_waker(&self) -> RawVoidPtr {
@@ -140,7 +140,7 @@ fn blocked_read_index(
 }
 
 extern "C" fn ffi_wake(data: RawVoidPtr) {
-    let notifier = unsafe { &mut *(data as *mut new_mock_engine_store::ProxyNotifier) };
+    let notifier = unsafe { &mut *(data as *mut mock_engine_store::ProxyNotifier) };
     notifier.wake()
 }
 
@@ -239,7 +239,7 @@ fn test_read_index() {
 #[test]
 fn test_util() {
     // test timer
-    new_mock_engine_store::mock_cluster::init_global_ffi_helper_set();
+    mock_engine_store::mock_cluster::init_global_ffi_helper_set();
     {
         let timeout = 128;
         let task = RawRustPtrWrap::new(ffi_make_timer_task(timeout));

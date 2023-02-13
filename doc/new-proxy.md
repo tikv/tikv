@@ -54,7 +54,7 @@ As described in [tiflash#5170](https://github.com/pingcap/tiflash/issues/5170).
 After refactoring, the Proxy can be divided into several crate/modules:
 1. `proxy_server`
    This is a replacement of `components/server`.
-2. `new-mock-engine-store`
+2. `mock-engine-store`
    This is a replacement of `components/test_raftstore` and the old `mock-engine-store`.
 3. `engine_store_ffi`
    This is decoupled from `components/raftstore`. The observers are also implemented in this crate.

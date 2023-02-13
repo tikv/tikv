@@ -25,7 +25,7 @@ use raftstore::{
 use test_raftstore::FilterFactory;
 use tikv_util::{error, time::ThreadReadId, Either, HandyRwLock};
 
-use crate::mock_cluster::TiFlashEngine;
+use super::common::*;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {

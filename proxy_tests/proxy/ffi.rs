@@ -5,9 +5,7 @@ use engine_store_ffi::ffi::{
     interfaces_ffi::{RawCppPtr, RawCppPtrArr, RawCppPtrTuple, RawVoidPtr},
     UnwrapExternCFunc,
 };
-use new_mock_engine_store::{
-    mock_cluster::init_global_ffi_helper_set, mock_store::RawCppPtrTypeImpl,
-};
+use mock_engine_store::{mock_cluster::init_global_ffi_helper_set, mock_store::RawCppPtrTypeImpl};
 
 #[test]
 fn test_tuple_of_raw_cpp_ptr() {
