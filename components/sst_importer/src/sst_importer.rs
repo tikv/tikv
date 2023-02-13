@@ -114,12 +114,32 @@ pub enum CacheKvFile {
     Fs(Arc<PathBuf>),
 }
 
+/// Remote presents a "remote" object which can be downloaded and then cached.
+/// This structure doesn't manage how it is downloaded, it just manages the
+/// state. You need to provide the manually downloaded data to the
+/// [`DownloadPromise`].
+/// Below is the state transform of this:
+/// ```text
+///                           DownloadPromise::fulfill
+///               +-----------+         +-----------+
+///               |Downloading+-------->|Cached     |
+///               +--+--------+         +-----------+
+///                  |     ^
+///                  |     |
+/// DownloadPromise  |     | Somebody takes
+/// dropped          |     | over the duty.
+///                  v     |
+///               +--------+--+
+///               |Leaked     |
+///               +-----------+
+/// ```
 #[derive(Clone, Debug)]
 pub struct Remote<T>(Arc<(Mutex<FileCacheInner<T>>, Condvar)>);
 
 pub struct DownloadPromise<T>(Arc<(Mutex<FileCacheInner<T>>, Condvar)>);
 
 impl<T> DownloadPromise<T> {
+    /// provide the downloaded data and make it cached.
     pub fn fulfill(self, item: T) -> Remote<T> {
         let mut l = self.0.as_ref().0.lock().unwrap();
         debug_assert!(matches!(*l, FileCacheInner::Downloading));
@@ -141,11 +161,39 @@ impl<T> Drop for DownloadPromise<T> {
 }
 
 impl<T> Remote<T> {
+    /// create a downloading remote object.
+    /// it returns the handle to the remote object and a [DownloadPromise], the
+    /// latter can be used to fulfill the remote object.
+    ///
+    /// # Examples
+    /// ```
+    /// # use sst_importer::sst_importer::Remote;
+    /// let (remote_obj, promise) = Remote::download();
+    /// promise.fulfill(42);
+    /// assert_eq!(remote_obj.get(), Some(42));
+    /// ```
     pub fn download() -> (Self, DownloadPromise<T>) {
         let inner = Arc::new((Mutex::new(FileCacheInner::Downloading), Condvar::new()));
         (Self(Arc::clone(&inner)), DownloadPromise(inner))
     }
 
+    /// Block and wait until the remote object is downloaded.
+    /// # Returns
+    /// If the remote object has been fulfilled, return `None`.
+    /// If the remote object hasn't been fulfilled, return a
+    /// [`DownloadPromise`]: it is time to take over the duty of downloading.
+    ///
+    /// # Examples
+    /// ```
+    /// # use sst_importer::sst_importer::Remote;
+    /// let (remote_obj, promise) = Remote::download();
+    /// drop(promise);
+    /// let new_promise = remote_obj.wait_until_fill();
+    /// new_promise
+    ///     .expect("wait_until_fill should return new promise when old promise dropped")
+    ///     .fulfill(42);
+    /// assert!(remote_obj.wait_until_fill().is_none());
+    /// ```
     pub fn wait_until_fill(&self) -> Option<DownloadPromise<T>> {
         let mut l = self.0.as_ref().0.lock().unwrap();
         loop {
@@ -164,7 +212,8 @@ impl<T> Remote<T> {
 }
 
 impl<T: ShareOwned> Remote<T> {
-    fn get(&self) -> Option<<T as ShareOwned>::Shared> {
+    /// Fetch the internal object of the remote object.
+    pub fn get(&self) -> Option<<T as ShareOwned>::Shared> {
         let l = self.0.as_ref().0.lock().unwrap();
         match *l {
             FileCacheInner::Downloading | FileCacheInner::Leaked => None,
