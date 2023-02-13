@@ -7,6 +7,7 @@ publish = false
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+trace-tablet-lifetime = ["tikv/trace-tablet-lifetime"]
 tcmalloc = ["server/tcmalloc"]
 jemalloc = ["server/jemalloc"]
 mimalloc = ["server/mimalloc"]
