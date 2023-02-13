@@ -378,7 +378,8 @@ grpcio = { version = "0.10.4", default-features = false, features = ["openssl-ve
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+ # FIXME: switch back to tikv/yatp after tikv/yatp#73 gets merged.
+yatp = { git = "https://github.com/zyguan/yatp.git", branch = "cleanup" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }

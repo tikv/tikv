@@ -7,10 +7,11 @@ use std::sync::Arc;
 
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
+use futures::{compat::Stream01CompatExt, StreamExt};
 use prometheus::{local::LocalHistogram, Histogram};
 use yatp::{
     pool::{CloneRunnerBuilder, Local, Runner},
-    queue::{multilevel, priority, QueueType, TaskCell as _},
+    queue::{multilevel, priority, Extras, QueueType, TaskCell as _},
     task::future::{Runner as FutureRunner, TaskCell},
     ThreadPool,
 };
@@ -18,7 +19,29 @@ use yatp::{
 use crate::{
     thread_group::GroupProperties,
     time::{Duration, Instant},
+    timer::GLOBAL_TIMER_HANDLE,
 };
+
+const DEFAULT_CLEANUP_TASK_ELAPSED_MAP_INTERVAL: Duration = Duration::from_secs(10);
+
+fn background_cleanup_task(
+    cleanup: impl Fn() -> Option<std::time::Instant> + Send + 'static,
+) -> TaskCell {
+    let mut interval = GLOBAL_TIMER_HANDLE
+        .interval(
+            std::time::Instant::now() + DEFAULT_CLEANUP_TASK_ELAPSED_MAP_INTERVAL,
+            DEFAULT_CLEANUP_TASK_ELAPSED_MAP_INTERVAL,
+        )
+        .compat();
+    TaskCell::new(
+        async move {
+            while let Some(Ok(_)) = interval.next().await {
+                cleanup();
+            }
+        },
+        Extras::multilevel_default(),
+    )
+}
 
 pub(crate) const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -296,12 +319,18 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             .clone()
             .unwrap_or_else(|| "yatp_pool".to_string());
         let (builder, read_pool_runner) = self.create_builder();
-        let multilevel_builder =
-            multilevel::Builder::new(multilevel::Config::default().name(Some(name)));
+        let multilevel_builder = multilevel::Builder::new(
+            multilevel::Config::default()
+                .name(Some(name))
+                .cleanup_interval(None),
+        );
         let runner_builder =
             multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-        builder
-            .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder)
+        let cleanup = multilevel_builder.cleanup_fn();
+        let pool = builder
+            .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
+        pool.spawn(background_cleanup_task(cleanup));
+        pool
     }
 
     pub fn build_priority_pool(
@@ -314,11 +343,17 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             .unwrap_or_else(|| "yatp_pool".to_string());
         let (builder, read_pool_runner) = self.create_builder();
         let priority_builder = priority::Builder::new(
-            priority::Config::default().name(Some(name)),
+            priority::Config::default()
+                .name(Some(name))
+                .cleanup_interval(None),
             priority_provider,
         );
         let runner_builder = priority_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-        builder.build_with_queue_and_runner(QueueType::Priority(priority_builder), runner_builder)
+        let cleanup = priority_builder.cleanup_fn();
+        let pool = builder
+            .build_with_queue_and_runner(QueueType::Priority(priority_builder), runner_builder);
+        pool.spawn(background_cleanup_task(cleanup));
+        pool
     }
 
     fn create_builder(mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
