@@ -53,15 +53,12 @@ use crate::{
     util, Config, Error, Result,
 };
 
-#[derive(Clone, Debug)]
-pub struct LoadedFile(Arc<LoadedFileInner>);
-
-struct LoadedFileInner {
+pub struct LoadedFile {
     permit: MemUsePermit,
     content: Arc<[u8]>,
 }
 
-impl std::fmt::Debug for LoadedFileInner {
+impl std::fmt::Debug for LoadedFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoadedFileInner")
             .field("permit", &self.permit)
@@ -74,7 +71,7 @@ impl ShareOwned for LoadedFile {
     type Shared = Arc<[u8]>;
 
     fn share_owned(&self) -> Self::Shared {
-        Arc::clone(&self.0.content)
+        Arc::clone(&self.content)
     }
 }
 
@@ -134,8 +131,14 @@ pub enum CacheKvFile {
 ///               |Leaked     |
 ///               +-----------+
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Remote<T>(Arc<(Mutex<FileCacheInner<T>>, Condvar)>);
+
+impl<T> Clone for Remote<T> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
 
 /// When holding this, the holder has promised to downloading the remote object
 /// into local, then provide it to others waiting the object, by
@@ -721,12 +724,10 @@ impl SstImporter {
             .observe(start.saturating_elapsed().as_secs_f64());
 
         let rewrite_buff = self.rewrite_kv_file(buff, rewrite_rule)?;
-        Ok(CacheKvFile::Mem(promise.fulfill(LoadedFile(Arc::new(
-            LoadedFileInner {
-                content: Arc::from(rewrite_buff.into_boxed_slice()),
-                permit,
-            },
-        )))))
+        Ok(CacheKvFile::Mem(promise.fulfill(LoadedFile {
+            content: Arc::from(rewrite_buff.into_boxed_slice()),
+            permit,
+        })))
     }
 
     pub fn wrap_kms(
