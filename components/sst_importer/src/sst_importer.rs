@@ -1374,7 +1374,10 @@ mod tests {
     use tempfile::Builder;
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
+    use tikv_util::{
+        codec::stream_event::EventEncoder, stream::block_on_external_io,
+        sys::thread::StdThreadBuildWrapper,
+    };
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
 
@@ -3006,7 +3009,7 @@ mod tests {
             let r = r.clone();
             std::thread::Builder::new()
                 .name(format!("rd-{}", i))
-                .spawn(move || match r.wait_until_fill() {
+                .spawn_wrapper(move || match r.wait_until_fill() {
                     Some(x) => x.fulfill(42).get(),
                     None => r.get(),
                 })
