@@ -9,7 +9,7 @@ use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb,
-    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
+    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raft::{
     eraftpb::{ConfState, Entry, Snapshot},
@@ -234,10 +234,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
     #[inline]
     pub fn tablet_index(&self) -> u64 {
-        match self.region_state.get_state() {
-            PeerState::Tombstone | PeerState::Applying => 0,
-            _ => self.region_state.get_tablet_index(),
-        }
+        self.region_state.get_tablet_index()
     }
 
     #[inline]

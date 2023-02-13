@@ -9,9 +9,13 @@ use kvproto::{metapb, replication_modepb::ReplicationStatus};
 use pd_client::PdClient;
 use raftstore::{
     coprocessor::CoprocessorHost,
-    store::{GlobalReplicationState, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX},
+    store::{
+        AutoSplitController, GlobalReplicationState, TabletSnapManager, Transport,
+        RAFT_INIT_LOG_INDEX,
+    },
 };
 use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
+use resource_metering::CollectorRegHandle;
 use slog::{info, o, Logger};
 use tikv_util::{
     config::VersionTrack,
@@ -92,6 +96,8 @@ where
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
+        auto_split_controller: AutoSplitController,
+        collector_reg_handle: CollectorRegHandle,
         background: Worker,
         pd_worker: LazyWorker<PdTask>,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
@@ -129,6 +135,8 @@ where
             concurrency_manager,
             causal_ts_provider,
             coprocessor_host,
+            auto_split_controller,
+            collector_reg_handle,
             background,
             pd_worker,
             store_cfg,
@@ -188,6 +196,8 @@ where
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
+        auto_split_controller: AutoSplitController,
+        collector_reg_handle: CollectorRegHandle,
         background: Worker,
         pd_worker: LazyWorker<PdTask>,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
@@ -218,6 +228,8 @@ where
             concurrency_manager,
             causal_ts_provider,
             coprocessor_host,
+            auto_split_controller,
+            collector_reg_handle,
             background,
             pd_worker,
         )?;

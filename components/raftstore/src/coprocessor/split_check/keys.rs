@@ -590,7 +590,7 @@ mod tests {
         // The split by keys should still work. But if the bug in on_kv() in size.rs
         // exists, it will result in split by keys failed.
         cfg.region_max_size = Some(ReadableSize(region_size * 6 / 5));
-        cfg.region_split_size = ReadableSize(region_size * 4 / 5);
+        cfg.region_split_size = Some(ReadableSize(region_size * 4 / 5));
         runnable = SplitCheckRunner::new(engine, tx.clone(), CoprocessorHost::new(tx, cfg));
         runnable.run(SplitCheckTask::split_check(
             region.clone(),

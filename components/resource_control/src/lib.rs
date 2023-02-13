@@ -4,10 +4,18 @@ use online_config::OnlineConfig;
 use serde::{Deserialize, Serialize};
 
 mod resource_group;
-pub use resource_group::{ResourceController, ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL};
+pub use resource_group::{
+    ResourceConsumeType, ResourceController, ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL,
+};
 
 mod future;
 pub use future::ControlledFuture;
+
+mod service;
+pub use service::ResourceManagerService;
+
+pub mod channel;
+pub use channel::ResourceMetered;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, Default)]
 #[serde(default)]

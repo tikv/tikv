@@ -12,10 +12,9 @@ pub use command::{
     MergeContext, ProposalControl, RequestSplit, SimpleWriteBinary, SimpleWriteEncoder,
     SimpleWriteReqDecoder, SimpleWriteReqEncoder, SplitFlowControl, SPLIT_PREFIX,
 };
-pub use life::DestroyProgress;
+pub use life::{DestroyProgress, GcPeerContext};
 pub use ready::{
-    cf_offset, write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, SnapState,
-    StateStorage,
+    write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, SnapState, StateStorage,
 };
 
 pub(crate) use self::{

@@ -12,7 +12,7 @@ use commit_merge::CommitMergeResult;
 pub use commit_merge::{CatchUpLogs, MergeContext};
 pub use compact_log::CompactLogContext;
 use compact_log::CompactLogResult;
-use conf_change::ConfChangeResult;
+use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use prepare_merge::PrepareMergeResult;
@@ -21,7 +21,10 @@ use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use rollback_merge::RollbackMergeResult;
 use slog::info;
 use split::SplitResult;
-pub use split::{temp_split_path, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX};
+pub use split::{
+    report_split_init_finish, temp_split_path, RequestSplit, SplitFlowControl, SplitInit,
+    SPLIT_PREFIX,
+};
 use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;
 
@@ -35,6 +38,7 @@ pub enum AdminCmdResult {
     ConfChange(ConfChangeResult),
     TransferLeader(u64),
     CompactLog(CompactLogResult),
+    UpdateGcPeers(UpdateGcPeersResult),
     PrepareMerge(PrepareMergeResult),
     CommitMerge(CommitMergeResult),
     RollbackMerge(RollbackMergeResult),
@@ -120,6 +124,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     }
                 }
                 AdminCmdType::CompactLog => self.propose_compact_log(ctx, req),
+                AdminCmdType::UpdateGcPeer => {
+                    let data = req.write_to_bytes().unwrap();
+                    self.propose(ctx, data)
+                }
                 AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 AdminCmdType::CommitMerge => self.propose_commit_merge(ctx, req),
                 _ => unimplemented!(),

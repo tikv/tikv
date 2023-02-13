@@ -69,6 +69,13 @@ impl CachedEntries {
         }
     }
 
+    pub fn iter_entries(&self, mut f: impl FnMut(&Entry)) {
+        let entries = self.entries.lock().unwrap();
+        for entry in &entries.0 {
+            f(entry);
+        }
+    }
+
     /// Take cached entries and dangle size for them. `dangle` means not in
     /// entry cache.
     pub fn take_entries(&self) -> (Vec<Entry>, usize) {

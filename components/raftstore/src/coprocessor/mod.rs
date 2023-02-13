@@ -26,14 +26,16 @@ mod metrics;
 pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
+use kvproto::raft_serverpb::RaftMessage;
 
 pub use self::{
     config::{Config, ConsistencyCheckMethod},
     consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver},
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
-        BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver,
-        BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry, StoreHandle,
+        BoxMessageObserver, BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver,
+        BoxRoleObserver, BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry,
+        StoreHandle,
     },
     error::{Error, Result},
     region_info_accessor::{
@@ -269,6 +271,7 @@ pub struct RoleChange {
     /// Which peer is voted by itself.
     pub vote: u64,
     pub initialized: bool,
+    pub peer_id: u64,
 }
 
 impl RoleChange {
@@ -280,6 +283,7 @@ impl RoleChange {
             prev_lead_transferee: raft::INVALID_ID,
             vote: raft::INVALID_ID,
             initialized: true,
+            peer_id: raft::INVALID_ID,
         }
     }
 }
@@ -300,6 +304,7 @@ pub enum RegionChangeReason {
     PrepareMerge,
     CommitMerge,
     RollbackMerge,
+    SwitchWitness,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -329,6 +334,13 @@ pub trait RegionChangeObserver: Coprocessor {
     /// applying. Return a bool which indicates whether we can actually do
     /// this write.
     fn pre_write_apply_state(&self, _: &mut ObserverContext<'_>) -> bool {
+        true
+    }
+}
+
+pub trait MessageObserver: Coprocessor {
+    /// Returns false if the message should not be stepped later.
+    fn on_raft_message(&self, _: &RaftMessage) -> bool {
         true
     }
 }

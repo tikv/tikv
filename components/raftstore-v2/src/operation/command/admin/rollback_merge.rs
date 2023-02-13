@@ -80,9 +80,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let mut msg = self.prepare_raft_message();
                 let mut extra_msg = ExtraMessage::default();
                 extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
-                extra_msg.set_premerge_commit(
-                    self.merge_context().pending.as_ref().unwrap().get_commit(),
-                );
+                extra_msg.set_index(self.merge_context().pending.as_ref().unwrap().get_commit());
                 msg.set_extra_msg(extra_msg);
                 let to_peer = self
                     .region()

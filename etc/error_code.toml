@@ -263,6 +263,11 @@ error = '''
 KV:Pd:GlobalConfigNotFound
 '''
 
+["KV:Pd:DataCompacted"]
+error = '''
+KV:Pd:DataCompacted
+'''
+
 ["KV:Pd:Unknown"]
 error = '''
 KV:Pd:Unknown
@@ -443,6 +448,11 @@ error = '''
 KV:Raftstore:FlashbackNotPrepared
 '''
 
+["KV:Raftstore:IsWitness"]
+error = '''
+KV:Raftstore:IsWitness
+'''
+
 ["KV:Raftstore:SnapAbort"]
 error = '''
 KV:Raftstore:SnapAbort
@@ -553,6 +563,11 @@ error = '''
 KV:SstImporter:InvalidKeyMode
 '''
 
+["KV:SstImporter:ResourceNotEnough"]
+error = '''
+KV:SstImporter:ResourceNotEnough
+'''
+
 ["KV:Storage:Timeout"]
 error = '''
 KV:Storage:Timeout
@@ -641,6 +656,11 @@ KV:Storage:KeyIsLocked
 ["KV:Storage:MaxTimestampNotSynced"]
 error = '''
 KV:Storage:MaxTimestampNotSynced
+'''
+
+["KV:Storage:FlashbackNotPrepared"]
+error = '''
+KV:Storage:FlashbackNotPrepared
 '''
 
 ["KV:Storage:DeadlineExceeded"]

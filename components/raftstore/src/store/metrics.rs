@@ -35,7 +35,8 @@ make_auto_flush_static_metric! {
         compact,
         transfer_leader,
         prepare_flashback,
-        finish_flashback
+        finish_flashback,
+        batch_switch_witness : "batch-switch-witness",
     }
 
     pub label_enum AdminCmdStatus {
@@ -177,6 +178,7 @@ make_static_metric! {
         region_nonexistent,
         applying_snap,
         disk_full,
+        non_witness,
         recovery,
     }
 
@@ -205,7 +207,8 @@ make_static_metric! {
         force_leader,
         witness,
         flashback_in_progress,
-        flashback_not_prepared
+        flashback_not_prepared,
+        non_witness,
     }
 
     pub label_enum RaftEventDurationType {
@@ -776,6 +779,76 @@ lazy_static! {
 
     pub static ref STORE_SLOW_SCORE_GAUGE: Gauge =
     register_gauge!("tikv_raftstore_slow_score", "Slow score of the store.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend", "Slow trend changing rate").unwrap();
+
+    pub static ref STORE_SLOW_TREND_L0_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l0", "Slow trend L0 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l1", "Slow trend L1 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l2", "Slow trend L2 window avg value.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_L0_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l0_l1", "Slow trend changing rate: L0/L1.").unwrap();
+    pub static ref STORE_SLOW_TREND_L1_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l1_l2", "Slow trend changing rate: L1/L2.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l1_margin_error", "Slow trend: L1 margin error range").unwrap();
+    pub static ref STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l2_margin_error", "Slow trend: L2 margin error range").unwrap();
+
+    pub static ref STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_margin_error_gap",
+        "Slow trend: the gap between margin window time and current sampling time",
+        &["window"]
+    ).unwrap();
+
+    pub static ref STORE_SLOW_TREND_MISC_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_misc",
+        "Slow trend uncatelogued gauge(s)",
+        &["type"]
+    ).unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_VALUE_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_value", "Store slow trend result meantime value").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result", "Store slow trend result changing rate").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_L0_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l0", "Slow trend result L0 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l1", "Slow trend result L1 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l2", "Slow trend result L2 window avg value.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_L0_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l0_l1", "Slow trend result changing rate: L0/L1.").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L1_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l1_l2", "Slow trend result changing rate: L1/L2.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_L1_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l1_margin_error", "Slow trend result: L1 margin error range").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L2_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l2_margin_error", "Slow trend result: L2 margin error range").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_result_margin_error_gap",
+        "Slow trend result: the gap between margin window time and current sampling time",
+        &["window"]
+    ).unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_result_misc",
+        "Slow trend result uncatelogued gauge(s)",
+        &["type"]
+    ).unwrap();
 
     pub static ref RAFT_LOG_GC_SKIPPED_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_raft_log_gc_skipped",
