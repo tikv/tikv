@@ -213,6 +213,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.on_gc_peer_request(ctx, &msg);
                     return;
                 }
+                ExtraMessageType::MsgWantRollbackMerge => {
+                    if self.is_leader() {
+                        self.merge_context_mut().maybe_add_rollback_peer(
+                            msg.get_from_peer().get_id(),
+                            msg.get_extra_msg(),
+                        );
+                        return;
+                    }
+                }
                 _ => (),
             }
         }

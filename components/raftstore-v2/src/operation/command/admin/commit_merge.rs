@@ -58,7 +58,7 @@ use futures::channel::oneshot;
 use kvproto::{
     metapb::{self, Region},
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CommitMergeRequest, RaftCmdRequest},
-    raft_serverpb::{MergeState, PeerState, RegionLocalState},
+    raft_serverpb::{ExtraMessage, MergeState, PeerState, RegionLocalState},
 };
 use protobuf::Message;
 use raft::{GetEntriesContext, Storage, INVALID_ID, NO_LIMIT};
@@ -182,6 +182,15 @@ impl MergeContext {
     #[inline]
     pub fn install_prepare_merge_fence(&mut self, index: u64, req: &RaftCmdRequest) {
         self.prepare_fence = Some((index, req.write_to_bytes().unwrap()));
+    }
+
+    #[inline]
+    pub fn maybe_add_rollback_peer(&mut self, peer_id: u64, extra_msg: &ExtraMessage) {
+        if let Some(ref state) = self.pending {
+            if state.get_commit() == extra_msg.get_index() {
+                self.rollback_peers.insert(peer_id);
+            }
+        }
     }
 }
 
