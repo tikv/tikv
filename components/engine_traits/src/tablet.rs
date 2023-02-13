@@ -13,6 +13,8 @@ use collections::HashMap;
 use kvproto::metapb::Region;
 use tikv_util::box_err;
 
+#[cfg(any(test, feature = "testexport"))]
+use crate::StateStorage;
 use crate::{Error, FlushState, Result};
 
 #[derive(Debug)]
@@ -146,6 +148,11 @@ pub trait TabletFactory<EK>: Send + Sync {
 
     /// Check if the tablet with specified path exists
     fn exists(&self, path: &Path) -> bool;
+
+    #[cfg(any(test, feature = "testexport"))]
+    fn set_state_storage(&self, _: Arc<dyn StateStorage>) {
+        unimplemented!()
+    }
 }
 
 pub struct SingletonFactory<EK> {
