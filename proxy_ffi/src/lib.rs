@@ -6,11 +6,12 @@
 
 #[allow(dead_code)]
 pub mod interfaces;
-// All ffi impls that without raft domain.
+// All ffi impls that not related to raft domain.
 pub mod basic_ffi_impls;
-// All ffi impls that within raft domain, but without proxy helper context.
+// All ffi impls that related to raft domain, but not related to proxy helper
+// context.
 pub mod domain_impls;
-// All ffi impls that within engine store helper context.
+// All ffi impls that related to engine store helper context.
 pub mod context_impls;
 pub mod encryption_impls;
 // FFI directly related with EngineStoreServerHelper.

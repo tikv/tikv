@@ -78,7 +78,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             "region_id" => region_id,
             "snap_key" => ?snap_key,
             "has_snap" => snap.is_some(),
-            "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
+            "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
         );
         fail::fail_point!("on_ob_pre_handle_snapshot", |_| {});
 
@@ -146,6 +146,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
 
                 // We use thread pool to do pre handling.
                 self.engine
+                    .proxy_ext
                     .pending_applies_count
                     .fetch_add(1, Ordering::SeqCst);
                 p.spawn(async move {
@@ -197,7 +198,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             "snap_key" => ?snap_key,
             "region_id" => region_id,
             "region" => ?ob_region,
-            "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
+            "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
         );
         let mut should_skip = false;
         #[allow(clippy::collapsible_if)]
@@ -260,7 +261,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                             "peer_id" => peer_id,
                             "snap_key" => ?snap_key,
                             "region_id" => ob_region.get_id(),
-                            "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
+                            "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
                         );
                         if !should_skip {
                             self.engine_store_server_helper
@@ -273,7 +274,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                             "peer_id" => peer_id,
                             "snap_key" => ?snap_key,
                             "region_id" => ob_region.get_id(),
-                            "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
+                            "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
                         );
                         true
                     }
@@ -282,6 +283,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 // then we must have put it into thread pool.
                 let _prev = self
                     .engine
+                    .proxy_ext
                     .pending_applies_count
                     .fetch_sub(1, Ordering::SeqCst);
 
@@ -292,7 +294,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                     "peer_id" => peer_id,
                     "snap_key" => ?snap_key,
                     "region" => ?ob_region,
-                    "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
+                    "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
                 );
                 neer_retry
             }
@@ -304,7 +306,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                     "peer_id" => peer_id,
                     "snap_key" => ?snap_key,
                     "region_id" => ob_region.get_id(),
-                    "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
+                    "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
                 );
                 true
             }
@@ -331,7 +333,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 "peer_id" => peer_id,
                 "snap_key" => ?snap_key,
                 "region" => ?ob_region,
-                "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
+                "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
             );
         }
     }

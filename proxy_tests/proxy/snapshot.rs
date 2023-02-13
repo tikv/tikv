@@ -401,6 +401,7 @@ fn test_basic_concurrent_snapshot() {
         .get(&2)
         .unwrap()
         .kv
+        .proxy_ext
         .pending_applies_count
         .clone();
     pd_client.add_peer(r1, new_peer(2, 2));

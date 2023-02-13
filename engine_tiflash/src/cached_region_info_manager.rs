@@ -91,9 +91,8 @@ impl CachedRegionInfoManager {
             Ok(g) => g,
             Err(_) => panic!("access_cached_region_info poisoned!"),
         };
-        match guard.get(&region_id) {
-            Some(g) => f(g.clone()),
-            None => (),
+        if let Some(g) = guard.get(&region_id) {
+            f(g.clone())
         }
     }
 

@@ -450,7 +450,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
 
         let helper =
             engine_store_ffi::ffi::gen_engine_store_server_helper(engine_store_server_helper);
-        let ffi_hub = Arc::new(engine_store_ffi::engine::TiFlashFFIHub {
+        let ffi_hub = Arc::new(engine_store_ffi::engine::TiFlashEngineStoreHub {
             engine_store_server_helper: helper,
         });
         // engine_tiflash::RocksEngine has engine_rocks::RocksEngine inside

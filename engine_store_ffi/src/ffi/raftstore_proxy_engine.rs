@@ -40,11 +40,11 @@ impl RaftStoreProxyEngineTrait for RaftStoreProxyEngine {
     }
 
     fn engine_store_server_helper(&self) -> isize {
-        self.kv_engine.engine_store_server_helper
+        self.kv_engine.proxy_ext.engine_store_server_helper
     }
 
     fn set_engine_store_server_helper(&mut self, x: isize) {
-        self.kv_engine.engine_store_server_helper = x;
+        self.kv_engine.proxy_ext.engine_store_server_helper = x;
     }
 }
 

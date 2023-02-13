@@ -240,7 +240,7 @@ impl RaftEngine for RocksEngine {
         {
             return RocksWriteBatchVec::with_unit_capacity(
                 self,
-                self.ffi_hub.as_ref().unwrap().create_write_batch(),
+                self.ps_ext.as_ref().unwrap().create_write_batch(),
                 capacity,
             );
         }

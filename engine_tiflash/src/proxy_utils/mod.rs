@@ -1,4 +1,11 @@
-use proxy_ffi::interfaces_ffi;
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
+mod hub_impls;
+pub use hub_impls::*;
+mod config;
+pub use config::*;
+pub(crate) mod engine_ext;
+pub use engine_ext::*;
 
 use crate::util::get_cf_handle;
 
@@ -13,7 +20,7 @@ pub fn do_write(cf: &str, key: &[u8]) -> bool {
     }
 }
 
-fn cf_to_name(batch: &crate::RocksWriteBatchVec, cf: u32) -> &'static str {
+pub fn cf_to_name(batch: &crate::RocksWriteBatchVec, cf: u32) -> &'static str {
     // d 0 w 2 l 1
     let handle_default = get_cf_handle(batch.db.as_ref(), engine_traits::CF_DEFAULT).unwrap();
     let d = handle_default.id();
@@ -32,7 +39,7 @@ fn cf_to_name(batch: &crate::RocksWriteBatchVec, cf: u32) -> &'static str {
     }
 }
 #[cfg(any(test, feature = "testexport"))]
-fn check_double_write(batch: &crate::RocksWriteBatchVec) {
+pub fn check_double_write(batch: &crate::RocksWriteBatchVec) {
     // It will fire if we write by both observer(compat_old_proxy is not enabled)
     // and TiKV's WriteBatch.
     fail::fail_point!("before_tiflash_check_double_write", |_| {});
@@ -51,7 +58,7 @@ fn check_double_write(batch: &crate::RocksWriteBatchVec) {
     }
 }
 #[cfg(not(any(test, feature = "testexport")))]
-fn check_double_write(batch: &crate::RocksWriteBatchVec) {}
+pub fn check_double_write(batch: &crate::RocksWriteBatchVec) {}
 
 pub fn log_check_double_write(batch: &crate::RocksWriteBatchVec) -> bool {
     check_double_write(batch);
@@ -72,50 +79,4 @@ pub fn log_check_double_write(batch: &crate::RocksWriteBatchVec) -> bool {
         // deadlock here.
     }
     false
-}
-
-use serde_derive::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct EngineStoreConfig {
-    pub enable_fast_add_peer: bool,
-}
-
-#[allow(clippy::derivable_impls)]
-impl Default for EngineStoreConfig {
-    fn default() -> Self {
-        Self {
-            enable_fast_add_peer: false,
-        }
-    }
-}
-
-#[derive(Default, Debug)]
-pub struct ProxyConfigSet {
-    pub engine_store: EngineStoreConfig,
-}
-
-impl From<interfaces_ffi::RawCppPtr> for crate::RawPSWriteBatchWrapper {
-    fn from(src: interfaces_ffi::RawCppPtr) -> Self {
-        let result = crate::RawPSWriteBatchWrapper {
-            ptr: src.ptr,
-            type_: src.type_,
-        };
-        let mut src = src;
-        src.ptr = std::ptr::null_mut();
-        result
-    }
-}
-
-#[allow(clippy::from_over_into)]
-impl Into<crate::FsStatsExt> for interfaces_ffi::StoreStats {
-    fn into(self) -> crate::FsStatsExt {
-        crate::FsStatsExt {
-            available: self.fs_stats.avail_size,
-            capacity: self.fs_stats.capacity_size,
-            used: self.fs_stats.used_size,
-        }
-    }
 }

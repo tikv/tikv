@@ -3,11 +3,11 @@
 use std::sync::Arc;
 
 use engine_traits::{self, Mutable, Result, WriteBatchExt, WriteOptions};
+use proxy_ffi::interfaces_ffi::RawCppPtr;
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::{
-    engine::RocksEngine, options::RocksWriteOptions, r2e, util::get_cf_handle, FFIHubInner,
-    RawPSWriteBatchWrapper,
+    engine::RocksEngine, options::RocksWriteOptions, r2e, util::get_cf_handle, EngineStoreHub,
 };
 
 const WRITE_BATCH_MAX_BATCH: usize = 16;
@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(v.unwrap(), b"bbb");
         let mut wb = RocksWriteBatchVec::with_unit_capacity(
             &engine,
-            RawPSWriteBatchWrapper {
+            RawCppPtr {
                 ptr: std::ptr::null_mut(),
                 type_: 0,
             },
@@ -344,7 +344,7 @@ mod tests {
         assert!(wb.should_write_to_engine());
         let mut wb = RocksWriteBatchVec::with_unit_capacity(
             &engine,
-            RawPSWriteBatchWrapper {
+            RawCppPtr {
                 ptr: std::ptr::null_mut(),
                 type_: 0,
             },

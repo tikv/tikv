@@ -58,6 +58,7 @@ pub struct ProxyForwarder<T: Transport, ER: RaftEngine> {
 impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
     pub fn get_cached_manager(&self) -> Arc<CachedRegionInfoManager> {
         self.engine
+            .proxy_ext
             .cached_region_info_manager
             .as_ref()
             .unwrap()
@@ -85,7 +86,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         debug_struct: DebugStruct,
     ) -> Self {
         let engine_store_server_helper =
-            gen_engine_store_server_helper(engine.engine_store_server_helper);
+            gen_engine_store_server_helper(engine.proxy_ext.engine_store_server_helper);
         // start thread pool for pre handle snapshot
         let snap_pool = Builder::new(tikv_util::thd_name!("region-task"))
             .max_thread_count(packed_envs.snap_handle_pool_size)

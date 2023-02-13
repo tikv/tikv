@@ -19,10 +19,7 @@ mod store {
 
         for id in cluster.engines.keys() {
             let engine = cluster.get_tiflash_engine(*id);
-            assert_eq!(
-                engine.ffi_hub.as_ref().unwrap().get_store_stats().capacity,
-                444444
-            );
+            assert_eq!(engine.get_store_stats().fs_stats.capacity_size, 444444);
         }
 
         for id in cluster.engines.keys() {

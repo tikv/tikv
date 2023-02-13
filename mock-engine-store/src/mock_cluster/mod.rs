@@ -330,7 +330,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 .engine_store_server_helper();
 
             let helper = engine_store_ffi::ffi::gen_engine_store_server_helper(helper_ptr);
-            let ffi_hub = Arc::new(engine_store_ffi::engine::TiFlashFFIHub {
+            let ffi_hub = Arc::new(engine_store_ffi::engine::TiFlashEngineStoreHub {
                 engine_store_server_helper: helper,
             });
             (helper_ptr, ffi_hub)
@@ -346,7 +346,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             Some(proxy_config_set),
         );
 
-        assert_ne!(engines.kv.engine_store_server_helper, 0);
+        assert_ne!(engines.kv.proxy_ext.engine_store_server_helper, 0);
         self.ffi_helper_lst.push(ffi_helper_set);
     }
 
@@ -834,7 +834,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
     pub fn run_node(&mut self, node_id: u64) -> ServerResult<()> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
-        assert_ne!(engines.kv.engine_store_server_helper, 0);
+        assert_ne!(engines.kv.proxy_ext.engine_store_server_helper, 0);
 
         let key_mgr = self.key_managers_map[&node_id].clone();
         let (router, system) =
