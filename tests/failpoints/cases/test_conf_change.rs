@@ -19,7 +19,7 @@ fn test_destroy_local_reader() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Set election timeout and max leader lease to 1s.
-    configure_for_lease_read(&mut cluster, Some(100), Some(10));
+    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
