@@ -75,16 +75,28 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             store_ctx,
             req.get_admin_request().get_prepare_merge(),
         )?;
-        let req = self.pre_propose_prepare_merge(store_ctx, req)?;
-
-        let mut proposal_ctx = ProposalContext::empty();
-        proposal_ctx.insert(ProposalContext::PREPARE_MERGE);
-        let data = req.write_to_bytes().unwrap();
-        let r = self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec());
-        if r.is_err() {
-            self.restore_merging_region_locks_status();
-        }
-        r
+        let (req, lock_size_limit) = self.pre_propose_prepare_merge(store_ctx, req)?;
+        self.propose_locks_before_prepare_merge(store_ctx, lock_size_limit)
+            .and_then(|_| {
+                let mut proposal_ctx = ProposalContext::empty();
+                proposal_ctx.insert(ProposalContext::PREPARE_MERGE);
+                let data = req.write_to_bytes().unwrap();
+                self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
+            })
+            .inspect_err(|_| {
+                // Match v1::post_propose_fail.
+                // If we just failed to propose PrepareMerge, the pessimistic locks status
+                // may become MergingRegion incorrectly. So, we have to revert it here.
+                // But we have to rule out the case when the region has successfully
+                // proposed PrepareMerge or has been in merging, which is decided by
+                // the boolean expression below.
+                if !self.proposal_control().is_merging() {
+                    let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
+                    if pessimistic_locks.status == LocksStatus::MergingRegion {
+                        pessimistic_locks.status = LocksStatus::Normal;
+                    }
+                }
+            })
     }
 
     /// Match v1::check_merge_proposal.
@@ -149,7 +161,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
-    ) -> Result<RaftCmdRequest> {
+    ) -> Result<(RaftCmdRequest, usize)> {
         let applied_index = self.entry_storage().applied_index();
         // Check existing fence.
         let has_prepare_merge_fence = self.merge_context().prepare_fence.is_some();
@@ -257,13 +269,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         debug_assert!(self.merge_context().prepare_fence.is_none());
-
-        self.propose_locks_before_prepare_merge(store_ctx, entry_size_limit - entry_size)?;
-
         req.mut_admin_request()
             .mut_prepare_merge()
             .set_min_index(min_matched + 1);
-        Ok(req)
+        Ok((req, entry_size_limit - entry_size))
     }
 
     fn propose_locks_before_prepare_merge<T>(
@@ -323,29 +332,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "propose {} pessimistic locks before prepare merge",
             cmd.get_requests().len();
         );
-        let r = self.propose(store_ctx, cmd.write_to_bytes().unwrap());
-        if r.is_err() {
-            self.restore_merging_region_locks_status();
-            r?;
-        }
+        self.propose(store_ctx, cmd.write_to_bytes().unwrap())?;
         Ok(())
-    }
-
-    // Match v1::post_propose_fail.
-    #[inline]
-    fn restore_merging_region_locks_status(&mut self) {
-        // If we just failed to propose PrepareMerge, the pessimistic locks status
-        // may become MergingRegion incorrectly. So, we have to revert it here.
-        // But we have to rule out the case when the region has successfully
-        // proposed PrepareMerge or has been in merging, which is decided by
-        // the boolean expression below.
-        // last_committed_prepare_merge_idx?
-        if !self.proposal_control().is_merging() {
-            let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
-            if pessimistic_locks.status == LocksStatus::MergingRegion {
-                pessimistic_locks.status = LocksStatus::Normal;
-            }
-        }
     }
 
     /// Called after some new entries have been applied and the fence can
