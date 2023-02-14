@@ -68,6 +68,10 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn continue_background_work(&self) -> Result<()> {
+        panic!()
+    }
+
     fn exists(path: &str) -> bool {
         panic!()
     }

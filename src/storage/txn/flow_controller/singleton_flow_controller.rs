@@ -442,8 +442,43 @@ impl Default for CfFlowChecker {
     }
 }
 
+pub trait FlowControlFactorStore {
+    fn num_files_at_level(&self, region_id: u64, cf: &str, level: usize) -> u64;
+    fn num_immutable_mem_table(&self, region_id: u64, cf: &str) -> u64;
+    fn pending_compaction_bytes(&self, region_id: u64, cf: &str) -> u64;
+    fn cf_names(&self, region_id: u64) -> Vec<String>;
+}
+
+impl<E: FlowControlFactorsExt + CfNamesExt> FlowControlFactorStore for E {
+    fn cf_names(&self, _region_id: u64) -> Vec<String> {
+        CfNamesExt::cf_names(self)
+            .iter()
+            .map(|v| v.to_string())
+            .collect()
+    }
+
+    fn num_files_at_level(&self, _region_id: u64, cf: &str, level: usize) -> u64 {
+        match self.get_cf_num_files_at_level(cf, level) {
+            Ok(Some(n)) => n,
+            _ => 0,
+        }
+    }
+    fn num_immutable_mem_table(&self, _region_id: u64, cf: &str) -> u64 {
+        match self.get_cf_num_immutable_mem_table(cf) {
+            Ok(Some(n)) => n,
+            _ => 0,
+        }
+    }
+    fn pending_compaction_bytes(&self, _region_id: u64, cf: &str) -> u64 {
+        match self.get_cf_pending_compaction_bytes(cf) {
+            Ok(Some(n)) => n,
+            _ => 0,
+        }
+    }
+}
+
 #[derive(CopyGetters, Setters)]
-pub(super) struct FlowChecker<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> {
+pub(super) struct FlowChecker<E: FlowControlFactorStore + Send + 'static> {
     pub soft_pending_compaction_bytes_limit: u64,
     hard_pending_compaction_bytes_limit: u64,
     memtables_threshold: u64,
@@ -469,34 +504,38 @@ pub(super) struct FlowChecker<E: CfNamesExt + FlowControlFactorsExt + Send + 'st
     last_speed: f64,
     wait_for_destroy_range_finish: bool,
 
+    region_id: u64,
     #[getset(get_copy = "pub", set = "pub")]
     tablet_suffix: u64,
 }
 
-impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
+impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
     pub fn new(
         config: &FlowControlConfig,
         engine: E,
         discard_ratio: Arc<AtomicU32>,
         limiter: Arc<Limiter>,
     ) -> Self {
-        Self::new_with_tablet_suffix(config, engine, discard_ratio, limiter, 0)
+        Self::new_with_region_id(0, 0, config, engine, discard_ratio, limiter)
     }
 
-    pub fn new_with_tablet_suffix(
+    pub fn new_with_region_id(
+        region_id: u64,
+        tablet_suffix: u64,
         config: &FlowControlConfig,
         engine: E,
         discard_ratio: Arc<AtomicU32>,
         limiter: Arc<Limiter>,
-        tablet_suffix: u64,
     ) -> Self {
         let cf_checkers = engine
-            .cf_names()
+            .cf_names(region_id)
             .into_iter()
-            .map(|cf| (cf.to_owned(), CfFlowChecker::default()))
+            .map(|cf_name| (cf_name, CfFlowChecker::default()))
             .collect();
 
         Self {
+            region_id,
+            tablet_suffix,
             soft_pending_compaction_bytes_limit: config.soft_pending_compaction_bytes_limit.0,
             hard_pending_compaction_bytes_limit: config.hard_pending_compaction_bytes_limit.0,
             memtables_threshold: config.memtables_threshold,
@@ -510,7 +549,6 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             last_record_time: Instant::now_coarse(),
             last_speed: 0.0,
             wait_for_destroy_range_finish: false,
-            tablet_suffix,
         }
     }
 
@@ -568,11 +606,8 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                 for (cf, cf_checker) in &mut self.cf_checkers {
                     if let Some(before) = cf_checker.pending_bytes_before_unsafe_destroy_range {
                         let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
-                        let after = (self
-                            .engine
-                            .get_cf_pending_compaction_bytes(cf)
-                            .unwrap_or(None)
-                            .unwrap_or(0) as f64)
+                        let after = (self.engine.pending_compaction_bytes(self.region_id, cf)
+                            as f64)
                             .log2();
 
                         assert!(before < soft);
@@ -691,12 +726,7 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         // Because pending compaction bytes changes dramatically, take the
         // logarithm of pending compaction bytes to make the values fall into
         // a relative small range
-        let num = (self
-            .engine
-            .get_cf_pending_compaction_bytes(&cf)
-            .unwrap_or(None)
-            .unwrap_or(0) as f64)
-            .log2();
+        let num = (self.engine.pending_compaction_bytes(self.region_id, &cf) as f64).log2();
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
         checker.long_term_pending_bytes.observe(num);
         SCHED_PENDING_COMPACTION_BYTES_GAUGE
@@ -756,11 +786,7 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
     }
 
     fn on_memtable_change(&mut self, cf: &str) {
-        let num_memtables = self
-            .engine
-            .get_cf_num_immutable_mem_table(cf)
-            .unwrap_or(None)
-            .unwrap_or(0);
+        let num_memtables = self.engine.num_immutable_mem_table(self.region_id, cf);
         let checker = self.cf_checkers.get_mut(cf).unwrap();
         SCHED_MEMTABLE_GAUGE
             .with_label_values(&[cf])
@@ -839,11 +865,7 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
     }
 
     fn collect_l0_consumption_stats(&mut self, cf: &str, l0_bytes: u64) {
-        let num_l0_files = self
-            .engine
-            .get_cf_num_files_at_level(cf, 0)
-            .unwrap_or(None)
-            .unwrap_or(0);
+        let num_l0_files = self.engine.num_files_at_level(self.region_id, cf, 0);
         let checker = self.cf_checkers.get_mut(cf).unwrap();
         checker.last_l0_bytes += l0_bytes;
         checker.long_term_num_l0_files.observe(num_l0_files);
@@ -856,11 +878,7 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
     }
 
     fn collect_l0_production_stats(&mut self, cf: &str, flush_bytes: u64) {
-        let num_l0_files = self
-            .engine
-            .get_cf_num_files_at_level(cf, 0)
-            .unwrap_or(None)
-            .unwrap_or(0);
+        let num_l0_files = self.engine.num_files_at_level(self.region_id, cf, 0);
 
         let checker = self.cf_checkers.get_mut(cf).unwrap();
         checker.last_flush_bytes += flush_bytes;

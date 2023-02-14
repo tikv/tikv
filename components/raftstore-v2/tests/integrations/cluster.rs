@@ -525,6 +525,10 @@ impl Cluster {
         &self.nodes[offset]
     }
 
+    pub fn receiver(&self, offset: usize) -> &Receiver<RaftMessage> {
+        &self.receivers[offset]
+    }
+
     /// Send messages and wait for side effects are all handled.
     #[allow(clippy::vec_box)]
     pub fn dispatch(&self, region_id: u64, mut msgs: Vec<Box<RaftMessage>>) {

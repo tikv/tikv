@@ -438,7 +438,9 @@ impl SstImporter {
 
         if self.import_support_download() {
             let shrink_file_count = shrink_files.len();
-            info!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
+            if shrink_file_count > 0 || retain_file_count > 0 {
+                info!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
+            }
 
             for f in shrink_files {
                 if let Err(e) = file_system::remove_file(&f) {
@@ -447,7 +449,9 @@ impl SstImporter {
             }
             shrink_file_count
         } else {
-            info!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
+            if shrink_buff_size > 0 || retain_buff_size > 0 {
+                info!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
+            }
             self.dec_mem(shrink_buff_size as _);
             shrink_buff_size
         }

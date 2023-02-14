@@ -17,18 +17,21 @@ use std::{
 
 use fail::fail_point;
 use file_system::{set_io_type, IoType};
-use resource_control::ResourceController;
+use resource_control::{
+    channel::{unbounded, Receiver, Sender},
+    ResourceController,
+};
 use tikv_util::{
     debug, error, info, mpsc, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name,
     time::Instant,
 };
 
 use crate::{
-    channel::{fsm_channel, ControlScheduler, FsmReceiver, FsmSender, NormalScheduler},
     config::Config,
     fsm::{Fsm, FsmScheduler, Priority},
     mailbox::BasicMailbox,
     router::Router,
+    scheduler::{ControlScheduler, NormalScheduler},
 };
 
 /// A unify type for FSMs so that they can be sent to channel easily.
@@ -288,7 +291,7 @@ pub trait PollHandler<N, C>: Send + 'static {
 /// Internal poller that fetches batch and call handler hooks for readiness.
 pub struct Poller<N: Fsm, C: Fsm, Handler> {
     pub router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
-    pub fsm_receiver: FsmReceiver<N, C>,
+    pub fsm_receiver: Receiver<FsmTypes<N, C>>,
     pub handler: Handler,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
@@ -481,8 +484,8 @@ pub trait HandlerBuilder<N, C> {
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
-    receiver: FsmReceiver<N, C>,
-    low_receiver: FsmReceiver<N, C>,
+    receiver: Receiver<FsmTypes<N, C>>,
+    low_receiver: Receiver<FsmTypes<N, C>>,
     pool_size: usize,
     max_batch_size: usize,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -599,8 +602,8 @@ where
 struct PoolStateBuilder<N: Fsm, C: Fsm> {
     max_batch_size: usize,
     reschedule_duration: Duration,
-    fsm_receiver: FsmReceiver<N, C>,
-    fsm_sender: FsmSender<N, C>,
+    fsm_receiver: Receiver<FsmTypes<N, C>>,
+    fsm_sender: Sender<FsmTypes<N, C>>,
     pool_size: usize,
 }
 
@@ -633,8 +636,8 @@ impl<N: Fsm, C: Fsm> PoolStateBuilder<N, C> {
 pub struct PoolState<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub name_prefix: String,
     pub handler_builder: H,
-    pub fsm_receiver: FsmReceiver<N, C>,
-    pub fsm_sender: FsmSender<N, C>,
+    pub fsm_receiver: Receiver<FsmTypes<N, C>>,
+    pub fsm_sender: Sender<FsmTypes<N, C>>,
     pub low_priority_pool_size: usize,
     pub expected_pool_size: usize,
     pub workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -658,8 +661,8 @@ pub fn create_system<N: Fsm, C: Fsm>(
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
     let state_cnt = Arc::new(AtomicUsize::new(0));
     let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
-    let (sender, receiver) = fsm_channel(resource_ctl);
-    let (low_sender, low_receiver) = fsm_channel(None); // no resource control for low fsm
+    let (sender, receiver) = unbounded(resource_ctl);
+    let (low_sender, low_receiver) = unbounded(None); // no resource control for low fsm
     let normal_scheduler = NormalScheduler {
         sender: sender.clone(),
         low_sender,

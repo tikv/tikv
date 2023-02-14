@@ -610,6 +610,9 @@ where
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
+                    if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
+                        continue;
+                    }
                     if let Err(e) = self.on_raft_message(msg) {
                         error!(%e;
                             "handle raft message err";
@@ -2787,8 +2790,8 @@ where
             ExtraMessageType::MsgVoterReplicatedIndexResponse => {
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
-            ExtraMessageType::MsgGcPeerRequest => unimplemented!(),
-            ExtraMessageType::MsgGcPeerResponse => unimplemented!(),
+            // It's v2 only message and ignore does no harm.
+            ExtraMessageType::MsgGcPeerRequest | ExtraMessageType::MsgGcPeerResponse => (),
         }
     }
 
@@ -5231,7 +5234,7 @@ where
             true,
         ) {
             match e {
-                Error::FlashbackInProgress(_) => self
+                Error::FlashbackInProgress(..) => self
                     .ctx
                     .raft_metrics
                     .invalid_proposal

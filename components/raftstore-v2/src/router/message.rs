@@ -2,13 +2,13 @@
 
 // #[PerformanceCriticalPath]
 
-use batch_system::ResourceMetered;
 use kvproto::{
     metapb,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
 use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
+use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
 
 use super::{
@@ -17,7 +17,7 @@ use super::{
     },
     ApplyRes,
 };
-use crate::operation::{RequestSplit, SimpleWriteBinary, SplitInit};
+use crate::operation::{RequestHalfSplit, RequestSplit, SimpleWriteBinary, SplitInit};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -33,6 +33,7 @@ pub enum PeerTick {
     ReactivateMemoryLock = 8,
     ReportBuckets = 9,
     CheckLongUncommitted = 10,
+    GcPeer = 11,
 }
 
 impl PeerTick {
@@ -52,6 +53,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
+            PeerTick::GcPeer => "gc_peer",
         }
     }
 
@@ -68,6 +70,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock,
             PeerTick::ReportBuckets,
             PeerTick::CheckLongUncommitted,
+            PeerTick::GcPeer,
         ];
         TICKS
     }
@@ -180,6 +183,10 @@ pub enum PeerMsg {
     },
     RequestSplit {
         request: RequestSplit,
+        ch: CmdResChannel,
+    },
+    RequestHalfSplit {
+        request: RequestHalfSplit,
         ch: CmdResChannel,
     },
     UpdateRegionSize {

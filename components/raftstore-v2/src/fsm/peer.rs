@@ -225,6 +225,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             }
             PeerTick::ReportBuckets => unimplemented!(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted(),
+            PeerTick::GcPeer => self.fsm.peer_mut().on_gc_peer_tick(self.store_ctx),
         }
     }
 
@@ -304,6 +305,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         .peer_mut()
                         .on_request_split(self.store_ctx, request, ch)
                 }
+                PeerMsg::RequestHalfSplit { request, ch } => self
+                    .fsm
+                    .peer_mut()
+                    .on_request_half_split(self.store_ctx, request, ch),
                 PeerMsg::UpdateRegionSize { size } => {
                     self.fsm.peer_mut().on_update_region_size(size)
                 }

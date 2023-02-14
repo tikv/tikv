@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    str::from_utf8,
     sync::{mpsc, Arc},
     thread,
     time::Duration,
@@ -118,7 +119,7 @@ fn test_load_global_config() {
                 .map(|(name, value)| {
                     let mut item = GlobalConfigItem::default();
                     item.set_name(name.to_string());
-                    item.set_value(value.to_string());
+                    item.set_payload(value.as_bytes().into());
                     item
                 })
                 .collect::<Vec<GlobalConfigItem>>(),
@@ -132,7 +133,7 @@ fn test_load_global_config() {
     assert!(
         res.iter()
             .zip(check_items)
-            .all(|(item1, item2)| item1.name == item2.0 && item1.value == item2.1)
+            .all(|(item1, item2)| item1.name == item2.0 && item1.payload == item2.1.as_bytes())
     );
     assert_eq!(revision, 3);
 }
@@ -156,7 +157,10 @@ fn test_watch_global_config_on_closed_server() {
                         Ok(r) => {
                             for item in r.get_changes() {
                                 assert_eq!(item.get_name(), items_clone[i].0);
-                                assert_eq!(item.get_value(), items_clone[i].1);
+                                assert_eq!(
+                                    from_utf8(item.get_payload()).unwrap(),
+                                    items_clone[i].1
+                                );
                                 i += 1;
                             }
                         }
@@ -181,7 +185,7 @@ fn test_watch_global_config_on_closed_server() {
                 .map(|(name, value)| {
                     let mut item = GlobalConfigItem::default();
                     item.set_name(name.to_string());
-                    item.set_value(value.to_string());
+                    item.set_payload(value.as_bytes().into());
                     item
                 })
                 .collect::<Vec<GlobalConfigItem>>(),
