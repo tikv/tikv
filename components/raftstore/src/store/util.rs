@@ -1409,7 +1409,7 @@ pub struct RegionReadProgressCore {
     pause: bool,
     // Discard incoming `(idx, ts)`
     discard: bool,
-    // A notify to trigger advancing resolved ts immediatly.
+    // A notify to trigger advancing resolved ts immediately.
     advance_notify: Option<Arc<Notify>>,
 }
 
