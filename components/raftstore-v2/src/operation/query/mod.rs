@@ -133,10 +133,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
                 .unwrap_or_default();
         }
         let mut region_buckets: BucketStat;
-        if let Some(bucket_ranges) = bucket_ranges {
+        if let (Some(bucket_ranges), Some(peer_region_buckets)) =
+            (bucket_ranges, self.fsm.peer().region_buckets())
+        {
             assert_eq!(buckets.len(), bucket_ranges.len());
             let mut i = 0;
-            region_buckets = self.fsm.peer().region_buckets().clone().unwrap();
+            region_buckets = peer_region_buckets.clone();
             let mut meta = (*region_buckets.meta).clone();
             if !buckets.is_empty() {
                 meta.version = gen_bucket_version(self.fsm.peer().term(), current_version);
