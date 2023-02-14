@@ -1090,6 +1090,7 @@ impl ObservedRange {
         })
     }
 
+    #[allow(clippy::collapsible_if)]
     pub fn update_region_key_range(&mut self, region: &Region) {
         // Check observed key range in region.
         if self.start_key_encoded <= region.start_key {
@@ -1407,7 +1408,7 @@ mod tests {
         )
         .unwrap();
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, txn_extra_op.clone());
+        let mut delegate = Delegate::new(1, txn_extra_op);
         assert!(delegate.handle.is_observing());
 
         let mut map = HashMap::default();

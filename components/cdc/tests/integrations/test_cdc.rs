@@ -2672,7 +2672,7 @@ fn test_cdc_filter_key_range() {
             vec![]
         }
     };
-    for case in vec![
+    for case in &[
         ("key1", true, false, true /* commit */),
         ("key1", true, false, false /* rollback */),
         ("key2", true, true, true),

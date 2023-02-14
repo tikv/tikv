@@ -675,7 +675,7 @@ mod tests {
         // Only observe ["", "b\0x90"]
         let observed_range = ObservedRange::new(
             Key::from_raw(&[]).into_encoded(),
-            Key::from_raw(&vec![b'k', 90]).into_encoded(),
+            Key::from_raw(&[b'k', 90]).into_encoded(),
         )
         .unwrap();
         let mut total_bytes = 0;
