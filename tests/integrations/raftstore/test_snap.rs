@@ -21,6 +21,7 @@ use raftstore::{store::*, Result};
 use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::server::snap::send_snap;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
 
@@ -714,9 +715,10 @@ fn test_correct_snapshot_term() {
 }
 
 /// Test when applying a snapshot, old logs should be cleaned up.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_snapshot_clean_up_logs_with_log_gc() {
-    let mut cluster = new_node_cluster(0, 4);
+    let mut cluster = new_cluster(0, 4);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(50);
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
     // Speed up log gc.
@@ -739,7 +741,7 @@ fn test_snapshot_clean_up_logs_with_log_gc() {
     // Peer (4, 4) must become leader at the end and send snapshot to 2.
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
-    let raft_engine = cluster.engines[&2].raft.clone();
+    let raft_engine = cluster.get_raft_engine(2);
     let mut dest = vec![];
     raft_engine.get_all_entries_to(1, &mut dest).unwrap();
     // No new log is proposed, so there should be no log at all.
