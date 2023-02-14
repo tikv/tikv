@@ -489,7 +489,6 @@ struct BaseRowSampleCollector {
     fm_sketches: Vec<FmSketch>,
     rng: StdRng,
     total_sizes: Vec<i64>,
-    row_buf: Vec<u8>,
     memory_usage: usize,
     reported_memory_usage: usize,
 }
@@ -502,7 +501,6 @@ impl Default for BaseRowSampleCollector {
             fm_sketches: vec![],
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
-            row_buf: Vec::new(),
             memory_usage: 0,
             reported_memory_usage: 0,
         }
@@ -517,46 +515,8 @@ impl BaseRowSampleCollector {
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
-            row_buf: Vec::new(),
             memory_usage: 0,
             reported_memory_usage: 0,
-        }
-    }
-
-    pub fn collect_column_group_old(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-        column_groups: &[tipb::AnalyzeColumnGroup],
-    ) {
-        let col_len = columns_val.len();
-        for i in 0..column_groups.len() {
-            self.row_buf.clear();
-            let offsets = column_groups[i].get_column_offsets();
-            let mut has_null = true;
-            for j in offsets {
-                if columns_val[*j as usize][0] == NIL_FLAG {
-                    continue;
-                }
-                has_null = false;
-                self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64 - 1
-            }
-            // We only maintain the null count for single column case.
-            if has_null && offsets.len() == 1 {
-                self.null_count[col_len + i] += 1;
-                continue;
-            }
-            // Use a in place murmur3 to replace this memory copy.
-            for j in offsets {
-                if columns_info[*j as usize].as_accessor().is_string_like() {
-                    self.row_buf
-                        .extend_from_slice(&collation_keys_val[*j as usize]);
-                } else {
-                    self.row_buf.extend_from_slice(&columns_val[*j as usize]);
-                }
-            }
-            self.fm_sketches[col_len + i].insert_old(&self.row_buf);
         }
     }
 
@@ -601,26 +561,6 @@ impl BaseRowSampleCollector {
                 }
                 self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
             }
-        }
-    }
-
-    pub fn collect_column_old(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-    ) {
-        for i in 0..columns_val.len() {
-            if columns_val[i][0] == NIL_FLAG {
-                self.null_count[i] += 1;
-                continue;
-            }
-            if columns_info[i].as_accessor().is_string_like() {
-                self.fm_sketches[i].insert_old(&collation_keys_val[i]);
-            } else {
-                self.fm_sketches[i].insert_old(&columns_val[i]);
-            }
-            self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
     }
 
@@ -1481,29 +1421,11 @@ mod benches {
     }
 
     #[bench]
-    fn bench_collect_column_old(b: &mut test::Bencher) {
-        let mut collector = BaseRowSampleCollector::new(10000, 4);
-        let (column_vals, collation_key_vals, columns_info, _) = prepare_arguments();
-        b.iter(move || {
-            collector.collect_column_old(&column_vals, &collation_key_vals, &columns_info);
-        })
-    }
-
-    #[bench]
     fn bench_collect_column(b: &mut test::Bencher) {
         let mut collector = BaseRowSampleCollector::new(10000, 4);
         let (column_vals, collation_key_vals, columns_info, _) = prepare_arguments();
         b.iter(|| {
             collector.collect_column(&column_vals, &collation_key_vals, &columns_info);
-        })
-    }
-
-    #[bench]
-    fn bench_collect_column_group_old(b: &mut test::Bencher) {
-        let mut collector = BaseRowSampleCollector::new(10000, 4);
-        let (column_vals, collation_key_vals, columns_info, column_groups) = prepare_arguments();
-        b.iter(|| {
-            collector.collect_column_group_old(&column_vals, &collation_key_vals, &columns_info, &column_groups);
         })
     }
 

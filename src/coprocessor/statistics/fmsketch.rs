@@ -2,7 +2,6 @@
 
 use collections::HashSet;
 use mur3::murmurhash3_x64_128;
-use murmur3::murmur3_x64_128;
 
 /// `FmSketch` is used to count the approximate number of distinct
 /// elements in multiset.
@@ -21,14 +20,6 @@ impl FmSketch {
             max_size,
             hash_set: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
         }
-    }
-
-    pub fn insert_old(&mut self, mut bytes: &[u8]) {
-        let hash = {
-            let out = murmur3_x64_128(&mut bytes, 0).unwrap();
-            out as u64
-        };
-        self.insert_hash_value(hash);
     }
 
     pub fn insert(&mut self, bytes: &[u8]) {
