@@ -313,6 +313,10 @@ impl<K: Ord, V> SegmentMap<K, V> {
     pub fn get_inner(&mut self) -> &mut BTreeMap<K, SegmentValue<K, V>> {
         &mut self.0
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// transform a [`RaftCmdRequest`] to `(key, value, cf)` triple.

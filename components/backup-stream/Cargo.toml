@@ -32,7 +32,7 @@ engine_traits = { workspace = true }
 error_code = { workspace = true }
 # We cannot update the etcd-client to latest version because of the cyclic requirement.
 # Also we need wait until https://github.com/etcdv3/etcd-client/pull/43/files to be merged.
-etcd-client = { git = "https://github.com/pingcap/etcd-client", rev = "14a6f8731f1890d5fd2f6e16a9f0d0a306b0599e", features = ["pub-response-field", "tls-openssl-vendored"] }
+etcd-client = { git = "https://github.com/pingcap/etcd-client", rev = "41d393c32a7a7c728550cee1d9a138dafe6f3e27", features = ["pub-response-field", "tls-openssl-vendored"] }
 external_storage = { workspace = true }
 external_storage_export = { workspace = true }
 fail = "0.5"
