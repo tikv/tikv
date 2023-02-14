@@ -147,7 +147,6 @@ To use this library, please follow the steps below:
 
 ## Contact
 
-[Zhigao Tong](http://github.com/solotzg) ([tongzhigao@pingcap.com](mailto:tongzhigao@pingcap.com))
 [Rongzhen Luo](http://github.com/CalvinNeo) ([luorongzhen@pingcap.com](mailto:luorongzhen@pingcap.com))
 
 ## License

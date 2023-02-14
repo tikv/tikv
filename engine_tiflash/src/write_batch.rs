@@ -3,12 +3,9 @@
 use std::sync::Arc;
 
 use engine_traits::{self, Mutable, Result, WriteBatchExt, WriteOptions};
-use proxy_ffi::interfaces_ffi::RawCppPtr;
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
-use crate::{
-    engine::RocksEngine, options::RocksWriteOptions, r2e, util::get_cf_handle, EngineStoreHub,
-};
+use crate::{engine::RocksEngine, options::RocksWriteOptions, r2e, util::get_cf_handle};
 
 const WRITE_BATCH_MAX_BATCH: usize = 16;
 const WRITE_BATCH_LIMIT: usize = 16;
@@ -251,6 +248,7 @@ impl Mutable for RocksWriteBatchVec {
 #[cfg(test)]
 mod tests {
     use engine_traits::{Peekable, WriteBatch, CF_DEFAULT};
+    use proxy_ffi::interfaces_ffi::RawCppPtr;
     use rocksdb::DBOptions as RawDBOptions;
     use tempfile::Builder;
 

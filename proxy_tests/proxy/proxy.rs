@@ -33,11 +33,12 @@ pub use mock_engine_store::{
     transport_simulate::{
         CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
     },
-    write_kv_in_mem, Cluster, ProxyConfig, RegionStats, Simulator, TestPdClient,
+    write_kv_in_mem, Cluster, ProxyConfig, RegionStats, Simulator,
 };
 pub use pd_client::PdClient;
 pub use raft::eraftpb::{ConfChangeType, MessageType};
 pub use raftstore::coprocessor::ConsistencyCheckMethod;
+pub use test_pd_client::TestPdClient;
 pub use test_raftstore::{new_learner_peer, new_peer};
 pub use tikv_util::{
     box_err, box_try,
@@ -139,7 +140,7 @@ pub fn new_mock_cluster(id: u64, count: usize) -> (Cluster<NodeCluster>, Arc<Tes
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     let mut cluster = Cluster::new(id, count, sim, pd_client.clone(), ProxyConfig::default());
     // Compat new proxy
-    cluster.cfg.proxy_compat = true;
+    cluster.cfg.mock_cfg.proxy_compat = true;
 
     (cluster, pd_client)
 }
@@ -151,7 +152,7 @@ pub fn new_mock_cluster_snap(id: u64, count: usize) -> (Cluster<NodeCluster>, Ar
     proxy_config.raft_store.snap_handle_pool_size = 2;
     let mut cluster = Cluster::new(id, count, sim, pd_client.clone(), proxy_config);
     // Compat new proxy
-    cluster.cfg.proxy_compat = true;
+    cluster.cfg.mock_cfg.proxy_compat = true;
 
     (cluster, pd_client)
 }

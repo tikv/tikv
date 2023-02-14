@@ -143,6 +143,8 @@ pub unsafe extern "C" fn ffi_mockps_consume_write_batch(
         .write()
         .unwrap();
     wb.data.sort_by_key(|k| k.0);
+    // TODO Actually write into rocksdb,
+    // so that we can get a valid snapshot later.
     for (_, write) in wb.data.drain(..) {
         match write {
             MockPSSingleWrite::Put(w) => {

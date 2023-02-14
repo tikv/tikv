@@ -408,6 +408,8 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             let applied_term =
                 self.check_entry_at_index(region_id, applied_index, new_peer_id, "applied_index")?;
             // Will otherwise cause "got message with lower index than committed" loop.
+            // Maybe this can be removed, since fb0917bfa44ec1fc55967 can pass if we remove
+            // this constraint.
             self.check_entry_at_index(
                 region_id,
                 apply_state.get_commit_index(),
@@ -419,10 +421,6 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             self.snap_mgr.register(key.clone(), SnapEntry::Generating);
             defer!(self.snap_mgr.deregister(&key, &SnapEntry::Generating));
             let snapshot = self.snap_mgr.get_snapshot_for_building(&key)?;
-            // for cf in snapshot.cf_files().iter() {
-            //     info!("!!!! snapshot cf_file of {} size {:?}", cf.cf, cf.size);
-            // }
-
             (snapshot, key.clone())
         };
 
@@ -460,15 +458,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
 
             // Write MetaFile
             {
-                // let v = snapshot_meta.write_to_bytes()?;
-                // let mut f = std::fs::File::create(snapshot.meta_path())?;
-                // info!("!!!!! create snapshot meta file {:?}", snapshot.meta_path());
-                // f.write_all(&v[..])?;
-                // f.flush()?;
-                // f.sync_all()?;
-                // snapshot.mut_meta_file().meta.insert(snapshot_meta.clone());
                 snapshot.set_snapshot_meta(snapshot_meta.clone())?;
-                // snapshot.set_hold_tmp_files(false);
                 snapshot.save_meta_file()?;
             }
             pb_snapshot_data.set_meta(snapshot_meta);
@@ -496,14 +486,6 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         // If no set, will result in a MsgResponse to peer 0.
         message.set_from(msg.get_from_peer().get_id());
         message.set_to(msg.get_to_peer().get_id());
-        // debug!(
-        //     "!!!! send snapshot to {} key {} raft message {:?} snap data {:?}
-        // apply_state {:?}",     msg.get_to_peer().get_id(),
-        //     key,
-        //     response,
-        //     pb_snapshot_data,
-        //     apply_state
-        // );
 
         match self.trans.lock() {
             Ok(mut trans) => match trans.send(response) {

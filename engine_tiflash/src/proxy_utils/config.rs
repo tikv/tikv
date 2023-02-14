@@ -19,6 +19,6 @@ impl Default for EngineStoreConfig {
 }
 
 #[derive(Default, Debug)]
-pub struct ProxyConfigSet {
+pub struct ProxyEngineConfigSet {
     pub engine_store: EngineStoreConfig,
 }

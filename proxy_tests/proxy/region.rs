@@ -262,7 +262,7 @@ fn new_later_add_learner_cluster<F: Fn(&mut Cluster<NodeCluster>)>(
     // Make sure we persist before generate snapshot.
     fail::cfg("on_pre_write_apply_state", "return").unwrap();
 
-    cluster.cfg.proxy_compat = false;
+    cluster.cfg.mock_cfg.proxy_compat = false;
     disable_auto_gen_compact_log(&mut cluster);
     // Disable default max peer count check.
     pd_client.disable_default_operator();

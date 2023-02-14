@@ -45,6 +45,7 @@ use raftstore::{
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use tikv::{
     coprocessor, coprocessor_v2,
     import::{ImportSstService, SstImporter},
@@ -82,7 +83,7 @@ use txn_types::TxnExtraScheduler;
 use super::{common::*, *};
 use crate::{
     config::Config,
-    mock_cluster::{Cluster, ProxyConfig, Simulator, TestPdClient},
+    mock_cluster::{Cluster, ProxyConfig, Simulator},
 };
 
 type SimulateStoreTransport =
@@ -525,7 +526,7 @@ impl ServerCluster {
                 }
                 Err(Error::Grpc(GrpcError::BindFail(ref addr, ref port))) => {
                     // Servers may meet the error, when we restart them.
-                    debug!("fail to create a server: bind fail {:?}", (addr, port));
+                    tikv_util::debug!("fail to create a server: bind fail {:?}", (addr, port));
                     thread::sleep(Duration::from_millis(100));
                     continue;
                 }

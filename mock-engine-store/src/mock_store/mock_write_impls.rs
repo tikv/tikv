@@ -323,7 +323,7 @@ impl EngineStoreServerWrap {
         let server = &mut (*self.engine_store_server);
         let node_id = (*self.engine_store_server).id;
         let _kv = &mut (*self.engine_store_server).engines.as_mut().unwrap().kv;
-        let proxy_compat = server.proxy_compat;
+        let proxy_compat = server.mock_cfg.proxy_compat;
         let mut do_handle_write_raft_cmd = move |region: &mut Box<MockRegion>| {
             if region.apply_state.get_applied_index() >= header.index {
                 debug!("obsolete write index";

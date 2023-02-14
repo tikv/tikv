@@ -1,8 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[cfg(feature = "enable-pagestorage")]
+use proxy_ffi::interfaces_ffi::{PageAndCppStrWithView, RawCppPtr, RawVoidPtr};
 use proxy_ffi::{
-    gen_engine_store_server_helper, interfaces_ffi,
-    interfaces_ffi::{EngineStoreServerHelper, PageAndCppStrWithView, RawCppPtr, RawVoidPtr},
+    gen_engine_store_server_helper, interfaces_ffi, interfaces_ffi::EngineStoreServerHelper,
 };
 
 use crate::RocksEngine;

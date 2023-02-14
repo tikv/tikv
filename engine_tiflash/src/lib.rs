@@ -65,6 +65,8 @@ mod ps_write_batch;
 #[cfg(feature = "enable-pagestorage")]
 pub use crate::ps_write_batch::*;
 
+mod ps_engine;
+
 pub mod mvcc_properties;
 pub use crate::mvcc_properties::*;
 pub mod perf_context;

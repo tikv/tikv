@@ -473,7 +473,7 @@ mod mix_mode {
     fn test_old_kv_write() {
         let (mut cluster, _pd_client) = new_mock_cluster(0, 3);
 
-        cluster.cfg.proxy_compat = false;
+        cluster.cfg.mock_cfg.proxy_compat = false;
         // No persist will be triggered by CompactLog
         fail::cfg("no_persist_compact_log", "return").unwrap();
         let _ = cluster.run();

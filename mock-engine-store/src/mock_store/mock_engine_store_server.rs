@@ -17,7 +17,6 @@ pub struct EngineStoreServer {
     pub id: u64,
     pub engines: Option<Engines<TiFlashEngine, engine_rocks::RocksEngine>>,
     pub kvstore: HashMap<RegionId, Box<MockRegion>>,
-    pub proxy_compat: bool,
     pub mock_cfg: MockConfig,
     pub region_states: RefCell<HashMap<RegionId, RegionStats>>,
     pub page_storage: MockPageStorage,
@@ -32,7 +31,6 @@ impl EngineStoreServer {
             id,
             engines,
             kvstore: Default::default(),
-            proxy_compat: false,
             mock_cfg: MockConfig::default(),
             region_states: RefCell::new(Default::default()),
             page_storage: Default::default(),
@@ -485,8 +483,14 @@ unsafe extern "C" fn ffi_handle_safe_ts_update(
 ) {
     let store = into_engine_store_server_wrap(arg1);
     let cluster = store.cluster_ptr as *const mock_cluster::Cluster<ServerCluster>;
-    assert_eq!(self_safe_ts, (*cluster).test_data.expected_self_safe_ts);
-    assert_eq!(leader_safe_ts, (*cluster).test_data.expected_leader_safe_ts);
+    assert_eq!(
+        self_safe_ts,
+        (*cluster).cluster_ext.test_data.expected_self_safe_ts
+    );
+    assert_eq!(
+        leader_safe_ts,
+        (*cluster).cluster_ext.test_data.expected_leader_safe_ts
+    );
 }
 
 unsafe extern "C" fn ffi_handle_compute_store_stats(

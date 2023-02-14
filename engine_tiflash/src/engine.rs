@@ -4,72 +4,35 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 use std::{
-    fmt::{self, Debug, Formatter},
+    fmt::Debug,
     fs,
-    ops::Deref,
     path::Path,
-    sync::{
-        atomic::{AtomicIsize, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicIsize, Arc},
 };
 
 use engine_rocks::{RocksDbVector, RocksEngineIterator, RocksSnapshot};
 use engine_traits::{
-    Checkpointable, Checkpointer, DbVector, Error, IterOptions, Iterable, KvEngine, Peekable,
-    ReadOptions, Result, SyncMutable,
+    Checkpointable, Checkpointer, Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions,
+    Result, SyncMutable,
 };
 use rocksdb::{Writable, DB};
 
+#[cfg(feature = "enable-pagestorage")]
+use crate::ps_engine::*;
 use crate::{
     proxy_utils::{engine_ext::*, EngineStoreHub},
     r2e,
     util::get_cf_handle,
+    ProxyEngineExt,
 };
 
-// This struct should be safe to copy.
-#[derive(Clone)]
-pub struct ProxyEngineExt {
-    pub engine_store_server_helper: isize,
-    pub pool_capacity: usize,
-    pub pending_applies_count: Arc<AtomicIsize>,
-    pub ffi_hub: Option<Arc<dyn EngineStoreHub + Send + Sync>>,
-    pub config_set: Option<Arc<crate::ProxyConfigSet>>,
-    pub cached_region_info_manager: Option<Arc<crate::CachedRegionInfoManager>>,
-}
-
-impl Default for ProxyEngineExt {
-    fn default() -> Self {
-        ProxyEngineExt {
-            engine_store_server_helper: 0,
-            pool_capacity: 0,
-            pending_applies_count: Arc::new(AtomicIsize::new(0)),
-            ffi_hub: None,
-            config_set: None,
-            cached_region_info_manager: None,
-        }
-    }
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RocksEngine {
     // Must ensure rocks is the first field, for RocksEngine::from_ref.
     // We must own a engine_rocks::RocksEngine, since TiKV has not decouple from engine_rocks yet.
     pub rocks: engine_rocks::RocksEngine,
     pub proxy_ext: ProxyEngineExt,
     pub ps_ext: Option<PageStorageExt>,
-}
-
-impl std::fmt::Debug for RocksEngine {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TiFlashEngine")
-            .field("rocks", &self.rocks)
-            .field(
-                "engine_store_server_helper",
-                &self.proxy_ext.engine_store_server_helper,
-            )
-            .finish()
-    }
 }
 
 impl RocksEngine {
@@ -81,8 +44,8 @@ impl RocksEngine {
         &mut self,
         engine_store_server_helper: isize,
         snap_handle_pool_size: usize,
-        ffi_hub: Option<Arc<dyn EngineStoreHub + Send + Sync>>,
-        config_set: Option<Arc<crate::ProxyConfigSet>>,
+        engine_store_hub: Option<Arc<dyn EngineStoreHub + Send + Sync>>,
+        config_set: Option<Arc<crate::ProxyEngineConfigSet>>,
     ) {
         #[cfg(feature = "enable-pagestorage")]
         tikv_util::info!("enabled pagestorage");
@@ -92,7 +55,7 @@ impl RocksEngine {
             engine_store_server_helper,
             pool_capacity: snap_handle_pool_size,
             pending_applies_count: Arc::new(AtomicIsize::new(0)),
-            ffi_hub,
+            engine_store_hub,
             config_set,
             cached_region_info_manager: Some(Arc::new(crate::CachedRegionInfoManager::new())),
         };
@@ -165,51 +128,9 @@ impl KvEngine for RocksEngine {
         self.rocks.bad_downcast()
     }
 
-    // The whole point is:
-    // 1. When `handle_pending_applies` is called by `on_timeout`, we can handle at
-    // least one. 2. When `handle_pending_applies` is called when we receive a
-    // new task,    or when `handle_pending_applies` need to handle multiple
-    // snapshots.    We need to compare to what's in queue.
-
     fn can_apply_snapshot(&self, is_timeout: bool, new_batch: bool, region_id: u64) -> bool {
-        fail::fail_point!("on_can_apply_snapshot", |e| e
-            .unwrap()
-            .parse::<bool>()
-            .unwrap());
-        if let Some(s) = self.proxy_ext.config_set.as_ref() {
-            if s.engine_store.enable_fast_add_peer {
-                // TODO Return true if this is an empty snapshot.
-                // We need to test if the region is still in fast add peer mode.
-                let result = self
-                    .proxy_ext
-                    .cached_region_info_manager
-                    .as_ref()
-                    .expect("expect cached_region_info_manager")
-                    .get_inited_or_fallback(region_id);
-                match result {
-                    Some(true) => {
-                        // Do nothing.
-                        tikv_util::debug!("can_apply_snapshot no fast path. do normal checking";
-                            "region_id" => region_id,
-                        );
-                    }
-                    None | Some(false) => {
-                        // Otherwise, try fast path.
-                        return true;
-                    }
-                };
-            }
-        }
-        // is called after calling observer's pre_handle_snapshot
-        let in_queue = self.proxy_ext.pending_applies_count.load(Ordering::SeqCst);
-        if is_timeout && new_batch {
-            // If queue is full, we should begin to handle
-            true
-        } else {
-            // Otherwise, we wait until the queue is full.
-            // In order to batch more tasks.
-            in_queue > (self.proxy_ext.pool_capacity as isize)
-        }
+        self.proxy_ext
+            .can_apply_snapshot(is_timeout, new_batch, region_id)
     }
 }
 
@@ -241,46 +162,14 @@ impl Iterable for RocksEngine {
     }
 }
 
-pub struct PsDbVector(Vec<u8>);
-
-impl PsDbVector {
-    pub fn from_raw(raw: Vec<u8>) -> PsDbVector {
-        PsDbVector(raw)
-    }
-}
-
-impl DbVector for PsDbVector {}
-
-impl Deref for PsDbVector {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl Debug for PsDbVector {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{:?}", &**self)
-    }
-}
-
-impl<'a> PartialEq<&'a [u8]> for PsDbVector {
-    fn eq(&self, rhs: &&[u8]) -> bool {
-        **rhs == **self
-    }
-}
-
+#[cfg(not(feature = "enable-pagestorage"))]
 impl Peekable for RocksEngine {
-    #[cfg(not(feature = "enable-pagestorage"))]
     type DbVector = RocksDbVector;
 
-    #[cfg(not(feature = "enable-pagestorage"))]
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDbVector>> {
         self.rocks.get_value_opt(opts, key)
     }
 
-    #[cfg(not(feature = "enable-pagestorage"))]
     fn get_value_cf_opt(
         &self,
         opts: &ReadOptions,
@@ -289,38 +178,16 @@ impl Peekable for RocksEngine {
     ) -> Result<Option<RocksDbVector>> {
         self.rocks.get_value_cf_opt(opts, cf, key)
     }
-
-    #[cfg(feature = "enable-pagestorage")]
-    type DbVector = PsDbVector;
-
-    #[cfg(feature = "enable-pagestorage")]
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<PsDbVector>> {
-        let result = self.ps_ext.as_ref().unwrap().read_page(key);
-        return match result {
-            None => Ok(None),
-            Some(v) => Ok(Some(PsDbVector::from_raw(v))),
-        };
-    }
-
-    #[cfg(feature = "enable-pagestorage")]
-    fn get_value_cf_opt(
-        &self,
-        opts: &ReadOptions,
-        cf: &str,
-        key: &[u8],
-    ) -> Result<Option<PsDbVector>> {
-        self.get_value_opt(opts, key)
-    }
 }
 
 impl RocksEngine {
-    fn do_write(&self, cf: &str, key: &[u8]) -> bool {
+    pub fn do_write(&self, cf: &str, key: &[u8]) -> bool {
         crate::do_write(cf, key)
     }
 }
 
+#[cfg(not(feature = "enable-pagestorage"))]
 impl SyncMutable for RocksEngine {
-    #[cfg(not(feature = "enable-pagestorage"))]
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         if self.do_write(engine_traits::CF_DEFAULT, key) {
             return self.rocks.get_sync_db().put(key, value).map_err(r2e);
@@ -328,7 +195,6 @@ impl SyncMutable for RocksEngine {
         Ok(())
     }
 
-    #[cfg(not(feature = "enable-pagestorage"))]
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         if self.do_write(cf, key) {
             let db = self.rocks.get_sync_db();
@@ -342,7 +208,6 @@ impl SyncMutable for RocksEngine {
         Ok(())
     }
 
-    #[cfg(not(feature = "enable-pagestorage"))]
     fn delete(&self, key: &[u8]) -> Result<()> {
         if self.do_write(engine_traits::CF_DEFAULT, key) {
             return self.rocks.get_sync_db().delete(key).map_err(r2e);
@@ -350,64 +215,11 @@ impl SyncMutable for RocksEngine {
         Ok(())
     }
 
-    #[cfg(not(feature = "enable-pagestorage"))]
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         if self.do_write(cf, key) {
             let db = self.rocks.get_sync_db();
             let handle = get_cf_handle(&db, cf)?;
             return self.rocks.get_sync_db().delete_cf(handle, key).map_err(r2e);
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "enable-pagestorage")]
-    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        if self.do_write(engine_traits::CF_DEFAULT, key) {
-            let ps_wb = self.ps_ext.as_ref().unwrap().create_write_batch();
-            self.ps_ext
-                .as_ref()
-                .unwrap()
-                .write_batch_put_page(ps_wb.ptr, key, value);
-            self.ps_ext.as_ref().unwrap().consume_write_batch(ps_wb.ptr);
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "enable-pagestorage")]
-    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        if self.do_write(cf, key) {
-            let ps_wb = self.ps_ext.as_ref().unwrap().create_write_batch();
-            self.ps_ext
-                .as_ref()
-                .unwrap()
-                .write_batch_put_page(ps_wb.ptr, key, value);
-            self.ps_ext.as_ref().unwrap().consume_write_batch(ps_wb.ptr);
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "enable-pagestorage")]
-    fn delete(&self, key: &[u8]) -> Result<()> {
-        if self.do_write(engine_traits::CF_DEFAULT, key) {
-            let ps_wb = self.ps_ext.as_ref().unwrap().create_write_batch();
-            self.ps_ext
-                .as_ref()
-                .unwrap()
-                .write_batch_del_page(ps_wb.ptr, key);
-            self.ps_ext.as_ref().unwrap().consume_write_batch(ps_wb.ptr);
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "enable-pagestorage")]
-    fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        if self.do_write(cf, key) {
-            let ps_wb = self.ps_ext.as_ref().unwrap().create_write_batch();
-            self.ps_ext
-                .as_ref()
-                .unwrap()
-                .write_batch_del_page(ps_wb.ptr, key);
-            self.ps_ext.as_ref().unwrap().consume_write_batch(ps_wb.ptr);
         }
         Ok(())
     }

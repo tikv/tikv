@@ -29,7 +29,7 @@ use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_store_ffi::{
     self,
     core::DebugStruct,
-    engine::ps_engine::PSEngine,
+    engine::ps_engine::PSLogEngine,
     ffi::{
         interfaces_ffi::{
             EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus,
@@ -354,7 +354,7 @@ pub unsafe fn run_tikv_proxy(
             #[cfg(feature = "enable-pagestorage")]
             {
                 tikv_util::info!("bootstrap with pagestorage");
-                run_impl::<PSEngine, API>(config, proxy_config, engine_store_server_helper)
+                run_impl::<PSLogEngine, API>(config, proxy_config, engine_store_server_helper)
             }
             #[cfg(not(feature = "enable-pagestorage"))]
             {
@@ -450,18 +450,18 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
 
         let helper =
             engine_store_ffi::ffi::gen_engine_store_server_helper(engine_store_server_helper);
-        let ffi_hub = Arc::new(engine_store_ffi::engine::TiFlashEngineStoreHub {
+        let engine_store_hub = Arc::new(engine_store_ffi::engine::TiFlashEngineStoreHub {
             engine_store_server_helper: helper,
         });
         // engine_tiflash::RocksEngine has engine_rocks::RocksEngine inside
         let mut kv_engine = TiFlashEngine::from_rocks(kv_engine);
-        let proxy_config_set = Arc::new(engine_tiflash::ProxyConfigSet {
+        let proxy_config_set = Arc::new(engine_tiflash::ProxyEngineConfigSet {
             engine_store: self.proxy_config.engine_store.clone(),
         });
         kv_engine.init(
             engine_store_server_helper,
             self.proxy_config.raft_store.snap_handle_pool_size,
-            Some(ffi_hub),
+            Some(engine_store_hub),
             Some(proxy_config_set),
         );
 
@@ -1706,7 +1706,7 @@ pub trait ConfiguredRaftEngine: RaftEngine {
 
     fn register_config(&self, _cfg_controller: &mut ConfigController) {}
 
-    fn as_ps_engine(&mut self) -> Option<&mut PSEngine> {
+    fn as_ps_engine(&mut self) -> Option<&mut PSLogEngine> {
         None
     }
 }
@@ -1795,17 +1795,17 @@ impl ConfiguredRaftEngine for RaftLogEngine {
     }
 }
 
-impl ConfiguredRaftEngine for PSEngine {
+impl ConfiguredRaftEngine for PSLogEngine {
     fn build(
         _config: &TikvConfig,
         _env: &Arc<Env>,
         _key_manager: &Option<Arc<DataKeyManager>>,
         _block_cache: &Cache,
     ) -> (Self, Option<Arc<RocksStatistics>>) {
-        (PSEngine::new(), None)
+        (PSLogEngine::new(), None)
     }
 
-    fn as_ps_engine(&mut self) -> Option<&mut PSEngine> {
+    fn as_ps_engine(&mut self) -> Option<&mut PSLogEngine> {
         Some(self)
     }
 }

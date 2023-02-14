@@ -70,6 +70,27 @@ fn test_delete_snapshot_after_apply() {
 }
 
 #[test]
+fn test_basic_snapshot() {
+    let (mut cluster, pd_client) = new_mock_cluster_snap(0, 2);
+    assert_eq!(cluster.cfg.proxy_cfg.raft_store.snap_handle_pool_size, 2);
+
+    fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
+    disable_auto_gen_compact_log(&mut cluster);
+
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v");
+
+    let engine_2 = cluster.get_engine(2);
+    must_get_none(&engine_2, b"k1");
+    // add peer (engine_2,engine_2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&engine_2, b"k1", b"v");
+}
+
+#[test]
 fn test_huge_multi_snapshot() {
     test_huge_snapshot(true)
 }

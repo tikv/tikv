@@ -182,13 +182,13 @@ impl RaftLogBatch for PSEngineWriteBatch {
 }
 
 #[derive(Clone, Default)]
-pub struct PSEngine {
+pub struct PSLogEngine {
     pub engine_store_server_helper: isize,
 }
 
-impl std::fmt::Debug for PSEngine {
+impl std::fmt::Debug for PSLogEngine {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PSEngine")
+        f.debug_struct("PSLogEngine")
             .field(
                 "engine_store_server_helper",
                 &self.engine_store_server_helper,
@@ -197,9 +197,9 @@ impl std::fmt::Debug for PSEngine {
     }
 }
 
-impl PSEngine {
+impl PSLogEngine {
     pub fn new() -> Self {
-        PSEngine {
+        PSLogEngine {
             engine_store_server_helper: 0,
         }
     }
@@ -302,7 +302,7 @@ impl PSEngine {
     }
 }
 
-impl RaftEngineReadOnly for PSEngine {
+impl RaftEngineReadOnly for PSLogEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         let key = keys::raft_state_key(raft_group_id);
         self.get_msg_cf(&key)
@@ -393,7 +393,7 @@ impl RaftEngineReadOnly for PSEngine {
     }
 }
 
-impl RaftEngineDebug for PSEngine {
+impl RaftEngineDebug for PSLogEngine {
     fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
     where
         F: FnMut(&Entry) -> Result<bool>,
@@ -409,7 +409,7 @@ impl RaftEngineDebug for PSEngine {
     }
 }
 
-impl RaftEngine for PSEngine {
+impl RaftEngine for PSLogEngine {
     type LogBatch = PSEngineWriteBatch;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
@@ -537,7 +537,7 @@ impl RaftEngine for PSEngine {
     }
 }
 
-impl PerfContextExt for PSEngine {
+impl PerfContextExt for PSLogEngine {
     type PerfContext = PSPerfContext;
 
     fn get_perf_context(level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext {

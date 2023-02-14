@@ -31,6 +31,7 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use tikv::{
     config::{ConfigController, Module},
     import::SstImporter,
@@ -44,10 +45,9 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
 
-pub use crate::mock_cluster::TiFlashEngine;
 use crate::{
     config::Config,
-    mock_cluster::{Simulator, TestPdClient},
+    mock_cluster::{Simulator, TiFlashEngine},
     transport_simulate::{Filter, SimulateTransport},
 };
 

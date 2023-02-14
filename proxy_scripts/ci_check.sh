@@ -49,6 +49,7 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package proxy_tests --test proxy replica_read -- --test-threads 1
     cargo test --package proxy_tests --test proxy ffi -- --test-threads 1
     cargo test --package proxy_tests --test proxy write --features="proxy_tests/enable-pagestorage"
+    # We don't support snapshot test for PS, since it don't support trait Snapshot.
 elif [[ $M == "debug" ]]; then
     # export RUSTC_WRAPPER=~/.cargo/bin/sccache
     export ENGINE_LABEL_VALUE=tiflash

@@ -6,6 +6,8 @@ mod config;
 pub use config::*;
 pub(crate) mod engine_ext;
 pub use engine_ext::*;
+mod proxy_ext;
+pub use proxy_ext::*;
 
 use crate::util::get_cf_handle;
 
@@ -38,6 +40,7 @@ pub fn cf_to_name(batch: &crate::RocksWriteBatchVec, cf: u32) -> &'static str {
         engine_traits::CF_RAFT
     }
 }
+
 #[cfg(any(test, feature = "testexport"))]
 pub fn check_double_write(batch: &crate::RocksWriteBatchVec) {
     // It will fire if we write by both observer(compat_old_proxy is not enabled)

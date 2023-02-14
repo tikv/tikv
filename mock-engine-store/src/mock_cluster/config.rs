@@ -7,11 +7,13 @@ use std::{
 
 use tikv::config::TikvConfig;
 
-use crate::mock_cluster::ProxyConfig;
+use super::ProxyConfig;
 
 #[derive(Clone, Default)]
 pub struct MockConfig {
     pub panic_when_flush_no_found: Arc<AtomicBool>,
+    /// Whether our mock server should compat new proxy.
+    pub proxy_compat: bool,
 }
 
 #[derive(Clone)]
@@ -19,8 +21,6 @@ pub struct Config {
     pub tikv: TikvConfig,
     pub prefer_mem: bool,
     pub proxy_cfg: ProxyConfig,
-    /// Whether our mock server should compat new proxy.
-    pub proxy_compat: bool,
     pub mock_cfg: MockConfig,
 }
 
