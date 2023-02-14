@@ -50,6 +50,7 @@ const DEFAULT_MIN_ADVANCE_TS_INTERVAL: Duration = Duration::from_millis(200); //
 
 pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
+    advance_ts_interval: Duration,
     timer: SteadyTimer,
     worker: Runtime,
     scheduler: Scheduler<Task>,
@@ -60,6 +61,7 @@ pub struct AdvanceTsWorker {
 
 impl AdvanceTsWorker {
     pub fn new(
+        advance_ts_interval: Duration,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
@@ -76,6 +78,7 @@ impl AdvanceTsWorker {
             scheduler,
             pd_client,
             worker,
+            advance_ts_interval,
             timer: SteadyTimer::default(),
             concurrency_manager,
         }
@@ -95,7 +98,13 @@ impl AdvanceTsWorker {
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let timeout = self.timer.delay(advance_ts_interval);
-        let min_timeout = self.timer.delay(DEFAULT_MIN_ADVANCE_TS_INTERVAL);
+        let min_timeout = self.timer.delay(
+            if DEFAULT_MIN_ADVANCE_TS_INTERVAL < self.advance_ts_interval {
+                DEFAULT_MIN_ADVANCE_TS_INTERVAL
+            } else {
+                self.advance_ts_interval
+            },
+        );
 
         let fut = async move {
             // Ignore get tso errors since we will retry every `advdance_ts_interval`.

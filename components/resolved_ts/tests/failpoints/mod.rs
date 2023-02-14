@@ -84,7 +84,7 @@ fn test_report_min_resolved_ts() {
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(region.id, vec![k.to_vec()], start_ts, commit_ts);
 
-    sleep_ms(100);
+    sleep_ms(1000);
     let ts3 = suite.cluster.pd_client.get_min_resolved_ts();
     let unapplied_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     assert!(ts3 > ts1);
@@ -118,7 +118,7 @@ fn test_report_min_resolved_ts_disable() {
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(region.id, vec![k.to_vec()], start_ts, commit_ts);
 
-    sleep_ms(100);
+    sleep_ms(1000);
 
     // no report
     let ts3 = suite.cluster.pd_client.get_min_resolved_ts();

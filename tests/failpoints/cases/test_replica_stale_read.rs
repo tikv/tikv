@@ -116,7 +116,7 @@ fn test_stale_read_1pc_flow_replicate() {
     );
     let read_ts = get_tso(&pd_client);
     // wait for advance_resolved_ts.
-    sleep_ms(200);
+    sleep_ms(1000);
     // Follower 2 can still read `value1`, but can not read `value2` due
     // to it don't have enough data
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
@@ -285,7 +285,7 @@ fn test_update_resoved_ts_before_apply_index() {
     );
 
     // Wait `resolved_ts` be updated
-    sleep_ms(100);
+    sleep_ms(1000);
 
     // The leader can't handle stale read with `commit_ts2` because its `safe_ts`
     // can't update due to its `apply_index` not update
@@ -387,7 +387,7 @@ fn test_stale_read_while_applying_snapshot() {
 
     // Wait follower 2 start applying snapshot
     cluster.wait_log_truncated(1, 2, last_index_on_store_2 + 1);
-    sleep_ms(100);
+    sleep_ms(1000);
 
     // We can't read while applying snapshot and the `safe_ts` should reset to 0
     let resp = follower_client2.kv_read(b"key1".to_vec(), k1_commit_ts);
@@ -552,7 +552,7 @@ fn test_read_source_region_after_target_region_merged() {
     );
 
     // Wait for the source region leader to update `safe_ts` (if it can)
-    sleep_ms(50);
+    sleep_ms(1000);
 
     // We still can read `key1` with `k1_commit_ts1` through source region
     source_follower_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts1);
