@@ -266,45 +266,48 @@ impl Filter for EraseHeartbeatCommit {
     }
 }
 
-fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_committed: bool) {
-    let region = cluster.pd_client.get_region(k).unwrap();
-    let mut tried_cnt = 0;
-    let leader = loop {
-        match cluster.leader_of_region(region.get_id()) {
-            None => {
-                tried_cnt += 1;
-                if tried_cnt >= 3 {
-                    panic!("leader should be elected");
+macro_rules! check_cluster {
+    ($cluster:expr, $k:expr, $v:expr, $all_committed:expr) => {
+        let region = $cluster.pd_client.get_region($k).unwrap();
+        let mut tried_cnt = 0;
+        let leader = loop {
+            match $cluster.leader_of_region(region.get_id()) {
+                None => {
+                    tried_cnt += 1;
+                    if tried_cnt >= 3 {
+                        panic!("leader should be elected");
+                    }
+                    continue;
                 }
-                continue;
+                Some(l) => break l,
             }
-            Some(l) => break l,
+        };
+        let mut missing_count = 0;
+        for i in 1..=region.get_peers().len() as u64 {
+            let engine = $cluster.get_engine(i);
+            if $all_committed || i == leader.get_store_id() {
+                must_get_equal(&engine, $k, $v);
+            } else {
+                // Note that a follower can still commit the log by an empty MsgAppend
+                // when bcast commit is disabled. A heartbeat response comes to leader
+                // before MsgAppendResponse will trigger MsgAppend.
+                match engine.get_value(&keys::data_key($k)).unwrap() {
+                    Some(res) => assert_eq!($v, &res[..]),
+                    None => missing_count += 1,
+                }
+            }
         }
+        assert!($all_committed || missing_count > 0);
     };
-    let mut missing_count = 0;
-    for i in 1..=region.get_peers().len() as u64 {
-        let engine = cluster.get_engine(i);
-        if all_committed || i == leader.get_store_id() {
-            must_get_equal(&engine, k, v);
-        } else {
-            // Note that a follower can still commit the log by an empty MsgAppend
-            // when bcast commit is disabled. A heartbeat response comes to leader
-            // before MsgAppendResponse will trigger MsgAppend.
-            match engine.get_value(&keys::data_key(k)).unwrap() {
-                Some(res) => assert_eq!(v, &res[..]),
-                None => missing_count += 1,
-            }
-        }
-    }
-    assert!(all_committed || missing_count > 0);
 }
 
 /// TiKV enables lazy broadcast commit optimization, which can delay split
 /// on follower node. So election of new region will delay. We need to make
 /// sure broadcast commit is disabled when split.
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_delay_split_region() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(500);
     cluster.cfg.raft_store.merge_max_log_gap = 100;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
@@ -323,8 +326,8 @@ fn test_delay_split_region() {
     cluster.must_put(b"k3", b"v3");
 
     // Although skip bcast is enabled, but heartbeat will commit the log in period.
-    check_cluster(&mut cluster, b"k1", b"v1", true);
-    check_cluster(&mut cluster, b"k3", b"v3", true);
+    check_cluster!(cluster, b"k1", b"v1", true);
+    check_cluster!(cluster, b"k3", b"v3", true);
     cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
 
     cluster.add_send_filter(CloneFilterFactory(EraseHeartbeatCommit));
@@ -333,14 +336,14 @@ fn test_delay_split_region() {
     sleep_ms(100);
     // skip bcast is enabled by default, so all followers should not commit
     // the log.
-    check_cluster(&mut cluster, b"k4", b"v4", false);
+    check_cluster!(cluster, b"k4", b"v4", false);
 
     cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
     // New leader should flush old committed entries eagerly.
-    check_cluster(&mut cluster, b"k4", b"v4", true);
+    check_cluster!(cluster, b"k4", b"v4", true);
     cluster.must_put(b"k5", b"v5");
     // New committed entries should be broadcast lazily.
-    check_cluster(&mut cluster, b"k5", b"v5", false);
+    check_cluster!(cluster, b"k5", b"v5", false);
     cluster.add_send_filter(CloneFilterFactory(EraseHeartbeatCommit));
 
     let k2 = b"k2";
@@ -352,7 +355,7 @@ fn test_delay_split_region() {
     sleep_ms(100);
     // After split, skip bcast is enabled again, so all followers should not
     // commit the log.
-    check_cluster(&mut cluster, b"k6", b"v6", false);
+    check_cluster!(cluster, b"k6", b"v6", false);
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
