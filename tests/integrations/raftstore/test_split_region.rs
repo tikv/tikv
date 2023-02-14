@@ -304,7 +304,7 @@ fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_
 /// sure broadcast commit is disabled when split.
 #[test]
 fn test_delay_split_region() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(500);
     cluster.cfg.raft_store.merge_max_log_gap = 100;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
@@ -411,9 +411,7 @@ fn test_node_split_overlap_snapshot() {
     must_get_equal(&engine3, b"k3", b"v3");
 }
 
-fn test_apply_new_version_snapshot<T: test_raftstore::Simulator>(
-    cluster: &mut test_raftstore::Cluster<T>,
-) {
+fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
@@ -468,19 +466,19 @@ fn test_apply_new_version_snapshot<T: test_raftstore::Simulator>(
 
 #[test]
 fn test_node_apply_new_version_snapshot() {
-    let mut cluster = test_raftstore::new_node_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     test_apply_new_version_snapshot(&mut cluster);
 }
 
 #[test]
 fn test_server_apply_new_version_snapshot() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     test_apply_new_version_snapshot(&mut cluster);
 }
 
 #[test]
 fn test_server_split_with_stale_peer() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     // disable raft log gc.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
@@ -604,7 +602,7 @@ fn test_split_region_diff_check() {
 #[test]
 fn test_node_split_region_after_reboot_with_config_change() {
     let count = 1;
-    let mut cluster = test_raftstore::new_server_cluster(0, count);
+    let mut cluster = new_server_cluster(0, count);
     let region_max_size = 2000;
     let region_split_size = 2000;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
@@ -645,10 +643,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
     }
 }
 
-fn test_split_epoch_not_match<T: test_raftstore::Simulator>(
-    cluster: &mut test_raftstore::Cluster<T>,
-    right_derive: bool,
-) {
+fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -720,25 +715,25 @@ fn test_split_epoch_not_match<T: test_raftstore::Simulator>(
 
 #[test]
 fn test_server_split_epoch_not_match_left_derive() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, false);
 }
 
 #[test]
 fn test_server_split_epoch_not_match_right_derive() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, true);
 }
 
 #[test]
 fn test_node_split_epoch_not_match_left_derive() {
-    let mut cluster = test_raftstore::new_node_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, false);
 }
 
 #[test]
 fn test_node_split_epoch_not_match_right_derive() {
-    let mut cluster = test_raftstore::new_node_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, true);
 }
 
@@ -780,10 +775,13 @@ fn test_node_quick_election_after_split() {
     assert!(new_leader.is_some());
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_node_split_region() {
     let count = 5;
-    let mut cluster = test_raftstore::new_node_cluster(0, count);
+    let mut cluster = new_cluster(0, count);
     // length of each key+value
     let item_len = 74;
     // make bucket's size to item_len, which means one row one bucket
@@ -988,7 +986,7 @@ fn test_split_with_in_memory_pessimistic_locks() {
 #[test]
 fn test_refresh_region_bucket_keys() {
     let count = 5;
-    let mut cluster = test_raftstore::new_server_cluster(0, count);
+    let mut cluster = new_server_cluster(0, count);
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
 
@@ -1174,7 +1172,7 @@ fn test_refresh_region_bucket_keys() {
 #[test]
 fn test_gen_split_check_bucket_ranges() {
     let count = 5;
-    let mut cluster = test_raftstore::new_server_cluster(0, count);
+    let mut cluster = new_server_cluster(0, count);
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(5);
     cluster.cfg.coprocessor.enable_region_bucket = true;
     // disable report buckets; as it will reset the user traffic stats to randomize
