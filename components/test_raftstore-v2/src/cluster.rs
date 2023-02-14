@@ -1128,7 +1128,7 @@ impl<T: Simulator> Cluster<T> {
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
         // todo(SpadeA): modify
         let resp = self
-            .call_command_on_leader(transfer_leader, Duration::from_secs(500))
+            .call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
         assert_eq!(
             resp.get_admin_response().get_cmd_type(),
