@@ -515,30 +515,28 @@ impl RpcClient {
     }
 }
 
-fn get_region_resp_by_id(
+async fn get_region_resp_by_id(
     mut raw_client: CachedRawClient,
     region_id: u64,
-) -> PdFuture<pdpb::GetRegionResponse> {
+) -> Result<pdpb::GetRegionResponse> {
     let timer = Instant::now_coarse();
     let mut req = pdpb::GetRegionByIdRequest::default();
     req.set_region_id(region_id);
-    Box::pin(async move {
-        raw_client.wait_for_ready().await?;
-        req.set_header(raw_client.header());
-        let resp = raw_client
-            .stub()
-            .get_region_by_id_async_opt(&req, raw_client.call_option().timeout(request_timeout()))
-            .unwrap_or_else(|e| {
-                panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
-            })
-            .await;
-        PD_REQUEST_HISTOGRAM_VEC
-            .get_region_by_id
-            .observe(timer.saturating_elapsed_secs());
-        let resp = raw_client.check_resp(resp)?;
-        check_resp_header(resp.get_header())?;
-        Ok(resp)
-    })
+    raw_client.wait_for_ready().await?;
+    req.set_header(raw_client.header());
+    let resp = raw_client
+        .stub()
+        .get_region_by_id_async_opt(&req, raw_client.call_option().timeout(request_timeout()))
+        .unwrap_or_else(|e| {
+            panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
+        })
+        .await;
+    PD_REQUEST_HISTOGRAM_VEC
+        .get_region_by_id
+        .observe(timer.saturating_elapsed_secs());
+    let resp = raw_client.check_resp(resp)?;
+    check_resp_header(resp.get_header())?;
+    Ok(resp)
 }
 pub trait PdClient {
     type ResponseChannel<R: Debug>: Stream<Item = Result<R>>;

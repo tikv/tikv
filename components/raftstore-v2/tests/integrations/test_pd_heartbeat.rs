@@ -6,11 +6,12 @@ use engine_traits::{MiscExt, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
 use pd_client::PdClient;
+use raftstore::coprocessor::Config as CopConfig;
 use raftstore_v2::{
     router::{PeerMsg, PeerTick},
     SimpleWriteEncoder,
 };
-use tikv_util::store::new_peer;
+use tikv_util::{config::ReadableSize, store::new_peer};
 
 use crate::cluster::Cluster;
 
@@ -70,7 +71,10 @@ fn test_store_heartbeat() {
 #[test]
 fn test_report_buckets() {
     let region_id = 2;
-    let cluster = Cluster::with_node_count(1, None);
+    let mut cop_cfg = CopConfig::default();
+    cop_cfg.enable_region_bucket = true;
+    cop_cfg.region_bucket_size = ReadableSize::kb(1);
+    let cluster = Cluster::with_cop_cfg(cop_cfg);
     let store_id = cluster.node(0).id();
     let router = &cluster.routers[0];
 
