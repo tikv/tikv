@@ -7491,7 +7491,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/zyguan/yatp.git?branch=cleanup#f4564bade2fff087d6c5750b5930e265bf44eb0c"
+source = "git+https://github.com/zyguan/yatp.git?branch=cleanup#e31fc9982627a62e72c0ad95e331ec0c5a2b600f"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",
