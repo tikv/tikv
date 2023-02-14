@@ -142,4 +142,16 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
     {
         self.local_reader.snapshot(req)
     }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn new_with_store_meta(
+        router: StoreRouter<EK, ER>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    ) -> Self {
+        let logger = router.logger().clone();
+        RaftRouter {
+            router: router.clone(),
+            local_reader: LocalReader::new(store_meta, router, logger),
+        }
+    }
 }

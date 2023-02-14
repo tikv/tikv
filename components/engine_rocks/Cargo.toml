@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [features]
+trace-lifetime = []
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]

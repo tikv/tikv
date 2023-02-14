@@ -22,8 +22,8 @@ use rollback_merge::RollbackMergeResult;
 use slog::info;
 use split::SplitResult;
 pub use split::{
-    report_split_init_finish, temp_split_path, RequestSplit, SplitFlowControl, SplitInit,
-    SPLIT_PREFIX,
+    report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
+    SplitInit, SPLIT_PREFIX,
 };
 use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;

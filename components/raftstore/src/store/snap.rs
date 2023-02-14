@@ -2021,6 +2021,11 @@ impl TabletSnapManager {
         }
         Ok(total_size)
     }
+
+    #[inline]
+    pub fn root_path(&self) -> &Path {
+        self.base.as_path()
+    }
 }
 
 #[cfg(test)]

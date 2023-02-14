@@ -9,8 +9,9 @@ mod txn_ext;
 
 pub use command::{
     AdminCmdResult, ApplyFlowControl, CatchUpLogs, CommittedEntries, CompactLogContext,
-    MergeContext, ProposalControl, RequestSplit, SimpleWriteBinary, SimpleWriteEncoder,
-    SimpleWriteReqDecoder, SimpleWriteReqEncoder, SplitFlowControl, SPLIT_PREFIX,
+    MergeContext, ProposalControl, RequestHalfSplit, RequestSplit, SimpleWriteBinary,
+    SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder, SplitFlowControl,
+    SPLIT_PREFIX,
 };
 pub use life::{DestroyProgress, GcPeerContext};
 pub use ready::{

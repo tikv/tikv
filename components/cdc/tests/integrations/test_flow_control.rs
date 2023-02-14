@@ -15,7 +15,7 @@ use crate::{new_event_feed, TestSuiteBuilder};
 fn test_cdc_congest() {
     let mut cluster = new_server_cluster(1, 1);
     // Increase the Raft tick interval to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(100), None);
+    configure_for_lease_read(&mut cluster.cfg, Some(100), None);
     let memory_quota = 1024; // 1KB
     let mut suite = TestSuiteBuilder::new()
         .cluster(cluster)
