@@ -100,7 +100,7 @@ fn test_server_huge_snapshot_multi_files() {
 
 fn test_server_snap_gc_internal(version: &str) {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     cluster.pd_client.reset_version(version);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
     cluster.cfg.raft_store.max_snapshot_file_raw_size = ReadableSize::mb(100);
@@ -269,7 +269,7 @@ fn test_server_concurrent_snap() {
 }
 
 fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    configure_for_snapshot(cluster);
+    configure_for_snapshot(&mut cluster.cfg);
 
     cluster.run();
     let cf = "lock";
@@ -443,7 +443,7 @@ impl Filter for SnapshotAppendFilter {
 }
 
 fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
-    configure_for_snapshot(cluster);
+    configure_for_snapshot(&mut cluster.cfg);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
