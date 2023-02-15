@@ -21,6 +21,7 @@ define_error_codes!(
     BAD_FORMAT_WRITE => ("BadFormatWrite", "",""),
     KEY_IS_LOCKED => ("KeyIsLocked", "", ""),
     MAX_TIMESTAMP_NOT_SYNCED => ("MaxTimestampNotSynced", "", ""),
+    FLASHBACK_NOT_PREPARED => ("FlashbackNotPrepared", "", ""),
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
     API_VERSION_NOT_MATCHED => ("ApiVersionNotMatched", "", ""),
     INVALID_KEY_MODE => ("InvalidKeyMode", "", ""),
