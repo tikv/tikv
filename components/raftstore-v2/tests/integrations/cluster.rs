@@ -520,12 +520,7 @@ impl Cluster {
             v2_default_config()
         };
         disable_all_auto_ticks(&mut cfg);
-
-        let cop_cfg = if let Some(config) = cop_cfg {
-            config
-        } else {
-            CopConfig::default()
-        };
+        let cop_cfg = cop_cfg.unwrap_or_default();
         for _ in 1..=count {
             let mut node = TestNode::with_pd(&cluster.pd_server, cluster.logger.clone());
             let (tx, rx) = new_test_transport();

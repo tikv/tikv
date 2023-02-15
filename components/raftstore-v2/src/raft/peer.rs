@@ -22,14 +22,13 @@ use raftstore::{
         fsm::ApplyMetrics,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
-        SplitCheckTask, TabletSnapManager, WriteTask,
+        TabletSnapManager, WriteTask,
     },
 };
-use slog::{error, Logger};
+use slog::Logger;
 
 use super::storage::Storage;
 use crate::{
-    batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
         AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext, ProposalControl,
@@ -211,22 +210,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(peer)
     }
 
-    pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        if ctx.coprocessor_host.cfg.enable_region_bucket && !self.region().get_peers().is_empty() {
-            if let Err(e) = ctx
-                .schedulers
-                .split_check
-                .schedule(SplitCheckTask::ApproximateBuckets(self.region().clone()))
-            {
-                error!(
-                    self.logger,
-                    "failed to schedule check approximate buckets";
-                    "err" => %e,
-                );
-            }
-        }
-    }
-
     #[inline]
     pub fn region_buckets_mut(&mut self) -> &mut BucketStat {
         self.region_buckets.as_mut().unwrap()
@@ -238,9 +221,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn set_region_buckets(&mut self, buckets: BucketStat) {
-        let old = self.region_buckets.replace(buckets);
-        self.last_region_buckets = old
+    pub fn set_region_buckets(&mut self, buckets: Option<BucketStat>) {
+        self.last_region_buckets = self.region_buckets.take();
+        self.region_buckets = buckets;
     }
 
     #[inline]
@@ -684,13 +667,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn post_split(&mut self) {
-        self.reset_region_buckets();
-    }
-
-    pub fn reset_region_buckets(&mut self) {
-        if self.region_buckets.is_some() {
-            self.last_region_buckets = self.region_buckets.take();
-        }
+        self.set_region_buckets(None);
     }
 
     pub fn maybe_campaign(&mut self) -> bool {

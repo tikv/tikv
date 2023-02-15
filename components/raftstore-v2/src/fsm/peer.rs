@@ -310,7 +310,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     region_epoch,
                     buckets,
                     bucket_ranges,
-                } => self.on_refresh_region_buckets(region_epoch, buckets, bucket_ranges),
+                } => self.fsm.peer_mut().on_refresh_region_buckets(
+                    self.store_ctx,
+                    region_epoch,
+                    buckets,
+                    bucket_ranges,
+                ),
                 PeerMsg::RequestHalfSplit { request, ch } => self
                     .fsm
                     .peer_mut()
