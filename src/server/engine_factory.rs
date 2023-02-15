@@ -236,6 +236,14 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn exists(&self, path: &Path) -> bool {
         RocksEngine::exists(path.to_str().unwrap())
     }
+
+    #[cfg(any(test, feature = "testexport"))]
+    fn set_state_storage(&self, state_storage: Arc<dyn StateStorage>) {
+        let inner = Arc::as_ptr(&self.inner) as *mut FactoryInner;
+        unsafe {
+            (*inner).state_storage = Some(state_storage);
+        }
+    }
 }
 
 #[cfg(test)]

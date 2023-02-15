@@ -172,7 +172,7 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
 #[test]
 fn test_node_cluster_region_info_accessor() {
     let mut cluster = new_node_cluster(1, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
