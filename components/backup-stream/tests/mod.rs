@@ -477,7 +477,7 @@ impl Suite {
 
     fn force_flush_files(&self, task: &str) {
         // TODO: use the callback to make the test more stable.
-        self.run(|| Task::ForceFlush(task.to_owned(), Box::new(|| {})));
+        self.run(|| Task::ForceFlush(task.to_owned()));
         self.sync();
     }
 
@@ -1337,7 +1337,7 @@ mod test {
             .get(&leader.store_id)
             .unwrap()
             .scheduler()
-            .schedule(Task::ForceFlush("r".to_owned(), Box::new(|| {})))
+            .schedule(Task::ForceFlush("r".to_owned()))
             .unwrap();
         suite.sync();
         std::thread::sleep(Duration::from_secs(1));
@@ -1360,7 +1360,7 @@ mod test {
         let mut suite = super::SuiteBuilder::new_named("network_partition")
             .nodes(3)
             .build();
-        let stream = suite.flush_stream();
+        let stream = suite.flush_stream(true);
         suite.must_register_task(1, "network_partition");
         let leader = suite.cluster.leader_of_region(1).unwrap();
         let round1 = run_async_test(suite.write_records(0, 64, 1));
