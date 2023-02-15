@@ -10,10 +10,7 @@ use pd_client::{Error as PdError, PdClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::store::initial_region;
 use thiserror::Error;
-use tikv::{
-    config::TikvConfig,
-    server::{config::Config as ServerConfig},
-};
+use tikv::{config::TikvConfig, server::config::Config as ServerConfig};
 use tikv_util::{
     config::{ReadableDuration, ReadableSize, VersionTrack},
     sys::SysQuota,
