@@ -269,7 +269,12 @@ fn test_server_concurrent_snap() {
     test_concurrent_snap(&mut cluster);
 }
 
-fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_cf_snapshot() {
+    let mut cluster = new_cluster(0, 3);
     configure_for_snapshot(&mut cluster.cfg);
 
     cluster.run();
@@ -305,18 +310,6 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put_cf(cf, b"k3", b"v3");
     must_get_cf_equal(&engine1, cf, b"k3", b"v3");
-}
-
-#[test]
-fn test_node_cf_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_cf_snapshot(&mut cluster);
-}
-
-#[test]
-fn test_server_snapshot() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_cf_snapshot(&mut cluster);
 }
 
 // replace content of all the snapshots with the first snapshot it received.
