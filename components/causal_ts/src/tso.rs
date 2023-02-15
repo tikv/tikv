@@ -83,11 +83,15 @@ struct TsoBatch {
 
 impl TsoBatch {
     pub fn pop(&self) -> Option<(TimeStamp, bool /* is_used_up */)> {
-        // logical_start might be far bigger than logical_end if the concurrency is *very* high,
-        // but it won't overflow in practice, so no need to do an extra load check here.
+        // logical_start might be far bigger than logical_end if the concurrency is
+        // *very* high, but it won't overflow in practice, so no need to do an
+        // extra load check here.
         let ts = self.logical_start.fetch_add(1, Ordering::Relaxed);
         if ts < self.logical_end {
-            return Some((TimeStamp::compose(self.physical, ts), ts + 1 == self.logical_end));
+            return Some((
+                TimeStamp::compose(self.physical, ts),
+                ts + 1 == self.logical_end,
+            ));
         }
         None
     }
