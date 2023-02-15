@@ -93,13 +93,10 @@ where
             }
         };
 
-        #[cfg(feature = "failpoints")]
         let delay = (|| {
             fail::fail_point!("delay_update_max_ts", |_| true);
             false
         })();
-        #[cfg(not(feature = "failpoints"))]
-        let delay = false;
 
         if delay {
             info!(self.logger, "[failpoint] delay update max ts for 1s"; "region_id" => region_id);
@@ -109,5 +106,18 @@ where
         } else {
             self.remote.spawn(f);
         }
+    }
+
+    pub fn handle_report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) {
+        let resp = self
+            .pd_client
+            .report_min_resolved_ts(store_id, min_resolved_ts);
+        let logger = self.logger.clone();
+        let f = async move {
+            if let Err(e) = resp.await {
+                warn!(logger, "report min resolved_ts failed"; "err" => ?e);
+            }
+        };
+        self.remote.spawn(f);
     }
 }

@@ -4,6 +4,7 @@
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
 #![feature(vec_into_raw_parts)]
+#![feature(let_chains)]
 
 #[cfg(test)]
 extern crate test;
@@ -60,6 +61,7 @@ pub mod thread_group;
 pub mod time;
 pub mod timer;
 pub mod topn;
+pub mod trend;
 pub mod worker;
 pub mod yatp_pool;
 

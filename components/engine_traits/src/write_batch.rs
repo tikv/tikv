@@ -73,6 +73,13 @@ pub trait WriteBatch: Mutable {
     /// Commit the WriteBatch to disk with the given options
     fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64>;
 
+    // TODO: it should be `FnOnce`.
+    fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut()) -> Result<u64> {
+        let seq = self.write_opt(opts)?;
+        cb();
+        Ok(seq)
+    }
+
     /// Commit the WriteBatch to disk atomically
     fn write(&mut self) -> Result<u64> {
         self.write_opt(&WriteOptions::default())

@@ -42,7 +42,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let cfg = new_tikv_config(0);
 
-    let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
+    let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store, &None);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let engine =

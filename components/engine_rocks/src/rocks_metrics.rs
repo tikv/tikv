@@ -582,12 +582,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .discardable
                 .inc_by(value);
         }
-        TickerType::TitanGcSample => {
-            STORE_ENGINE_BLOB_GC_ACTION
-                .get(name_enum)
-                .sample
-                .inc_by(value);
-        }
         TickerType::TitanGcSmallFile => {
             STORE_ENGINE_BLOB_GC_ACTION
                 .get(name_enum)
@@ -612,6 +606,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .trigger_next
                 .inc_by(value);
         }
+        // TODO: Some tickers are ignored.
         _ => {}
     }
 }

@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{assert_matches::assert_matches, time::Duration};
 
 use engine_traits::{Peekable, CF_DEFAULT};
 use futures::executor::block_on;
@@ -9,35 +9,32 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, TransferLeaderRequest},
 };
 use raft::prelude::ConfChangeType;
-use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
+use raftstore_v2::{
+    router::{PeerMsg, PeerTick},
+    SimpleWriteEncoder,
+};
 use tikv_util::store::new_peer;
 
 use crate::cluster::Cluster;
 
 fn put_data(
     region_id: u64,
-    cluster: &Cluster,
+    cluster: &mut Cluster,
     node_off: usize,
     node_off_for_verify: usize,
     key: &[u8],
 ) {
-    let router = &cluster.routers[node_off];
+    let mut router = &mut cluster.routers[node_off];
 
     router.wait_applied_to_current_term(region_id, Duration::from_secs(3));
 
     // router.wait_applied_to_current_term(2, Duration::from_secs(3));
-    let tablet_registry = cluster.node(node_off).tablet_registry();
-    let tablet = tablet_registry
-        .get(region_id)
-        .unwrap()
-        .latest()
-        .unwrap()
-        .clone();
-    assert!(tablet.get_value(key).unwrap().is_none());
+    let snap = router.stale_snapshot(region_id);
+    assert_matches!(snap.get_value(key), Ok(None));
 
     let header = Box::new(router.new_request_for(region_id).take_header());
     let mut put = SimpleWriteEncoder::with_capacity(64);
-    put.put(CF_DEFAULT, &key[1..], b"value");
+    put.put(CF_DEFAULT, key, b"value");
     let (msg, mut sub) = PeerMsg::simple_write(header, put.encode());
     router.send(region_id, msg).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -53,17 +50,29 @@ fn put_data(
 
     let resp = block_on(sub.result()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
-    assert_eq!(tablet.get_value(key).unwrap().unwrap(), b"value");
+    router = &mut cluster.routers[node_off];
+    let snap = router.stale_snapshot(region_id);
+    assert_eq!(snap.get_value(key).unwrap().unwrap(), b"value");
 
-    // Verify the data is ready in the other node
-    let tablet_registry = cluster.node(node_off_for_verify).tablet_registry();
-    let tablet = tablet_registry
-        .get(region_id)
-        .unwrap()
-        .latest()
-        .unwrap()
-        .clone();
-    assert_eq!(tablet.get_value(key).unwrap().unwrap(), b"value");
+    // Because of skip bcast commit, the data should not be applied yet.
+    router = &mut cluster.routers[node_off_for_verify];
+    let snap = router.stale_snapshot(region_id);
+    assert_matches!(snap.get_value(key), Ok(None));
+    // Trigger heartbeat explicitly to commit on follower.
+    router = &mut cluster.routers[node_off];
+    for _ in 0..2 {
+        router
+            .send(region_id, PeerMsg::Tick(PeerTick::Raft))
+            .unwrap();
+        router
+            .send(region_id, PeerMsg::Tick(PeerTick::Raft))
+            .unwrap();
+    }
+    cluster.dispatch(region_id, vec![]);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    router = &mut cluster.routers[node_off_for_verify];
+    let snap = router.stale_snapshot(region_id);
+    assert_eq!(snap.get_value(key).unwrap().unwrap(), b"value");
 }
 
 pub fn must_transfer_leader(
@@ -97,7 +106,7 @@ pub fn must_transfer_leader(
 
 #[test]
 fn test_transfer_leader() {
-    let cluster = Cluster::with_node_count(3, None);
+    let mut cluster = Cluster::with_node_count(3, None);
     let region_id = 2;
     let router0 = &cluster.routers[0];
 
@@ -137,13 +146,13 @@ fn test_transfer_leader() {
     cluster.dispatch(region_id, vec![]);
 
     // Ensure follower has latest entries before transfer leader.
-    put_data(region_id, &cluster, 0, 1, b"zkey1");
+    put_data(region_id, &mut cluster, 0, 1, b"key1");
 
     // Perform transfer leader
     must_transfer_leader(&cluster, region_id, 0, 1, peer1);
 
     // Before transfer back to peer0, put some data again.
-    put_data(region_id, &cluster, 1, 0, b"zkey2");
+    put_data(region_id, &mut cluster, 1, 0, b"key2");
 
     // Perform transfer leader
     let store_id = cluster.node(0).id();

@@ -10,7 +10,7 @@ use crossbeam::channel::TryRecvError;
 use engine_traits::{FlushState, KvEngine, TabletRegistry};
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
-use raftstore::store::ReadTask;
+use raftstore::store::{Config, ReadTask};
 use slog::Logger;
 use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
@@ -58,6 +58,7 @@ pub struct ApplyFsm<EK: KvEngine, R> {
 
 impl<EK: KvEngine, R> ApplyFsm<EK, R> {
     pub fn new(
+        cfg: &Config,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
@@ -65,10 +66,12 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         read_scheduler: Scheduler<ReadTask<EK>>,
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
+        applied_term: u64,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
         let apply = Apply::new(
+            cfg,
             peer,
             region_state,
             res_reporter,
@@ -76,6 +79,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             read_scheduler,
             flush_state,
             log_recovery,
+            applied_term,
             logger,
         );
         (
@@ -98,6 +102,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                 res = self.receiver.next().fuse() => res,
                 _ = timeout.fuse() => None,
             };
+            self.apply.on_start_apply();
             let mut task = match res {
                 Some(r) => r,
                 None => {
@@ -114,9 +119,10 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
                     ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
                     ApplyTask::UnsafeWrite(raw_write) => self.apply.apply_unsafe_write(raw_write),
+                    ApplyTask::ManualFlush => self.apply.on_manual_flush().await,
                 }
 
-                // TODO: yield after some time.
+                self.apply.maybe_flush().await;
 
                 // Perhaps spin sometime?
                 match self.receiver.try_recv() {
@@ -125,7 +131,8 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     Err(TryRecvError::Disconnected) => return,
                 }
             }
-            self.apply.flush();
+            let written_bytes = self.apply.flush();
+            self.apply.maybe_reschedule(written_bytes).await;
         }
     }
 }

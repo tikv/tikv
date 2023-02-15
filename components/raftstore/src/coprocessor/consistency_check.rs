@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use engine_traits::{KvEngine, Snapshot, ALL_CFS, CF_RAFT};
+use engine_traits::{KvEngine, Snapshot, CF_RAFT};
 use kvproto::metapb::Region;
 
 use crate::{
@@ -63,7 +63,7 @@ fn compute_hash_on_raw<S: Snapshot>(region: &Region, snap: &S) -> Result<u32> {
 
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    for cf in ALL_CFS {
+    for cf in snap.cf_names() {
         snap.scan(cf, &start_key, &end_key, false, |k, v| {
             digest.update(k);
             digest.update(v);

@@ -52,6 +52,7 @@ fn test_store_heartbeat() {
         let stats = block_on(cluster.node(0).pd_client().get_store_stats_async(store_id)).unwrap();
         if stats.get_start_time() > 0 {
             assert_ne!(stats.get_capacity(), 0);
+            assert_ne!(stats.get_used_size(), 0);
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));

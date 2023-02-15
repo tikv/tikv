@@ -1,8 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use dashmap::{mapref::one::RefMut, DashMap};
+use dashmap::{
+    mapref::{entry::Entry, one::RefMut},
+    DashMap,
+};
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
 use resolved_ts::Resolver;
@@ -146,12 +149,27 @@ impl SubscriptionTracer {
         }
     }
 
+    pub fn current_regions(&self) -> Vec<u64> {
+        self.0.iter().map(|s| *s.key()).collect()
+    }
+
     /// try advance the resolved ts with the min ts of in-memory locks.
     /// returns the regions and theirs resolved ts.
-    pub fn resolve_with(&self, min_ts: TimeStamp) -> Vec<ResolveResult> {
+    pub fn resolve_with(
+        &self,
+        min_ts: TimeStamp,
+        regions: impl IntoIterator<Item = u64>,
+    ) -> Vec<ResolveResult> {
+        let rs = regions.into_iter().collect::<HashSet<_>>();
         self.0
             .iter_mut()
-            // Don't advance the checkpoint ts of removed region.
+            .filter(|s| {
+                let contains = rs.contains(s.key());
+                if !contains {
+                    crate::metrics::LOST_LEADER_REGION.inc();
+                }
+                contains
+            })
             .map(|mut s| ResolveResult::resolve(s.value_mut(), min_ts))
             .collect()
     }
@@ -185,21 +203,19 @@ impl SubscriptionTracer {
         if_cond: impl FnOnce(&RegionSubscription, &Region) -> bool,
     ) -> bool {
         let region_id = region.get_id();
-        let remove_result = self.0.remove(&region_id);
+        let remove_result = self.0.entry(region_id);
         match remove_result {
-            Some((_, mut v)) => {
-                if if_cond(&v, region) {
+            Entry::Occupied(mut x) => {
+                if if_cond(x.get(), region) {
                     TRACK_REGION.dec();
-                    v.stop();
+                    x.get_mut().stop();
+                    let v = x.remove();
                     info!("stop listen stream from store"; "observer" => ?v, "region_id"=> %region_id);
                     return true;
                 }
                 false
             }
-            None => {
-                debug!("trying to deregister region not registered"; "region_id" => %region_id);
-                false
-            }
+            Entry::Vacant(_) => false,
         }
     }
 
@@ -499,7 +515,7 @@ mod test {
         drop(region4_sub);
 
         let mut rs = subs
-            .resolve_with(TimeStamp::new(1000))
+            .resolve_with(TimeStamp::new(1000), vec![1, 2, 3, 4])
             .into_iter()
             .map(|r| (r.region, r.checkpoint, r.checkpoint_type))
             .collect::<Vec<_>>();

@@ -6,6 +6,7 @@ use engine_rocks::{
     raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
+    TabletLogger,
 };
 use engine_traits::{
     CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
@@ -16,19 +17,18 @@ use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
 use crate::{
-    config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    config::{CfResources, DbConfig, DbResources, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
     storage::config::EngineType,
 };
 
 struct FactoryInner {
-    env: Arc<Env>,
     region_info_accessor: Option<RegionInfoAccessor>,
-    block_cache: Cache,
     rocksdb_config: Arc<DbConfig>,
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
-    statistics: Arc<RocksStatistics>,
+    db_resources: DbResources,
+    cf_resources: CfResources,
     state_storage: Option<Arc<dyn StateStorage>>,
     lite: bool,
 }
@@ -40,17 +40,15 @@ pub struct KvEngineFactoryBuilder {
 
 impl KvEngineFactoryBuilder {
     pub fn new(env: Arc<Env>, config: &TikvConfig, cache: Cache) -> Self {
-        let statistics = Arc::new(RocksStatistics::new_titan());
         Self {
             inner: FactoryInner {
-                env,
                 region_info_accessor: None,
-                block_cache: cache,
                 rocksdb_config: Arc::new(config.rocksdb.clone()),
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                statistics,
+                db_resources: config.rocksdb.build_resources(env),
+                cf_resources: config.rocksdb.build_cf_resources(cache),
                 state_storage: None,
                 lite: false,
             },
@@ -134,16 +132,15 @@ impl KvEngineFactory {
     }
 
     pub fn rocks_statistics(&self) -> Arc<RocksStatistics> {
-        self.inner.statistics.clone()
+        self.inner.db_resources.statistics.clone()
     }
 
-    fn db_opts(&self) -> RocksDbOptions {
+    fn db_opts(&self, for_engine: EngineType) -> RocksDbOptions {
         // Create kv engine.
         let mut db_opts = self
             .inner
             .rocksdb_config
-            .build_opt(Some(self.inner.statistics.as_ref()));
-        db_opts.set_env(self.inner.env.clone());
+            .build_opt(&self.inner.db_resources, for_engine);
         if !self.inner.lite {
             db_opts.add_event_listener(RocksEventListener::new(
                 "kv",
@@ -158,7 +155,7 @@ impl KvEngineFactory {
 
     fn cf_opts(&self, for_engine: EngineType) -> Vec<(&str, RocksCfOptions)> {
         self.inner.rocksdb_config.build_cf_opts(
-            &self.inner.block_cache,
+            &self.inner.cf_resources,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
             for_engine,
@@ -166,7 +163,7 @@ impl KvEngineFactory {
     }
 
     pub fn block_cache(&self) -> &Cache {
-        &self.inner.block_cache
+        &self.inner.cf_resources.cache
     }
 
     /// Create a shared db.
@@ -174,7 +171,7 @@ impl KvEngineFactory {
     /// It will always create in path/DEFAULT_DB_SUB_DIR.
     pub fn create_shared_db(&self, path: impl AsRef<Path>) -> Result<RocksEngine> {
         let path = path.as_ref();
-        let mut db_opts = self.db_opts();
+        let mut db_opts = self.db_opts(EngineType::RaftKv);
         let cf_opts = self.cf_opts(EngineType::RaftKv);
         if let Some(listener) = &self.inner.flow_listener {
             db_opts.add_event_listener(listener.clone());
@@ -191,7 +188,9 @@ impl KvEngineFactory {
 
 impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<RocksEngine> {
-        let mut db_opts = self.db_opts();
+        let mut db_opts = self.db_opts(EngineType::RaftKv2);
+        let tablet_name = path.file_name().unwrap().to_str().unwrap().to_string();
+        db_opts.set_info_log(TabletLogger::new(tablet_name));
         let cf_opts = self.cf_opts(EngineType::RaftKv2);
         if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
             db_opts.add_event_listener(listener.clone_with(ctx.id, suffix));
@@ -219,7 +218,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn destroy_tablet(&self, ctx: TabletContext, path: &Path) -> Result<()> {
         info!("destroy tablet"; "path" => %path.display(), "id" => ctx.id, "suffix" => ?ctx.suffix);
         // Create kv engine.
-        let _db_opts = self.db_opts();
+        let _db_opts = self.db_opts(EngineType::RaftKv2);
         let _cf_opts = self.cf_opts(EngineType::RaftKv2);
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
         // engine_rocks::util::destroy_engine(
@@ -236,6 +235,14 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
 
     fn exists(&self, path: &Path) -> bool {
         RocksEngine::exists(path.to_str().unwrap())
+    }
+
+    #[cfg(any(test, feature = "testexport"))]
+    fn set_state_storage(&self, state_storage: Arc<dyn StateStorage>) {
+        let inner = Arc::as_ptr(&self.inner) as *mut FactoryInner;
+        unsafe {
+            (*inner).state_storage = Some(state_storage);
+        }
     }
 }
 
@@ -259,7 +266,10 @@ mod tests {
                 e
             );
         });
-        let cache = cfg.storage.block_cache.build_shared_cache();
+        let cache = cfg
+            .storage
+            .block_cache
+            .build_shared_cache(cfg.storage.engine);
         let dir = test_util::temp_dir("test-engine-factory", false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
