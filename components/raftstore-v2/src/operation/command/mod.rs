@@ -59,8 +59,8 @@ mod control;
 mod write;
 
 pub use admin::{
-    report_split_init_finish, temp_split_path, AdminCmdResult, CompactLogContext, RequestSplit,
-    SplitFlowControl, SplitInit, SPLIT_PREFIX,
+    report_split_init_finish, temp_split_path, AdminCmdResult, CompactLogContext, RequestHalfSplit,
+    RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
 pub use write::{

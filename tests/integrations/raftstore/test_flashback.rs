@@ -285,7 +285,7 @@ fn test_flashback_for_read() {
 #[test]
 fn test_flashback_for_local_read() {
     let mut cluster = new_node_cluster(0, 3);
-    let election_timeout = configure_for_lease_read(&mut cluster, Some(50), None);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     cluster.run();
@@ -384,7 +384,7 @@ fn test_flashback_for_check_is_in_persist() {
 #[test]
 fn test_flashback_for_apply_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     cluster.run();
 
     cluster.must_transfer_leader(1, new_peer(3, 3));
