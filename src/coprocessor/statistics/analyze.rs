@@ -1,11 +1,13 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, marker::PhantomData, mem, sync::Arc};
+use std::{
+    cmp::Reverse, collections::BinaryHeap, hash::Hasher, marker::PhantomData, mem, sync::Arc,
+};
 
 use api_version::{keyspace::KvPair, KvFormat};
 use async_trait::async_trait;
-use mur3::Hasher128;
 use kvproto::coprocessor::{KeyRange, Response};
+use mur3::Hasher128;
 use protobuf::Message;
 use rand::{rngs::StdRng, Rng};
 use tidb_query_common::storage::{
@@ -1362,8 +1364,6 @@ mod tests {
             assert_eq!(collector.samples.len(), 0);
         }
     }
-
-
 }
 
 #[cfg(test)]
@@ -1371,20 +1371,27 @@ mod benches {
     use tidb_query_datatype::{
         codec::{
             batch::LazyBatchColumn,
-            collation::{Collator, collator::CollatorUtf8Mb4Bin}
-        }, 
-        EvalType, FieldTypeTp
+            collation::{collator::CollatorUtf8Mb4Bin, Collator},
+        },
+        EvalType, FieldTypeTp,
     };
 
     use super::*;
 
-    fn prepare_arguments() -> (Vec<Vec<u8>>, Vec<Vec<u8>>, Vec<tipb::ColumnInfo>, Vec<tipb::AnalyzeColumnGroup>) {
+    fn prepare_arguments() -> (
+        Vec<Vec<u8>>,
+        Vec<Vec<u8>>,
+        Vec<tipb::ColumnInfo>,
+        Vec<tipb::AnalyzeColumnGroup>,
+    ) {
         let mut columns_info = Vec::new();
         for i in 1..4 {
             let mut col_info = tipb::ColumnInfo::default();
             col_info.set_column_id(i as i64);
             col_info.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
-            col_info.as_mut_accessor().set_collation(Collation::Utf8Mb4Bin);
+            col_info
+                .as_mut_accessor()
+                .set_collation(Collation::Utf8Mb4Bin);
             columns_info.push(col_info);
         }
         let mut columns_slice = Vec::new();
@@ -1397,16 +1404,21 @@ mod benches {
         let mut collation_key_vals = Vec::new();
         for i in 0..columns_info.len() {
             let mut val = vec![];
-            columns_slice[i].encode(
-                0,
-                &columns_info[i],
-                &mut EvalContext::default(),
-                &mut val,
-            ).unwrap();
+            columns_slice[i]
+                .encode(0, &columns_info[i], &mut EvalContext::default(), &mut val)
+                .unwrap();
             if columns_info[i].as_accessor().is_string_like() {
                 let mut mut_val = &val[..];
-                let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &columns_info[i]).unwrap();
-                let decoded_sorted_val = CollatorUtf8Mb4Bin::sort_key(&decoded_val.as_string().unwrap().unwrap().into_owned()).unwrap();
+                let decoded_val = table::decode_col_value(
+                    &mut mut_val,
+                    &mut EvalContext::default(),
+                    &columns_info[i],
+                )
+                .unwrap();
+                let decoded_sorted_val = CollatorUtf8Mb4Bin::sort_key(
+                    &decoded_val.as_string().unwrap().unwrap().into_owned(),
+                )
+                .unwrap();
                 collation_key_vals.push(decoded_sorted_val);
             } else {
                 collation_key_vals.push(Vec::new());
@@ -1434,8 +1446,12 @@ mod benches {
         let mut collector = BaseRowSampleCollector::new(10000, 4);
         let (column_vals, collation_key_vals, columns_info, column_groups) = prepare_arguments();
         b.iter(|| {
-            collector.collect_column_group(&column_vals, &collation_key_vals, &columns_info, &column_groups);
+            collector.collect_column_group(
+                &column_vals,
+                &collation_key_vals,
+                &columns_info,
+                &column_groups,
+            );
         })
     }
-
 }
