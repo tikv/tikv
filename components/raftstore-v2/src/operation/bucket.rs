@@ -50,12 +50,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = self.region();
         if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
             error!(
-                 self.logger,
+                self.logger,
                 "receive a stale refresh region bucket message";
                 "epoch" => ?region_epoch,
                 "current_epoch" => ?region.get_region_epoch(),
             );
-
             return;
         }
         let current_version = self
@@ -69,7 +68,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             (bucket_ranges, self.region_buckets())
         {
             assert_eq!(buckets.len(), bucket_ranges.len());
-            let mut i = 0;
+            let mut meta_idx = 0;
             region_buckets = peer_region_buckets.clone();
             let mut meta = (*region_buckets.meta).clone();
             if !buckets.is_empty() {
@@ -79,10 +78,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
                 // the bucket range is the suspected range that needs to split, so it needs to
                 // find the first keys.
-                while i < meta.keys.len() && meta.keys[i] != bucket_range.0 {
-                    i += 1;
+                while meta_idx < meta.keys.len() && meta.keys[meta_idx] != bucket_range.0 {
+                    meta_idx += 1;
                 }
-                assert!(i != meta.keys.len());
+                assert!(meta_idx != meta.keys.len());
                 // the bucket size is small and does not have split keys,
                 // then it should be merged with its left neighbor
                 let region_bucket_merge_size = store_ctx
@@ -91,32 +90,32 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     .region_bucket_merge_size_ratio
                     * (store_ctx.coprocessor_host.cfg.region_bucket_size.0 as f64);
                 if bucket.keys.is_empty() && bucket.size <= (region_bucket_merge_size as u64) {
-                    meta.sizes[i] = bucket.size;
+                    meta.sizes[meta_idx] = bucket.size;
                     // i is not the last entry (which is end key)
-                    assert!(i < meta.keys.len() - 1);
+                    assert!(meta_idx < meta.keys.len() - 1);
                     // the region has more than one bucket
                     // and the left neighbor + current bucket size is not very big
                     if meta.keys.len() > 2
-                        && i != 0
-                        && meta.sizes[i - 1] + bucket.size
+                        && meta_idx != 0
+                        && meta.sizes[meta_idx - 1] + bucket.size
                             < store_ctx.coprocessor_host.cfg.region_bucket_size.0 * 2
                     {
                         // bucket is too small
-                        region_buckets.left_merge(i);
-                        meta.left_merge(i);
+                        region_buckets.left_merge(meta_idx);
+                        meta.left_merge(meta_idx);
                         continue;
                     }
                 } else {
                     // update size
-                    meta.sizes[i] = bucket.size / (bucket.keys.len() + 1) as u64;
+                    meta.sizes[meta_idx] = bucket.size / (bucket.keys.len() + 1) as u64;
                     // insert new bucket keys (split the original bucket)
                     for bucket_key in bucket.keys {
-                        i += 1;
-                        region_buckets.split(i);
-                        meta.split(i, bucket_key);
+                        meta_idx += 1;
+                        region_buckets.split(meta_idx);
+                        meta.split(meta_idx, bucket_key);
                     }
                 }
-                i += 1;
+                meta_idx += 1;
             }
             region_buckets.meta = Arc::new(meta);
         } else {
@@ -156,7 +155,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn report_region_buckets_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
-        let region_buckets = self.region_buckets_mut();
+        let region_buckets = self.region_buckets().as_ref().unwrap();
         let task = pd::Task::ReportBuckets(region_buckets.clone());
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
@@ -166,7 +165,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             return;
         }
-        region_buckets.stats = new_bucket_stats(&region_buckets.meta);
+        self.clear_region_bucket_stats();
     }
 
     pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &StoreContext<EK, ER, T>) {
