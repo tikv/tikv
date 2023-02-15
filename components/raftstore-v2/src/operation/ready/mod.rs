@@ -250,7 +250,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.is_leader() && from_peer.get_id() != INVALID_ID {
             self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
         }
-        self.insert_peer_cache(msg.take_from_peer());
+        self.insert_peer_cache(from_peer);
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
