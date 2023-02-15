@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::metapb::{self, RegionEpoch};
+use kvproto::metapb::RegionEpoch;
 use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use raftstore::{
     coprocessor::RegionChangeEvent,
@@ -61,7 +61,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let current_version = self
             .region_buckets()
             .as_ref()
-            .or(self.last_region_buckets().as_ref())
+            .or_else(|| self.last_region_buckets().as_ref())
             .map(|b| b.meta.version)
             .unwrap_or_default();
         let mut region_buckets: BucketStat;
@@ -120,8 +120,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             region_buckets.meta = Arc::new(meta);
         } else {
-            // the origin region has no buckets in the begin, so the refreshed buckets
-            // length should only one.
+            // The buckets number should be same with the bucket range, but the generated
+            // buckets should be generated if the given bucket range is none.
             assert_eq!(buckets.len(), 1);
             let bucket_keys = buckets.pop().unwrap().keys;
             let bucket_count = bucket_keys.len() + 1;
