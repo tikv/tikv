@@ -12,7 +12,7 @@ use raftstore::store::initial_region;
 use thiserror::Error;
 use tikv::{
     config::TikvConfig,
-    server::{config::Config as ServerConfig, KvEngineFactoryBuilder},
+    server::{config::Config as ServerConfig},
 };
 use tikv_util::{
     config::{ReadableDuration, ReadableSize, VersionTrack},
