@@ -4,11 +4,10 @@ use std::{cmp, thread, time::Duration};
 
 use engine_traits::CF_LOCK;
 use kvproto::{
-    coprocessor::{Request, Response, StoreBatchTask},
-    errorpb,
-    kvrpcpb::{Context, IsolationLevel, LockInfo},
+    coprocessor::{Request, Response, StoreBatchTask, StoreBatchTaskResponse},
+    kvrpcpb::{Context, IsolationLevel},
 };
-use protobuf::{Message, SingularPtrField};
+use protobuf::Message;
 use raftstore::store::Bucket;
 use test_coprocessor::*;
 use test_raftstore::{Cluster, ServerCluster};
@@ -22,7 +21,11 @@ use tikv::{
     server::Config,
     storage::TestEngineBuilder,
 };
-use tikv_util::{codec::number::*, config::ReadableSize};
+use tikv_util::{
+    codec::number::*,
+    config::{ReadableDuration, ReadableSize},
+    HandyRwLock,
+};
 use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,
     ScalarFuncSig, SelectResponse,
@@ -225,6 +228,44 @@ fn test_select_after_lease() {
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
+}
+
+/// If a failed read should not trigger panic.
+#[test]
+fn test_select_failed() {
+    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+    cluster.run();
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(b""), None);
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    let product = ProductTable::new();
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
+
+    // Sleep until the leader lease is expired.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_heartbeat_interval()
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32
+            * 2,
+    );
+    for id in 1..=3 {
+        if id != ctx.get_peer().get_store_id() {
+            cluster.stop_node(id);
+        }
+    }
+    let req = DagSelect::from(&product).build_with(ctx.clone(), &[0]);
+    let f = endpoint.parse_and_handle_unary_request(req, None);
+    cluster.stop_node(ctx.get_peer().get_store_id());
+    drop(cluster);
+    let _ = futures::executor::block_on(f);
 }
 
 #[test]
@@ -2151,11 +2192,14 @@ fn test_batch_request() {
             }
             req
         };
-    let verify_response = |result: &QueryResult,
-                           data: &[u8],
-                           region_err: &SingularPtrField<errorpb::Error>,
-                           locked: &SingularPtrField<LockInfo>,
-                           other_err: &String| {
+    let verify_response = |result: &QueryResult, resp: &Response| {
+        let (data, details, region_err, locked, other_err) = (
+            resp.get_data(),
+            resp.get_exec_details_v2(),
+            &resp.region_error,
+            &resp.locked,
+            &resp.other_error,
+        );
         match result {
             QueryResult::Valid(res) => {
                 let expected_len = res.len();
@@ -2179,6 +2223,12 @@ fn test_batch_request() {
                 assert!(region_err.is_none());
                 assert!(locked.is_none());
                 assert!(other_err.is_empty());
+                let scan_details = details.get_scan_detail_v2();
+                assert_eq!(scan_details.processed_versions, row_count as u64);
+                if row_count > 0 {
+                    assert!(scan_details.processed_versions_size > 0);
+                    assert!(scan_details.total_versions > 0);
+                }
             }
             QueryResult::ErrRegion => {
                 assert!(region_err.is_some());
@@ -2196,6 +2246,20 @@ fn test_batch_request() {
                 assert!(!other_err.is_empty())
             }
         }
+    };
+
+    let batch_resp_2_resp = |batch_resp: &mut StoreBatchTaskResponse| -> Response {
+        let mut response = Response::default();
+        response.set_data(batch_resp.take_data());
+        if let Some(err) = batch_resp.region_error.take() {
+            response.set_region_error(err);
+        }
+        if let Some(lock_info) = batch_resp.locked.take() {
+            response.set_locked(lock_info);
+        }
+        response.set_other_error(batch_resp.take_other_error());
+        response.set_exec_details_v2(batch_resp.take_exec_details_v2());
+        response
     };
 
     for (ranges, results, invalid_epoch, key_is_locked) in cases.iter() {
@@ -2229,25 +2293,13 @@ fn test_batch_request() {
             }
         }
         let mut resp = handle_request(&endpoint, req);
-        let batch_results = resp.take_batch_responses().to_vec();
+        let mut batch_results = resp.take_batch_responses().to_vec();
         for (i, result) in results.iter().enumerate() {
             if i == 0 {
-                verify_response(
-                    result,
-                    resp.get_data(),
-                    &resp.region_error,
-                    &resp.locked,
-                    &resp.other_error,
-                );
+                verify_response(result, &resp);
             } else {
-                let batch_resp = batch_results.get(i - 1).unwrap();
-                verify_response(
-                    result,
-                    batch_resp.get_data(),
-                    &batch_resp.region_error,
-                    &batch_resp.locked,
-                    &batch_resp.other_error,
-                );
+                let batch_resp = batch_results.get_mut(i - 1).unwrap();
+                verify_response(result, &batch_resp_2_resp(batch_resp));
             };
         }
         if *key_is_locked {

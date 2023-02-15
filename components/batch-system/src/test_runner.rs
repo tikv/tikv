@@ -11,7 +11,9 @@ use std::{
     },
 };
 
+use collections::HashMap;
 use derive_more::{Add, AddAssign};
+use resource_control::ResourceMetered;
 use tikv_util::mpsc;
 
 use crate::*;
@@ -22,6 +24,21 @@ pub enum Message {
     Loop(usize),
     /// `Runner` will call the callback directly.
     Callback(Box<dyn FnOnce(&Handler, &mut Runner) + Send + 'static>),
+    /// group name, write bytes
+    Resource(String, u64),
+}
+
+impl ResourceMetered for Message {
+    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+        match self {
+            Message::Resource(group_name, bytes) => {
+                let mut map = HashMap::default();
+                map.insert(group_name.to_owned(), *bytes);
+                Some(map)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A simple runner used for benchmarking only.
@@ -102,6 +119,7 @@ impl Handler {
                     }
                 }
                 Ok(Message::Callback(cb)) => cb(self, r),
+                Ok(Message::Resource(..)) => {}
                 Err(_) => break,
             }
         }

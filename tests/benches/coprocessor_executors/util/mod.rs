@@ -8,6 +8,7 @@ pub mod store;
 
 use std::{marker::PhantomData, sync::Arc};
 
+use api_version::ApiV1;
 use criterion::{black_box, measurement::Measurement};
 use kvproto::coprocessor::KeyRange;
 use test_coprocessor::*;
@@ -41,7 +42,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     let mut dag = DagRequest::default();
     dag.set_executors(executors.to_vec().into());
 
-    tikv::coprocessor::dag::DagHandlerBuilder::new(
+    tikv::coprocessor::dag::DagHandlerBuilder::<_, ApiV1>::new(
         black_box(dag),
         black_box(ranges.to_vec()),
         black_box(ToTxnStore::<TargetTxnStore>::to_store(store)),

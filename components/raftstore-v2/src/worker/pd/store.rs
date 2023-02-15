@@ -257,6 +257,17 @@ where
         self.remote.spawn(f);
     }
 
+    pub fn handle_update_store_infos(
+        &mut self,
+        cpu_usages: RecordPairVec,
+        read_io_rates: RecordPairVec,
+        write_io_rates: RecordPairVec,
+    ) {
+        self.store_stat.store_cpu_usages = cpu_usages;
+        self.store_stat.store_read_io_rates = read_io_rates;
+        self.store_stat.store_write_io_rates = write_io_rates;
+    }
+
     /// Returns (capacity, used, available).
     fn collect_engine_size(&self) -> Option<(u64, u64, u64)> {
         let disk_stats = match fs2::statvfs(self.tablet_registry.tablet_root()) {

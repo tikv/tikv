@@ -207,6 +207,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref GRPC_RESOURCE_GROUP_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_grpc_resource_group_total",
+        "Total number of handle grpc message for each resource group",
+        &["name"]
+    )
+    .unwrap();
     pub static ref GRPC_PROXY_MSG_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_grpc_proxy_msg_total",
         "Total number of handle grpc proxy message",

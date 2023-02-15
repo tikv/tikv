@@ -53,7 +53,7 @@ use raftstore::{
     },
     Result,
 };
-use slog::info;
+use slog::{error, info, warn};
 use tikv_util::{log::SlogFormat, slog_panic};
 
 use crate::{
@@ -86,8 +86,8 @@ pub struct SplitInit {
     pub region: metapb::Region,
     pub check_split: bool,
     pub scheduled: bool,
-    pub source_leader: bool,
-    pub source_id: u64,
+    pub derived_leader: bool,
+    pub derived_region_id: u64,
 
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
@@ -113,10 +113,48 @@ impl SplitInit {
     }
 }
 
+pub fn report_split_init_finish<EK, ER, T>(
+    ctx: &mut StoreContext<EK, ER, T>,
+    derived_region_id: u64,
+    finish_region_id: u64,
+    cleanup: bool,
+) where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    let _ = ctx.router.force_send(
+        derived_region_id,
+        PeerMsg::SplitInitFinish(finish_region_id),
+    );
+    if !cleanup {
+        return;
+    }
+
+    if let Err(e) = ctx
+        .schedulers
+        .tablet_gc
+        .schedule(tablet_gc::Task::direct_destroy_path(temp_split_path(
+            &ctx.tablet_registry,
+            finish_region_id,
+        )))
+    {
+        error!(ctx.logger, "failed to destroy split init temp"; "error" => ?e);
+    }
+}
+
 #[derive(Debug)]
 pub struct RequestSplit {
     pub epoch: RegionEpoch,
     pub split_keys: Vec<Vec<u8>>,
+    pub source: Cow<'static, str>,
+}
+
+#[derive(Debug)]
+pub struct RequestHalfSplit {
+    pub epoch: RegionEpoch,
+    pub start_key: Option<Vec<u8>>,
+    pub end_key: Option<Vec<u8>>,
+    pub policy: CheckPolicy,
     pub source: Cow<'static, str>,
 }
 
@@ -249,6 +287,55 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         self.ask_batch_split_pd(ctx, rs.split_keys, ch);
+    }
+
+    pub fn on_request_half_split<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        rhs: RequestHalfSplit,
+        _ch: CmdResChannel,
+    ) {
+        let is_key_range = rhs.start_key.is_some() && rhs.end_key.is_some();
+        info!(
+            self.logger,
+            "on half split";
+            "is_key_range" => is_key_range,
+            "policy" => ?rhs.policy,
+            "source" => ?rhs.source,
+        );
+        if !self.is_leader() {
+            // region on this store is no longer leader, skipped.
+            info!(self.logger, "not leader, skip.");
+            return;
+        }
+
+        let region = self.region();
+        if util::is_epoch_stale(&rhs.epoch, region.get_region_epoch()) {
+            warn!(
+                self.logger,
+                "receive a stale halfsplit message";
+                "is_key_range" => is_key_range,
+            );
+            return;
+        }
+
+        let task = SplitCheckTask::split_check_key_range(
+            region.clone(),
+            rhs.start_key,
+            rhs.end_key,
+            false,
+            rhs.policy,
+            // todo: bucket range
+            None,
+        );
+        if let Err(e) = ctx.schedulers.split_check.schedule(task) {
+            error!(
+                self.logger,
+                "failed to schedule split check";
+                "is_key_range" => is_key_range,
+                "err" => %e,
+            );
+        }
     }
 
     pub fn propose_split<T>(
@@ -449,21 +536,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         fail_point!("on_split", self.peer().get_store_id() == 3, |_| {});
 
         let derived = &res.regions[res.derived_index];
-        let derived_epoch = derived.get_region_epoch().clone();
         let region_id = derived.get_id();
 
-        // Group in-memory pessimistic locks in the original region into new regions.
-        // The locks of new regions will be put into the corresponding new regions
-        // later. And the locks belonging to the old region will stay in the original
-        // map.
-        let region_locks = {
-            let mut pessimistic_locks = self.txn_ext().pessimistic_locks.write();
-            info!(self.logger, "moving {} locks to new regions", pessimistic_locks.len(););
-            // Update the version so the concurrent reader will fail due to EpochNotMatch
-            // instead of PessimisticLockNotFound.
-            pessimistic_locks.version = derived_epoch.get_version();
-            pessimistic_locks.group_by_regions(&res.regions, derived)
-        };
+        let region_locks = self.txn_context().split(&res.regions, derived);
         fail_point!("on_split_invalidate_locks");
 
         let tablet: EK = match res.tablet.downcast() {
@@ -539,8 +614,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             new_ids.insert(new_region_id);
             let split_init = PeerMsg::SplitInit(Box::new(SplitInit {
                 region: new_region,
-                source_leader: self.is_leader(),
-                source_id: region_id,
+                derived_leader: self.is_leader(),
+                derived_region_id: region_id,
                 check_split: last_region_id == new_region_id,
                 scheduled: false,
                 approximate_size: estimated_size,
@@ -586,10 +661,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_id = split_init.region.id;
         if self.storage().is_initialized() && self.persisted_index() >= RAFT_INIT_LOG_INDEX {
             // Race with split operation. The tablet created by split will eventually be
-            // deleted (TODO). We don't trim it.
-            let _ = store_ctx
-                .router
-                .force_send(split_init.source_id, PeerMsg::SplitInitFinish(region_id));
+            // deleted. We don't trim it.
+            report_split_init_finish(store_ctx, split_init.derived_region_id, region_id, true);
             return;
         }
 
@@ -643,14 +716,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     },
                 ));
         }
-        if split_init.source_leader
+        if split_init.derived_leader
             && self.leader_id() == INVALID_ID
             && self.term() == RAFT_INIT_LOG_TERM
         {
             let _ = self.raft_group_mut().campaign();
             self.set_has_ready();
 
-            *self.txn_ext().pessimistic_locks.write() = split_init.locks;
+            self.txn_context().init_with_lock(split_init.locks);
             let control = self.split_flow_control_mut();
             control.approximate_size = split_init.approximate_size;
             control.approximate_keys = split_init.approximate_keys;
@@ -662,9 +735,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if split_init.check_split {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
-        let _ = store_ctx
-            .router
-            .force_send(split_init.source_id, PeerMsg::SplitInitFinish(region_id));
+        report_split_init_finish(store_ctx, split_init.derived_region_id, region_id, false);
     }
 
     pub fn on_split_init_finish(&mut self, region_id: u64) {

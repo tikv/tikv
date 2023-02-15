@@ -312,10 +312,7 @@ fn test_scale_scheduler_pool() {
             .update_config("storage.scheduler-worker-pool-size", &format!("{}", size))
             .unwrap();
         assert_eq!(
-            scheduler
-                .get_sched_pool(CommandPri::Normal)
-                .pool
-                .get_pool_size(),
+            scheduler.get_sched_pool().get_pool_size(CommandPri::Normal),
             size
         );
     };
@@ -1448,12 +1445,17 @@ fn test_before_propose_deadline() {
             }),
         )
         .unwrap();
-    assert!(matches!(
-        rx.recv().unwrap(),
-        Err(StorageError(box StorageErrorInner::Kv(KvError(
-            box KvErrorInner::Request(_),
-        ))))
-    ));
+    let res = rx.recv().unwrap();
+    assert!(
+        matches!(
+            res,
+            Err(StorageError(box StorageErrorInner::Kv(KvError(
+                box KvErrorInner::Request(_),
+            ))))
+        ),
+        "actual: {:?}",
+        res
+    );
 }
 
 #[test]

@@ -14,14 +14,14 @@ fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdCl
 
 fn prepare_for_stale_read_before_run(
     leader: Peer,
-    before_run: Option<Box<dyn Fn(&mut Cluster<ServerCluster>)>>,
+    before_run: Option<Box<dyn Fn(&mut Config)>>,
 ) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
     if let Some(f) = before_run {
-        f(&mut cluster);
+        f(&mut cluster.cfg);
     };
     cluster.cfg.resolved_ts.enable = true;
     cluster.run();
