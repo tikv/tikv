@@ -41,8 +41,8 @@ fn test_pending_peers() {
 #[test]
 fn test_pending_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
-    let election_timeout = configure_for_lease_read(&mut cluster, None, Some(15));
+    configure_for_snapshot(&mut cluster.cfg);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, None, Some(15));
     let gc_limit = cluster.cfg.raft_store.raft_log_gc_count_limit();
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
 

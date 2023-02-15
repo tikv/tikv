@@ -276,7 +276,7 @@ fn test_read_on_replica_check_memory_locks() {
 fn test_invalid_read_index_when_no_leader() {
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(10), Some(6));
+    configure_for_lease_read(&mut cluster.cfg, Some(10), Some(6));
     cluster.cfg.raft_store.raft_heartbeat_ticks = 1;
     cluster.cfg.raft_store.hibernate_regions = false;
     let pd_client = Arc::clone(&cluster.pd_client);
