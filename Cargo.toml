@@ -118,7 +118,6 @@ memory_trace_macros = { workspace = true }
 mime = "0.3.13"
 more-asserts = "0.2"
 mur3 = "0.1"
-murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 notify = "4"
 num-traits = "0.2.14"

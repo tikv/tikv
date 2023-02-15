@@ -414,7 +414,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                                         } else {
                                             // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
                                             // So it is safe the unwrap the Ok value.
-                                            let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
+                                            let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap())?;
                                             decoded_sorted_val
                                         }
                                     }
@@ -1416,7 +1416,7 @@ mod benches {
                 )
                 .unwrap();
                 let decoded_sorted_val = CollatorUtf8Mb4Bin::sort_key(
-                    &decoded_val.as_string().unwrap().unwrap().into_owned(),
+                    &decoded_val.as_string().unwrap().unwrap(),
                 )
                 .unwrap();
                 collation_key_vals.push(decoded_sorted_val);
