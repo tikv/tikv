@@ -574,7 +574,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let entry_storage = self.storage().entry_storage();
         // If it's marked as tombstone, then it must be changed by conf change. In
         // this case, all following entries are skipped so applied_index never equals
-        // to commit_index.
+        // to last_applying_index.
         (self.storage().region_state().get_state() != PeerState::Tombstone
             && entry_storage.applied_index() != last_applying_index)
             // Wait for critical commands like split.

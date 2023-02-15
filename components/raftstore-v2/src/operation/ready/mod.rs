@@ -947,6 +947,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 write_task.raft_wb = Some(raft_engine.log_batch(64));
             }
             let wb = write_task.raft_wb.as_mut().unwrap();
+            // There may be tombstone key from last peer.
             raft_engine
                 .clean(region_id, 0, entry_storage.raft_state(), wb)
                 .unwrap_or_else(|e| {
