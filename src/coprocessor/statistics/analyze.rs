@@ -1415,10 +1415,9 @@ mod benches {
                     &columns_info[i],
                 )
                 .unwrap();
-                let decoded_sorted_val = CollatorUtf8Mb4Bin::sort_key(
-                    &decoded_val.as_string().unwrap().unwrap(),
-                )
-                .unwrap();
+                let decoded_sorted_val =
+                    CollatorUtf8Mb4Bin::sort_key(&decoded_val.as_string().unwrap().unwrap())
+                        .unwrap();
                 collation_key_vals.push(decoded_sorted_val);
             } else {
                 collation_key_vals.push(Vec::new());
