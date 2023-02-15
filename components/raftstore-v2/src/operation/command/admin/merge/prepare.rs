@@ -46,6 +46,7 @@ use raftstore::{
 use slog::{debug, info};
 use tikv_util::{box_err, store::region_on_same_stores};
 
+use super::PrepareStatus;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
@@ -97,6 +98,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         pessimistic_locks.status = LocksStatus::Normal;
                     }
                 }
+                self.free_merge_context();
             })
     }
 
@@ -163,10 +165,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<(RaftCmdRequest, usize)> {
-        let needs_init_fence = self.check_existing_fence()?;
+        let needs_fence_check = self.check_prepare_status()?;
 
         let last_index = self.raft_group().raft.raft_log.last_index();
-        let (min_matched, min_committed) = self.get_min_progress()?;
+        let (min_matched, min_committed) = self.calculate_min_progress()?;
         if min_matched == 0
             || min_committed == 0
             || last_index - min_matched > store_ctx.cfg.merge_max_log_gap
@@ -227,7 +229,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ));
         };
 
-        if needs_init_fence {
+        if needs_fence_check {
             let has_locks = {
                 let pessimistic_locks = self.txn_context().ext().pessimistic_locks.read();
                 if pessimistic_locks.status != LocksStatus::Normal {
@@ -242,8 +244,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 !pessimistic_locks.is_empty()
             };
             if has_locks && self.entry_storage().applied_index() < last_index {
-                self.merge_context_mut().prepare_fence = Some(last_index);
-                self.merge_context_mut().pending_prepare = Some(req);
+                self.merge_context_mut().prepare_status =
+                    Some(PrepareStatus::WaitForFence(last_index, Some(req)));
                 info!(
                     self.logger,
                     "start rejecting new proposals before prepare merge";
@@ -252,31 +254,41 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return Err(Error::PendingPrepareMerge);
             }
         }
-        debug_assert!(self.merge_context().prepare_fence.is_none());
         req.mut_admin_request()
             .mut_prepare_merge()
             .set_min_index(min_matched + 1);
         Ok((req, entry_size_limit - entry_size))
     }
 
+    /// Returns whether the fence check is needed.
     #[inline]
-    fn check_existing_fence(&mut self) -> Result<bool> {
+    fn check_prepare_status(&mut self) -> Result<bool> {
         let applied_index = self.entry_storage().applied_index();
-        if let Some(f) = self
+        match self
             .merge_context()
-            .prepare_fence
-            && applied_index < f
+            .as_ref()
+            .and_then(|c| c.prepare_status.as_ref())
         {
-            info!(
-                self.logger,
-                "reject PrepareMerge because applied_index has not reached prepare_merge_fence";
-                "applied_index" => applied_index,
-                "prepare_merge_fence" => f,
-            );
-            return Err(Error::PendingPrepareMerge);
+            Some(PrepareStatus::WaitForFence(f, _)) => {
+                if applied_index < *f {
+                    info!(
+                        self.logger,
+                        "reject PrepareMerge because applied_index has not reached prepare_merge_fence";
+                        "applied_index" => applied_index,
+                        "prepare_merge_fence" => f,
+                    );
+                    Err(Error::PendingPrepareMerge)
+                } else {
+                    self.merge_context_mut().prepare_status.take();
+                    Ok(false)
+                }
+            }
+            Some(PrepareStatus::Applied(state)) => Err(box_err!(
+                "another merge is in-progress, merge_state: {:?}.",
+                state
+            )),
+            None => Ok(true),
         }
-        // No need to check again if there's already one,
-        Ok(self.merge_context_mut().prepare_fence.take().is_none())
     }
 
     /// Called after some new entries have been applied and the fence can
@@ -288,7 +300,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         if let Some(req) = self
             .merge_context_mut()
-            .maybe_take_pending_prepare(Some(applied_index))
+            .maybe_redo_pending_prepare(applied_index)
         {
             let (ch, _) = CmdResChannel::pair();
             self.on_admin_command(store_ctx, req, ch);
@@ -433,7 +445,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         self.proposal_control_mut()
             .enter_prepare_merge(res.state.get_commit());
-        self.merge_context_mut().pending = Some(res.state);
+        self.merge_context_mut().prepare_status = Some(PrepareStatus::Applied(res.state));
 
         // TODO: self.
         // update_merge_progress_on_apply_res_prepare_merge(store_ctx);

@@ -172,7 +172,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             return Err(e);
         }
-        if self.merge_context().should_block_write(admin_type) {
+        if self
+            .merge_context()
+            .map_or(false, |c| c.should_block_write(admin_type))
+        {
             return Err(Error::ProposalInMergingMode(self.region_id()));
         }
         Ok(())

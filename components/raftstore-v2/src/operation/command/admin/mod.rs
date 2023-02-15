@@ -1,19 +1,18 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod commit_merge;
 mod compact_log;
 mod conf_change;
-mod prepare_merge;
+mod merge;
 mod split;
 mod transfer_leader;
 
-pub use commit_merge::MergeContext;
 pub use compact_log::CompactLogContext;
 use compact_log::CompactLogResult;
 use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
-use prepare_merge::PrepareMergeResult;
+use merge::prepare::PrepareMergeResult;
+pub use merge::MergeContext;
 use protobuf::Message;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;

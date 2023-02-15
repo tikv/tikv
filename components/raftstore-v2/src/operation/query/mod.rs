@@ -281,7 +281,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage().apply_state().get_applied_index() >= read_index
             // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
             // TODO: Add a test to cover this case
-            && self.merge_context().pending.is_none()
+            && self.merge_context().map_or(true, |c| c.has_applied_prepare_merge())
     }
 
     #[inline]

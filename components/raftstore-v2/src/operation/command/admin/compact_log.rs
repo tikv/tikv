@@ -363,7 +363,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             return;
         }
-        if self.merge_context().pending.is_some() {
+        if self
+            .merge_context()
+            .map_or(false, |c| c.has_applied_prepare_merge())
+        {
             info!(
                 self.logger,
                 "in merging mode, skip compact";
