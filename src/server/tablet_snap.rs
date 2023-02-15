@@ -60,7 +60,7 @@ impl RecvTabletSnapContext {
         }
 
         let chunk_size = match head.take_data().try_into() {
-            Ok(buff) => usize::from_ne_bytes(buff),
+            Ok(buff) => usize::from_le_bytes(buff),
             Err(_) => return Err(box_err!("failed to get chunk size")),
         };
         let meta = head.take_message();
@@ -119,7 +119,7 @@ async fn send_snap_files(
     let mut total_sent = msg.compute_size() as u64;
     let mut chunk = SnapshotChunk::default();
     chunk.set_message(msg);
-    chunk.set_data(usize::to_ne_bytes(SNAP_CHUNK_LEN).to_vec());
+    chunk.set_data(usize::to_le_bytes(SNAP_CHUNK_LEN).to_vec());
     sender
         .feed((chunk, WriteFlags::default().buffer_hint(true)))
         .await?;
@@ -145,7 +145,7 @@ async fn send_snap_files(
                 }
                 off += readed;
             }
-            limiter.consume(off);
+            limiter.consume(off).await;
             total_sent += off as u64;
             let mut chunk = SnapshotChunk::default();
             chunk.set_data(buffer);
@@ -260,7 +260,7 @@ async fn recv_snap_files(
                 None => return Err(box_err!("missing chunk")),
             };
             f.write_all(&chunk[..])?;
-            limit.consume(chunk.len());
+            limit.consume(chunk.len()).await;
             size += chunk.len();
         }
         debug!("received snap file"; "file" => %p.display(), "size" => size);
@@ -479,7 +479,7 @@ pub fn copy_tablet_snapshot(
 
     let mut head = SnapshotChunk::default();
     head.set_message(msg);
-    head.set_data(usize::to_ne_bytes(SNAP_CHUNK_LEN).to_vec());
+    head.set_data(usize::to_le_bytes(SNAP_CHUNK_LEN).to_vec());
 
     let recv_context = RecvTabletSnapContext::new(head)?;
     let recv_path = recver_snap_mgr.tmp_recv_path(&recv_context.key);
