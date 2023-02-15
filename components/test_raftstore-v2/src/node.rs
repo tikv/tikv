@@ -190,7 +190,7 @@ impl Simulator for NodeCluster {
         let mut raft_store = cfg.raft_store.clone();
         raft_store
             .validate(
-                cfg.coprocessor.region_split_size.unwrap_or_default(),
+                cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket,
                 cfg.coprocessor.region_bucket_size,
             )
@@ -285,16 +285,12 @@ impl Simulator for NodeCluster {
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
 
-        let region_split_size = cfg.coprocessor.region_split_size;
+        let region_split_size = cfg.coprocessor.region_split_size();
         let enable_region_bucket = cfg.coprocessor.enable_region_bucket;
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg
-            .validate(
-                region_split_size.unwrap_or_default(),
-                enable_region_bucket,
-                region_bucket_size,
-            )
+            .validate(region_split_size, enable_region_bucket, region_bucket_size)
             .unwrap();
 
         // let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
