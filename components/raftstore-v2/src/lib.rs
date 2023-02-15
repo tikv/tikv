@@ -26,6 +26,7 @@
 #![feature(div_duration)]
 #![feature(box_into_inner)]
 #![feature(assert_matches)]
+#![feature(result_option_inspect)]
 
 mod batch;
 mod bootstrap;

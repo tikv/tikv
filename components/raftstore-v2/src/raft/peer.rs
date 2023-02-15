@@ -11,11 +11,12 @@ use engine_traits::{
     CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
 };
 use kvproto::{
-    metapb, pdpb,
+    metapb::{self, PeerRole},
+    pdpb,
     raft_serverpb::{RaftMessage, RegionLocalState},
 };
 use pd_client::BucketStat;
-use raft::{RawNode, StateRole};
+use raft::{ProgressState, RawNode, StateRole, INVALID_INDEX};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
@@ -25,14 +26,15 @@ use raftstore::{
         TabletSnapManager, WriteTask,
     },
 };
-use slog::Logger;
+use slog::{warn, Logger};
+use tikv_util::box_err;
 
 use super::storage::Storage;
 use crate::{
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext, ProposalControl,
-        SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
+        AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext, MergeContext,
+        ProposalControl, SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -57,6 +59,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// For raft log compaction.
     compact_log_context: CompactLogContext,
+
+    merge_context: MergeContext,
+    last_sent_snapshot_index: u64,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -131,7 +136,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let raft_cfg = cfg.new_raft_config(peer_id, applied_index);
 
         let region_id = storage.region().get_id();
-        let tablet_index = storage.region_state().get_tablet_index();
+        let region_state = storage.region_state().clone();
+        let tablet_index = region_state.get_tablet_index();
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
@@ -156,6 +162,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
             compact_log_context: CompactLogContext::new(applied_index),
+            merge_context: MergeContext::from_region_state(&logger, &region_state),
+            last_sent_snapshot_index: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
@@ -361,6 +369,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn merge_context(&self) -> &MergeContext {
+        &self.merge_context
+    }
+
+    #[inline]
+    pub fn merge_context_mut(&mut self) -> &mut MergeContext {
+        &mut self.merge_context
+    }
+
+    #[inline]
     pub fn raft_group(&self) -> &RawNode<Storage<EK, ER>> {
         &self.raft_group
     }
@@ -560,12 +578,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         false
     }
 
-    #[inline]
-    // TODO
-    pub fn has_pending_merge_state(&self) -> bool {
-        false
-    }
-
     pub fn serving(&self) -> bool {
         matches!(self.destroy_progress, DestroyProgress::None)
     }
@@ -711,6 +723,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn in_joint_state(&self) -> bool {
+        self.region().get_peers().iter().any(|p| {
+            p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
+        })
+    }
+
+    #[inline]
     pub fn split_trace_mut(&mut self) -> &mut Vec<(u64, HashSet<u64>)> {
         &mut self.split_trace
     }
@@ -791,5 +810,58 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn gc_peer_context_mut(&mut self) -> &mut GcPeerContext {
         &mut self.gc_peer_context
+    }
+
+    #[inline]
+    pub fn update_last_sent_snapshot_index(&mut self, i: u64) {
+        if i > self.last_sent_snapshot_index {
+            self.last_sent_snapshot_index = i;
+        }
+    }
+
+    #[inline]
+    pub fn last_sent_snapshot_index(&self) -> u64 {
+        self.last_sent_snapshot_index
+    }
+
+    /// Returns (minimal matched, minimal committed)
+    pub fn get_min_progress(&self) -> Result<(u64, u64)> {
+        let (mut min_m, mut min_c) = (None, None);
+        if let Some(progress) = self.raft_group().status().progress {
+            for (id, pr) in progress.iter() {
+                // Reject merge if there is any pending request snapshot,
+                // because a target region may merge a source region which is in
+                // an invalid state.
+                if pr.state == ProgressState::Snapshot
+                    || pr.pending_request_snapshot != INVALID_INDEX
+                {
+                    return Err(box_err!(
+                        "there is a pending snapshot peer {} [{:?}], skip merge",
+                        id,
+                        pr
+                    ));
+                }
+                if min_m.unwrap_or(u64::MAX) > pr.matched {
+                    min_m = Some(pr.matched);
+                }
+                if min_c.unwrap_or(u64::MAX) > pr.committed_index {
+                    min_c = Some(pr.committed_index);
+                }
+            }
+        }
+        let (mut min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
+        if min_m < min_c {
+            warn!(
+                self.logger,
+                "min_matched < min_committed, raft progress is inaccurate";
+                "min_matched" => min_m,
+                "min_committed" => min_c,
+            );
+            // Reset `min_matched` to `min_committed`, since the raft log at `min_committed`
+            // is known to be committed in all peers, all of the peers should also have
+            // replicated it
+            min_m = min_c;
+        }
+        Ok((min_m, min_c))
     }
 }

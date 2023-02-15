@@ -1,15 +1,19 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod commit_merge;
 mod compact_log;
 mod conf_change;
+mod prepare_merge;
 mod split;
 mod transfer_leader;
 
+pub use commit_merge::MergeContext;
 pub use compact_log::CompactLogContext;
 use compact_log::CompactLogResult;
 use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
+use prepare_merge::PrepareMergeResult;
 use protobuf::Message;
 use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
 use slog::info;
@@ -32,6 +36,7 @@ pub enum AdminCmdResult {
     TransferLeader(u64),
     CompactLog(CompactLogResult),
     UpdateGcPeers(UpdateGcPeersResult),
+    PrepareMerge(PrepareMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -118,6 +123,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     let data = req.write_to_bytes().unwrap();
                     self.propose(ctx, data)
                 }
+                AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 _ => unimplemented!(),
             }
         };
