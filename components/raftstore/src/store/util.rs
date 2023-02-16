@@ -1240,9 +1240,10 @@ impl RegionReadProgress {
     }
 
     pub fn notify_advance_resolved_ts(&self) {
-        let core = self.core.lock().unwrap();
-        if let Some(advance_notify) = core.advance_notify.as_ref() {
-            advance_notify.notify_waiters();
+        if let Ok(core) = self.core.try_lock() {
+            if let Some(advance_notify) = core.advance_notify.as_ref() {
+                advance_notify.notify_waiters();
+            }
         }
     }
 

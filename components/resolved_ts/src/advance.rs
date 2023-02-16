@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp,
     ffi::CString,
     sync::{
         atomic::{AtomicI32, Ordering},
@@ -98,13 +99,10 @@ impl AdvanceTsWorker {
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let timeout = self.timer.delay(advance_ts_interval);
-        let min_timeout = self.timer.delay(
-            if DEFAULT_MIN_ADVANCE_TS_INTERVAL < self.advance_ts_interval {
-                DEFAULT_MIN_ADVANCE_TS_INTERVAL
-            } else {
-                self.advance_ts_interval
-            },
-        );
+        let min_timeout = self.timer.delay(cmp::min(
+            DEFAULT_CHECK_LEADER_TIMEOUT_DURATION,
+            self.advance_ts_interval,
+        ));
 
         let fut = async move {
             // Ignore get tso errors since we will retry every `advdance_ts_interval`.
