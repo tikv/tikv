@@ -20,7 +20,7 @@ use tikv_util::{sys::thread::StdThreadBuildWrapper, time::Limiter};
 use super::singleton_flow_controller::{
     FlowChecker, FlowControlFactorStore, Msg, RATIO_SCALE_FACTOR, TICK_DURATION,
 };
-use crate::storage::config::FlowControlConfig;
+use crate::storage::{config::FlowControlConfig, metrics::*};
 
 pub struct TabletFlowFactorStore<EK> {
     registry: TabletRegistry<EK>,
@@ -156,15 +156,12 @@ impl FlowInfoDispatcher {
 
                     let msg = flow_info_receiver.recv_deadline(deadline);
                     match msg.clone() {
-                        Ok(FlowInfo::L0(_cf, _, region_id, suffix))
-                        | Ok(FlowInfo::L0Intra(_cf, _, region_id, suffix))
-                        | Ok(FlowInfo::Flush(_cf, _, region_id, suffix))
-                        | Ok(FlowInfo::Compaction(_cf, region_id, suffix)) => {
+                        Ok(FlowInfo::L0(_cf, _, region_id))
+                        | Ok(FlowInfo::L0Intra(_cf, _, region_id))
+                        | Ok(FlowInfo::Flush(_cf, _, region_id))
+                        | Ok(FlowInfo::Compaction(_cf, region_id)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             if let Some(checker) = checkers.get_mut(&region_id) {
-                                if checker.tablet_suffix() != suffix {
-                                    continue;
-                                }
                                 checker.on_flow_info_msg(enabled, msg);
                             }
                         }
@@ -175,7 +172,7 @@ impl FlowInfoDispatcher {
                                 checker.on_flow_info_msg(enabled, msg);
                             }
                         }
-                        Ok(FlowInfo::Created(region_id, suffix)) => {
+                        Ok(FlowInfo::Created(region_id)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             match checkers.entry(region_id) {
                                 HashMapEntry::Occupied(e) => e.into_mut(),
@@ -193,7 +190,6 @@ impl FlowInfoDispatcher {
                                     ));
                                     e.insert(FlowChecker::new_with_region_id(
                                         region_id,
-                                        suffix,
                                         &config,
                                         engine,
                                         limiter.1.clone(),
@@ -202,25 +198,17 @@ impl FlowInfoDispatcher {
                                 }
                             };
                         }
-                        Ok(FlowInfo::Destroyed(region_id, suffix)) => {
-                            let mut remove_limiter = false;
-                            {
-                                let mut checkers = flow_checkers.as_ref().write().unwrap();
-                                if let Some(checker) = checkers.get_mut(&region_id) {
-                                    if checker.tablet_suffix() == suffix {
-                                        checkers.remove(&region_id);
-                                        remove_limiter = true;
-                                    }
-                                }
-                            }
-                            if remove_limiter {
-                                limiters.as_ref().write().unwrap().remove(&region_id);
-                            }
+                        Ok(FlowInfo::Destroyed(region_id)) => {
+                            let mut checkers = flow_checkers.as_ref().write().unwrap();
+                            checkers.remove(&region_id);
+                            limiters.as_ref().write().unwrap().remove(&region_id);
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
+                            let mut total_rate = 0.0;
                             for checker in (*checkers).values_mut() {
-                                checker.update_statistics();
+                                total_rate += checker.update_statistics();
+                                SCHED_WRITE_FLOW_GAUGE.set(total_rate as i64);
                             }
                             deadline = std::time::Instant::now() + TICK_DURATION;
                         }
@@ -353,25 +341,13 @@ mod tests {
         let tablet_suffix = 5_u64;
         let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
         reg.load(tablet_context, false).unwrap();
-        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
         test_flow_controller_basic_impl(&flow_controller, region_id);
-        tx.send(FlowInfo::Destroyed(region_id, tablet_suffix))
+        tx.send(FlowInfo::Destroyed(region_id)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
     }
 
     #[test]
@@ -382,15 +358,9 @@ mod tests {
         let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
         let mut cached = reg.load(tablet_context, false).unwrap();
         let stub = cached.latest().unwrap().clone();
-        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
         test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, region_id, tablet_suffix);
     }
 
@@ -402,16 +372,10 @@ mod tests {
         let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
         let mut cached = reg.load(tablet_context, false).unwrap();
         let stub = cached.latest().unwrap().clone();
-        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        test_flow_controller_l0_impl(&flow_controller, &stub, &tx, region_id, tablet_suffix);
+        test_flow_controller_l0_impl(&flow_controller, &stub, &tx, region_id);
     }
 
     #[test]
@@ -422,22 +386,10 @@ mod tests {
         let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
         let mut cached = reg.load(tablet_context, false).unwrap();
         let stub = cached.latest().unwrap().clone();
-        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
 
-        test_flow_controller_pending_compaction_bytes_impl(
-            &flow_controller,
-            &stub,
-            &tx,
-            region_id,
-            tablet_suffix,
-        );
+        test_flow_controller_pending_compaction_bytes_impl(&flow_controller, &stub, &tx, region_id);
     }
 }
