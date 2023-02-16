@@ -98,7 +98,10 @@ impl TestRouter {
                 thread::sleep(Duration::from_millis(10));
                 continue;
             }
-            return block_on(sub.result());
+            let res = block_on(sub.result());
+            if res.is_some() {
+                return res;
+            }
         }
         None
     }
@@ -740,5 +743,75 @@ pub mod split_helper {
         assert_eq!(region.get_end_key(), right.get_end_key());
 
         (left, right)
+    }
+}
+
+pub mod life_helper {
+    use std::assert_matches::assert_matches;
+
+    use engine_traits::RaftEngine;
+    use kvproto::raft_serverpb::{ExtraMessageType, PeerState};
+
+    use super::*;
+
+    pub fn assert_peer_not_exist(region_id: u64, peer_id: u64, router: &TestRouter) {
+        let timer = Instant::now();
+        loop {
+            let (ch, sub) = DebugInfoChannel::pair();
+            let msg = PeerMsg::QueryDebugInfo(ch);
+            match router.send(region_id, msg) {
+                Err(TrySendError::Disconnected(_)) => return,
+                Ok(()) => {
+                    if let Some(m) = block_on(sub.result()) {
+                        if m.raft_status.id != peer_id {
+                            return;
+                        }
+                    }
+                }
+                Err(_) => (),
+            }
+            if timer.elapsed() < Duration::from_secs(3) {
+                thread::sleep(Duration::from_millis(10));
+            } else {
+                panic!("peer of {} still exists", region_id);
+            }
+        }
+    }
+
+    // TODO: make raft engine support more suitable way to verify range is empty.
+    /// Verify all states in raft engine are cleared.
+    pub fn assert_tombstone(raft_engine: &impl RaftEngine, region_id: u64, peer: &metapb::Peer) {
+        let mut buf = vec![];
+        raft_engine.get_all_entries_to(region_id, &mut buf).unwrap();
+        assert!(buf.is_empty(), "{:?}", buf);
+        assert_matches!(raft_engine.get_raft_state(region_id), Ok(None));
+        assert_matches!(raft_engine.get_apply_state(region_id, u64::MAX), Ok(None));
+        let region_state = raft_engine
+            .get_region_state(region_id, u64::MAX)
+            .unwrap()
+            .unwrap();
+        assert_matches!(region_state.get_state(), PeerState::Tombstone);
+        assert!(
+            region_state.get_region().get_peers().contains(peer),
+            "{:?}",
+            region_state
+        );
+    }
+
+    #[track_caller]
+    pub fn assert_valid_report(report: &RaftMessage, region_id: u64, peer_id: u64) {
+        assert_eq!(
+            report.get_extra_msg().get_type(),
+            ExtraMessageType::MsgGcPeerResponse
+        );
+        assert_eq!(report.get_region_id(), region_id);
+        assert_eq!(report.get_from_peer().get_id(), peer_id);
+    }
+
+    #[track_caller]
+    pub fn assert_tombstone_msg(msg: &RaftMessage, region_id: u64, peer_id: u64) {
+        assert_eq!(msg.get_region_id(), region_id);
+        assert_eq!(msg.get_to_peer().get_id(), peer_id);
+        assert!(msg.get_is_tombstone());
     }
 }
