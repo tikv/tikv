@@ -10,6 +10,7 @@ pub mod slash_etc;
 pub use slash_etc::SlashEtcStore;
 
 pub mod etcd;
+pub mod pd;
 use std::{cmp::Ordering, future::Future, pin::Pin, time::Duration};
 
 use async_trait::async_trait;
@@ -106,6 +107,15 @@ pub enum TransactionOp {
 pub struct WithRevision<T> {
     pub revision: i64,
     pub inner: T,
+}
+
+impl<T> WithRevision<T> {
+    pub fn map<R>(self, f: impl FnOnce(T) -> R) -> WithRevision<R> {
+        WithRevision {
+            revision: self.revision,
+            inner: f(self.inner),
+        }
+    }
 }
 
 /// The key set for getting.
@@ -206,5 +216,14 @@ pub trait MetaStore: Clone + Send + Sync {
     /// Delete some keys.
     async fn delete(&self, keys: Keys) -> Result<()> {
         self.txn(Transaction::default().delete(keys)).await
+    }
+    /// Get the latest version of some keys.
+    async fn get_latest(&self, keys: Keys) -> Result<WithRevision<Vec<KeyValue>>> {
+        let s = self.snapshot().await?;
+        let keys = s.get(keys).await?;
+        Ok(WithRevision {
+            revision: s.revision(),
+            inner: keys,
+        })
     }
 }

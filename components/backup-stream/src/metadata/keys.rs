@@ -2,7 +2,7 @@
 
 use kvproto::metapb::Region;
 
-const PREFIX: &str = "/tidb/br-stream";
+pub(super) const PREFIX: &str = "/tidb/br-stream";
 const PATH_INFO: &str = "/info";
 const PATH_NEXT_BACKUP_TS: &str = "/checkpoint";
 const PATH_STORAGE_CHECKPOINT: &str = "/storage-checkpoint";

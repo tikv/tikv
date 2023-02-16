@@ -203,6 +203,37 @@ pub const INVALID_ID: u64 = 0;
 // TODO: Implementation of config registration for each module
 pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
 
+#[derive(Default)]
+pub struct GlobalConfigSelector {
+    basic_path: String,
+    items: Vec<String>,
+}
+
+impl GlobalConfigSelector {
+    /// Query a prefix of some key.
+    pub fn of_prefix(p: String) -> Self {
+        Self {
+            basic_path: p,
+            items: vec![],
+        }
+    }
+
+    /// Query the key exactly equals to the prefix.
+    pub fn exactly(mut self) -> Self {
+        self.items = vec![String::new()];
+        self
+    }
+}
+
+impl From<GlobalConfigSelector> for pdpb::LoadGlobalConfigRequest {
+    fn from(value: GlobalConfigSelector) -> Self {
+        let mut r = Self::default();
+        r.config_path = value.basic_path;
+        r.names = value.items.into();
+        r
+    }
+}
+
 /// PdClient communicates with Placement Driver (PD).
 /// Because now one PD only supports one cluster, so it is no need to pass
 /// cluster id in trait interface every time, so passing the cluster id when
@@ -212,7 +243,7 @@ pub trait PdClient: Send + Sync {
     /// Load a list of GlobalConfig
     fn load_global_config(
         &self,
-        _config_path: String,
+        _s: GlobalConfigSelector,
     ) -> PdFuture<(Vec<pdpb::GlobalConfigItem>, i64)> {
         unimplemented!();
     }

@@ -71,6 +71,7 @@ tonic = "0.8"
 txn_types = { workspace = true }
 uuid = "0.8"
 yatp = { workspace = true }
+rand = "0.8.0"
 
 [dev-dependencies]
 async-trait = "0.1"
@@ -78,7 +79,6 @@ engine_panic = { workspace = true }
 grpcio = { workspace = true }
 hex = "0.4"
 protobuf = { version = "2.8", features = ["bytes"] }
-rand = "0.8.0"
 tempdir = "0.3"
 tempfile = "3.0"
 test_raftstore = { workspace = true }
