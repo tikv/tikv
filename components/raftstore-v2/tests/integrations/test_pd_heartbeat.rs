@@ -119,9 +119,33 @@ fn test_report_buckets() {
         .send(region_id, PeerMsg::Tick(PeerTick::ReportBuckets))
         .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
+
     let resp = block_on(cluster.node(0).pd_client().get_buckets_by_id(region_id)).unwrap();
+    let mut buckets_tmp = vec![];
+    let mut bucket_ranges = vec![];
     if let Some(buckets) = resp {
         assert!(buckets.get_keys().len() > 2);
         assert_eq!(buckets.get_region_id(), region_id);
+        for i in 0..buckets.keys.len() - 1 {
+            buckets_tmp.push(raftstore::store::Bucket::default());
+            let bucket_range =
+                raftstore::store::BucketRange(buckets.keys[i].clone(), buckets.keys[i + 1].clone());
+            bucket_ranges.push(bucket_range);
+        }
+    }
+
+    // send the same region buckets to refresh which needs to merge the last.
+    let resp = block_on(cluster.node(0).pd_client().get_region_by_id(region_id)).unwrap();
+    if let Some(region) = resp {
+        let region_epoch = region.get_region_epoch().clone();
+        for _ in 0..2 {
+            let msg = PeerMsg::RefreshRegionBuckets {
+                region_epoch: region_epoch.clone(),
+                buckets: buckets_tmp.clone(),
+                bucket_ranges: Some(bucket_ranges.clone()),
+            };
+            router.send(region_id, msg).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 }

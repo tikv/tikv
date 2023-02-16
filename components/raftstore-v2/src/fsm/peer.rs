@@ -191,7 +191,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         }
         self.schedule_tick(PeerTick::SplitRegionCheck);
         self.schedule_tick(PeerTick::PdHeartbeat);
-        self.schedule_tick(PeerTick::ReportBuckets);
         self.schedule_tick(PeerTick::CompactLog);
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
@@ -311,11 +310,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     region_epoch,
                     buckets,
                     bucket_ranges,
-                } => self.on_refresh_region_buckets(
-                    region_epoch,
-                    buckets,
-                    bucket_ranges,
-                ),
+                } => self.on_refresh_region_buckets(region_epoch, buckets, bucket_ranges),
                 PeerMsg::RequestHalfSplit { request, ch } => self
                     .fsm
                     .peer_mut()
