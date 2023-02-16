@@ -27,6 +27,8 @@
 //! Start the tick (`Peer::on_check_merge`) to periodically check the
 //! eligibility of merge.
 
+use std::mem;
+
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};
 use kvproto::{
     raft_cmdpb::{
@@ -44,9 +46,8 @@ use raftstore::{
     Error, Result,
 };
 use slog::{debug, info};
-use tikv_util::{box_err, store::region_on_same_stores};
+use tikv_util::{box_err, log::SlogFormat, store::region_on_same_stores};
 
-use super::PrepareStatus;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
@@ -54,6 +55,35 @@ use crate::{
     raft::{Apply, Peer},
     router::CmdResChannel,
 };
+
+#[derive(Clone)]
+pub struct PreProposeContext {
+    min_matched: u64,
+    lock_size_limit: usize,
+}
+
+pub enum PrepareStatus {
+    /// When a fence <idx, cmd> is present, we (1) delay the PrepareMerge
+    /// command `cmd` until all writes before `idx` are applied (2) reject all
+    /// in-coming write proposals.
+    /// Before proposing `PrepareMerge`, we first serialize and propose the lock
+    /// table. Locks marked as deleted (but not removed yet) will be
+    /// serialized as normal locks.
+    /// Thanks to the fence, we can ensure at the time of lock transfer, locks
+    /// are either removed (when applying logs) or won't be removed before
+    /// merge (the proposals to remove them are rejected).
+    ///
+    /// The request can be `None` because we needs to take it out to redo the
+    /// propose. In the meantime the fence is needed to bypass the check.
+    WaitForFence {
+        fence: u64,
+        ctx: PreProposeContext,
+        req: Option<RaftCmdRequest>,
+    },
+    /// In this state, all write proposals except for `RollbackMerge` will be
+    /// rejected.
+    Applied(MergeState),
+}
 
 #[derive(Debug)]
 pub struct PrepareMergeResult {
@@ -65,7 +95,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn propose_prepare_merge<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
     ) -> Result<u64> {
         if self.storage().has_dirty_data() {
             return Err(box_err!(
@@ -77,8 +107,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             store_ctx,
             req.get_admin_request().get_prepare_merge(),
         )?;
-        let (req, lock_size_limit) = self.pre_propose_prepare_merge(store_ctx, req)?;
-        self.propose_locks_before_prepare_merge(store_ctx, lock_size_limit)
+        let pre_propose = if let Some(r) = self.already_checked_pessimistic_locks()? {
+            r
+        } else {
+            let r = self.check_logs_before_prepare_merge(store_ctx)?;
+            self.check_pessimistic_locks(r, &mut req)?
+        };
+        req.mut_admin_request()
+            .mut_prepare_merge()
+            .set_min_index(pre_propose.min_matched + 1);
+        self.propose_locks_before_prepare_merge(store_ctx, pre_propose.lock_size_limit)
             .and_then(|_| {
                 let mut proposal_ctx = ProposalContext::empty();
                 proposal_ctx.insert(ProposalContext::PREPARE_MERGE);
@@ -115,8 +153,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Just for simplicity, do not start region merge while in joint state
         if self.in_joint_state() {
             return Err(box_err!(
-                "{:?} region in joint state, can not propose merge command, command: {:?}",
-                self.logger.list(),
+                "{} region in joint state, can not propose merge command, command: {:?}",
+                SlogFormat(&self.logger),
                 req
             ));
         }
@@ -160,13 +198,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     // Match v1::pre_propose_prepare_merge.
-    fn pre_propose_prepare_merge<T>(
+    fn check_logs_before_prepare_merge<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
-    ) -> Result<(RaftCmdRequest, usize)> {
-        let needs_fence_check = self.check_prepare_status()?;
-
+    ) -> Result<PreProposeContext> {
         let last_index = self.raft_group().raft.raft_log.last_index();
         let (min_matched, min_committed) = self.calculate_min_progress()?;
         if min_matched == 0
@@ -228,66 +263,72 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "log gap size exceed entry size limit, skip merging."
             ));
         };
-
-        if needs_fence_check {
-            let has_locks = {
-                let pessimistic_locks = self.txn_context().ext().pessimistic_locks.read();
-                if pessimistic_locks.status != LocksStatus::Normal {
-                    // If `status` is not `Normal`, it means the in-memory pessimistic locks are
-                    // being transferred, probably triggered by transferring leader. In this case,
-                    // we abort merging to simplify the situation.
-                    return Err(box_err!(
-                        "pessimistic locks status is {:?}, skip merging.",
-                        pessimistic_locks.status
-                    ));
-                }
-                !pessimistic_locks.is_empty()
-            };
-            if has_locks && self.entry_storage().applied_index() < last_index {
-                self.merge_context_mut().prepare_status =
-                    Some(PrepareStatus::WaitForFence(last_index, Some(req)));
-                info!(
-                    self.logger,
-                    "start rejecting new proposals before prepare merge";
-                    "prepare_merge_fence" => last_index
-                );
-                return Err(Error::PendingPrepareMerge);
-            }
-        }
-        req.mut_admin_request()
-            .mut_prepare_merge()
-            .set_min_index(min_matched + 1);
-        Ok((req, entry_size_limit - entry_size))
+        Ok(PreProposeContext {
+            min_matched,
+            lock_size_limit: entry_size_limit - entry_size,
+        })
     }
 
-    /// Returns whether the fence check is needed.
-    #[inline]
-    fn check_prepare_status(&mut self) -> Result<bool> {
+    fn check_pessimistic_locks(
+        &mut self,
+        ctx: PreProposeContext,
+        req: &mut RaftCmdRequest,
+    ) -> Result<PreProposeContext> {
+        let has_locks = {
+            let pessimistic_locks = self.txn_context().ext().pessimistic_locks.read();
+            if pessimistic_locks.status != LocksStatus::Normal {
+                // If `status` is not `Normal`, it means the in-memory pessimistic locks are
+                // being transferred, probably triggered by transferring leader. In this case,
+                // we abort merging to simplify the situation.
+                return Err(box_err!(
+                    "pessimistic locks status is {:?}, skip merging.",
+                    pessimistic_locks.status
+                ));
+            }
+            !pessimistic_locks.is_empty()
+        };
+        let last_index = self.raft_group().raft.raft_log.last_index();
+        if has_locks && self.entry_storage().applied_index() < last_index {
+            self.merge_context_mut().prepare_status = Some(PrepareStatus::WaitForFence {
+                fence: last_index,
+                ctx,
+                req: Some(mem::take(req)),
+            });
+            info!(
+                self.logger,
+                "start rejecting new proposals before prepare merge";
+                "prepare_merge_fence" => last_index
+            );
+            return Err(Error::PendingPrepareMerge);
+        }
+        Ok(ctx)
+    }
+
+    fn already_checked_pessimistic_locks(&mut self) -> Result<Option<PreProposeContext>> {
         let applied_index = self.entry_storage().applied_index();
         match self
             .merge_context()
             .as_ref()
             .and_then(|c| c.prepare_status.as_ref())
         {
-            Some(PrepareStatus::WaitForFence(f, _)) => {
-                if applied_index < *f {
+            Some(PrepareStatus::WaitForFence { fence, ctx, .. }) => {
+                if applied_index < *fence {
                     info!(
                         self.logger,
                         "reject PrepareMerge because applied_index has not reached prepare_merge_fence";
                         "applied_index" => applied_index,
-                        "prepare_merge_fence" => f,
+                        "prepare_merge_fence" => fence,
                     );
                     Err(Error::PendingPrepareMerge)
                 } else {
-                    self.merge_context_mut().prepare_status.take();
-                    Ok(false)
+                    Ok(Some(ctx.clone()))
                 }
             }
             Some(PrepareStatus::Applied(state)) => Err(box_err!(
                 "another merge is in-progress, merge_state: {:?}.",
                 state
             )),
-            None => Ok(true),
+            None => Ok(None),
         }
     }
 
@@ -300,7 +341,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         if let Some(req) = self
             .merge_context_mut()
-            .maybe_redo_pending_prepare(applied_index)
+            .maybe_take_pending_prepare(applied_index)
         {
             let (ch, _) = CmdResChannel::pair();
             self.on_admin_command(store_ctx, req, ch);

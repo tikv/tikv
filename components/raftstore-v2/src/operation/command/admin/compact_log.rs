@@ -363,10 +363,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             return;
         }
-        if self
-            .merge_context()
-            .map_or(false, |c| c.has_applied_prepare_merge())
-        {
+        if self.merge_context().map_or(false, |c| {
+            c.should_block_write(Some(AdminCmdType::CompactLog))
+        }) {
             info!(
                 self.logger,
                 "in merging mode, skip compact";
@@ -398,7 +397,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // All logs < perssited_apply will be deleted, so should check with +1.
         if old_truncated + 1 < self.storage().apply_trace().persisted_apply_index()
-            && let Some(index) = self.compact_log_index() {
+            && let Some(index) = self.compact_log_index()
+        {
             // Raft Engine doesn't care about first index.
             if let Err(e) = store_ctx
                 .engine
@@ -441,7 +441,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // If it's snapshot, logs are gc already.
             if !task.has_snapshot
                 && old_persisted < self.entry_storage().truncated_index() + 1
-                && let Some(index) = self.compact_log_index() {
+                && let Some(index) = self.compact_log_index()
+            {
                 let batch = task.extra_write.ensure_v2(|| self.entry_storage().raft_engine().log_batch(0));
                 // Raft Engine doesn't care about first index.
                 if let Err(e) =

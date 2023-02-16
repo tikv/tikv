@@ -77,10 +77,11 @@ impl ProposedAdminCmd {
 /// Compared to `CmdEpochChecker`, `ProposalControl` also traces the whole
 /// lifetime of prepare merge.
 pub struct ProposalControl {
+    // Admin commands that are proposed but not applied.
     // Use `LinkedList` to reduce memory footprint. In most cases, the list
     // should be empty or 1 element. And access speed is not a concern.
     proposed_admin_cmd: LinkedList<ProposedAdminCmd>,
-    pending_merge_index: u64,
+    applied_prepare_merge_index: u64,
     term: u64,
 }
 
@@ -88,7 +89,7 @@ impl ProposalControl {
     pub fn new(term: u64) -> ProposalControl {
         ProposalControl {
             proposed_admin_cmd: LinkedList::new(),
-            pending_merge_index: 0,
+            applied_prepare_merge_index: 0,
             term,
         }
     }
@@ -211,14 +212,14 @@ impl ProposalControl {
 
     #[inline]
     pub fn enter_prepare_merge(&mut self, prepare_merge_index: u64) {
-        self.pending_merge_index = prepare_merge_index;
+        self.applied_prepare_merge_index = prepare_merge_index;
     }
 
     #[inline]
     pub fn leave_prepare_merge(&mut self, prepare_merge_index: u64) {
-        if self.pending_merge_index != 0 {
-            assert_eq!(self.pending_merge_index, prepare_merge_index);
-            self.pending_merge_index = 0;
+        if self.applied_prepare_merge_index != 0 {
+            assert_eq!(self.applied_prepare_merge_index, prepare_merge_index);
+            self.applied_prepare_merge_index = 0;
         }
     }
 
@@ -242,8 +243,8 @@ impl ProposalControl {
     /// applied.
     #[inline]
     pub fn is_merging(&self) -> bool {
-        if self.proposed_admin_cmd.is_empty() {
-            return self.pending_merge_index != 0;
+        if self.applied_prepare_merge_index != 0 {
+            return true;
         }
         self.proposed_admin_cmd
             .iter()

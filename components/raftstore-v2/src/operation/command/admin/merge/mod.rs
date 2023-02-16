@@ -5,8 +5,9 @@ pub mod prepare;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
-    raft_serverpb::{MergeState, PeerState, RegionLocalState},
+    raft_serverpb::{PeerState, RegionLocalState},
 };
+use prepare::PrepareStatus;
 use raft::{ProgressState, INVALID_INDEX};
 use raftstore::Result;
 use slog::{info, warn, Logger};
@@ -14,28 +15,9 @@ use tikv_util::box_err;
 
 use crate::raft::Peer;
 
-pub enum PrepareStatus {
-    /// When a fence <idx, cmd> is present, we (1) delay the PrepareMerge
-    /// command `cmd` until all writes before `idx` are applied (2) reject all
-    /// in-coming write proposals.
-    /// Before proposing `PrepareMerge`, we first serialize and propose the lock
-    /// table. Locks marked as deleted (but not removed yet) will be
-    /// serialized as normal locks.
-    /// Thanks to the fence, we can ensure at the time of lock transfer, locks
-    /// are either removed (when applying logs) or won't be removed before
-    /// merge (the proposals to remove them are rejected).
-    ///
-    /// The request can be `None` because we needs to take it out to redo the
-    /// propose. In the meantime the fence is needed to bypass the check.
-    WaitForFence(u64, Option<RaftCmdRequest>),
-    /// In this state, all write proposals except for `RollbackMerge` will be
-    /// rejected.
-    Applied(MergeState),
-}
-
 #[derive(Default)]
 pub struct MergeContext {
-    pub prepare_status: Option<PrepareStatus>,
+    prepare_status: Option<PrepareStatus>,
 }
 
 impl MergeContext {
@@ -52,12 +34,16 @@ impl MergeContext {
     }
 
     #[inline]
-    pub fn maybe_redo_pending_prepare(&mut self, applied: u64) -> Option<RaftCmdRequest> {
-        if let Some(PrepareStatus::WaitForFence(f, cmd)) = self.prepare_status.as_mut()
-            && applied >= *f
+    pub fn maybe_take_pending_prepare(&mut self, applied: u64) -> Option<RaftCmdRequest> {
+        if let Some(PrepareStatus::WaitForFence {
+            fence,
+            req,
+            ..
+        }) = self.prepare_status.as_mut()
+            && applied >= *fence
         {
             // The status will be updated during processing the proposal.
-            return cmd.take();
+            return req.take();
         }
         None
     }
@@ -66,8 +52,10 @@ impl MergeContext {
     pub fn should_block_write(&self, admin_type: Option<AdminCmdType>) -> bool {
         matches!(self.prepare_status, Some(PrepareStatus::Applied(_)))
             && admin_type != Some(AdminCmdType::RollbackMerge)
-            || matches!(self.prepare_status, Some(PrepareStatus::WaitForFence(..)))
-                && admin_type != Some(AdminCmdType::PrepareMerge)
+            || matches!(
+                self.prepare_status,
+                Some(PrepareStatus::WaitForFence { .. })
+            ) && admin_type != Some(AdminCmdType::PrepareMerge)
     }
 
     #[inline]
