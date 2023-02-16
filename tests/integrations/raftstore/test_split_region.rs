@@ -472,7 +472,6 @@ fn test_apply_new_version_snapshot() {
     must_get_equal(&engine3, b"k2", b"v2");
 }
 
-
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_server_split_with_stale_peer() {
