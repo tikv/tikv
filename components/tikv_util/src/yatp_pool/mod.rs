@@ -10,7 +10,7 @@ pub use future_pool::{Full, FuturePool};
 use futures::{compat::Stream01CompatExt, StreamExt};
 use prometheus::{local::LocalHistogram, Histogram};
 use yatp::{
-    pool::{CloneRunnerBuilder, Local, Runner},
+    pool::{CloneRunnerBuilder, Local, Remote, Runner},
     queue::{multilevel, priority, Extras, QueueType, TaskCell as _},
     task::future::{Runner as FutureRunner, TaskCell},
     ThreadPool,
@@ -22,15 +22,15 @@ use crate::{
     timer::GLOBAL_TIMER_HANDLE,
 };
 
-const DEFAULT_CLEANUP_TASK_ELAPSED_MAP_INTERVAL: Duration = Duration::from_secs(10);
+const DEFAULT_CLEANUP_INTERVAL: Duration = Duration::from_secs(10);
 
 fn background_cleanup_task(
     cleanup: impl Fn() -> Option<std::time::Instant> + Send + 'static,
 ) -> TaskCell {
     let mut interval = GLOBAL_TIMER_HANDLE
         .interval(
-            std::time::Instant::now() + DEFAULT_CLEANUP_TASK_ELAPSED_MAP_INTERVAL,
-            DEFAULT_CLEANUP_TASK_ELAPSED_MAP_INTERVAL,
+            std::time::Instant::now() + DEFAULT_CLEANUP_INTERVAL,
+            DEFAULT_CLEANUP_INTERVAL,
         )
         .compat();
     TaskCell::new(
@@ -41,6 +41,38 @@ fn background_cleanup_task(
         },
         Extras::multilevel_default(),
     )
+}
+
+pub enum CleanupMethod {
+    /// Cleanup in place on spawning.
+    InPlace,
+    /// Cleanup in this pool (the one to be built) locally.
+    Local,
+    /// Cleanup in the other remote pool.
+    Other(Remote<TaskCell>),
+}
+
+impl CleanupMethod {
+    fn preferred_interval(&self) -> Option<std::time::Duration> {
+        match self {
+            Self::InPlace => Some(DEFAULT_CLEANUP_INTERVAL),
+            _ => None,
+        }
+    }
+
+    fn try_spawn(
+        &self,
+        cleanup: impl Fn() -> Option<std::time::Instant> + Send + 'static,
+    ) -> Option<TaskCell> {
+        match self {
+            Self::InPlace => None,
+            Self::Local => Some(background_cleanup_task(cleanup)),
+            Self::Other(remote) => {
+                remote.spawn(background_cleanup_task(cleanup));
+                None
+            }
+        }
+    }
 }
 
 pub(crate) const TICK_INTERVAL: Duration = Duration::from_secs(1);
@@ -203,6 +235,7 @@ pub struct YatpPoolBuilder<T: PoolTicker> {
     max_thread_count: usize,
     stack_size: usize,
     max_tasks: usize,
+    cleanup_method: CleanupMethod,
 }
 
 impl<T: PoolTicker> YatpPoolBuilder<T> {
@@ -218,6 +251,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             max_thread_count: 1,
             stack_size: 0,
             max_tasks: std::usize::MAX,
+            cleanup_method: CleanupMethod::InPlace,
         }
     }
 
@@ -253,6 +287,11 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
 
     pub fn max_tasks(mut self, tasks: usize) -> Self {
         self.max_tasks = tasks;
+        self
+    }
+
+    pub fn cleanup_method(mut self, method: CleanupMethod) -> Self {
+        self.cleanup_method = method;
         self
     }
 
@@ -318,18 +357,22 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             .name_prefix
             .clone()
             .unwrap_or_else(|| "yatp_pool".to_string());
-        let (builder, read_pool_runner) = self.create_builder();
         let multilevel_builder = multilevel::Builder::new(
             multilevel::Config::default()
                 .name(Some(name))
-                .cleanup_interval(None),
+                .cleanup_interval(self.cleanup_method.preferred_interval()),
         );
+        let cleanup_task = self
+            .cleanup_method
+            .try_spawn(multilevel_builder.cleanup_fn());
+        let (builder, read_pool_runner) = self.create_builder();
         let runner_builder =
             multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-        let cleanup = multilevel_builder.cleanup_fn();
         let pool = builder
             .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
-        pool.spawn(background_cleanup_task(cleanup));
+        if let Some(task) = cleanup_task {
+            pool.spawn(task);
+        }
         pool
     }
 
@@ -341,18 +384,20 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             .name_prefix
             .clone()
             .unwrap_or_else(|| "yatp_pool".to_string());
-        let (builder, read_pool_runner) = self.create_builder();
         let priority_builder = priority::Builder::new(
             priority::Config::default()
                 .name(Some(name))
-                .cleanup_interval(None),
+                .cleanup_interval(self.cleanup_method.preferred_interval()),
             priority_provider,
         );
+        let cleanup_task = self.cleanup_method.try_spawn(priority_builder.cleanup_fn());
+        let (builder, read_pool_runner) = self.create_builder();
         let runner_builder = priority_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-        let cleanup = priority_builder.cleanup_fn();
         let pool = builder
             .build_with_queue_and_runner(QueueType::Priority(priority_builder), runner_builder);
-        pool.spawn(background_cleanup_task(cleanup));
+        if let Some(task) = cleanup_task {
+            pool.spawn(task);
+        }
         pool
     }
 
