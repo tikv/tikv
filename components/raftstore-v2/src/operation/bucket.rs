@@ -11,7 +11,7 @@ use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
 };
-use slog::error;
+use slog::{error, warn};
 
 use crate::{batch::StoreContext, fsm::PeerFsmDelegate, raft::Peer, router::PeerTick, worker::pd};
 
@@ -67,12 +67,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             meta.region_epoch = region_epoch;
             for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
-                // the bucket range is the suspected range that needs to split, so it needs to
-                // find the first keys.
+                // the bucket ranges maybe need to split or merge not all the meta keys, so it
+                // needs to find the first keys.
                 while meta_idx < meta.keys.len() && meta.keys[meta_idx] != bucket_range.0 {
                     meta_idx += 1;
                 }
-                assert!(meta_idx != meta.keys.len());
+                // meta_idx can't be not the last entry (which is end key)
+                if meta_idx >= meta.keys.len() - 1 {
+                    warn!(
+                        self.logger,
+                        "can't find the bucket key";
+                        "bucket_range_key" => log_wrappers::Value::key(&bucket_range.0));
+                    break;
+                }
                 // the bucket size is small and does not have split keys,
                 // then it should be merged with its left neighbor
                 let region_bucket_merge_size = store_ctx
@@ -82,8 +89,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     * (store_ctx.coprocessor_host.cfg.region_bucket_size.0 as f64);
                 if bucket.keys.is_empty() && bucket.size <= (region_bucket_merge_size as u64) {
                     meta.sizes[meta_idx] = bucket.size;
-                    // i is not the last entry (which is end key)
-                    assert!(meta_idx < meta.keys.len() - 1);
                     // the region has more than one bucket
                     // and the left neighbor + current bucket size is not very big
                     if meta.keys.len() > 2
@@ -110,12 +115,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             region_buckets.meta = Arc::new(meta);
         } else {
-            // The buckets number should be same with the bucket range, but the generated
-            // buckets should be generated if the given bucket range is none.
+            // There must be one buckets that include all buckets keys.
             assert_eq!(buckets.len(), 1);
             let bucket_keys = buckets.pop().unwrap().keys;
             let bucket_count = bucket_keys.len() + 1;
-
             let mut meta = BucketMeta {
                 region_id: self.region_id(),
                 region_epoch,
@@ -160,7 +163,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        if ctx.coprocessor_host.cfg.enable_region_bucket && !self.region().get_peers().is_empty()&&self.storage().is_initialized() {
+        if ctx.coprocessor_host.cfg.enable_region_bucket
+            && self.storage().is_initialized()
+        {
             if let Err(e) = ctx
                 .schedulers
                 .split_check
@@ -183,7 +188,7 @@ where
 {
     #[inline]
     pub fn on_report_region_buckets_tick(&mut self) {
-        if !self.fsm.peer().is_leader()|| self.fsm.peer().region_buckets().is_none() {
+        if !self.fsm.peer().is_leader() || self.fsm.peer().region_buckets().is_none() {
             return;
         }
         self.fsm.peer_mut().report_region_buckets_pd(self.store_ctx);
@@ -191,11 +196,11 @@ where
     }
 
     pub fn on_refresh_region_buckets(
-        &mut self, 
+        &mut self,
         region_epoch: RegionEpoch,
         buckets: Vec<Bucket>,
-        bucket_ranges: Option<Vec<BucketRange>>
-    ){
+        bucket_ranges: Option<Vec<BucketRange>>,
+    ) {
         if util::is_epoch_stale(&region_epoch, self.fsm.peer().region().get_region_epoch()) {
             error!(
                 self.fsm.peer().logger,
@@ -204,7 +209,12 @@ where
                 "current_epoch" => ?self.fsm.peer().region().get_region_epoch(),
             );
         }
-        self.fsm.peer_mut().on_refresh_region_buckets(self.store_ctx,region_epoch,buckets,bucket_ranges);
+        self.fsm.peer_mut().on_refresh_region_buckets(
+            self.store_ctx,
+            region_epoch,
+            buckets,
+            bucket_ranges,
+        );
         self.schedule_tick(PeerTick::ReportBuckets);
     }
 }
