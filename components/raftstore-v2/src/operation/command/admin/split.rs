@@ -708,6 +708,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if mailbox.is_none() {
                 // None means the node is shutdown concurrently and thus the
                 // mailboxes in router have been cleared
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
                 return;
             }
 
