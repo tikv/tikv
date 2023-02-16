@@ -351,7 +351,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_compact_log<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        res: CompactLogResult,
+        mut res: CompactLogResult,
     ) {
         let first_index = self.entry_storage().first_index();
         if res.compact_index <= first_index {
@@ -363,15 +363,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             return;
         }
-        if self.merge_context().map_or(false, |c| {
-            c.should_block_write(Some(AdminCmdType::CompactLog))
-        }) {
+        if let Some(i) = self.merge_context().and_then(|c| c.max_compact_log_index())
+            && res.compact_index > i
+        {
             info!(
                 self.logger,
-                "in merging mode, skip compact";
-                "compact_index" => res.compact_index
+                "in merging mode, adjust compact index";
+                "old_index" => res.compact_index,
+                "new_index" => i,
             );
-            return;
+            res.compact_index = i;
         }
         // TODO: check entry_cache_warmup_state
         self.entry_storage_mut()

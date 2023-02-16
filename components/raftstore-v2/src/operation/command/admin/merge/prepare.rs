@@ -58,7 +58,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct PreProposeContext {
-    min_matched: u64,
+    pub min_matched: u64,
     lock_size_limit: usize,
 }
 

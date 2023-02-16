@@ -62,6 +62,15 @@ impl MergeContext {
     pub fn has_applied_prepare_merge(&self) -> bool {
         matches!(self.prepare_status, Some(PrepareStatus::Applied(_)))
     }
+
+    #[inline]
+    pub fn max_compact_log_index(&self) -> Option<u64> {
+        if let Some(PrepareStatus::WaitForFence { ctx, .. }) = self.prepare_status.as_ref() {
+            Some(ctx.min_matched)
+        } else {
+            None
+        }
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
