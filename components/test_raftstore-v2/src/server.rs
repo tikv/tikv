@@ -196,7 +196,7 @@ impl ServerCluster {
         let mut raft_store = cfg.raft_store.clone();
         raft_store
             .validate(
-                cfg.coprocessor.region_split_size.unwrap_or_default(),
+                cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket,
                 cfg.coprocessor.region_bucket_size,
             )

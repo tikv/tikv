@@ -266,45 +266,48 @@ impl Filter for EraseHeartbeatCommit {
     }
 }
 
-fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_committed: bool) {
-    let region = cluster.pd_client.get_region(k).unwrap();
-    let mut tried_cnt = 0;
-    let leader = loop {
-        match cluster.leader_of_region(region.get_id()) {
-            None => {
-                tried_cnt += 1;
-                if tried_cnt >= 3 {
-                    panic!("leader should be elected");
+macro_rules! check_cluster {
+    ($cluster:expr, $k:expr, $v:expr, $all_committed:expr) => {
+        let region = $cluster.pd_client.get_region($k).unwrap();
+        let mut tried_cnt = 0;
+        let leader = loop {
+            match $cluster.leader_of_region(region.get_id()) {
+                None => {
+                    tried_cnt += 1;
+                    if tried_cnt >= 3 {
+                        panic!("leader should be elected");
+                    }
+                    continue;
                 }
-                continue;
+                Some(l) => break l,
             }
-            Some(l) => break l,
+        };
+        let mut missing_count = 0;
+        for i in 1..=region.get_peers().len() as u64 {
+            let engine = $cluster.get_engine(i);
+            if $all_committed || i == leader.get_store_id() {
+                must_get_equal(&engine, $k, $v);
+            } else {
+                // Note that a follower can still commit the log by an empty MsgAppend
+                // when bcast commit is disabled. A heartbeat response comes to leader
+                // before MsgAppendResponse will trigger MsgAppend.
+                match engine.get_value(&keys::data_key($k)).unwrap() {
+                    Some(res) => assert_eq!($v, &res[..]),
+                    None => missing_count += 1,
+                }
+            }
         }
+        assert!($all_committed || missing_count > 0);
     };
-    let mut missing_count = 0;
-    for i in 1..=region.get_peers().len() as u64 {
-        let engine = cluster.get_engine(i);
-        if all_committed || i == leader.get_store_id() {
-            must_get_equal(&engine, k, v);
-        } else {
-            // Note that a follower can still commit the log by an empty MsgAppend
-            // when bcast commit is disabled. A heartbeat response comes to leader
-            // before MsgAppendResponse will trigger MsgAppend.
-            match engine.get_value(&keys::data_key(k)).unwrap() {
-                Some(res) => assert_eq!(v, &res[..]),
-                None => missing_count += 1,
-            }
-        }
-    }
-    assert!(all_committed || missing_count > 0);
 }
 
 /// TiKV enables lazy broadcast commit optimization, which can delay split
 /// on follower node. So election of new region will delay. We need to make
 /// sure broadcast commit is disabled when split.
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_delay_split_region() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(500);
     cluster.cfg.raft_store.merge_max_log_gap = 100;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
@@ -323,8 +326,8 @@ fn test_delay_split_region() {
     cluster.must_put(b"k3", b"v3");
 
     // Although skip bcast is enabled, but heartbeat will commit the log in period.
-    check_cluster(&mut cluster, b"k1", b"v1", true);
-    check_cluster(&mut cluster, b"k3", b"v3", true);
+    check_cluster!(cluster, b"k1", b"v1", true);
+    check_cluster!(cluster, b"k3", b"v3", true);
     cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
 
     cluster.add_send_filter(CloneFilterFactory(EraseHeartbeatCommit));
@@ -333,14 +336,14 @@ fn test_delay_split_region() {
     sleep_ms(100);
     // skip bcast is enabled by default, so all followers should not commit
     // the log.
-    check_cluster(&mut cluster, b"k4", b"v4", false);
+    check_cluster!(cluster, b"k4", b"v4", false);
 
     cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
     // New leader should flush old committed entries eagerly.
-    check_cluster(&mut cluster, b"k4", b"v4", true);
+    check_cluster!(cluster, b"k4", b"v4", true);
     cluster.must_put(b"k5", b"v5");
     // New committed entries should be broadcast lazily.
-    check_cluster(&mut cluster, b"k5", b"v5", false);
+    check_cluster!(cluster, b"k5", b"v5", false);
     cluster.add_send_filter(CloneFilterFactory(EraseHeartbeatCommit));
 
     let k2 = b"k2";
@@ -352,7 +355,7 @@ fn test_delay_split_region() {
     sleep_ms(100);
     // After split, skip bcast is enabled again, so all followers should not
     // commit the log.
-    check_cluster(&mut cluster, b"k6", b"v6", false);
+    check_cluster!(cluster, b"k6", b"v6", false);
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
@@ -411,9 +414,7 @@ fn test_node_split_overlap_snapshot() {
     must_get_equal(&engine3, b"k3", b"v3");
 }
 
-fn test_apply_new_version_snapshot<T: test_raftstore::Simulator>(
-    cluster: &mut test_raftstore::Cluster<T>,
-) {
+fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
@@ -468,19 +469,19 @@ fn test_apply_new_version_snapshot<T: test_raftstore::Simulator>(
 
 #[test]
 fn test_node_apply_new_version_snapshot() {
-    let mut cluster = test_raftstore::new_node_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     test_apply_new_version_snapshot(&mut cluster);
 }
 
 #[test]
 fn test_server_apply_new_version_snapshot() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     test_apply_new_version_snapshot(&mut cluster);
 }
 
 #[test]
 fn test_server_split_with_stale_peer() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     // disable raft log gc.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
@@ -604,7 +605,7 @@ fn test_split_region_diff_check() {
 #[test]
 fn test_node_split_region_after_reboot_with_config_change() {
     let count = 1;
-    let mut cluster = test_raftstore::new_server_cluster(0, count);
+    let mut cluster = new_server_cluster(0, count);
     let region_max_size = 2000;
     let region_split_size = 2000;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
@@ -645,10 +646,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
     }
 }
 
-fn test_split_epoch_not_match<T: test_raftstore::Simulator>(
-    cluster: &mut test_raftstore::Cluster<T>,
-    right_derive: bool,
-) {
+fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -720,25 +718,25 @@ fn test_split_epoch_not_match<T: test_raftstore::Simulator>(
 
 #[test]
 fn test_server_split_epoch_not_match_left_derive() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, false);
 }
 
 #[test]
 fn test_server_split_epoch_not_match_right_derive() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, true);
 }
 
 #[test]
 fn test_node_split_epoch_not_match_left_derive() {
-    let mut cluster = test_raftstore::new_node_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, false);
 }
 
 #[test]
 fn test_node_split_epoch_not_match_right_derive() {
-    let mut cluster = test_raftstore::new_node_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     test_split_epoch_not_match(&mut cluster, true);
 }
 
@@ -780,10 +778,13 @@ fn test_node_quick_election_after_split() {
     assert!(new_leader.is_some());
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_node_split_region() {
     let count = 5;
-    let mut cluster = test_raftstore::new_node_cluster(0, count);
+    let mut cluster = new_cluster(0, count);
     // length of each key+value
     let item_len = 74;
     // make bucket's size to item_len, which means one row one bucket
@@ -988,7 +989,7 @@ fn test_split_with_in_memory_pessimistic_locks() {
 #[test]
 fn test_refresh_region_bucket_keys() {
     let count = 5;
-    let mut cluster = test_raftstore::new_server_cluster(0, count);
+    let mut cluster = new_server_cluster(0, count);
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
 
@@ -1174,7 +1175,7 @@ fn test_refresh_region_bucket_keys() {
 #[test]
 fn test_gen_split_check_bucket_ranges() {
     let count = 5;
-    let mut cluster = test_raftstore::new_server_cluster(0, count);
+    let mut cluster = new_server_cluster(0, count);
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(5);
     cluster.cfg.coprocessor.enable_region_bucket = true;
     // disable report buckets; as it will reset the user traffic stats to randomize

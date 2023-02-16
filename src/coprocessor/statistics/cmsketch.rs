@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use murmur3::murmur3_x64_128;
+use mur3::murmurhash3_x64_128;
 
 /// `CmSketch` is used to estimate point queries.
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
@@ -30,9 +30,8 @@ impl CmSketch {
     }
 
     // `hash` hashes the data into two u64 using murmur hash.
-    fn hash(mut bytes: &[u8]) -> (u64, u64) {
-        let out = murmur3_x64_128(&mut bytes, 0).unwrap();
-        (out as u64, (out >> 64) as u64)
+    fn hash(bytes: &[u8]) -> (u64, u64) {
+        murmurhash3_x64_128(bytes, 0)
     }
 
     // `insert` inserts the data into cm sketch. For each row i, the position at
