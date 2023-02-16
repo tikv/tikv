@@ -236,7 +236,7 @@ impl TestSuite {
     pub fn new(count: usize, api_version: ApiVersion) -> TestSuite {
         let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
-        configure_for_lease_read(&mut cluster, Some(100), None);
+        configure_for_lease_read(&mut cluster.cfg, Some(100), None);
         // Disable background renew to make timestamp predictable.
         configure_for_causal_ts(&mut cluster, "0s", 1);
 

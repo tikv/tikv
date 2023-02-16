@@ -159,7 +159,7 @@ fn test_reject_proposal_during_region_split() {
 #[test]
 fn test_reject_proposal_during_region_merge() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run();
@@ -284,7 +284,7 @@ fn test_reject_proposal_during_region_merge() {
 #[test]
 fn test_reject_proposal_during_rollback_region_merge() {
     let mut cluster = new_node_cluster(0, 2);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run_conf_change();
