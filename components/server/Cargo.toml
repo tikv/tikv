@@ -30,7 +30,6 @@ test-engines-panic = [
   "tikv/test-engines-panic",
 ]
 nortcheck = ["engine_rocks/nortcheck"]
-backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
 [dependencies]
 api_version = { workspace = true }

@@ -11,10 +11,10 @@ pub use slash_etc::SlashEtcStore;
 
 pub mod etcd;
 pub mod pd;
+
 use std::{cmp::Ordering, future::Future, pin::Pin, time::Duration};
 
 use async_trait::async_trait;
-pub use etcd::EtcdStore;
 use tokio_stream::Stream;
 
 // ==== Generic interface definition ====
@@ -23,6 +23,8 @@ use crate::errors::Result;
 
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+pub use etcd::EtcdStore;
+pub use pd::PdStore;
 
 #[derive(Debug, Default)]
 pub struct Transaction {

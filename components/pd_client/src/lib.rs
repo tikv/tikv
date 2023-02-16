@@ -31,7 +31,10 @@ pub use self::{
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
-    util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
+    util::{
+        check_resp_header, merge_bucket_stats, new_bucket_stats, PdConnector,
+        REQUEST_RECONNECT_INTERVAL,
+    },
 };
 
 pub type Key = Vec<u8>;
@@ -228,8 +231,10 @@ impl GlobalConfigSelector {
 impl From<GlobalConfigSelector> for pdpb::LoadGlobalConfigRequest {
     fn from(value: GlobalConfigSelector) -> Self {
         let mut r = Self::default();
-        r.config_path = value.basic_path;
-        r.names = value.items.into();
+        r.set_config_path(value.basic_path);
+        if !value.items.is_empty() {
+            r.set_names(value.items.into());
+        }
         r
     }
 }

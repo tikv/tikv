@@ -30,7 +30,7 @@ use std::{
 use api_version::{dispatch_api_version, KvFormat};
 use backup_stream::{
     config::BackupStreamConfigManager,
-    metadata::{ConnectionConfig, LazyEtcdClient},
+    metadata::{store::PdStore, ConnectionConfig, LazyEtcdClient},
     observer::BackupStreamObserver,
 };
 use causal_ts::CausalTsProviderImpl;
@@ -1036,17 +1036,9 @@ where
                 Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
             );
 
-            let etcd_cli = LazyEtcdClient::new(
-                self.config.pd.endpoints.as_slice(),
-                ConnectionConfig {
-                    keep_alive_interval: self.config.server.grpc_keepalive_time.0,
-                    keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
-                    tls: Arc::clone(&self.security_mgr),
-                },
-            );
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 node.id(),
-                etcd_cli,
+                PdStore::new(self.pd_client.clone()),
                 self.config.backup_stream.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,

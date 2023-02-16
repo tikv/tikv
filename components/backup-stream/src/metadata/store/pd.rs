@@ -20,8 +20,14 @@ use crate::{
     metadata::keys::{KeyValue, MetaKey, PREFIX},
 };
 
-struct PdStore<PD> {
+pub struct PdStore<PD> {
     client: Arc<PD>,
+}
+
+impl<PD> PdStore<PD> {
+    pub fn new(s: Arc<PD>) -> Self {
+        Self { client: s }
+    }
 }
 
 impl<PD> Clone for PdStore<PD> {
@@ -117,13 +123,7 @@ impl Stream for PdWatchStream {
                 None => return None.into(),
                 Some(Err(err)) => return Some(Err(Error::Grpc(err))).into(),
                 Some(Ok(x)) => {
-                    if x.get_header().has_error() {
-                        return Some(Err(Error::Other(box_err!(
-                            "during watching events from PD: {:?}",
-                            x.get_header().get_error()
-                        ))))
-                        .into();
-                    }
+                    pd_client::check_resp_header(x.get_header())?;
                     this.buf.clear();
                     for e in x.get_changes() {
                         let ty = match e.get_kind() {
@@ -155,7 +155,7 @@ impl Snapshot for RevOnly {
     }
 }
 
-struct RevOnly(i64);
+pub struct RevOnly(i64);
 
 #[async_trait]
 impl<PD: PdClient> MetaStore for PdStore<PD> {
