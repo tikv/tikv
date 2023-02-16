@@ -1,10 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(unused_variables)]
 use std::sync::Arc;
 
 use engine_traits::{self, Mutable, Result, WriteBatchExt, WriteOptions};
 use proxy_ffi::interfaces_ffi::RawCppPtr;
-use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
+use rocksdb::{WriteBatch as RawWriteBatch, DB};
 
 use crate::{engine::RocksEngine, r2e, PageStorageExt};
 

@@ -61,7 +61,7 @@ pub fn check_double_write(batch: &crate::RocksWriteBatchVec) {
     }
 }
 #[cfg(not(any(test, feature = "testexport")))]
-pub fn check_double_write(batch: &crate::RocksWriteBatchVec) {}
+pub fn check_double_write(_: &crate::RocksWriteBatchVec) {}
 
 pub fn log_check_double_write(batch: &crate::RocksWriteBatchVec) -> bool {
     check_double_write(batch);

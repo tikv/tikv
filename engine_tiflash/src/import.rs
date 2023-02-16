@@ -1,5 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(unused_variables)]
+#![allow(unreachable_code)]
+
 use std::fs::File;
 
 use engine_traits::{ImportExt, IngestExternalFileOptions, Result};

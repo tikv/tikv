@@ -205,6 +205,7 @@ impl RangeProperties {
     }
 
     /// Returns `size` and `keys`.
+    #[allow(clippy::redundant_closure)]
     pub fn get_approximate_distance_in_range(&self, start: &[u8], end: &[u8]) -> (u64, u64) {
         assert!(start <= end);
         if start == end {

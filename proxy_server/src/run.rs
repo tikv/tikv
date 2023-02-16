@@ -29,7 +29,6 @@ use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_store_ffi::{
     self,
     core::DebugStruct,
-    engine::ps_engine::PSLogEngine,
     ffi::{
         interfaces_ffi::{
             EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus,
@@ -40,6 +39,7 @@ use engine_store_ffi::{
     },
     TiFlashEngine,
 };
+use engine_tiflash::PSLogEngine;
 use engine_traits::{
     CachedTablet, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
     SingletonFactory, StatisticsReporter, TabletContext, TabletRegistry, CF_DEFAULT, CF_LOCK,
@@ -345,6 +345,7 @@ pub unsafe fn run_tikv_proxy(
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
+            tikv_util::info!("bootstrap with tikv-rocks-engine");
             run_impl::<engine_rocks::RocksEngine, API>(
                 config,
                 proxy_config,
@@ -358,7 +359,7 @@ pub unsafe fn run_tikv_proxy(
             }
             #[cfg(not(feature = "enable-pagestorage"))]
             {
-                tikv_util::info!("bootstrap with origin tikv");
+                tikv_util::info!("bootstrap with tikv-raft-engine");
                 run_impl::<RaftLogEngine, API>(config, proxy_config, engine_store_server_helper)
             }
         }

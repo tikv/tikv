@@ -19,14 +19,13 @@ use kvproto::{
     },
 };
 use protobuf::Message;
-use raft::eraftpb::Entry;
-use tikv_util::{box_try, info};
-use tracker::TrackerToken;
-
-use crate::ffi::{
+use proxy_ffi::{
     gen_engine_store_server_helper,
     interfaces_ffi::{PageAndCppStrWithView, RawCppPtr},
 };
+use raft::eraftpb::Entry;
+use tikv_util::{box_try, info};
+use tracker::TrackerToken;
 
 pub struct PSEngineWriteBatch {
     pub engine_store_server_helper: isize,

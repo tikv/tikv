@@ -35,11 +35,11 @@ Until a safe point is reached, related modifications are not visible to others.
 
 `Idempotency` is an essential property for `External Consistency`, which means such a system could handle outdated raft commands. A practical way is like:
 
-- Fsync snapshot in `engine-store` atomically
-- Fsync region snapshot in `raftstore-proxy` atomically
-- Make RaftEngine only GC raft log whose index is smaller than persisted apply-state
-- `engine-store` should screen out raft commands with outdated apply-state during apply process
-- `engine-store` should recover from the middle step by overwriting and must NOT provide services until caught up with the latest state
+- Fsync snapshot in `engine-store` atomically.
+- Fsync region snapshot in `raftstore-proxy` atomically.
+- Make RaftEngine only GC raft log whose index is smaller than persisted apply-state.
+- `engine-store` should screen out raft commands with outdated apply-state during apply process.
+- `engine-store` should recover from the middle step by overwriting and must NOT provide services until caught up with the latest state.
 
 Such architecture can inherit several important features from TiKV, such as distributed fault tolerance/recovery, automatic re-balancing, etc.
 It's also convenient for PD to maintain this kind of storage system by the existing way as long as it works as `raft store`.
@@ -51,19 +51,19 @@ We've managed to refactor TiKV source code and extract parts of the necessary pr
 The main categories are like:
 
 - applying commands
-  - applying normal-write raft command
-  - applying `IngestSst` write command
-  - applying admin raft command
+  - applying normal-write raft command.
+  - applying `IngestSst` write command.
+  - applying admin raft command.
 - region management
-  - peer detection: destroy peer
-  - region snapshot: pre-handle/apply region snapshot
+  - peer detection: destroy peer.
+  - region snapshot: pre-handle/apply region snapshot.
 - replica read: batch read-index
 - utils and support services
-  - status services: metrics; CPU profile; config; thread stats; self-defined API;
-  - pd-related store stats: key/bytes R/W stats; disk stats; `engine-store` stats;
-  - encryption: get file; new file; delete file; link file; rename file;
-  - SST file reader
-  - tools/utils
+  - status services: metrics; CPU profile; config; thread stats; self-defined API.
+  - pd-related store stats: key/bytes R/W stats; disk stats; `engine-store` stats.
+  - encryption: get file; new file; delete file; link file; rename file.
+  - SST file reader.
+  - tools/utils.
 
 
 #### Handling Commands
@@ -93,10 +93,10 @@ When the leader peer has reclaimed related raft log or other peers can not proce
 However, the region snapshot data, whose format is TiKV's `SST` file, is not usually used by other storage systems directly.
 The standard process has been divided into several parts to accelerate the speed of applying region snapshot data:
 
-- `SST File Reader` to read key-value one by one from SST files
-- Multi-thread pool to pre-handle SST files into the self-defined structure of `engine-store`
+- `SST File Reader` to read key-value one by one from SST files.
+- Multi-thread pool to pre-handle SST files into the self-defined structure of `engine-store`.
 - Delete old data within [start-key, end-key) of the new region strictly.
-- Apply self-defined structure by original sequence
+- Apply self-defined structure by original sequence.
 
 #### IngestSst
 Interfaces about `IngestSst` are the core to be compatible with `TiDB Lighting` and `BR` for the `HTAP` scenario.
@@ -107,7 +107,7 @@ It can substantially speed up data loading/restoring.
 Encryption is essential for `DBaaS`(database as a service).
 To be compatible with TiKV, a data key manager with the same logic is indispensable, especially for rotating data encryption keys or using the KMS service.
 
-#### Encryption
+#### Status Server
 Status services like metrics, CPU/Memory profile(flame graph), or other self-defined stats can effectively support the diagnosis.
 It's suggested to encapsulate those into one status server and let other external components visit through the status address.
 We could also reuse most of the original metrics of TiKV, and an optional way is to add a specific prefix for each name.
@@ -129,9 +129,9 @@ To use this library, please follow the steps below:
 - Install `grpc`, `protobuf`, `c++`, `rust`.
 - Include this project as submodule.
 - Modify [FFI Source Code](raftstore-proxy/ffi/src/RaftStoreProxyFFI) under namspace `DB` if necessary and run `make gen_proxy_ffi`.
-- Run `ENGINE_LABEL_VALUE=xxx make release`
-  - label `engine:${ENGINE_LABEL_VALUE}` will be added to store info automatically
-  - prefix `${ENGINE_LABEL_VALUE}_proxy_` will be added to each metrics name;
+- Run `ENGINE_LABEL_VALUE=xxx make release`:
+  - label `engine:${ENGINE_LABEL_VALUE}` will be added to store info automatically.
+  - prefix `${ENGINE_LABEL_VALUE}_proxy_` will be added to each metrics name.
 - Include FFI header files and implement related interfaces (mainly `struct EngineStoreServerHelper` and `struct RaftStoreProxyFFIHelper`) by `c++`.
 - Compile and link target library `target/release/lib${ENGINE_LABEL_VALUE}_proxy.dylib|so`.
 

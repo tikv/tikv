@@ -79,7 +79,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         let is_replicated = !r.initialized;
         let f = |info: MapEntry<u64, Arc<CachedRegionInfo>>| match info {
             MapEntry::Occupied(mut o) => {
-                // Note the region info may be registered by maybe_fast_path
+                // Note the region info may be registered by maybe_fast_path_tick
                 info!("fast path: ongoing {}:{} {}, peer created",
                     self.store_id, region_id, 0;
                     "region_id" => region_id,

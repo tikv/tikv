@@ -60,12 +60,11 @@ mod write_batch;
 #[cfg(not(feature = "enable-pagestorage"))]
 pub use crate::write_batch::*;
 
-#[cfg(feature = "enable-pagestorage")]
-mod ps_write_batch;
-#[cfg(feature = "enable-pagestorage")]
-pub use crate::ps_write_batch::*;
-
 mod ps_engine;
+mod rocks_engine;
+#[cfg(feature = "enable-pagestorage")]
+pub use crate::ps_engine::ps_write_batch::*;
+pub use crate::ps_engine::PSLogEngine;
 
 pub mod mvcc_properties;
 pub use crate::mvcc_properties::*;

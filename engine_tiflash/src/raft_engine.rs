@@ -238,15 +238,15 @@ impl RaftEngine for RocksEngine {
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
         #[cfg(feature = "enable-pagestorage")]
         {
-            return RocksWriteBatchVec::with_unit_capacity(
+            RocksWriteBatchVec::with_unit_capacity(
                 self,
                 self.ps_ext.as_ref().unwrap().create_write_batch(),
                 capacity,
-            );
+            )
         }
         #[cfg(not(feature = "enable-pagestorage"))]
         {
-            return RocksWriteBatchVec::with_unit_capacity(self, capacity);
+            RocksWriteBatchVec::with_unit_capacity(self, capacity)
         }
     }
 

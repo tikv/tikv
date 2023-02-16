@@ -37,7 +37,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
     }
 
     // Returns whether we need to ignore this message and run fast path instead.
-    pub fn maybe_fast_path(&self, msg: &RaftMessage) -> bool {
+    pub fn maybe_fast_path_tick(&self, msg: &RaftMessage) -> bool {
         if !self.packed_envs.engine_store_cfg.enable_fast_add_peer {
             // fast path not enabled
             return false;
@@ -131,7 +131,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                             // In these cases, we need to check everytime.
 
                             // TODO We can then remove logics in apply snapshot.
-                            // This is because if the next maybe_fast_path after apply snapshot
+                            // This is because if the next maybe_fast_path_tick after apply snapshot
                             // will have has_already_inited == true, which leads to normal
                             // MsgAppend.
                             let has_already_inited = self.is_initialized(region_id);

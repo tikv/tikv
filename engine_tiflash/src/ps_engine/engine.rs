@@ -1,9 +1,37 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::RocksEngineIterator;
-use engine_traits::{Iterable, Peekable, ReadOptions, Result, SyncMutable};
+use engine_traits::{IterOptions, Iterable, Peekable, ReadOptions, Result, SyncMutable};
 
 use crate::RocksEngine;
+
+impl Iterable for RocksEngine {
+    type Iterator = RocksEngineIterator;
+
+    #[cfg(feature = "enable-pagestorage")]
+    fn scan<F>(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> Result<bool>,
+    {
+        let mut f = f;
+        self.ps_ext
+            .as_ref()
+            .unwrap()
+            .scan_page(start_key.into(), end_key.into(), &mut f);
+        Ok(())
+    }
+
+    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+        self.rocks.iterator_opt(cf, opts)
+    }
+}
 
 impl Peekable for RocksEngine {
     type DbVector = crate::ps_engine::PsDbVector;

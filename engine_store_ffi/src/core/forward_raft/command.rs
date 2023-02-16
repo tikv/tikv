@@ -396,6 +396,6 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
     }
 
     pub fn on_raft_message(&self, msg: &RaftMessage) -> bool {
-        !self.maybe_fast_path(&msg)
+        !self.maybe_fast_path_tick(&msg)
     }
 }
