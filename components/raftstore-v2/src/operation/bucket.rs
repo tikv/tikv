@@ -192,10 +192,9 @@ where
 {
     #[inline]
     pub fn on_report_region_buckets_tick(&mut self) {
-        if !self.fsm.peer().is_leader() || self.fsm.peer().region_buckets().is_none() {
-            return;
+        if self.fsm.peer().is_leader() && self.fsm.peer().region_buckets().is_some() {
+            self.fsm.peer_mut().report_region_buckets_pd(self.store_ctx);
         }
-        self.fsm.peer_mut().report_region_buckets_pd(self.store_ctx);
         self.schedule_tick(PeerTick::ReportBuckets);
     }
 }
