@@ -17,7 +17,7 @@ use super::{
     },
     ApplyRes,
 };
-use crate::operation::{RequestSplit, SimpleWriteBinary, SplitInit};
+use crate::operation::{RequestHalfSplit, RequestSplit, SimpleWriteBinary, SplitInit};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -183,6 +183,10 @@ pub enum PeerMsg {
     },
     RequestSplit {
         request: RequestSplit,
+        ch: CmdResChannel,
+    },
+    RequestHalfSplit {
+        request: RequestHalfSplit,
         ch: CmdResChannel,
     },
     UpdateRegionSize {

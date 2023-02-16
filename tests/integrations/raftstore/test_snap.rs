@@ -21,6 +21,7 @@ use raftstore::{store::*, Result};
 use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::server::snap::send_snap;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
 
@@ -100,7 +101,7 @@ fn test_server_huge_snapshot_multi_files() {
 
 fn test_server_snap_gc_internal(version: &str) {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     cluster.pd_client.reset_version(version);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
     cluster.cfg.raft_store.max_snapshot_file_raw_size = ReadableSize::mb(100);
@@ -268,8 +269,13 @@ fn test_server_concurrent_snap() {
     test_concurrent_snap(&mut cluster);
 }
 
-fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    configure_for_snapshot(cluster);
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_cf_snapshot() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_snapshot(&mut cluster.cfg);
 
     cluster.run();
     let cf = "lock";
@@ -304,18 +310,6 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put_cf(cf, b"k3", b"v3");
     must_get_cf_equal(&engine1, cf, b"k3", b"v3");
-}
-
-#[test]
-fn test_node_cf_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_cf_snapshot(&mut cluster);
-}
-
-#[test]
-fn test_server_snapshot() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_cf_snapshot(&mut cluster);
 }
 
 // replace content of all the snapshots with the first snapshot it received.
@@ -443,7 +437,7 @@ impl Filter for SnapshotAppendFilter {
 }
 
 fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
-    configure_for_snapshot(cluster);
+    configure_for_snapshot(&mut cluster.cfg);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -661,11 +655,12 @@ fn random_long_vec(length: usize) -> Vec<u8> {
 
 /// Snapshot is generated using apply term from apply thread, which should be
 /// set correctly otherwise lead to inconsistency.
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_correct_snapshot_term() {
     // Use five replicas so leader can send a snapshot to a new peer without
     // committing extra logs.
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
@@ -714,9 +709,10 @@ fn test_correct_snapshot_term() {
 }
 
 /// Test when applying a snapshot, old logs should be cleaned up.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_snapshot_clean_up_logs_with_log_gc() {
-    let mut cluster = new_node_cluster(0, 4);
+    let mut cluster = new_cluster(0, 4);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(50);
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
     // Speed up log gc.
@@ -739,7 +735,7 @@ fn test_snapshot_clean_up_logs_with_log_gc() {
     // Peer (4, 4) must become leader at the end and send snapshot to 2.
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
-    let raft_engine = cluster.engines[&2].raft.clone();
+    let raft_engine = cluster.get_raft_engine(2);
     let mut dest = vec![];
     raft_engine.get_all_entries_to(1, &mut dest).unwrap();
     // No new log is proposed, so there should be no log at all.

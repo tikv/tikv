@@ -53,7 +53,7 @@ use raftstore::{
     },
     Result,
 };
-use slog::{error, info};
+use slog::{error, info, warn};
 use tikv_util::{log::SlogFormat, slog_panic};
 
 use crate::{
@@ -146,6 +146,15 @@ pub fn report_split_init_finish<EK, ER, T>(
 pub struct RequestSplit {
     pub epoch: RegionEpoch,
     pub split_keys: Vec<Vec<u8>>,
+    pub source: Cow<'static, str>,
+}
+
+#[derive(Debug)]
+pub struct RequestHalfSplit {
+    pub epoch: RegionEpoch,
+    pub start_key: Option<Vec<u8>>,
+    pub end_key: Option<Vec<u8>>,
+    pub policy: CheckPolicy,
     pub source: Cow<'static, str>,
 }
 
@@ -278,6 +287,55 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         self.ask_batch_split_pd(ctx, rs.split_keys, ch);
+    }
+
+    pub fn on_request_half_split<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        rhs: RequestHalfSplit,
+        _ch: CmdResChannel,
+    ) {
+        let is_key_range = rhs.start_key.is_some() && rhs.end_key.is_some();
+        info!(
+            self.logger,
+            "on half split";
+            "is_key_range" => is_key_range,
+            "policy" => ?rhs.policy,
+            "source" => ?rhs.source,
+        );
+        if !self.is_leader() {
+            // region on this store is no longer leader, skipped.
+            info!(self.logger, "not leader, skip.");
+            return;
+        }
+
+        let region = self.region();
+        if util::is_epoch_stale(&rhs.epoch, region.get_region_epoch()) {
+            warn!(
+                self.logger,
+                "receive a stale halfsplit message";
+                "is_key_range" => is_key_range,
+            );
+            return;
+        }
+
+        let task = SplitCheckTask::split_check_key_range(
+            region.clone(),
+            rhs.start_key,
+            rhs.end_key,
+            false,
+            rhs.policy,
+            // todo: bucket range
+            None,
+        );
+        if let Err(e) = ctx.schedulers.split_check.schedule(task) {
+            error!(
+                self.logger,
+                "failed to schedule split check";
+                "is_key_range" => is_key_range,
+                "err" => %e,
+            );
+        }
     }
 
     pub fn propose_split<T>(
