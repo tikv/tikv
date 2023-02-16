@@ -704,7 +704,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_id = self.region_id();
         if self.storage().has_dirty_data() {
             let tablet_index = self.storage().tablet_index();
-            let mailbox = store_ctx.router.mailbox(region_id).unwrap();
+            let mailbox = store_ctx.router.mailbox(region_id);
+            if mailbox.is_none() {
+                // None means the node is shutdown concurrently and thus the
+                // mailboxes in router have been cleared
+                return;
+            }
+
             let _ = store_ctx
                 .schedulers
                 .tablet_gc
@@ -712,7 +718,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.tablet().unwrap().clone(),
                     self.region(),
                     move || {
-                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                        let _ = mailbox
+                            .unwrap()
+                            .force_send(PeerMsg::TabletTrimmed { tablet_index });
                     },
                 ));
         }

@@ -551,6 +551,8 @@ fn test_server_split_with_stale_peer() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_split_region_diff_check() {
     let count = 1;
     let mut cluster = new_cluster(0, count);
