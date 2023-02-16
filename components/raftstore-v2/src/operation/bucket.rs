@@ -1,4 +1,4 @@
-// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This module implements the interactions with bucket.
 
@@ -48,15 +48,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
 
         let region = self.region();
-        if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
-            error!(
-                self.logger,
-                "receive a stale refresh region bucket message";
-                "epoch" => ?region_epoch,
-                "current_epoch" => ?region.get_region_epoch(),
-            );
-            return;
-        }
         let current_version = self
             .region_buckets()
             .as_ref()
@@ -169,7 +160,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        if ctx.coprocessor_host.cfg.enable_region_bucket && !self.region().get_peers().is_empty() {
+        if ctx.coprocessor_host.cfg.enable_region_bucket && !self.region().get_peers().is_empty()&&self.storage().is_initialized() {
             if let Err(e) = ctx
                 .schedulers
                 .split_check
@@ -192,9 +183,28 @@ where
 {
     #[inline]
     pub fn on_report_region_buckets_tick(&mut self) {
-        if self.fsm.peer().is_leader() && self.fsm.peer().region_buckets().is_some() {
-            self.fsm.peer_mut().report_region_buckets_pd(self.store_ctx);
+        if !self.fsm.peer().is_leader()|| self.fsm.peer().region_buckets().is_none() {
+            return;
         }
+        self.fsm.peer_mut().report_region_buckets_pd(self.store_ctx);
+        self.schedule_tick(PeerTick::ReportBuckets);
+    }
+
+    pub fn on_refresh_region_buckets(
+        &mut self, 
+        region_epoch: RegionEpoch,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>
+    ){
+        if util::is_epoch_stale(&region_epoch, self.fsm.peer().region().get_region_epoch()) {
+            error!(
+                self.fsm.peer().logger,
+                "receive a stale refresh region bucket message";
+                "epoch" => ?region_epoch,
+                "current_epoch" => ?self.fsm.peer().region().get_region_epoch(),
+            );
+        }
+        self.fsm.peer_mut().on_refresh_region_buckets(self.store_ctx,region_epoch,buckets,bucket_ranges);
         self.schedule_tick(PeerTick::ReportBuckets);
     }
 }
