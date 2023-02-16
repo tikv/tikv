@@ -47,7 +47,6 @@ use txn_types::TimeStamp;
 use crate::{endpoint::Task, metrics::*};
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
-const DEFAULT_MIN_ADVANCE_TS_INTERVAL: Duration = Duration::from_millis(200); // 200ms
 
 pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
