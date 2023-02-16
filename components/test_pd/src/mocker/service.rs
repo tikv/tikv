@@ -239,11 +239,7 @@ impl PdMocker for Service {
             .lock()
             .unwrap()
             .insert(region_id, buckets.clone());
-
-        let mut resp = ReportBucketsResponse::default();
-        let header = Service::header();
-        resp.set_header(header);
-        Some(Ok(resp))
+        None
     }
 
     fn region_heartbeat(

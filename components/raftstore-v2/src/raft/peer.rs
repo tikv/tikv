@@ -14,7 +14,7 @@ use kvproto::{
     metapb, pdpb,
     raft_serverpb::{RaftMessage, RegionLocalState},
 };
-use pd_client::{new_bucket_stats, BucketStat};
+use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
@@ -221,13 +221,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.last_region_buckets = Some(b);
         }
         self.region_buckets = buckets;
-    }
-
-    #[inline]
-    pub fn clear_region_bucket_stats(&mut self) {
-        if let Some(b) = &mut self.region_buckets {
-            b.stats = new_bucket_stats(&b.meta);
-        }
     }
 
     #[inline]
