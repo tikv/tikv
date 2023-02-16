@@ -30,7 +30,7 @@ use kvproto::{
     raft_serverpb::{ExtraMessageType, RaftMessage},
 };
 use protobuf::Message as _;
-use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
+use raft::{eraftpb, prelude::MessageType, Ready, SnapshotStatus, StateRole, INVALID_ID};
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
@@ -251,7 +251,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.is_leader() && from_peer.get_id() != INVALID_ID {
             self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
         }
-        self.insert_peer_cache(msg.take_from_peer());
+        self.insert_peer_cache(from_peer);
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
@@ -363,6 +363,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 );
                 // unreachable store
                 self.raft_group_mut().report_unreachable(to_peer_id);
+                if msg_type == eraftpb::MessageType::MsgSnapshot {
+                    self.raft_group_mut()
+                        .report_snapshot(to_peer_id, SnapshotStatus::Failure);
+                }
                 ctx.raft_metrics.send_message.add(msg_type, false);
             }
         }
