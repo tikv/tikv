@@ -30,7 +30,7 @@ use kvproto::{
     raft_serverpb::{ExtraMessageType, RaftMessage},
 };
 use protobuf::Message as _;
-use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
+use raft::{eraftpb, prelude::MessageType, Ready, SnapshotStatus, StateRole, INVALID_ID};
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
@@ -362,6 +362,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 );
                 // unreachable store
                 self.raft_group_mut().report_unreachable(to_peer_id);
+                if msg_type == eraftpb::MessageType::MsgSnapshot {
+                    self.raft_group_mut()
+                        .report_snapshot(to_peer_id, SnapshotStatus::Failure);
+                }
                 ctx.raft_metrics.send_message.add(msg_type, false);
             }
         }
