@@ -48,6 +48,7 @@ impl Debug for StreamTask {
             .field("table_filter", &self.info.table_filter)
             .field("start_ts", &self.info.start_ts)
             .field("end_ts", &self.info.end_ts)
+            .field("is_paused", &self.is_paused)
             .finish()
     }
 }
