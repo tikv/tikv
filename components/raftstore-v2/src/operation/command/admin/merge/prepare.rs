@@ -135,8 +135,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if pessimistic_locks.status == LocksStatus::MergingRegion {
                         pessimistic_locks.status = LocksStatus::Normal;
                     }
+                    self.free_merge_context();
                 }
-                self.free_merge_context();
             })
     }
 
