@@ -29,6 +29,7 @@ use tikv_util::{
     time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
+use txn_types::TimeStamp;
 
 use super::metrics::*;
 use crate::{
@@ -563,7 +564,11 @@ impl ReadDelegate {
         if safe_ts >= read_ts {
             return Ok(());
         }
-        self.read_progress.notify_advance_resolved_ts();
+        // Advancing resolved ts may be expensive, only notify if read_ts - safe_ts >
+        // 200ms.
+        if TimeStamp::from(read_ts).physical() - TimeStamp::from(safe_ts).physical() > 200 {
+            self.read_progress.notify_advance_resolved_ts();
+        }
         debug!(
             "reject stale read by safe ts";
             "safe_ts" => safe_ts,
