@@ -3319,7 +3319,7 @@ where
     }
 
     fn response_read<T>(
-        &mut self,
+        &self,
         read: &mut ReadIndexRequest<Callback<EK::Snapshot>>,
         ctx: &mut PollContext<EK, ER, T>,
         replica_read: bool,
@@ -4772,7 +4772,7 @@ where
     }
 
     fn handle_read<E: ReadExecutor<Tablet = EK>>(
-        &mut self,
+        &self,
         reader: &mut E,
         req: RaftCmdRequest,
         check_epoch: bool,
