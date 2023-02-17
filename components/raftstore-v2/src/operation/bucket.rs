@@ -55,6 +55,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .map(|b| b.meta.version)
             .unwrap_or_default();
         let mut region_buckets: BucketStat;
+        // The region buckets reset after this region happened split or merge.
+        // The message should be dropped if it's epoch is lower than the regions.
+        // The bucket ranges is none when the region buckets is also none.
+        // So this condition indicates that the region buckets needs to refresh not
+        // renew.
         if let (Some(bucket_ranges), Some(peer_region_buckets)) =
             (bucket_ranges, self.region_buckets())
         {
@@ -115,7 +120,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             region_buckets.meta = Arc::new(meta);
         } else {
-            // There must be one buckets that include all buckets keys.
+            // when the region buckets is none, the exclusive buckets includes all the
+            // bucket keys.
             assert_eq!(buckets.len(), 1);
             let bucket_keys = buckets.pop().unwrap().keys;
             let bucket_count = bucket_keys.len() + 1;
@@ -157,7 +163,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "failed to report buckets to pd";
                 "err" => ?e,
             );
-            return;
         }
     }
 
@@ -205,6 +210,7 @@ where
                 "epoch" => ?region_epoch,
                 "current_epoch" => ?self.fsm.peer().region().get_region_epoch(),
             );
+            return;
         }
         self.fsm.peer_mut().on_refresh_region_buckets(
             self.store_ctx,
