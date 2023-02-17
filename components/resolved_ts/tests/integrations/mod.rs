@@ -128,7 +128,7 @@ fn test_dynamic_change_advance_ts_interval() {
                 panic!("unexpect update");
             }
         }
-        sleep_ms(200)
+        sleep_ms(10)
     }
 
     // change the interval to 10ms
