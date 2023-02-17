@@ -18,7 +18,7 @@ use engine_traits::{
 };
 use file_system::IoRateLimiter;
 use futures::{compat::Future01CompatExt, executor::block_on, select, FutureExt};
-use keys::{data_key, validate_data_key};
+use keys::{data_key, validate_data_key, DATA_PREFIX_KEY};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::ApiVersion,
@@ -1404,7 +1404,7 @@ impl WrapFactory {
     fn region_id_of_key(&self, mut key: &[u8]) -> u64 {
         // Strip the data prefix if the key is the data key
         if validate_data_key(key) {
-            key = &key[1..];
+            key = &key[DATA_PREFIX_KEY.len()..];
         }
         self.pd_client.get_region(key).unwrap().get_id()
     }
