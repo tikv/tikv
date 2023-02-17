@@ -790,6 +790,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.add_pending_tick(PeerTick::CompactLog);
                     self.add_pending_tick(PeerTick::SplitRegionCheck);
                     self.add_pending_tick(PeerTick::CheckLongUncommitted);
+                    self.add_pending_tick(PeerTick::ReportBuckets);
                     self.maybe_schedule_gc_peer_tick();
                 }
                 StateRole::Follower => {
