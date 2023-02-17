@@ -35,12 +35,8 @@ use tikv_util::{
     Either,
 };
 use time::{Duration, Timespec};
-<<<<<<< HEAD
-use txn_types::{TimeStamp, WriteBatchFlags};
-=======
 use tokio::sync::Notify;
-use txn_types::WriteBatchFlags;
->>>>>>> 07b2bde11f (raftstore,resolved_ts: advance resolved ts as needed (#14123))
+use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
 use crate::{coprocessor::CoprocessorHost, store::snap::SNAPSHOT_VERSION, Error, Result};
