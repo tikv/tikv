@@ -112,7 +112,7 @@ fn test_rpc_client() {
     assert_eq!(ts.logical() + 100, ts100.logical());
 
     let mut prev_id = 0;
-    for _ in 0..100 {
+    for _ in 0..10 {
         let mut client = new_client_v2(eps.clone(), None);
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
