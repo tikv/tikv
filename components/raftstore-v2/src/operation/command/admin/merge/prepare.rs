@@ -162,11 +162,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let target_region = req.get_target();
         {
             let store_meta = store_ctx.store_meta.lock().unwrap();
-            match store_meta.readers.get(&target_region.get_id()) {
-                Some((reader, _)) if *reader.region != *target_region => {
+            match store_meta.regions.get(&target_region.get_id()) {
+                Some((region, _)) if *region != *target_region => {
                     return Err(box_err!(
                         "target region not matched, skip proposing: {:?} != {:?}",
-                        reader.region,
+                        region,
                         target_region
                     ));
                 }
