@@ -345,6 +345,11 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    // Gets Buckets by Region id.
+    fn get_buckets_by_id(&self, _region_id: u64) -> PdFuture<Option<metapb::Buckets>> {
+        unimplemented!();
+    }
+
     /// Gets Region and its leader by Region id.
     fn get_region_leader_by_id(
         &self,

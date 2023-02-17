@@ -727,11 +727,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         };
 
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
-
+        let observed_range = downstream_.observed_range;
         let region_epoch = request.take_region_epoch();
         let mut init = Initializer {
             engine: self.engine.clone(),
             sched,
+            observed_range,
             region_id,
             region_epoch,
             conn_id,
@@ -1275,7 +1276,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{channel, recv_timeout};
+    use crate::{channel, delegate::ObservedRange, recv_timeout};
 
     struct TestEndpointSuite {
         // The order must ensure `endpoint` be dropped before other fields.
@@ -1426,6 +1427,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::RawKv,
             false,
+            ObservedRange::default(),
         );
         req.set_kv_api(ChangeDataRequestKvApi::RawKv);
         suite.run(Task::Register {
@@ -1462,6 +1464,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TxnKv,
             false,
+            ObservedRange::default(),
         );
         req.set_kv_api(ChangeDataRequestKvApi::TxnKv);
         suite.run(Task::Register {
@@ -1499,6 +1502,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TxnKv,
             false,
+            ObservedRange::default(),
         );
         req.set_kv_api(ChangeDataRequestKvApi::TxnKv);
         suite.run(Task::Register {
@@ -1678,6 +1682,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         suite.run(Task::Register {
             request: req,
@@ -1725,6 +1730,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
@@ -1748,6 +1754,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         suite.run(Task::Register {
             request: req.clone(),
@@ -1785,6 +1792,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         suite.run(Task::Register {
             request: req,
@@ -1830,6 +1838,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         suite.add_local_reader(100);
         suite.run(Task::Register {
@@ -1862,6 +1871,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         suite.run(Task::Register {
             request: req,
@@ -1938,6 +1948,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         downstream.get_state().store(DownstreamState::Normal);
         // Enable batch resolved ts in the test.
@@ -1975,6 +1986,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         downstream.get_state().store(DownstreamState::Normal);
         suite.add_region(2, 100);
@@ -2021,6 +2033,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         downstream.get_state().store(DownstreamState::Normal);
         suite.add_region(3, 100);
@@ -2092,6 +2105,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         let downstream_id = downstream.get_id();
         suite.run(Task::Register {
@@ -2135,6 +2149,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         let new_downstream_id = downstream.get_id();
         suite.run(Task::Register {
@@ -2187,6 +2202,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         suite.run(Task::Register {
             request: req,
@@ -2242,6 +2258,7 @@ mod tests {
                     conn_id,
                     ChangeDataRequestKvApi::TiDb,
                     false,
+                    ObservedRange::default(),
                 );
                 downstream.get_state().store(DownstreamState::Normal);
                 suite.run(Task::Register {
@@ -2360,6 +2377,7 @@ mod tests {
             conn_id_a,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         suite.run(Task::Register {
             request: req.clone(),
@@ -2384,6 +2402,7 @@ mod tests {
             conn_id_b,
             ChangeDataRequestKvApi::TiDb,
             false,
+            ObservedRange::default(),
         );
         suite.run(Task::Register {
             request: req.clone(),
