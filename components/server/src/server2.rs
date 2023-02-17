@@ -73,7 +73,9 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
+    read_pool::{
+        build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
+    },
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
         gc_worker::{AutoGcConfig, GcWorker},
@@ -666,6 +668,15 @@ where
         } else {
             None
         };
+        if let Some(unified_read_pool) = &unified_read_pool {
+            let handle = unified_read_pool.handle();
+            self.background_worker.spawn_interval_task(
+                UPDATE_EWMA_TIME_SLICE_INTERVAL,
+                move || {
+                    handle.update_ewma_time_slice();
+                },
+            );
+        }
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
         let props = tikv_util::thread_group::current_properties();
@@ -814,7 +825,7 @@ where
         self.config
             .raft_store
             .validate(
-                self.config.coprocessor.region_split_size,
+                self.config.coprocessor.region_split_size(),
                 self.config.coprocessor.enable_region_bucket,
                 self.config.coprocessor.region_bucket_size,
             )
@@ -1300,6 +1311,7 @@ where
                 Arc::new(self.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.store_path.clone(),
+                self.resource_manager.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1452,7 +1464,11 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> Arc<EnginesResourceInfo> {
-        let block_cache = self.config.storage.block_cache.build_shared_cache();
+        let block_cache = self
+            .config
+            .storage
+            .block_cache
+            .build_shared_cache(self.config.storage.engine);
         let env = self
             .config
             .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
@@ -1799,7 +1815,10 @@ mod test {
         config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
-        let cache = config.storage.block_cache.build_shared_cache();
+        let cache = config
+            .storage
+            .block_cache
+            .build_shared_cache(config.storage.engine);
 
         let factory = KvEngineFactoryBuilder::new(env, &config, cache).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();

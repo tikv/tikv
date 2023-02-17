@@ -194,8 +194,20 @@ impl rocksdb::EventListener for RocksPersistenceListener {
     }
 
     fn on_flush_completed(&self, job: &FlushJobInfo) {
+        let num = match job
+            .file_path()
+            .file_prefix()
+            .and_then(|n| n.to_str())
+            .map(|n| n.parse())
+        {
+            Some(Ok(n)) => n,
+            _ => {
+                slog_global::error!("failed to parse file number"; "path" => job.file_path().display());
+                0
+            }
+        };
         self.0
-            .on_flush_completed(job.cf_name(), job.largest_seqno());
+            .on_flush_completed(job.cf_name(), job.largest_seqno(), num);
     }
 }
 
@@ -207,7 +219,7 @@ mod tests {
     };
 
     use engine_traits::{
-        FlushProgress, FlushState, MiscExt, StateStorage, SyncMutable, CF_DEFAULT, DATA_CFS,
+        ApplyProgress, FlushState, MiscExt, StateStorage, SyncMutable, CF_DEFAULT, DATA_CFS,
     };
     use tempfile::Builder;
 
@@ -221,7 +233,7 @@ mod tests {
         assert_eq!(filename, "/000398.sst");
     }
 
-    type Record = (u64, u64, FlushProgress);
+    type Record = (u64, u64, ApplyProgress);
 
     #[derive(Default)]
     struct MemStorage {
@@ -229,7 +241,7 @@ mod tests {
     }
 
     impl StateStorage for MemStorage {
-        fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: FlushProgress) {
+        fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: ApplyProgress) {
             self.records
                 .lock()
                 .unwrap()

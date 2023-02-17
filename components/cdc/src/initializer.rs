@@ -47,7 +47,7 @@ use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
 
 use crate::{
     channel::CdcEvent,
-    delegate::{post_init_downstream, Delegate, DownstreamId, DownstreamState},
+    delegate::{post_init_downstream, Delegate, DownstreamId, DownstreamState, ObservedRange},
     endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors},
@@ -79,6 +79,7 @@ pub(crate) struct Initializer<E> {
     pub(crate) sched: Scheduler<Task>,
     pub(crate) sink: crate::channel::Sink,
 
+    pub(crate) observed_range: ObservedRange,
     pub(crate) region_id: u64,
     pub(crate) region_epoch: RegionEpoch,
     pub(crate) observe_id: ObserveId,
@@ -206,10 +207,12 @@ impl<E: KvEngine> Initializer<E> {
         let region_id = region.get_id();
         let observe_id = self.observe_id;
         let kv_api = self.kv_api;
+        self.observed_range.update_region_key_range(&region);
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id,
+            "all_key_covered" => ?self.observed_range.all_key_covered,
             "start_key" => log_wrappers::Value::key(snap.lower_bound().unwrap_or_default()),
             "end_key" => log_wrappers::Value::key(snap.upper_bound().unwrap_or_default()));
 
@@ -432,6 +435,7 @@ impl<E: KvEngine> Initializer<E> {
             self.request_id,
             entries,
             self.filter_loop,
+            &self.observed_range,
         )?;
         if done {
             let (cb, fut) = tikv_util::future::paired_future_callback();
@@ -641,7 +645,7 @@ mod tests {
             }),
             sched: receiver_worker.scheduler(),
             sink,
-
+            observed_range: ObservedRange::default(),
             region_id: 1,
             region_epoch: RegionEpoch::default(),
             observe_id: ObserveId::new(),
@@ -668,6 +672,12 @@ mod tests {
 
         let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Arc<[u8]>>>::new();
 
+        // Only observe ["", "b\0x90"]
+        let observed_range = ObservedRange::new(
+            Key::from_raw(&[]).into_encoded(),
+            Key::from_raw(&[b'k', 90]).into_encoded(),
+        )
+        .unwrap();
         let mut total_bytes = 0;
         // Pessimistic locks should not be tracked
         for i in 0..10 {
@@ -700,6 +710,7 @@ mod tests {
             ChangeDataRequestKvApi::TiDb,
             false,
         );
+        initializer.observed_range = observed_range.clone();
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -713,7 +724,14 @@ mod tests {
         // To not block test by barrier.
         pool.spawn(async move {
             let mut d = drain.drain();
-            while d.next().await.is_some() {}
+            while let Some((e, _)) = d.next().await {
+                if let CdcEvent::Event(e) = e {
+                    for e in e.get_entries().get_entries() {
+                        let key = Key::from_raw(&e.key).into_encoded();
+                        assert!(observed_range.contains_encoded_key(&key), "{:?}", e);
+                    }
+                }
+            }
         });
 
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();

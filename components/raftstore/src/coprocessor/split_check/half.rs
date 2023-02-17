@@ -267,7 +267,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_split_size: ReadableSize(130_u64),
+            region_split_size: Some(ReadableSize(130_u64)),
             enable_region_bucket: true,
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
@@ -391,7 +391,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_split_size: ReadableSize(130_u64),
+            region_split_size: Some(ReadableSize(130_u64)),
             enable_region_bucket: true,
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()

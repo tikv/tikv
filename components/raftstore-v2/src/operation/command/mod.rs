@@ -16,7 +16,7 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::{mem, time::Duration};
+use std::{mem, sync::atomic::Ordering, time::Duration};
 
 use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
@@ -41,7 +41,9 @@ use raftstore::{
 };
 use slog::{info, warn};
 use tikv_util::{
-    box_err, slog_panic,
+    box_err,
+    log::SlogFormat,
+    slog_panic,
     time::{duration_to_sec, monotonic_raw_now, Instant},
 };
 
@@ -57,8 +59,8 @@ mod control;
 mod write;
 
 pub use admin::{
-    temp_split_path, AdminCmdResult, CompactLogContext, RequestSplit, SplitFlowControl, SplitInit,
-    SPLIT_PREFIX,
+    report_split_init_finish, temp_split_path, AdminCmdResult, CompactLogContext, RequestHalfSplit,
+    RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
 pub use write::{
@@ -107,7 +109,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn schedule_apply_fsm<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let region_state = self.storage().region_state().clone();
-        let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
+        let mailbox = match store_ctx.router.mailbox(self.region_id()) {
+            Some(m) => m,
+            None => {
+                assert!(
+                    store_ctx.shutdown.load(Ordering::Relaxed),
+                    "failed to load mailbox: {}",
+                    SlogFormat(&self.logger)
+                );
+                return;
+            }
+        };
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
@@ -308,11 +320,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_apply_res<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, apply_res: ApplyRes) {
-        if !self.serving() {
-            return;
+        if !self.serving() || !apply_res.admin_result.is_empty() {
+            // TODO: remove following log once stable.
+            info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         }
-        // TODO: remove following log once stable.
-        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
             // Ignore admin command side effects, otherwise it may split incomplete
@@ -334,6 +345,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
                 AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
+                AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
             }
         }
 
@@ -378,7 +390,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let last_applying_index = self.compact_log_context().last_applying_index();
         let committed_index = self.entry_storage().commit_index();
-        if last_applying_index < committed_index {
+        if last_applying_index < committed_index || !self.serving() {
             // We need to continue to apply after previous page is finished.
             self.set_has_ready();
         }
@@ -587,10 +599,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::PrepareFlashback => unimplemented!(),
                 AdminCmdType::FinishFlashback => unimplemented!(),
                 AdminCmdType::BatchSwitchWitness => unimplemented!(),
+                AdminCmdType::UpdateGcPeer => self.apply_update_gc_peer(log_index, admin_req),
                 AdminCmdType::InvalidAdmin => {
                     return Err(box_err!("invalid admin command type"));
                 }
-                AdminCmdType::UpdateGcPeer => unimplemented!(),
             };
 
             match admin_result {

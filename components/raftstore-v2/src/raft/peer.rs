@@ -10,7 +10,10 @@ use collections::{HashMap, HashSet};
 use engine_traits::{
     CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
 };
-use kvproto::{metapb, pdpb, raft_serverpb::RegionLocalState};
+use kvproto::{
+    metapb, pdpb,
+    raft_serverpb::{RaftMessage, RegionLocalState},
+};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -28,8 +31,8 @@ use super::storage::Storage;
 use crate::{
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, CompactLogContext, DestroyProgress, ProposalControl, SimpleWriteReqEncoder,
-        SplitFlowControl, TxnContext,
+        AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext, ProposalControl,
+        SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -103,6 +106,12 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     leader_transferee: u64,
 
     long_uncommitted_threshold: u64,
+
+    /// Pending messages to be sent on handle ready. We should avoid sending
+    /// messages immediately otherwise it may break the persistence assumption.
+    pending_messages: Vec<RaftMessage>,
+
+    gc_peer_context: GcPeerContext,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -182,6 +191,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.long_uncommitted_base_threshold.0.as_secs(),
                 1,
             ),
+            pending_messages: vec![],
+            gc_peer_context: GcPeerContext::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -197,6 +208,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         peer.proposal_control.maybe_update_term(term);
 
         Ok(peer)
+    }
+
+    #[inline]
+    pub fn region_buckets(&self) -> &Option<BucketStat> {
+        &self.region_buckets
+    }
+
+    #[inline]
+    pub fn set_region_buckets(&mut self, buckets: Option<BucketStat>) {
+        if let Some(b) = self.region_buckets.take() {
+            self.last_region_buckets = Some(b);
+        }
+        self.region_buckets = buckets;
+    }
+
+    #[inline]
+    pub fn last_region_buckets(&self) -> &Option<BucketStat> {
+        &self.last_region_buckets
     }
 
     #[inline]
@@ -624,6 +653,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn add_pending_tick(&mut self, tick: PeerTick) {
+        // Msg per batch is 4096/256 by default, the buffer won't grow too large.
         self.pending_ticks.push(tick);
     }
 
@@ -634,13 +664,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn post_split(&mut self) {
-        self.reset_region_buckets();
-    }
-
-    pub fn reset_region_buckets(&mut self) {
-        if self.region_buckets.is_some() {
-            self.last_region_buckets = self.region_buckets.take();
-        }
+        self.set_region_buckets(None);
     }
 
     pub fn maybe_campaign(&mut self) -> bool {
@@ -754,5 +778,30 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn set_long_uncommitted_threshold(&mut self, dur: Duration) {
         self.long_uncommitted_threshold = cmp::max(dur.as_secs(), 1);
+    }
+
+    #[inline]
+    pub fn add_message(&mut self, msg: RaftMessage) {
+        self.pending_messages.push(msg);
+    }
+
+    #[inline]
+    pub fn has_pending_messages(&mut self) -> bool {
+        !self.pending_messages.is_empty()
+    }
+
+    #[inline]
+    pub fn take_pending_messages(&mut self) -> Vec<RaftMessage> {
+        mem::take(&mut self.pending_messages)
+    }
+
+    #[inline]
+    pub fn gc_peer_context(&self) -> &GcPeerContext {
+        &self.gc_peer_context
+    }
+
+    #[inline]
+    pub fn gc_peer_context_mut(&mut self) -> &mut GcPeerContext {
+        &mut self.gc_peer_context
     }
 }

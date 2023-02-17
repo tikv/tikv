@@ -30,8 +30,8 @@
 use std::{cmp, sync::Mutex};
 
 use engine_traits::{
-    FlushProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+    data_cf_offset, ApplyProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use kvproto::{
     metapb::Region,
@@ -111,7 +111,7 @@ impl<EK: KvEngine, ER: RaftEngine> StateStorage<EK, ER> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> engine_traits::StateStorage for StateStorage<EK, ER> {
-    fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: FlushProgress) {
+    fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: ApplyProgress) {
         let cf = to_static_cf(pr.cf());
         let flushed_index = pr.applied_index();
         self.raft_engine
@@ -138,11 +138,6 @@ struct Progress {
     ///
     /// If `flushed` == `last_modified`, then all data in the CF is persisted.
     last_modified: u64,
-}
-
-pub fn cf_offset(cf: &str) -> usize {
-    let cf = if cf.is_empty() { CF_DEFAULT } else { cf };
-    DATA_CFS.iter().position(|c| *c == cf).expect(cf)
 }
 
 /// `ApplyTrace` is used to track the indexes of modifications and flushes.
@@ -204,7 +199,7 @@ impl ApplyTrace {
     }
 
     fn on_flush(&mut self, cf: &str, index: u64) {
-        let off = cf_offset(cf);
+        let off = data_cf_offset(cf);
         // Technically it should always be true.
         if index > self.data_cfs[off].flushed {
             self.data_cfs[off].flushed = index;
@@ -212,7 +207,7 @@ impl ApplyTrace {
     }
 
     fn on_modify(&mut self, cf: &str, index: u64) {
-        let off = cf_offset(cf);
+        let off = data_cf_offset(cf);
         self.data_cfs[off].last_modified = index;
     }
 
