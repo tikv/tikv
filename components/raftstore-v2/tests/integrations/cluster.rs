@@ -30,7 +30,7 @@ use kvproto::{
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    coprocessor::CoprocessorHost,
+    coprocessor::{Config as CopConfig, CoprocessorHost},
     store::{
         region_meta::{RegionLocalState, RegionMeta},
         AutoSplitController, Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport,
@@ -237,6 +237,7 @@ pub struct RunningState {
     pub registry: TabletRegistry<KvTestEngine>,
     pub system: StoreSystem<KvTestEngine, RaftTestEngine>,
     pub cfg: Arc<VersionTrack<Config>>,
+    pub cop_cfg: Arc<VersionTrack<CopConfig>>,
     pub transport: TestTransport,
     snap_mgr: TabletSnapManager,
     background: Worker,
@@ -247,6 +248,7 @@ impl RunningState {
         pd_client: &Arc<RpcClient>,
         path: &Path,
         cfg: Arc<VersionTrack<Config>>,
+        cop_cfg: Arc<VersionTrack<CopConfig>>,
         transport: TestTransport,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
@@ -293,11 +295,9 @@ impl RunningState {
         let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
         let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap()).unwrap();
+        let coprocessor_host =
+            CoprocessorHost::new(router.store_router().clone(), cop_cfg.value().clone());
 
-        let coprocessor_host = CoprocessorHost::new(
-            router.store_router().clone(),
-            raftstore::coprocessor::Config::default(),
-        );
         let background = Worker::new("background");
         let pd_worker = LazyWorker::new("pd-worker");
         system
@@ -330,6 +330,7 @@ impl RunningState {
             transport,
             snap_mgr,
             background,
+            cop_cfg,
         };
         (TestRouter(router), state)
     }
@@ -361,11 +362,17 @@ impl TestNode {
         }
     }
 
-    fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
+    fn start(
+        &mut self,
+        cfg: Arc<VersionTrack<Config>>,
+        cop_cfg: Arc<VersionTrack<CopConfig>>,
+        trans: TestTransport,
+    ) -> TestRouter {
         let (router, state) = RunningState::new(
             &self.pd_client,
             self.path.path(),
             cfg,
+            cop_cfg,
             trans,
             ConcurrencyManager::new(1.into()),
             None,
@@ -392,8 +399,9 @@ impl TestNode {
         let state = self.running_state().unwrap();
         let prev_transport = state.transport.clone();
         let cfg = state.cfg.clone();
+        let cop_cfg = state.cop_cfg.clone();
         self.stop();
-        self.start(cfg, prev_transport)
+        self.start(cfg, cop_cfg, prev_transport)
     }
 
     pub fn running_state(&self) -> Option<&RunningState> {
@@ -492,6 +500,14 @@ impl Cluster {
     }
 
     pub fn with_node_count(count: usize, config: Option<Config>) -> Self {
+        Cluster::with_configs(count, config, None)
+    }
+
+    pub fn with_cop_cfg(coprocessor_cfg: CopConfig) -> Cluster {
+        Cluster::with_configs(1, None, Some(coprocessor_cfg))
+    }
+
+    pub fn with_configs(count: usize, config: Option<Config>, cop_cfg: Option<CopConfig>) -> Self {
         let pd_server = test_pd::Server::new(1);
         let logger = slog_global::borrow_global().new(o!());
         let mut cluster = Cluster {
@@ -507,10 +523,15 @@ impl Cluster {
             v2_default_config()
         };
         disable_all_auto_ticks(&mut cfg);
+        let cop_cfg = cop_cfg.unwrap_or_default();
         for _ in 1..=count {
             let mut node = TestNode::with_pd(&cluster.pd_server, cluster.logger.clone());
             let (tx, rx) = new_test_transport();
-            let router = node.start(Arc::new(VersionTrack::new(cfg.clone())), tx);
+            let router = node.start(
+                Arc::new(VersionTrack::new(cfg.clone())),
+                Arc::new(VersionTrack::new(cop_cfg.clone())),
+                tx,
+            );
             cluster.nodes.push(node);
             cluster.receivers.push(rx);
             cluster.routers.push(router);
