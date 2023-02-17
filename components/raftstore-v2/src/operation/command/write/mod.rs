@@ -9,7 +9,7 @@ use raftstore::{
         msg::ErrorCallback,
         util::{self, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER},
     },
-    Result,
+    Error, Result,
 };
 use tikv_util::slog_panic;
 
@@ -56,6 +56,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.propose_pending_writes(ctx);
         if let Some(conflict) = self.proposal_control_mut().check_conflict(None) {
             conflict.delay_channel(ch);
+            return;
+        }
+        if self.proposal_control().has_pending_prepare_merge()
+            || self.proposal_control().is_merging()
+        {
+            let resp = cmd_resp::new_error(Error::ProposalInMergingMode(self.region_id()));
+            ch.report_error(resp);
             return;
         }
         // ProposalControl is reliable only when applied to current term.

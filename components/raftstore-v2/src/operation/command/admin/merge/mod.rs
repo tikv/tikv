@@ -4,7 +4,7 @@ pub mod prepare;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
-    raft_cmdpb::{AdminCmdType, RaftCmdRequest},
+    raft_cmdpb::RaftCmdRequest,
     raft_serverpb::{PeerState, RegionLocalState},
 };
 use prepare::PrepareStatus;
@@ -46,16 +46,6 @@ impl MergeContext {
             return req.take();
         }
         None
-    }
-
-    #[inline]
-    pub fn should_block_write(&self, admin_type: Option<AdminCmdType>) -> bool {
-        matches!(self.prepare_status, Some(PrepareStatus::Applied(_)))
-            && admin_type != Some(AdminCmdType::RollbackMerge)
-            || matches!(
-                self.prepare_status,
-                Some(PrepareStatus::WaitForFence { .. })
-            ) && admin_type != Some(AdminCmdType::PrepareMerge)
     }
 
     #[inline]

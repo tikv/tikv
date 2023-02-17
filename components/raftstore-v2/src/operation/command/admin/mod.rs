@@ -14,7 +14,10 @@ use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use merge::prepare::PrepareMergeResult;
 pub use merge::MergeContext;
 use protobuf::Message;
-use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
+use raftstore::{
+    store::{cmd_resp, fsm::apply, msg::ErrorCallback},
+    Error,
+};
 use slog::info;
 use split::SplitResult;
 pub use split::{
@@ -95,6 +98,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
             conflict.delay_channel(ch);
+            return;
+        }
+        if self.proposal_control().has_pending_prepare_merge()
+            && cmd_type != AdminCmdType::PrepareMerge
+            || self.proposal_control().is_merging() && cmd_type != AdminCmdType::RollbackMerge
+        {
+            let resp = cmd_resp::new_error(Error::ProposalInMergingMode(self.region_id()));
+            ch.report_error(resp);
             return;
         }
         // To maintain propose order, we need to make pending proposal first.

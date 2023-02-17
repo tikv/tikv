@@ -294,6 +294,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 ctx,
                 req: Some(mem::take(req)),
             });
+            self.proposal_control_mut().set_pending_prepare_merge(true);
             info!(
                 self.logger,
                 "start rejecting new proposals before prepare merge";
@@ -487,6 +488,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.proposal_control_mut()
             .enter_prepare_merge(res.state.get_commit());
         self.merge_context_mut().prepare_status = Some(PrepareStatus::Applied(res.state));
+        self.proposal_control_mut().set_pending_prepare_merge(false);
 
         // TODO: self.
         // update_merge_progress_on_apply_res_prepare_merge(store_ctx);

@@ -81,6 +81,7 @@ pub struct ProposalControl {
     // Use `LinkedList` to reduce memory footprint. In most cases, the list
     // should be empty or 1 element. And access speed is not a concern.
     proposed_admin_cmd: LinkedList<ProposedAdminCmd>,
+    has_pending_prepare_merge: bool,
     applied_prepare_merge_index: u64,
     term: u64,
 }
@@ -89,6 +90,7 @@ impl ProposalControl {
     pub fn new(term: u64) -> ProposalControl {
         ProposalControl {
             proposed_admin_cmd: LinkedList::new(),
+            has_pending_prepare_merge: false,
             applied_prepare_merge_index: 0,
             term,
         }
@@ -136,6 +138,7 @@ impl ProposalControl {
         self.proposed_admin_cmd.iter_mut().rev().find(|cmd| {
             (check_ver && cmd.epoch_state.change_ver)
                 || (check_conf_ver && cmd.epoch_state.change_conf_ver)
+                || cmd.cmd_type == AdminCmdType::PrepareMerge
         })
     }
 
@@ -208,6 +211,16 @@ impl ProposalControl {
             }
             self.proposed_admin_cmd.pop_front();
         }
+    }
+
+    #[inline]
+    pub fn set_pending_prepare_merge(&mut self, v: bool) {
+        self.has_pending_prepare_merge = v;
+    }
+
+    #[inline]
+    pub fn has_pending_prepare_merge(&self) -> bool {
+        self.has_pending_prepare_merge
     }
 
     #[inline]
