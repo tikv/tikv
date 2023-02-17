@@ -6334,6 +6334,7 @@ where
                 "err" => ?e,
             );
         }
+        // todo: it will delete in next pr.
         region_buckets.stats = new_bucket_stats(&region_buckets.meta);
 
         self.register_report_region_buckets_tick();
