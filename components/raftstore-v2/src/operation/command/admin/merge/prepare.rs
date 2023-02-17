@@ -99,8 +99,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) -> Result<u64> {
         if self.storage().has_dirty_data() {
             return Err(box_err!(
-                "{:?} source peer has dirty data, try again later",
-                self.logger.list()
+                "{} source peer has dirty data, try again later",
+                SlogFormat(&self.logger)
             ));
         }
         self.validate_prepare_merge_command(
@@ -131,11 +131,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 // proposed PrepareMerge or has been in merging, which is decided by
                 // the boolean expression below.
                 if !self.proposal_control().is_merging() {
+                    self.free_merge_context();
                     let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
                     if pessimistic_locks.status == LocksStatus::MergingRegion {
                         pessimistic_locks.status = LocksStatus::Normal;
                     }
-                    self.free_merge_context();
                 }
             })
     }
