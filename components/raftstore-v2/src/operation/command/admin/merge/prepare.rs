@@ -48,6 +48,7 @@ use raftstore::{
 use slog::{debug, info};
 use tikv_util::{box_err, log::SlogFormat, store::region_on_same_stores};
 
+use super::MergeContext;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
@@ -55,6 +56,13 @@ use crate::{
     raft::{Apply, Peer},
     router::CmdResChannel,
 };
+
+impl MergeContext {
+    #[inline]
+    pub fn has_applied_prepare_merge(&self) -> bool {
+        matches!(self.prepare_status, Some(PrepareStatus::Applied(_)))
+    }
+}
 
 #[derive(Clone)]
 pub struct PreProposeContext {
@@ -116,28 +124,32 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         req.mut_admin_request()
             .mut_prepare_merge()
             .set_min_index(pre_propose.min_matched + 1);
-        self.propose_locks_before_prepare_merge(store_ctx, pre_propose.lock_size_limit)
+        let r = self
+            .propose_locks_before_prepare_merge(store_ctx, pre_propose.lock_size_limit)
             .and_then(|_| {
                 let mut proposal_ctx = ProposalContext::empty();
                 proposal_ctx.insert(ProposalContext::PREPARE_MERGE);
                 let data = req.write_to_bytes().unwrap();
                 self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
-            })
-            .inspect_err(|_| {
-                // Match v1::post_propose_fail.
-                // If we just failed to propose PrepareMerge, the pessimistic locks status
-                // may become MergingRegion incorrectly. So, we have to revert it here.
-                // But we have to rule out the case when the region has successfully
-                // proposed PrepareMerge or has been in merging, which is decided by
-                // the boolean expression below.
-                if !self.proposal_control().is_merging() {
-                    self.free_merge_context();
-                    let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
-                    if pessimistic_locks.status == LocksStatus::MergingRegion {
-                        pessimistic_locks.status = LocksStatus::Normal;
-                    }
+            });
+        if r.is_ok() {
+            self.proposal_control_mut().set_pending_prepare_merge(false);
+        } else {
+            // Match v1::post_propose_fail.
+            // If we just failed to propose PrepareMerge, the pessimistic locks status
+            // may become MergingRegion incorrectly. So, we have to revert it here.
+            // But we have to rule out the case when the region has successfully
+            // proposed PrepareMerge or has been in merging, which is decided by
+            // the boolean expression below.
+            if !self.proposal_control().is_merging() {
+                self.take_merge_context();
+                let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
+                if pessimistic_locks.status == LocksStatus::MergingRegion {
+                    pessimistic_locks.status = LocksStatus::Normal;
                 }
-            })
+            }
+        }
+        r
     }
 
     /// Match v1::check_merge_proposal.
@@ -488,7 +500,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.proposal_control_mut()
             .enter_prepare_merge(res.state.get_commit());
         self.merge_context_mut().prepare_status = Some(PrepareStatus::Applied(res.state));
-        self.proposal_control_mut().set_pending_prepare_merge(false);
 
         // TODO: self.
         // update_merge_progress_on_apply_res_prepare_merge(store_ctx);
