@@ -172,7 +172,7 @@ pub trait Snapshot: Send + Sync + 'static {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum KvEventType {
     Put,
     Delete,

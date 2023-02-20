@@ -1,5 +1,13 @@
 use std::{
-    collections::VecDeque, convert::TryInto, fmt::Display, pin::Pin, sync::Arc, task::ready,
+    collections::VecDeque,
+    convert::TryInto,
+    fmt::Display,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    task::ready,
     time::Duration,
 };
 
@@ -91,17 +99,26 @@ fn try_make_item(op: TransactionOp) -> Result<pdpb::GlobalConfigItem> {
     }
 }
 
-struct PdWatchStream {
-    inner: ClientSStreamReceiver<WatchGlobalConfigResponse>,
-    buf: VecDeque<KvEvent>,
+enum PdWatchStream {
+    Running {
+        inner: ClientSStreamReceiver<WatchGlobalConfigResponse>,
+        buf: VecDeque<KvEvent>,
+        canceled: Arc<AtomicBool>,
+    },
+    Canceled,
 }
 
 impl PdWatchStream {
-    fn new(inner: ClientSStreamReceiver<WatchGlobalConfigResponse>) -> Self {
-        Self {
+    /// Create a new Watch Stream from PD, with a function to cancel the stream.
+    fn new(inner: ClientSStreamReceiver<WatchGlobalConfigResponse>) -> (Self, impl FnOnce()) {
+        let cancel = Arc::default();
+        let s = Self::Running {
             inner,
             buf: Default::default(),
-        }
+            canceled: Arc::clone(&cancel),
+        };
+
+        (s, move || cancel.store(true, Ordering::SeqCst))
     }
 }
 
@@ -109,22 +126,32 @@ impl Stream for PdWatchStream {
     type Item = Result<KvEvent>;
 
     fn poll_next(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        let this = self.get_mut();
+        let (inner, buf, canceled) = match Pin::new(&mut *self).get_mut() {
+            PdWatchStream::Running {
+                inner,
+                buf,
+                canceled,
+            } => (inner, buf, canceled),
+            PdWatchStream::Canceled => return None.into(),
+        };
         loop {
-            if let Some(x) = this.buf.pop_front() {
+            if let Some(x) = buf.pop_front() {
                 return Some(Ok(x)).into();
             }
-
-            let resp = ready!(this.inner.poll_next_unpin(cx));
+            if canceled.load(Ordering::SeqCst) {
+                *self.get_mut() = Self::Canceled;
+                return None.into();
+            }
+            let resp = ready!(inner.poll_next_unpin(cx));
             match resp {
                 None => return None.into(),
                 Some(Err(err)) => return Some(Err(Error::Grpc(err))).into(),
                 Some(Ok(x)) => {
                     pd_client::check_resp_header(x.get_header())?;
-                    this.buf.clear();
+                    buf.clear();
                     for e in x.get_changes() {
                         let ty = match e.get_kind() {
                             pdpb::EventType::Put => KvEventType::Put,
@@ -136,7 +163,7 @@ impl Stream for PdWatchStream {
                             kind: ty,
                             pair: KeyValue(MetaKey(k), v),
                         };
-                        this.buf.push_back(kv);
+                        buf.push_back(kv);
                     }
                 }
             }
@@ -186,9 +213,10 @@ impl<PD: PdClient> MetaStore for PdStore<PD> {
                 let stream = self
                     .client
                     .watch_global_config(to_config_key(k.0)?, start_rev)?;
+                let (stream, cancel) = PdWatchStream::new(stream);
                 Ok(KvChangeSubscription {
-                    stream: PdWatchStream::new(stream).boxed(),
-                    cancel: Box::pin(async { todo!() }),
+                    stream: stream.boxed(),
+                    cancel: Box::pin(async { cancel() }),
                 })
             }
             _ => Err(unimplemented("watch distinct keys or range of keys")),
@@ -248,7 +276,7 @@ impl<PD: PdClient> MetaStore for PdStore<PD> {
 mod tests {
     use std::{cell::OnceCell, sync::Arc, time::Duration};
 
-    use futures::Future;
+    use futures::{Future, StreamExt};
     use pd_client::RpcClient;
     use test_pd::{mocker::Service, util::*, Server as PdServer};
     use tikv_util::config::ReadableDuration;
@@ -257,7 +285,7 @@ mod tests {
     use super::PdStore;
     use crate::metadata::{
         keys::{KeyValue, MetaKey},
-        store::{Keys, MetaStore},
+        store::{Keys, KvEventType, MetaStore},
     };
 
     fn new_test_server_and_client() -> (PdServer<Service>, PdStore<RpcClient>) {
@@ -277,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn test_point_query() {
+    fn test_query() {
         let (_s, c) = new_test_server_and_client();
 
         w(c.set(KeyValue(MetaKey::task_of("a"), b"alpha".to_vec()))).unwrap();
@@ -290,6 +318,47 @@ mod tests {
             [KeyValue(MetaKey::task_of("a"), b"alpha".to_vec())].as_slice()
         );
         let k = w(c.get_latest(Keys::Key(MetaKey::task_of("c")))).unwrap();
-        assert_eq!(k.inner.as_slice(), [].as_slice())
+        assert_eq!(k.inner.as_slice(), [].as_slice());
+
+        let k = w(c.get_latest(Keys::Prefix(MetaKey::tasks()))).unwrap();
+        assert_eq!(
+            k.inner.as_slice(),
+            [
+                KeyValue(MetaKey::task_of("a"), b"alpha".to_vec()),
+                KeyValue(MetaKey::task_of("b"), b"beta".to_vec()),
+                KeyValue(MetaKey::task_of("t"), b"theta".to_vec())
+            ]
+            .as_slice()
+        )
+    }
+
+    #[test]
+    fn test_watch() {
+        let (_s, c) = new_test_server_and_client();
+        let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
+        let insert = |k, v| w(c.set(kv(k, v))).unwrap();
+        let delete = |k: &str| w(c.delete(Keys::Key(MetaKey::task_of(k)))).unwrap();
+
+        insert("a", "the guest in scarlet clothes");
+        let res = w(c.get_latest(Keys::Prefix(MetaKey::tasks()))).unwrap();
+        assert_eq!(
+            res.inner.as_slice(),
+            &[kv("a", "the guest in scarlet clothes")]
+        );
+        let mut ws = w(c.watch(Keys::Prefix(MetaKey::tasks()), res.revision + 1)).unwrap();
+        let mut items = vec![];
+        insert("a", "looking up at the ocean");
+        items.push(w(ws.stream.next()).unwrap().unwrap());
+        insert("b", "a folk tale in the polar day");
+        delete("a");
+        items.push(w(ws.stream.next()).unwrap().unwrap());
+        items.push(w(ws.stream.next()).unwrap().unwrap());
+        w(ws.cancel);
+        assert!(w(ws.stream.next()).is_none());
+
+        assert_eq!(items[0].pair, kv("a", "looking up at the ocean"));
+        assert_eq!(items[1].pair, kv("b", "a folk tale in the polar day"));
+        assert_eq!(items[2].kind, KvEventType::Delete);
+        assert_eq!(items[2].pair.0, MetaKey::task_of("a"));
     }
 }

@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{path::Path, result};
+use std::result;
 
 use futures::executor::block_on;
 use kvproto::pdpb::*;
