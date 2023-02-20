@@ -9,12 +9,12 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Condvar, Mutex,
     },
     time::Duration,
 };
 
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
@@ -42,13 +42,35 @@ use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
-    caching::cache_map::CacheMap,
+    caching::cache_map::{CacheMap, ShareOwned},
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
     util, Config, Error, Result,
 };
+
+pub struct LoadedFile {
+    permit: MemUsePermit,
+    content: Arc<[u8]>,
+}
+
+impl std::fmt::Debug for LoadedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadedFileInner")
+            .field("permit", &self.permit)
+            .field("content.len()", &self.content.len())
+            .finish()
+    }
+}
+
+impl ShareOwned for LoadedFile {
+    type Shared = Arc<[u8]>;
+
+    fn share_owned(&self) -> Self::Shared {
+        Arc::clone(&self.content)
+    }
+}
 
 #[derive(Default, Debug, Clone)]
 pub struct DownloadExt<'a> {
@@ -63,17 +85,164 @@ impl<'a> DownloadExt<'a> {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Debug)]
+struct MemUsePermit {
+    amount: u64,
+    statistic: Arc<AtomicU64>,
+}
+
+impl Drop for MemUsePermit {
+    fn drop(&mut self) {
+        self.statistic.fetch_sub(self.amount, Ordering::SeqCst);
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum CacheKvFile {
-    Mem(Arc<Vec<u8>>),
+    Mem(Remote<LoadedFile>),
     Fs(Arc<PathBuf>),
+}
+
+/// Remote presents a "remote" object which can be downloaded and then cached.
+/// The remote object should generally implement the `ShareOwned` trait.
+/// This structure doesn't manage how it is downloaded, it just manages the
+/// state. You need to provide the manually downloaded data to the
+/// [`DownloadPromise`].
+/// Below is the state transform of this:
+/// ```text
+///                           DownloadPromise::fulfill
+///               +-----------+         +-----------+
+///               |Downloading+-------->|Cached     |
+///               +--+--------+         +-----------+
+///                  |     ^
+///                  |     |
+/// DownloadPromise  |     | Somebody takes
+/// dropped          |     | over the duty.
+///                  v     |
+///               +--------+--+
+///               |Leaked     |
+///               +-----------+
+/// ```
+#[derive(Debug)]
+pub struct Remote<T>(Arc<(Mutex<FileCacheInner<T>>, Condvar)>);
+
+impl<T> Clone for Remote<T> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+/// When holding this, the holder has promised to downloading the remote object
+/// into local, then provide it to others waiting the object, by
+/// [`Self::fulfill()`].
+pub struct DownloadPromise<T>(Arc<(Mutex<FileCacheInner<T>>, Condvar)>);
+
+impl<T> DownloadPromise<T> {
+    /// provide the downloaded data and make it cached.
+    pub fn fulfill(self, item: T) -> Remote<T> {
+        let mut l = self.0.as_ref().0.lock().unwrap();
+        debug_assert!(matches!(*l, FileCacheInner::Downloading));
+        *l = FileCacheInner::Cached(item);
+        self.0.as_ref().1.notify_all();
+        drop(l);
+        Remote(Arc::clone(&self.0))
+    }
+}
+
+impl<T> Drop for DownloadPromise<T> {
+    fn drop(&mut self) {
+        let mut l = self.0.as_ref().0.lock().unwrap();
+        if matches!(*l, FileCacheInner::Downloading) {
+            *l = FileCacheInner::Leaked;
+            self.0.as_ref().1.notify_one();
+        }
+    }
+}
+
+impl<T> Remote<T> {
+    /// create a downloading remote object.
+    /// it returns the handle to the remote object and a [`DownloadPromise`],
+    /// the latter can be used to fulfill the remote object.
+    ///
+    /// # Examples
+    /// ```
+    /// # use sst_importer::sst_importer::Remote;
+    /// let (remote_obj, promise) = Remote::download();
+    /// promise.fulfill(42);
+    /// assert_eq!(remote_obj.get(), Some(42));
+    /// ```
+    pub fn download() -> (Self, DownloadPromise<T>) {
+        let inner = Arc::new((Mutex::new(FileCacheInner::Downloading), Condvar::new()));
+        (Self(Arc::clone(&inner)), DownloadPromise(inner))
+    }
+
+    /// Block and wait until the remote object is downloaded.
+    /// # Returns
+    /// If the remote object has been fulfilled, return `None`.
+    /// If the remote object hasn't been fulfilled, return a
+    /// [`DownloadPromise`]: it is time to take over the duty of downloading.
+    ///
+    /// # Examples
+    /// ```
+    /// # use sst_importer::sst_importer::Remote;
+    /// let (remote_obj, promise) = Remote::download();
+    /// drop(promise);
+    /// let new_promise = remote_obj.wait_until_fill();
+    /// new_promise
+    ///     .expect("wait_until_fill should return new promise when old promise dropped")
+    ///     .fulfill(42);
+    /// assert!(remote_obj.wait_until_fill().is_none());
+    /// ```
+    pub fn wait_until_fill(&self) -> Option<DownloadPromise<T>> {
+        let mut l = self.0.as_ref().0.lock().unwrap();
+        loop {
+            match *l {
+                FileCacheInner::Downloading => {
+                    l = self.0.as_ref().1.wait(l).unwrap();
+                }
+                FileCacheInner::Leaked => {
+                    *l = FileCacheInner::Downloading;
+                    return Some(DownloadPromise(Arc::clone(&self.0)));
+                }
+                FileCacheInner::Cached(_) => return None,
+            }
+        }
+    }
+}
+
+impl<T: ShareOwned> Remote<T> {
+    /// Fetch the internal object of the remote object.
+    pub fn get(&self) -> Option<<T as ShareOwned>::Shared> {
+        let l = self.0.as_ref().0.lock().unwrap();
+        match *l {
+            FileCacheInner::Downloading | FileCacheInner::Leaked => None,
+            FileCacheInner::Cached(ref t) => Some(t.share_owned()),
+        }
+    }
+}
+
+/// returns a error indices that we are going to panic in a invalid state.
+/// (Rust panic information cannot be send to BR, hence client cannot know
+/// what happens, so we pack it into a `Result`.)
+fn bug(message: impl std::fmt::Display) -> Error {
+    Error::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!("BUG in TiKV: {}", message),
+    ))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FileCacheInner<T> {
+    Downloading,
+    Leaked,
+    Cached(T),
 }
 
 impl CacheKvFile {
     // get the ref count of item.
     pub fn ref_count(&self) -> usize {
         match self {
-            CacheKvFile::Mem(buff) => Arc::strong_count(buff),
+            CacheKvFile::Mem(buff) => Arc::strong_count(&buff.0),
             CacheKvFile::Fs(path) => Arc::strong_count(path),
         }
     }
@@ -101,7 +270,7 @@ pub struct SstImporter {
     cached_storage: CacheMap<StorageBackend>,
     download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
-    mem_use: AtomicU64,
+    mem_use: Arc<AtomicU64>,
     mem_limit: ReadableSize,
 }
 
@@ -131,7 +300,7 @@ impl SstImporter {
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
             download_rt,
-            mem_use: AtomicU64::new(0),
+            mem_use: Arc::new(AtomicU64::new(0)),
             mem_limit: ReadableSize(memory_limit as u64),
         })
     }
@@ -404,9 +573,10 @@ impl SstImporter {
             let mut need_retain = true;
             match c {
                 CacheKvFile::Mem(buff) => {
-                    let buflen = buff.len();
+                    let buflen = buff.get().map(|v| v.len()).unwrap_or_default();
                     // The term of recycle memeory is 60s.
                     if c.ref_count() == 1 && c.is_expired(start) {
+                        CACHE_EVENT.with_label_values(&["remove"]).inc();
                         need_retain = false;
                         shrink_buff_size += buflen;
                     } else {
@@ -428,9 +598,13 @@ impl SstImporter {
             need_retain
         });
 
+        CACHED_FILE_IN_MEM.set(self.mem_use.load(Ordering::SeqCst) as _);
+
         if self.import_support_download() {
             let shrink_file_count = shrink_files.len();
-            info!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
+            if shrink_file_count > 0 || retain_file_count > 0 {
+                info!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
+            }
 
             for f in shrink_files {
                 if let Err(e) = file_system::remove_file(&f) {
@@ -439,8 +613,9 @@ impl SstImporter {
             }
             shrink_file_count
         } else {
-            info!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
-            self.dec_mem(shrink_buff_size as _);
+            if shrink_buff_size > 0 || retain_buff_size > 0 {
+                info!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
+            }
             shrink_buff_size
         }
     }
@@ -451,21 +626,22 @@ impl SstImporter {
         self.mem_limit == ReadableSize(0)
     }
 
-    fn inc_mem_and_check(&self, meta: &KvMeta) -> bool {
+    fn request_memory(&self, meta: &KvMeta) -> Option<MemUsePermit> {
         let size = meta.get_length();
         let old = self.mem_use.fetch_add(size, Ordering::SeqCst);
 
         // If the memory is limited, roll backup the mem_use and return false.
         if old + size > self.mem_limit.0 {
             self.mem_use.fetch_sub(size, Ordering::SeqCst);
-            false
+            CACHE_EVENT.with_label_values(&["out-of-quota"]).inc();
+            None
         } else {
-            true
+            CACHE_EVENT.with_label_values(&["add"]).inc();
+            Some(MemUsePermit {
+                amount: size,
+                statistic: Arc::clone(&self.mem_use),
+            })
         }
-    }
-
-    fn dec_mem(&self, size: u64) {
-        self.mem_use.fetch_sub(size, Ordering::SeqCst);
     }
 
     pub fn do_read_kv_file(
@@ -478,21 +654,41 @@ impl SstImporter {
         let start = Instant::now();
         let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
 
-        let mut lock = self
-            .file_locks
-            .entry(dst_name)
-            .or_insert((CacheKvFile::Mem(Arc::default()), Instant::now()));
+        let promise = {
+            let lock = self.file_locks.entry(dst_name);
+            IMPORTER_APPLY_DURATION
+                .with_label_values(&["download-get-lock"])
+                .observe(start.saturating_elapsed().as_secs_f64());
 
-        if let CacheKvFile::Mem(buff) = &lock.0 {
-            if !buff.is_empty() {
-                lock.1 = Instant::now();
-                return Ok(lock.0.clone());
+            match lock {
+                Entry::Occupied(mut ent) => match ent.get_mut() {
+                    (CacheKvFile::Mem(buff), last_used) => {
+                        *last_used = Instant::now();
+                        match buff.wait_until_fill() {
+                            Some(handle) => handle,
+                            None => return Ok(ent.get().0.clone()),
+                        }
+                    }
+                    _ => {
+                        return Err(bug(concat!(
+                            "using both read-to-memory and download-to-file is unacceptable for now.",
+                            "(If you think it is possible in the future you are reading this, ",
+                            "please change this line to `return item.get.0.clone()`)",
+                            "(Please also check the state transform is OK too.)",
+                        )));
+                    }
+                },
+                Entry::Vacant(ent) => {
+                    let (cache, handle) = Remote::download();
+                    ent.insert((CacheKvFile::Mem(cache), Instant::now()));
+                    handle
+                }
             }
-        }
+        };
 
-        if !self.inc_mem_and_check(meta) {
-            return Err(Error::ResourceNotEnough(String::from("memory is limited")));
-        }
+        let permit = self
+            .request_memory(meta)
+            .ok_or_else(|| Error::ResourceNotEnough(String::from("memory is limited")))?;
 
         let expected_sha256 = {
             let sha256 = meta.get_sha256().to_vec();
@@ -532,8 +728,10 @@ impl SstImporter {
             .observe(start.saturating_elapsed().as_secs_f64());
 
         let rewrite_buff = self.rewrite_kv_file(buff, rewrite_rule)?;
-        *lock = (CacheKvFile::Mem(Arc::new(rewrite_buff)), Instant::now());
-        Ok(lock.0.clone())
+        Ok(CacheKvFile::Mem(promise.fulfill(LoadedFile {
+            content: Arc::from(rewrite_buff.into_boxed_slice()),
+            permit,
+        })))
     }
 
     pub fn wrap_kms(
@@ -607,7 +805,7 @@ impl SstImporter {
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         backend: &StorageBackend,
         speed_limiter: &Limiter,
-    ) -> Result<Arc<Vec<u8>>> {
+    ) -> Result<Arc<[u8]>> {
         let c = if self.import_support_download() {
             self.do_download_kv_file(meta, backend, speed_limiter)?
         } else {
@@ -615,7 +813,7 @@ impl SstImporter {
         };
         match c {
             // If cache memroy, it has been rewrite, return buffer directly.
-            CacheKvFile::Mem(buff) => Ok(buff),
+            CacheKvFile::Mem(buff) => buff.get().ok_or_else(|| bug("invalid cache state")),
             // If cache file name, it need to read and rewrite.
             CacheKvFile::Fs(path) => {
                 let file = File::open(path.as_ref())?;
@@ -624,7 +822,7 @@ impl SstImporter {
                 reader.read_to_end(&mut buffer)?;
 
                 let rewrite_buff = self.rewrite_kv_file(buffer, rewrite_rule)?;
-                Ok(Arc::new(rewrite_buff))
+                Ok(Arc::from(rewrite_buff.into_boxed_slice()))
             }
         }
     }
@@ -762,10 +960,10 @@ impl SstImporter {
         end_key: &[u8],
         start_ts: u64,
         restore_ts: u64,
-        file_buff: Arc<Vec<u8>>,
-        build_fn: &mut dyn FnMut(Vec<u8>, Vec<u8>),
+        file_buff: Arc<[u8]>,
+        mut build_fn: impl FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
-        let mut event_iter = EventIterator::new(file_buff.as_slice());
+        let mut event_iter = EventIterator::new(file_buff.as_ref());
         let mut smallest_key = None;
         let mut largest_key = None;
         let mut total_key = 0;
@@ -1195,7 +1393,10 @@ mod tests {
     use tempfile::Builder;
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
+    use tikv_util::{
+        codec::stream_event::EventEncoder, stream::block_on_external_io,
+        sys::thread::StdThreadBuildWrapper,
+    };
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
 
@@ -1731,7 +1932,11 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(CacheKvFile::Mem(Arc::new(buff.clone())), output);
+        assert!(
+            matches!(output.clone(), CacheKvFile::Mem(rc) if &*rc.get().unwrap() == buff.as_slice()),
+            "{:?}",
+            output
+        );
 
         // Do not shrint nothing.
         let shrink_size = importer.shrink_by_tick();
@@ -2744,11 +2949,11 @@ mod tests {
             length: 100,
             ..Default::default()
         };
-        let check = importer.inc_mem_and_check(&meta);
-        assert!(check);
+        let check = importer.request_memory(&meta);
+        assert!(check.is_some());
         assert_eq!(importer.mem_use.load(Ordering::SeqCst), meta.get_length());
 
-        importer.dec_mem(meta.get_length());
+        drop(check);
         assert_eq!(importer.mem_use.load(Ordering::SeqCst), 0);
 
         // test inc_mem_and_check() failed.
@@ -2756,8 +2961,8 @@ mod tests {
             length: u64::MAX,
             ..Default::default()
         };
-        let check = importer.inc_mem_and_check(&meta);
-        assert!(!check);
+        let check = importer.request_memory(&meta);
+        assert!(check.is_none());
     }
 
     #[test]
@@ -2767,7 +2972,8 @@ mod tests {
             SstImporter::new(&Config::default(), import_dir, None, ApiVersion::V1).unwrap();
 
         let key = "file1";
-        let value = (CacheKvFile::Mem(Arc::default()), Instant::now());
+        let (r, _) = Remote::download();
+        let value = (CacheKvFile::Mem(r), Instant::now());
         let lock = importer.file_locks.entry(key.to_string()).or_insert(value);
 
         // test locked by try_entry()
@@ -2783,5 +2989,54 @@ mod tests {
 
         let _buff = v.0.clone();
         assert_eq!(v.0.ref_count(), 2);
+    }
+
+    #[test]
+    fn test_remote_waiting() {
+        let (r, dl) = Remote::download();
+        let r2 = r.clone();
+        let js = (0..2)
+            .map(|_| {
+                let r = r.clone();
+                std::thread::spawn(move || {
+                    assert!(r.wait_until_fill().is_none());
+                    r.get()
+                })
+            })
+            .collect::<Vec<_>>();
+        dl.fulfill(42);
+        for j in js {
+            assert!(matches!(j.join(), Ok(Some(42))));
+        }
+        assert_eq!(r2.get(), Some(42));
+    }
+
+    #[test]
+    fn test_remote_drop_in_one_thread() {
+        let (r, dl) = Remote::download();
+        drop(dl);
+        let p = r.wait_until_fill();
+        assert!(p.is_some());
+        p.unwrap().fulfill("Kitty");
+        assert_eq!(r.get(), Some("Kitty"));
+    }
+
+    #[test]
+    fn test_remote_take_duty() {
+        let (r, dl) = Remote::download();
+        let js = (0..4).map(|i| {
+            let r = r.clone();
+            std::thread::Builder::new()
+                .name(format!("rd-{}", i))
+                .spawn_wrapper(move || match r.wait_until_fill() {
+                    Some(x) => x.fulfill(42).get(),
+                    None => r.get(),
+                })
+                .unwrap()
+        });
+        drop(dl);
+        for j in js {
+            assert!(matches!(j.join(), Ok(Some(42))));
+        }
     }
 }
