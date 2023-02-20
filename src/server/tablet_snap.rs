@@ -14,6 +14,8 @@
 //! shorter than expected is interpreted as EOF. Therefore sometimes an empty
 //! chunk needs to be sent to conclude a file.
 
+#[cfg(any(test, feature = "testexport"))]
+use std::io;
 use std::{
     convert::{TryFrom, TryInto},
     fs::{self, File},
@@ -166,7 +168,7 @@ async fn send_snap_files(
                 }
                 off += readed;
             }
-            limiter.consume(off);
+            limiter.consume(off).await;
             total_sent += off as u64;
             chunk.set_data(mem::take(&mut buffer));
             sender
@@ -292,7 +294,7 @@ async fn recv_snap_files(
                 None => return Err(box_err!("missing chunk")),
             };
             f.write_all(&data[..])?;
-            limit.consume(data.len());
+            limit.consume(data.len()).await;
             size += data.len();
         }
         debug!("received snap file"; "file" => %p.display(), "size" => size);
@@ -507,6 +509,43 @@ impl<R: RaftExtension> Runnable for TabletRunner<R> {
             }
         }
     }
+}
+
+// A helper function to copy snapshot.
+#[cfg(any(test, feature = "testexport"))]
+pub fn copy_tablet_snapshot(
+    key: TabletSnapKey,
+    msg: RaftMessage,
+    sender_snap_mgr: &TabletSnapManager,
+    recver_snap_mgr: &TabletSnapManager,
+) -> Result<()> {
+    let sender_path = sender_snap_mgr.tablet_gen_path(&key);
+    let files = fs::read_dir(sender_path)?
+        .map(|f| Ok(f?.path()))
+        .filter(|f| f.is_ok() && f.as_ref().unwrap().is_file())
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut head = SnapshotChunk::default();
+    head.set_message(msg);
+    head.set_data(usize::to_le_bytes(SNAP_CHUNK_LEN).to_vec());
+
+    let recv_context = RecvTabletSnapContext::new(head)?;
+    let recv_path = recver_snap_mgr.tmp_recv_path(&recv_context.key);
+    fs::create_dir_all(&recv_path)?;
+
+    for path in files {
+        let sender_name = path.file_name().unwrap().to_str().unwrap();
+        let mut sender_f = File::open(&path)?;
+
+        let recv_p = recv_path.join(sender_name);
+        let mut recv_f = File::create(recv_p)?;
+
+        while io::copy(&mut sender_f, &mut recv_f)? != 0 {}
+    }
+
+    let final_path = recver_snap_mgr.final_recv_path(&recv_context.key);
+    fs::rename(&recv_path, final_path)?;
+    Ok(())
 }
 
 #[cfg(test)]

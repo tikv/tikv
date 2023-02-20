@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.6.0-alpha"
+version = "6.7.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -13,6 +13,7 @@ publish = false
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+trace-tablet-lifetime = ["engine_rocks/trace-lifetime"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -38,7 +39,7 @@ cloud-azure = [
   "encryption_export/cloud-azure",
   "sst_importer/cloud-azure",
 ]
-testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport"]
+testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport"]
 test-engine-kv-rocksdb = [
   "engine_test/test-engine-kv-rocksdb"
 ]
@@ -117,7 +118,7 @@ match-template = "0.0.1"
 memory_trace_macros = { workspace = true }
 mime = "0.3.13"
 more-asserts = "0.2"
-murmur3 = "0.5.1"
+mur3 = "0.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 notify = "4"
 num-traits = "0.2.14"
@@ -280,6 +281,7 @@ members = [
   "components/test_pd",
   "components/test_pd_client",
   "components/test_raftstore",
+  "components/test_raftstore-v2",
   "components/test_raftstore_macro",
   "components/test_sst_importer",
   "components/test_storage",
@@ -356,6 +358,7 @@ example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/exampl
 test_pd = { path = "components/test_pd" }
 test_pd_client = { path = "components/test_pd_client" }
 test_raftstore = { path = "components/test_raftstore", default-features = false }
+test_raftstore-v2 = { path = "components/test_raftstore-v2", default-features = false }
 test_raftstore_macro = { path = "components/test_raftstore_macro" }
 test_sst_importer = { path = "components/test_sst_importer" }
 test_storage = { path = "components/test_storage", default-features = false }
