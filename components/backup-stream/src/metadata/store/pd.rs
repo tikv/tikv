@@ -8,7 +8,7 @@ use futures::{Stream, StreamExt};
 use grpcio::ClientSStreamReceiver;
 use kvproto::pdpb::{self, GlobalConfigItem, WatchGlobalConfigResponse};
 use pd_client::{GlobalConfigSelector, PdClient};
-use tikv_util::{box_err, warn};
+use tikv_util::{box_err, info, warn};
 
 use super::{
     GetResponse, Keys, KvChangeSubscription, KvEvent, KvEventType, MetaStore, Snapshot,
@@ -201,6 +201,7 @@ impl<PD: PdClient> MetaStore for PdStore<PD> {
             let item = try_make_item(o).context_with(|| format!("in the {}th item of txn", i))?;
             r.push(item);
         }
+        info!("PD store storing a transcation."; "txn" => ?r);
         self.client
             .store_global_config(PREFIX.to_owned(), r)
             .await?;
@@ -214,25 +215,81 @@ impl<PD: PdClient> MetaStore for PdStore<PD> {
     async fn get_latest(&self, keys: Keys) -> Result<WithRevision<Vec<KeyValue>>> {
         let c = self.client.as_ref();
         let cfg = try_make_pd_selector(keys)?;
-        let (ks, rev) = c.load_global_config(cfg).await?;
+        let (ks, rev) = c.load_global_config(cfg.clone()).await?;
+        let rs = ks
+            .into_iter()
+            .filter_map(|ks| {
+                if ks.get_error().get_type() != pdpb::ErrorType::Ok {
+                    warn!("PD store get latest encounters error."; "err" => ?ks.get_error(), "spec" => ?cfg);
+                    return None;
+                }
+                if ks.get_kind() == pdpb::EventType::Delete {
+                    return None;
+                }
+
+                let key = ks.get_name().as_bytes().to_vec();
+                let value = if !ks.get_value().is_empty() {
+                    ks.get_value().as_bytes()
+                } else {
+                    ks.get_payload()
+                };
+                Some(KeyValue(MetaKey(key), value.to_vec()))
+            })
+            .collect();
+        info!("PD store get latest finished."; "items" => ?rs, "revision" => %rev, "spec" => ?cfg);
         Ok(WithRevision {
             revision: rev,
-            inner: ks
-                .into_iter()
-                .filter_map(|ks| {
-                    if ks.get_kind() == pdpb::EventType::Delete {
-                        return None;
-                    }
-
-                    let key = ks.get_name().as_bytes().to_vec();
-                    let value = if !ks.get_value().is_empty() {
-                        ks.get_value().as_bytes()
-                    } else {
-                        ks.get_payload()
-                    };
-                    Some(KeyValue(MetaKey(key), value.to_vec()))
-                })
-                .collect(),
+            inner: rs,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::OnceCell, sync::Arc, time::Duration};
+
+    use futures::Future;
+    use pd_client::RpcClient;
+    use test_pd::{mocker::Service, util::*, Server as PdServer};
+    use tikv_util::config::ReadableDuration;
+    use tokio::runtime::Runtime;
+
+    use super::PdStore;
+    use crate::metadata::{
+        keys::{KeyValue, MetaKey},
+        store::{Keys, MetaStore},
+    };
+
+    fn new_test_server_and_client() -> (PdServer<Service>, PdStore<RpcClient>) {
+        let server = PdServer::new(1);
+        let eps = server.bind_addrs();
+        let client =
+            new_client_with_update_interval(eps, None, ReadableDuration(Duration::from_secs(99)));
+        (server, PdStore::new(Arc::new(client)))
+    }
+
+    fn w<T>(f: impl Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
+
+    #[test]
+    fn test_point_query() {
+        let (_s, c) = new_test_server_and_client();
+
+        w(c.set(KeyValue(MetaKey::task_of("a"), b"alpha".to_vec()))).unwrap();
+        w(c.set(KeyValue(MetaKey::task_of("b"), b"beta".to_vec()))).unwrap();
+        w(c.set(KeyValue(MetaKey::task_of("t"), b"theta".to_vec()))).unwrap();
+
+        let k = w(c.get_latest(Keys::Key(MetaKey::task_of("a")))).unwrap();
+        assert_eq!(
+            k.inner.as_slice(),
+            [KeyValue(MetaKey::task_of("a"), b"alpha".to_vec())].as_slice()
+        );
+        let k = w(c.get_latest(Keys::Key(MetaKey::task_of("c")))).unwrap();
+        assert_eq!(k.inner.as_slice(), [].as_slice())
     }
 }

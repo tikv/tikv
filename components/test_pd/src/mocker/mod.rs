@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::result;
+use std::{path::Path, result};
 
 use futures::executor::block_on;
 use kvproto::pdpb::*;
@@ -27,35 +27,64 @@ pub const DEFAULT_CLUSTER_ID: u64 = 42;
 
 pub type Result<T> = result::Result<T, String>;
 
+fn make_config_key(path: &str, name: &str) -> MetaKey {
+    let key = format!(
+        "{}/{}",
+        path.trim_end_matches("/"),
+        name.trim_start_matches("/")
+    )
+    .trim_end_matches("/")
+    .to_owned()
+    .into_bytes();
+    MetaKey(key)
+}
+
 pub trait PdMocker {
     fn load_global_config(
         &self,
-        _req: &LoadGlobalConfigRequest,
+        req: &LoadGlobalConfigRequest,
         etcd_client: EtcdClient,
     ) -> Option<Result<LoadGlobalConfigResponse>> {
-        let mut res = LoadGlobalConfigResponse::default();
-        let mut items = Vec::new();
-        let (resp, revision) = block_on(async move {
-            etcd_client.lock().await.get_key(Keys::Range(
-                MetaKey(b"".to_vec()),
-                MetaKey(b"\xff".to_vec()),
-            ))
-        });
+        let make_response = |kvs: Vec<KeyValue>, rev: i64| {
+            let mut res = LoadGlobalConfigResponse::default();
+            let values: Vec<GlobalConfigItem> = kvs
+                .iter()
+                .map(|kv| {
+                    let mut item = GlobalConfigItem::default();
+                    item.set_name(String::from_utf8(kv.key().to_vec()).unwrap());
+                    item.set_payload(kv.value().into());
+                    item
+                })
+                .collect();
+            res.set_revision(rev);
+            res.set_items(values.into());
+            res
+        };
 
-        let values: Vec<GlobalConfigItem> = resp
+        if req.get_names().is_empty() {
+            let (resp, revision) = block_on(async move {
+                etcd_client.lock().await.get_key(Keys::Prefix(MetaKey(
+                    req.get_config_path().as_bytes().to_vec(),
+                )))
+            });
+            let resp = make_response(resp, revision);
+            return Some(Ok(resp));
+        }
+
+        let cfg_path = req.get_config_path();
+
+        let values = req
+            .get_names()
             .iter()
-            .map(|kv| {
-                let mut item = GlobalConfigItem::default();
-                item.set_name(String::from_utf8(kv.key().to_vec()).unwrap());
-                item.set_payload(kv.value().into());
-                item
+            .flat_map(|name| {
+                let (resp, _) = block_on(etcd_client.lock())
+                    .get_key(Keys::Key(make_config_key(cfg_path, name)));
+                resp
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let resp = make_response(values, 0);
 
-        items.extend(values);
-        res.set_revision(revision);
-        res.set_items(items.into());
-        Some(Ok(res))
+        Some(Ok(resp))
     }
 
     fn store_global_config(
@@ -68,12 +97,15 @@ pub trait PdMocker {
             block_on(async move {
                 match item.get_kind() {
                     EventType::Put => {
-                        let kv =
-                            KeyValue(MetaKey(item.get_name().into()), item.get_payload().into());
+                        let kv = KeyValue(
+                            make_config_key(req.get_config_path(), item.get_name()),
+                            item.get_payload().into(),
+                        );
                         cli.lock().await.set(kv).await
                     }
                     EventType::Delete => {
-                        let key = Keys::Key(MetaKey(item.get_name().into()));
+                        let key =
+                            Keys::Key(make_config_key(req.get_config_path(), item.get_name()));
                         cli.lock().await.delete(key).await
                     }
                 }

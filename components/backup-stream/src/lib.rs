@@ -3,7 +3,7 @@
 #![feature(result_flattening)]
 #![feature(assert_matches)]
 #![feature(test)]
-#![feature(never_type)]
+#![feature(once_cell)]
 
 mod checkpoint_manager;
 pub mod config;

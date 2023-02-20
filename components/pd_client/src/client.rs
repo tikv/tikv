@@ -321,7 +321,7 @@ impl PdClient for RpcClient {
             .load_global_config
             .start_coarse_timer();
 
-        let mut req = s.into();
+        let req = s.into();
         let executor = |client: &Client, req| match client
             .inner
             .rl()

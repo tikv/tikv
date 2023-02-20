@@ -206,7 +206,7 @@ pub const INVALID_ID: u64 = 0;
 // TODO: Implementation of config registration for each module
 pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct GlobalConfigSelector {
     basic_path: String,
     items: Vec<String>,
