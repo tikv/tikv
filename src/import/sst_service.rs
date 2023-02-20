@@ -635,6 +635,24 @@ where
         ctx.spawn(task);
     }
 
+    fn get_mode(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _req: GetModeRequest,
+        sink: UnarySink<GetModeResponse>,
+    ) {
+        let label = "get_mode";
+        let timer = Instant::now_coarse();
+
+        let mut resp = GetModeResponse::default();
+        resp.set_mode(self.importer.get_mode());
+
+        let task = async move {
+            crate::send_rpc_response!(Ok(resp), sink, label, timer);
+        };
+        ctx.spawn(task);
+    }
+
     /// Receive SST from client and save the file for later ingesting.
     fn upload(
         &mut self,
