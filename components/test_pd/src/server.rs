@@ -13,8 +13,8 @@ use std::{
 use fail::fail_point;
 use futures::{future, SinkExt, TryFutureExt, TryStreamExt};
 use grpcio::{
-    DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
-    Server as GrpcServer, ServerBuilder, ServerStreamingSink, UnarySink, WriteFlags,
+    ClientStreamingSink, DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus,
+    RpcStatusCode, Server as GrpcServer, ServerBuilder, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::pdpb::*;
 use pd_client::Error as PdError;
@@ -358,6 +358,29 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         sink: UnarySink<StoreHeartbeatResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.store_heartbeat(&req))
+    }
+
+    fn report_buckets(
+        &mut self,
+        ctx: grpcio::RpcContext<'_>,
+        stream: RequestStream<ReportBucketsRequest>,
+        sink: ClientStreamingSink<ReportBucketsResponse>,
+    ) {
+        let mock = self.clone();
+        ctx.spawn(async move {
+            let mut stream = stream.map_err(PdError::from);
+            while let Ok(Some(req)) = stream.try_next().await {
+                let resp = mock
+                    .case
+                    .as_ref()
+                    .and_then(|case| case.report_buckets(&req))
+                    .or_else(|| mock.default_handler.report_buckets(&req));
+                if let Some(Ok(resp)) = resp {
+                    sink.success(resp);
+                    break;
+                }
+            }
+        });
     }
 
     fn region_heartbeat(
