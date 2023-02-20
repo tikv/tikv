@@ -5,7 +5,7 @@ use kvproto::{
     metapb, pdpb,
     raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
 };
-use pd_client::PdClient;
+use pd_client::PdClientV2;
 use raftstore::store::SplitInfo;
 use slog::{info, warn, Logger};
 use yatp::{task::future::TaskCell, Remote};
@@ -37,7 +37,7 @@ impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     #[inline]
     pub fn handle_ask_batch_split(
@@ -49,7 +49,7 @@ where
         ch: CmdResChannel,
     ) {
         Self::ask_batch_split_imp(
-            &self.pd_client,
+            &mut self.pd_client,
             &self.logger,
             &self.router,
             &self.remote,
@@ -62,7 +62,7 @@ where
     }
 
     fn ask_batch_split_imp(
-        pd_client: &T,
+        pd_client: &mut T,
         logger: &Logger,
         router: &StoreRouter<EK, ER>,
         remote: &Remote<TaskCell>,
@@ -128,7 +128,7 @@ where
     }
 
     pub fn handle_auto_split(&mut self, split_infos: Vec<SplitInfo>) {
-        let pd_client = self.pd_client.clone();
+        let mut pd_client = self.pd_client.clone();
         let logger = self.logger.clone();
         let router = self.router.clone();
         let remote = self.remote.clone();
@@ -140,7 +140,7 @@ where
                 // Try to split the region with the given split key.
                 if let Some(split_key) = split_info.split_key {
                     Self::ask_batch_split_imp(
-                        &pd_client,
+                        &mut pd_client,
                         &logger,
                         &router,
                         &remote,

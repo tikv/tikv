@@ -15,7 +15,7 @@ use txn_types::Key;
 // `keys::DATA_PREFIX`. This case ensures it's performed correctly.
 #[test]
 fn test_gc_bypass_raft() {
-    let (cluster, leader, ctx) = must_new_cluster_mul(2);
+    let (mut cluster, leader, ctx) = must_new_cluster_mul(2);
     cluster.pd_client.disable_default_operator();
 
     let env = Arc::new(Environment::new(1));

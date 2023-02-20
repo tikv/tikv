@@ -18,8 +18,9 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType};
+use futures::stream::StreamExt;
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
-use pd_client::PdClient;
+use pd_client::PdClientV2;
 use raft::{StateRole, INVALID_ID};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent},
@@ -516,12 +517,12 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         raft_engine: ER,
         tablet_registry: TabletRegistry<EK>,
         trans: T,
-        pd_client: Arc<C>,
+        pd_client: C,
         router: &StoreRouter<EK, ER>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
         auto_split_controller: AutoSplitController,
         collector_reg_handle: CollectorRegHandle,
@@ -530,14 +531,17 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
     ) -> Result<()>
     where
         T: Transport + 'static,
-        C: PdClient + 'static,
+        C: PdClientV2 + Clone + 'static,
     {
         let sync_router = Mutex::new(router.clone());
-        pd_client.handle_reconnect(move || {
-            sync_router
-                .lock()
-                .unwrap()
-                .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
+        let mut reconnected = pd_client.subscribe_reconnect();
+        pd_worker.remote().spawn(async move {
+            while reconnected.next().await.is_some() {
+                sync_router
+                    .lock()
+                    .unwrap()
+                    .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
+            }
         });
 
         let purge_worker = if raft_engine.need_manual_purge()

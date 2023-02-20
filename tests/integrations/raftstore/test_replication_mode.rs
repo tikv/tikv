@@ -1,13 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{mpsc, Arc},
-    thread,
-    time::Duration,
-};
+use std::{sync::mpsc, thread, time::Duration};
 
 use kvproto::replication_modepb::*;
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
 use tikv_util::{config::*, HandyRwLock};
@@ -157,7 +153,7 @@ fn test_sync_recover_after_apply_snapshot() {
 fn test_check_conf_change() {
     let mut cluster = prepare_cluster();
     run_cluster(&mut cluster);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.must_remove_peer(1, new_peer(2, 2));
     must_get_none(&cluster.get_engine(2), b"k1");
     cluster.add_send_filter(IsolationFilterFactory::new(2));
@@ -199,7 +195,7 @@ fn test_check_conf_change() {
 #[test]
 fn test_update_group_id() {
     let mut cluster = new_server_cluster(0, 2);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     cluster.add_label(1, "zone", "ES");
     cluster.add_label(2, "zone", "WS");
     pd_client.disable_default_operator();
@@ -356,7 +352,7 @@ fn test_switching_replication_mode_hibernate() {
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(1);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(30);
     cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::hours(1);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     pd_client.configure_dr_auto_sync("zone");
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
@@ -458,7 +454,7 @@ fn test_loading_label_after_rolling_start() {
     cluster.add_label(3, "zone", "WS");
     cluster.run_node(3).unwrap();
 
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.must_add_peer(r, new_peer(2, 2));
     pd_client.must_add_peer(r, new_peer(3, 3));
     cluster.must_transfer_leader(r, new_peer(1, 1));
@@ -481,7 +477,7 @@ fn test_loading_label_after_rolling_start() {
 fn test_assign_commit_groups_with_migrate_region() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run_conf_change();
 

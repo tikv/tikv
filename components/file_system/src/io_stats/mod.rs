@@ -62,7 +62,7 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        b.iter(|| fetch_io_bytes());
+        b.iter(fetch_io_bytes);
         for _ in 0..8 {
             rx.recv().unwrap();
         }

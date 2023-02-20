@@ -15,7 +15,7 @@ use kvproto::{
     metapb::{self, PeerRole},
     raft_serverpb::*,
 };
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::Result;
 use test_pd_client::TestPdClient;
@@ -32,7 +32,7 @@ macro_rules! call_conf_change {
     }};
 }
 
-fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<TestPdClient>) -> metapb::Peer {
+fn new_conf_change_peer(store: &metapb::Store, pd_client: &mut TestPdClient) -> metapb::Peer {
     let peer_id = pd_client.alloc_id().unwrap();
     new_peer(store.get_id(), peer_id)
 }
@@ -41,7 +41,7 @@ fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<TestPdClient>) ->
 fn test_server_simple_conf_change() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -162,7 +162,7 @@ fn test_server_simple_conf_change() {
 fn test_pd_conf_change() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -190,7 +190,7 @@ fn test_pd_conf_change() {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    let peer2 = new_conf_change_peer(&stores[1], &pd_client);
+    let peer2 = new_conf_change_peer(&stores[1], &mut pd_client);
     let engine_2 = cluster.get_engine(peer2.get_store_id());
     assert!(
         engine_2
@@ -210,7 +210,7 @@ fn test_pd_conf_change() {
     must_get_equal(&engine_2, b"k2", b"v2");
 
     // add new peer to first region.
-    let peer3 = new_conf_change_peer(&stores[2], &pd_client);
+    let peer3 = new_conf_change_peer(&stores[2], &mut pd_client);
     let engine_3 = cluster.get_engine(peer3.get_store_id());
     pd_client.must_add_peer(region_id, peer3.clone());
     must_get_equal(&engine_3, b"k1", b"v1");
@@ -230,7 +230,7 @@ fn test_pd_conf_change() {
     must_get_none(&engine_2, b"k1");
     must_get_none(&engine_2, b"k2");
     // add peer4 to first region 1.
-    let peer4 = new_conf_change_peer(&stores[1], &pd_client);
+    let peer4 = new_conf_change_peer(&stores[1], &mut pd_client);
     pd_client.must_add_peer(region_id, peer4.clone());
     // Remove peer3 from first region.
     pd_client.must_remove_peer(region_id, peer3);
@@ -251,7 +251,7 @@ fn test_pd_conf_change() {
     // TODO: add more tests.
 }
 
-fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize) {
+fn wait_till_reach_count(pd_client: &mut TestPdClient, region_id: u64, c: usize) {
     let mut replica_count = 0;
     for _ in 0..1000 {
         let region = match block_on(pd_client.get_region_by_id(region_id)).unwrap() {
@@ -279,14 +279,14 @@ fn test_auto_adjust_replica() {
     let mut cluster = new_cluster(0, count);
     cluster.start().unwrap();
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let mut region = pd_client.get_region(b"").unwrap();
     let region_id = region.get_id();
 
     let stores = pd_client.get_stores().unwrap();
 
     // default replica is 5.
-    wait_till_reach_count(Arc::clone(&pd_client), region_id, 5);
+    wait_till_reach_count(&mut pd_client, region_id, 5);
 
     let (key, value) = (b"k1", b"v1");
     cluster.must_put(key, value);
@@ -309,31 +309,31 @@ fn test_auto_adjust_replica() {
         must_get_equal(&cluster.get_engine(peer.get_store_id()), b"k1", b"v1");
     }
 
-    let mut peer = new_conf_change_peer(&stores[i], &pd_client);
+    let mut peer = new_conf_change_peer(&stores[i], &mut pd_client);
     peer.set_role(PeerRole::Learner);
     let engine = cluster.get_engine(peer.get_store_id());
     must_get_none(&engine, b"k1");
 
     pd_client.must_add_peer(region_id, peer.clone());
-    wait_till_reach_count(Arc::clone(&pd_client), region_id, 6);
+    wait_till_reach_count(&mut pd_client, region_id, 6);
     must_get_equal(&engine, b"k1", b"v1");
     peer.set_role(PeerRole::Voter);
     pd_client.must_add_peer(region_id, peer);
 
     // it should remove extra replica.
     pd_client.enable_default_operator();
-    wait_till_reach_count(Arc::clone(&pd_client), region_id, 5);
+    wait_till_reach_count(&mut pd_client, region_id, 5);
 
     region = block_on(pd_client.get_region_by_id(region_id))
         .unwrap()
         .unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
     pd_client.must_remove_peer(region_id, peer);
-    wait_till_reach_count(Arc::clone(&pd_client), region_id, 4);
+    wait_till_reach_count(&mut pd_client, region_id, 4);
 
     // it should add missing replica.
     pd_client.enable_default_operator();
-    wait_till_reach_count(Arc::clone(&pd_client), region_id, 5);
+    wait_till_reach_count(&mut pd_client, region_id, 5);
 }
 
 macro_rules! find_leader_response_header {
@@ -349,7 +349,7 @@ macro_rules! find_leader_response_header {
 fn test_after_remove_itself() {
     let count = 3;
     let mut cluster = new_cluster(0, count);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -420,7 +420,7 @@ fn test_after_remove_itself() {
 fn test_split_brain() {
     let count = 6;
     let mut cluster = new_cluster(0, count);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -494,7 +494,7 @@ fn test_split_brain() {
 fn test_conf_change_safe() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -562,7 +562,7 @@ fn test_conf_change_safe() {
 fn test_transfer_leader_safe() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -613,7 +613,7 @@ fn test_transfer_leader_safe() {
 fn test_conf_change_remove_leader() {
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.allow_remove_leader = false;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));
@@ -642,7 +642,7 @@ fn test_conf_change_remove_leader() {
 fn test_node_learner_conf_change() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
@@ -735,7 +735,7 @@ fn test_node_learner_conf_change() {
 fn test_learner_with_slow_snapshot() {
     let mut cluster = new_cluster(0, 3);
     configure_for_snapshot(&mut cluster.cfg);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
@@ -818,7 +818,7 @@ fn test_node_stale_peer() {
     let mut cluster = new_cluster(0, 4);
     // To avoid stale peers know they are stale from PD.
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(2);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
@@ -850,7 +850,7 @@ fn test_conf_change_fast() {
     // timeout, but it's OK as the cluster starts with only one peer, it will
     // campaigns immediately.
     configure_for_lease_read(&mut cluster.cfg, Some(5000), None);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");

@@ -7,7 +7,7 @@ use std::{
 };
 
 use futures::executor::block_on;
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
 use tikv_util::{time::Instant, HandyRwLock};

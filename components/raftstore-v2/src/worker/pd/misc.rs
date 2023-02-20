@@ -8,9 +8,9 @@ use std::{
 use causal_ts::CausalTsProvider;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::{compat::Future01CompatExt, FutureExt};
-use pd_client::PdClient;
+use pd_client::{PdClientV2, TsoGetter};
 use raftstore::{store::TxnExt, Result};
-use slog::{info, warn};
+use slog::{error, info, warn};
 use tikv_util::{box_err, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
@@ -20,7 +20,7 @@ impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     pub fn handle_update_max_timestamp(
         &mut self,
@@ -28,9 +28,9 @@ where
         initial_status: u64,
         txn_ext: Arc<TxnExt>,
     ) {
-        let pd_client = self.pd_client.clone();
+        let Some(mut transport) = self.get_or_create_tso_transport() else { return };
         let concurrency_manager = self.concurrency_manager.clone();
-        let causal_ts_provider = self.causal_ts_provider.clone();
+        let mut causal_ts_provider = self.causal_ts_provider.clone();
         let logger = self.logger.clone();
         let shutdown = self.shutdown.clone();
 
@@ -49,14 +49,15 @@ where
                 // And it won't break correctness of transaction commands, as
                 // causal_ts_provider.flush() is implemented as
                 // pd_client.get_tso() + renew TSO cached.
-                let res: Result<TimeStamp> = if let Some(causal_ts_provider) = &causal_ts_provider {
-                    causal_ts_provider
-                        .async_flush()
-                        .await
-                        .map_err(|e| box_err!(e))
-                } else {
-                    pd_client.get_tso().await.map_err(Into::into)
-                };
+                let res: Result<TimeStamp> =
+                    if let Some(causal_ts_provider) = &mut causal_ts_provider {
+                        causal_ts_provider
+                            .async_flush()
+                            .await
+                            .map_err(|e| box_err!(e))
+                    } else {
+                        transport.get_tso().await.map_err(Into::into)
+                    };
 
                 match res {
                     Ok(ts) => {
@@ -106,6 +107,16 @@ where
         } else {
             self.remote.spawn(f);
         }
+    }
+
+    fn get_or_create_tso_transport(&mut self) -> Option<T::TsoGetter> {
+        if self.tso_transport.is_none() {
+            match self.pd_client.new_tso_getter() {
+                Ok(t) => self.tso_transport = Some(t),
+                Err(e) => error!(self.logger, "failed to create tso stream"; "err" => %e),
+            };
+        }
+        self.tso_transport.clone()
     }
 
     pub fn handle_report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) {

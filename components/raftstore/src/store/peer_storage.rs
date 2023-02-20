@@ -1189,7 +1189,6 @@ pub mod tests {
     };
     use kvproto::raft_serverpb::RaftSnapshotData;
     use metapb::{Peer, Store, StoreLabel};
-    use pd_client::PdClient;
     use raft::{
         eraftpb::{ConfState, Entry, HardState},
         Error as RaftError, GetEntriesContext, StorageError,
@@ -1316,8 +1315,8 @@ pub mod tests {
         }
     }
 
-    impl PdClient for TestPdClient {
-        fn get_store(&self, store_id: u64) -> pd_client::Result<metapb::Store> {
+    impl pd_client::PdClientCommon for TestPdClient {
+        fn get_store(&mut self, store_id: u64) -> pd_client::Result<metapb::Store> {
             if store_id < 4 {
                 return Ok(self.stores[store_id as usize].clone());
             }
@@ -1631,7 +1630,7 @@ pub mod tests {
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
-            Option::<Arc<TestPdClient>>::None,
+            Option::<TestPdClient>::None,
         );
         worker.start_with_timer(runner);
         let snap = s.snapshot(0, 1);
@@ -1770,7 +1769,6 @@ pub mod tests {
         }];
         let store = new_store(1, labels);
         pd_client.add_store(store);
-        let pd_mock = Arc::new(pd_client);
         let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s.engines.kv.clone(),
@@ -1778,7 +1776,7 @@ pub mod tests {
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
-            Some(pd_mock),
+            Some(pd_client),
         );
         worker.start_with_timer(runner);
         let snap = s.snapshot(0, 1);
@@ -1838,7 +1836,7 @@ pub mod tests {
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
-            Option::<Arc<TestPdClient>>::None,
+            Option::<TestPdClient>::None,
         );
         worker.start_with_timer(runner);
 
@@ -1917,7 +1915,7 @@ pub mod tests {
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
-            Option::<Arc<TestPdClient>>::None,
+            Option::<TestPdClient>::None,
         );
         worker.start(runner);
         s1.snapshot(0, 1).unwrap_err();

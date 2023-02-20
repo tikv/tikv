@@ -2,10 +2,7 @@
 
 use std::{
     mem,
-    sync::{
-        mpsc::{channel, sync_channel, Receiver, SyncSender},
-        Arc,
-    },
+    sync::mpsc::{channel, sync_channel, Receiver, SyncSender},
     time::Duration,
 };
 
@@ -40,7 +37,7 @@ impl RegionChangeObserver for TestObserver {
 }
 
 fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let receiver: Receiver<(Region, RegionChangeEvent)>;

@@ -3,7 +3,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use engine_traits::{KvEngine, RaftEngine};
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use tikv_util::worker::Runnable;
 
 use super::{
@@ -44,7 +44,7 @@ impl<E, R, C, S> Runner<E, R, C, S>
 where
     E: KvEngine,
     R: RaftEngine,
-    C: PdClient,
+    C: PdClientCommon,
     S: StoreRouter<E>,
 {
     pub fn new(
@@ -64,7 +64,7 @@ impl<E, R, C, S> Runnable for Runner<E, R, C, S>
 where
     E: KvEngine,
     R: RaftEngine,
-    C: PdClient,
+    C: PdClientCommon,
     S: StoreRouter<E>,
 {
     type Task = Task;

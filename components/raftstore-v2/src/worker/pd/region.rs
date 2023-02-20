@@ -4,20 +4,25 @@ use std::{sync::Arc, time::Duration};
 
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
+use futures::stream::StreamExt;
 use kvproto::{metapb, pdpb};
 use pd_client::{
-    merge_bucket_stats, metrics::PD_HEARTBEAT_COUNTER_VEC, BucketStat, PdClient, RegionStat,
+    merge_bucket_stats, metrics::PD_HEARTBEAT_COUNTER_VEC, BucketStat, PdClientV2, RegionStat,
 };
 use raftstore::store::{ReadStats, WriteStats};
 use resource_metering::RawRecords;
-use slog::{debug, error, info};
-use tikv_util::{store::QueryStats, time::UnixSecs};
+use slog::{error, info, Logger};
+use tikv_util::{mpsc::future as mpsc, store::QueryStats, time::UnixSecs};
 
 use super::{requests::*, Runner};
 use crate::{
+    batch::StoreRouter,
     operation::{RequestHalfSplit, RequestSplit},
     router::{CmdResChannel, PeerMsg},
 };
+
+pub type HeartbeatTransport = mpsc::Sender<pdpb::RegionHeartbeatRequest>;
+pub type BucketTransport = mpsc::Sender<pdpb::ReportBucketsRequest>;
 
 pub struct RegionHeartbeatTask {
     pub term: u64,
@@ -109,7 +114,7 @@ impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     pub fn handle_region_heartbeat(&mut self, task: RegionHeartbeatTask) {
         // HACK! In order to keep the compatible of protos, we use 0 to identify
@@ -192,157 +197,173 @@ where
             .region_keys_read
             .observe(region_stat.read_keys as f64);
 
-        let resp = self.pd_client.region_heartbeat(
-            task.term,
-            task.region.clone(),
-            task.peer,
-            region_stat,
-            None,
-        );
-        let logger = self.logger.clone();
-        let f = async move {
-            if let Err(e) = resp.await {
-                debug!(
-                    logger,
-                    "failed to send heartbeat";
-                    "region_id" => task.region.get_id(),
+        let mut req = pdpb::RegionHeartbeatRequest::default();
+        req.set_term(task.term);
+        let mut header = pdpb::RequestHeader::default();
+        header.set_cluster_id(self.cluster_id);
+        req.set_header(header);
+        req.set_region(task.region);
+        req.set_leader(task.peer);
+        req.set_down_peers(region_stat.down_peers.into());
+        req.set_pending_peers(region_stat.pending_peers.into());
+        req.set_bytes_written(region_stat.written_bytes);
+        req.set_keys_written(region_stat.written_keys);
+        req.set_bytes_read(region_stat.read_bytes);
+        req.set_keys_read(region_stat.read_keys);
+        req.set_query_stats(region_stat.query_stats);
+        req.set_approximate_size(region_stat.approximate_size);
+        req.set_approximate_keys(region_stat.approximate_keys);
+        req.set_cpu_usage(region_stat.cpu_usage);
+        // if let Some(s) = replication_status {
+        //     req.set_replication_status(s);
+        // }
+        let mut interval = pdpb::TimeInterval::default();
+        interval.set_start_timestamp(region_stat.last_report_ts.into_inner());
+        interval.set_end_timestamp(UnixSecs::now().into_inner());
+        req.set_interval(interval);
+        let Some(transport) = self.get_or_create_region_heartbeat_transport() else { return };
+        let _ = transport.send(req);
+    }
+
+    fn handle_response(
+        logger: &Logger,
+        router: &StoreRouter<EK, ER>,
+        mut resp: pdpb::RegionHeartbeatResponse,
+    ) {
+        let region_id = resp.get_region_id();
+        let epoch = resp.take_region_epoch();
+        let peer = resp.take_target_peer();
+
+        if resp.has_change_peer() {
+            PD_HEARTBEAT_COUNTER_VEC
+                .with_label_values(&["change peer"])
+                .inc();
+
+            let mut change_peer = resp.take_change_peer();
+            info!(
+                logger,
+                "try to change peer";
+                "region_id" => region_id,
+                "change_type" => ?change_peer.get_change_type(),
+                "peer" => ?change_peer.get_peer()
+            );
+            let req =
+                new_change_peer_request(change_peer.get_change_type(), change_peer.take_peer());
+            send_admin_request(logger, router, region_id, epoch, peer, req, None);
+        } else if resp.has_change_peer_v2() {
+            PD_HEARTBEAT_COUNTER_VEC
+                .with_label_values(&["change peer"])
+                .inc();
+
+            let mut change_peer_v2 = resp.take_change_peer_v2();
+            info!(
+                logger,
+                "try to change peer";
+                "region_id" => region_id,
+                "changes" => ?change_peer_v2.get_changes(),
+            );
+            let req = new_change_peer_v2_request(change_peer_v2.take_changes().into());
+            send_admin_request(logger, router, region_id, epoch, peer, req, None);
+        } else if resp.has_transfer_leader() {
+            PD_HEARTBEAT_COUNTER_VEC
+                .with_label_values(&["transfer leader"])
+                .inc();
+
+            let mut transfer_leader = resp.take_transfer_leader();
+            info!(
+                logger,
+                "try to transfer leader";
+                "region_id" => region_id,
+                "from_peer" => ?peer,
+                "to_peer" => ?transfer_leader.get_peer(),
+                "to_peers" => ?transfer_leader.get_peers(),
+            );
+            let req = new_transfer_leader_request(
+                transfer_leader.take_peer(),
+                transfer_leader.take_peers().into(),
+            );
+            send_admin_request(logger, router, region_id, epoch, peer, req, None);
+        } else if resp.has_split_region() {
+            PD_HEARTBEAT_COUNTER_VEC
+                .with_label_values(&["split region"])
+                .inc();
+
+            let mut split_region = resp.take_split_region();
+            info!(
+                logger,
+                "try to split";
+                "region_id" => region_id,
+                "region_epoch" => ?epoch,
+            );
+
+            let (ch, _) = CmdResChannel::pair();
+            let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
+                PeerMsg::RequestSplit {
+                    request: RequestSplit {
+                        epoch,
+                        split_keys: split_region.take_keys().into(),
+                        source: "pd".into(),
+                    },
+                    ch,
+                }
+            } else {
+                PeerMsg::RequestHalfSplit {
+                    request: RequestHalfSplit {
+                        epoch,
+                        start_key: None,
+                        end_key: None,
+                        policy: split_region.get_policy(),
+                        source: "pd".into(),
+                    },
+                    ch,
+                }
+            };
+            if let Err(e) = router.send(region_id, msg) {
+                error!(logger,
+                    "send split request failed";
+                    "region_id" => region_id,
                     "err" => ?e
                 );
             }
-        };
-        self.remote.spawn(f);
+        } else if resp.has_merge() {
+            // TODO
+            info!(logger, "pd asks for merge but ignored");
+        } else {
+            PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
+        }
     }
 
-    pub fn maybe_schedule_heartbeat_receiver(&mut self) {
-        if self.is_hb_receiver_scheduled {
-            return;
-        }
-        let router = self.router.clone();
-        let store_id = self.store_id;
-        let logger = self.logger.clone();
-
-        let fut =
-            self.pd_client
-                .handle_region_heartbeat_response(self.store_id, move |mut resp| {
-                    let region_id = resp.get_region_id();
-                    let epoch = resp.take_region_epoch();
-                    let peer = resp.take_target_peer();
-
-                    if resp.has_change_peer() {
-                        PD_HEARTBEAT_COUNTER_VEC
-                            .with_label_values(&["change peer"])
-                            .inc();
-
-                        let mut change_peer = resp.take_change_peer();
-                        info!(
-                            logger,
-                            "try to change peer";
-                            "region_id" => region_id,
-                            "change_type" => ?change_peer.get_change_type(),
-                            "peer" => ?change_peer.get_peer()
-                        );
-                        let req = new_change_peer_request(
-                            change_peer.get_change_type(),
-                            change_peer.take_peer(),
-                        );
-                        send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
-                    } else if resp.has_change_peer_v2() {
-                        PD_HEARTBEAT_COUNTER_VEC
-                            .with_label_values(&["change peer"])
-                            .inc();
-
-                        let mut change_peer_v2 = resp.take_change_peer_v2();
-                        info!(
-                            logger,
-                            "try to change peer";
-                            "region_id" => region_id,
-                            "changes" => ?change_peer_v2.get_changes(),
-                        );
-                        let req = new_change_peer_v2_request(change_peer_v2.take_changes().into());
-                        send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
-                    } else if resp.has_transfer_leader() {
-                        PD_HEARTBEAT_COUNTER_VEC
-                            .with_label_values(&["transfer leader"])
-                            .inc();
-
-                        let mut transfer_leader = resp.take_transfer_leader();
-                        info!(
-                            logger,
-                            "try to transfer leader";
-                            "region_id" => region_id,
-                            "from_peer" => ?peer,
-                            "to_peer" => ?transfer_leader.get_peer(),
-                            "to_peers" => ?transfer_leader.get_peers(),
-                        );
-                        let req = new_transfer_leader_request(
-                            transfer_leader.take_peer(),
-                            transfer_leader.take_peers().into(),
-                        );
-                        send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
-                    } else if resp.has_split_region() {
-                        PD_HEARTBEAT_COUNTER_VEC
-                            .with_label_values(&["split region"])
-                            .inc();
-
-                        let mut split_region = resp.take_split_region();
-                        info!(
-                            logger,
-                            "try to split";
-                            "region_id" => region_id,
-                            "region_epoch" => ?epoch,
-                        );
-
-                        let (ch, _) = CmdResChannel::pair();
-                        let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
-                            PeerMsg::RequestSplit {
-                                request: RequestSplit {
-                                    epoch,
-                                    split_keys: split_region.take_keys().into(),
-                                    source: "pd".into(),
-                                },
-                                ch,
-                            }
-                        } else {
-                            PeerMsg::RequestHalfSplit {
-                                request: RequestHalfSplit {
-                                    epoch,
-                                    start_key: None,
-                                    end_key: None,
-                                    policy: split_region.get_policy(),
-                                    source: "pd".into(),
-                                },
-                                ch,
-                            }
-                        };
-                        if let Err(e) = router.send(region_id, msg) {
-                            error!(logger,
-                                "send split request failed";
-                                "region_id" => region_id,
-                                "err" => ?e
-                            );
-                        }
-                    } else if resp.has_merge() {
-                        // TODO
-                        info!(logger, "pd asks for merge but ignored");
-                    } else {
-                        PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
-                    }
-                });
-        let logger = self.logger.clone();
-        let f = async move {
-            match fut.await {
-                Ok(_) => {
-                    info!(
-                        logger,
-                        "region heartbeat response handler exit";
-                        "store_id" => store_id,
-                    );
+    fn get_or_create_region_heartbeat_transport(&mut self) -> Option<&mut HeartbeatTransport> {
+        if self.region_heartbeat_transport.is_none() {
+            match self
+                .pd_client
+                .create_region_heartbeat_stream(mpsc::WakePolicy::Immediately)
+            {
+                Err(e) => {
+                    error!(self.logger, "failed to create region heartbeat stream"; "err" => %e)
                 }
-                Err(e) => panic!("unexpected error: {:?}", e),
-            }
-        };
-        self.remote.spawn(f);
-        self.is_hb_receiver_scheduled = true;
+                Ok((tx, mut rx)) => {
+                    let router = self.router.clone();
+                    let store_id = self.store_id;
+                    let logger = self.logger.clone();
+                    self.remote.spawn(async move {
+                        while let Some(resp) = rx.next().await {
+                            match resp {
+                                Ok(resp) => Self::handle_response(&logger, &router, resp),
+                                Err(e) => error!(logger, "unexpected error"; "err" => %e),
+                            }
+                        }
+                        info!(
+                            logger,
+                            "region heartbeat response handler exit";
+                            "store_id" => store_id,
+                        );
+                    });
+                    self.region_heartbeat_transport = Some(tx);
+                }
+            };
+        }
+        self.region_heartbeat_transport.as_mut()
     }
 
     pub fn handle_report_region_buckets(&mut self, region_buckets: BucketStat) {
@@ -357,23 +378,37 @@ where
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - last_report_ts.into_inner();
         let delta = report_buckets.report(now);
-        let resp = self
-            .pd_client
-            .report_region_buckets(&delta, Duration::from_secs(interval_second));
-        let logger = self.logger.clone();
-        let f = async move {
-            if let Err(e) = resp.await {
-                debug!(
-                    logger,
-                    "failed to send buckets";
-                    "region_id" => region_id,
-                    "version" => delta.meta.version,
-                    "region_epoch" => ?delta.meta.region_epoch,
-                    "err" => ?e
-                );
+
+        let mut buckets = metapb::Buckets::default();
+        buckets.set_region_id(delta.meta.region_id);
+        buckets.set_version(delta.meta.version);
+        buckets.set_keys(delta.meta.keys.clone().into());
+        buckets.set_period_in_ms(Duration::from_secs(interval_second).as_millis() as u64);
+        buckets.set_stats(delta.stats.clone());
+        let mut req = pdpb::ReportBucketsRequest::default();
+        let mut header = pdpb::RequestHeader::default();
+        header.set_cluster_id(self.cluster_id);
+        req.set_header(header);
+        req.set_buckets(buckets);
+        req.set_region_epoch(delta.meta.region_epoch.clone());
+
+        let Some(transport) = self.get_or_create_region_bucket_transport() else { return };
+        let _ = transport.send(req);
+    }
+
+    fn get_or_create_region_bucket_transport(&mut self) -> Option<&mut BucketTransport> {
+        if self.region_bucket_transport.is_none() {
+            match self
+                .pd_client
+                .create_report_region_buckets_stream(mpsc::WakePolicy::Immediately)
+            {
+                Err(e) => {
+                    error!(self.logger, "failed to create region heartbeat stream"; "err" => %e)
+                }
+                Ok(tx) => self.region_bucket_transport = Some(tx),
             }
-        };
-        self.remote.spawn(f);
+        }
+        self.region_bucket_transport.as_mut()
     }
 
     pub fn handle_update_read_stats(&mut self, mut stats: ReadStats) {

@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{iter::FromIterator, sync::Arc, time::Duration};
+use std::{iter::FromIterator, time::Duration};
 
 use collections::HashMap;
 use futures::executor::block_on;
@@ -9,7 +9,7 @@ use kvproto::{
     raft_cmdpb::ChangePeerRequest,
     raft_serverpb::{PeerState, RaftApplyState},
 };
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, store::find_peer};
@@ -22,7 +22,7 @@ fn test_witness_split_merge() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -108,7 +108,7 @@ fn test_witness_conf_change() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k1", b"v1");
@@ -177,7 +177,7 @@ fn test_witness_switch_witness() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k1", b"v1");
@@ -216,7 +216,7 @@ fn test_witness_leader() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k1", b"v1");
@@ -256,7 +256,7 @@ fn test_witness_election_priority() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -301,7 +301,7 @@ fn test_witness_raftlog_gc_lagged_follower() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k0", b"v0");
@@ -378,7 +378,7 @@ fn test_witness_raftlog_gc_lagged_witness() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -436,7 +436,7 @@ fn test_witness_replica_read() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k0", b"v0");
@@ -509,7 +509,7 @@ fn test_witness_leader_down() {
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k0", b"v0");
@@ -570,7 +570,7 @@ fn test_witness_ignore_consistency_check() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k1", b"v1");

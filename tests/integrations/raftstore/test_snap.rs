@@ -31,7 +31,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
     cluster.cfg.raft_store.max_snapshot_file_raw_size = ReadableSize(max_snapshot_file_size);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -106,7 +106,7 @@ fn test_server_snap_gc_internal(version: &str) {
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
     cluster.cfg.raft_store.max_snapshot_file_raw_size = ReadableSize::mb(100);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -219,7 +219,7 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -356,7 +356,7 @@ fn test_node_stale_snap() {
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -439,7 +439,7 @@ impl Filter for SnapshotAppendFilter {
 fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     configure_for_snapshot(&mut cluster.cfg);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
     cluster.run();
@@ -481,7 +481,7 @@ fn test_inspected_snapshot() {
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
     cluster.cfg.raft_store.merge_max_log_gap = 3;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -530,7 +530,7 @@ fn test_gen_during_heavy_recv() {
     cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(5 * 1024 * 1024);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
 
@@ -661,7 +661,7 @@ fn test_correct_snapshot_term() {
     // Use five replicas so leader can send a snapshot to a new peer without
     // committing extra logs.
     let mut cluster = new_cluster(0, 5);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     // Use run conf change to make new node be initialized with term 0.
@@ -717,7 +717,7 @@ fn test_snapshot_clean_up_logs_with_log_gc() {
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
     // Speed up log gc.
     cluster.cfg.raft_store.raft_log_compact_sync_interval = ReadableDuration::millis(1);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
 
     // Disable default max peer number check.
     pd_client.disable_default_operator();

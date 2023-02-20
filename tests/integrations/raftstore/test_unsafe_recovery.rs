@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{iter::FromIterator, sync::Arc, time::Duration};
+use std::{iter::FromIterator, time::Duration};
 
 use futures::executor::block_on;
 use kvproto::{metapb, pdpb};
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, store::find_peer, HandyRwLock};
@@ -30,7 +30,7 @@ fn test_unsafe_recovery_demote_failed_voters() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -85,7 +85,7 @@ fn test_unsafe_recovery_demote_non_exist_voters() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -150,7 +150,7 @@ fn test_unsafe_recovery_auto_promote_learner() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -223,7 +223,7 @@ fn test_unsafe_recovery_already_in_joint_state() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -312,7 +312,7 @@ fn test_unsafe_recovery_early_return_after_exit_joint_state() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -397,7 +397,7 @@ fn test_unsafe_recovery_create_region() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
@@ -1166,7 +1166,7 @@ fn test_unsafe_recovery_has_commit_merge() {
 
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
@@ -1224,7 +1224,7 @@ fn test_unsafe_recovery_during_merge() {
 
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");

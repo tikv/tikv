@@ -44,7 +44,7 @@ fn setup(
     LockManager,
 ) {
     let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
-    let pd_client = Arc::new(TestPdClient::new(0, true));
+    let pd_client = TestPdClient::new(0, true);
     let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
     lock_mgr
         .start(

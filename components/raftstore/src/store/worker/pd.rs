@@ -896,10 +896,10 @@ pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClient + Clone + 'static,
 {
     store_id: u64,
-    pd_client: Arc<T>,
+    pd_client: T,
     router: RaftRouter<EK, ER>,
     region_peers: HashMap<u64, PeerStat>,
     region_buckets: HashMap<u64, ReportBucket>,
@@ -930,19 +930,19 @@ where
     health_service: Option<HealthService>,
     curr_health_status: ServingStatus,
     coprocessor_host: CoprocessorHost<EK>,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+    causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClient + Clone + 'static,
 {
     pub fn new(
         cfg: &Config,
         store_id: u64,
-        pd_client: Arc<T>,
+        pd_client: T,
         router: RaftRouter<EK, ER>,
         scheduler: Scheduler<Task<EK, ER>>,
         auto_split_controller: AutoSplitController,
@@ -953,7 +953,7 @@ where
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
     ) -> Runner<EK, ER, T> {
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
@@ -1030,7 +1030,7 @@ where
 
     // Deprecate
     fn handle_ask_split(
-        &self,
+        &mut self,
         mut region: metapb::Region,
         split_key: Vec<u8>,
         peer: metapb::Peer,
@@ -1085,7 +1085,7 @@ where
     fn handle_ask_batch_split(
         router: RaftRouter<EK, ER>,
         scheduler: Scheduler<Task<EK, ER>>,
-        pd_client: Arc<T>,
+        mut pd_client: T,
         mut region: metapb::Region,
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
@@ -1174,7 +1174,7 @@ where
     }
 
     fn handle_heartbeat(
-        &self,
+        &mut self,
         term: u64,
         region: metapb::Region,
         peer: metapb::Peer,
@@ -1465,7 +1465,7 @@ where
             .set(self.slow_trend_result.l2_margin_error_base());
     }
 
-    fn handle_report_batch_split(&self, regions: Vec<metapb::Region>) {
+    fn handle_report_batch_split(&mut self, regions: Vec<metapb::Region>) {
         let resp = self.pd_client.report_batch_split(regions);
         let f = async move {
             if let Err(e) = resp.await {
@@ -1475,7 +1475,7 @@ where
         self.remote.spawn(f);
     }
 
-    fn handle_validate_peer(&self, local_region: metapb::Region, peer: metapb::Peer) {
+    fn handle_validate_peer(&mut self, local_region: metapb::Region, peer: metapb::Peer) {
         let router = self.router.clone();
         let resp = self.pd_client.get_region_by_id(local_region.get_id());
         let f = async move {
@@ -1730,9 +1730,9 @@ where
         initial_status: u64,
         txn_ext: Arc<TxnExt>,
     ) {
-        let pd_client = self.pd_client.clone();
+        let mut pd_client = self.pd_client.clone();
         let concurrency_manager = self.concurrency_manager.clone();
-        let causal_ts_provider = self.causal_ts_provider.clone();
+        let mut causal_ts_provider = self.causal_ts_provider.clone();
 
         let f = async move {
             let mut success = false;
@@ -1746,7 +1746,7 @@ where
                 // causal_ts_provider.flush() is implemented as pd_client.get_tso() + renew TSO
                 // cached.
                 let res: crate::Result<TimeStamp> =
-                    if let Some(causal_ts_provider) = &causal_ts_provider {
+                    if let Some(causal_ts_provider) = &mut causal_ts_provider {
                         causal_ts_provider
                             .async_flush()
                             .await
@@ -1807,7 +1807,7 @@ where
         }
     }
 
-    fn handle_query_region_leader(&self, region_id: u64) {
+    fn handle_query_region_leader(&mut self, region_id: u64) {
         let router = self.router.clone();
         let resp = self.pd_client.get_region_leader_by_id(region_id);
         let f = async move {
@@ -1841,7 +1841,7 @@ where
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 
-    fn handle_report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
+    fn handle_report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) {
         let resp = self
             .pd_client
             .report_min_resolved_ts(store_id, min_resolved_ts);
@@ -1966,7 +1966,7 @@ impl<EK, ER, T> Runnable for Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient,
+    T: PdClient + Clone,
 {
     type Task = Task<EK, ER>;
 
@@ -2012,7 +2012,7 @@ where
                 self.remote.clone(),
             ),
             Task::AutoSplit { split_infos } => {
-                let pd_client = self.pd_client.clone();
+                let mut pd_client = self.pd_client.clone();
                 let router = self.router.clone();
                 let scheduler = self.scheduler.clone();
                 let remote = self.remote.clone();
@@ -2210,7 +2210,7 @@ impl<EK, ER, T> RunnableWithTimer for Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClient + Clone + 'static,
 {
     fn on_timeout(&mut self) {
         // Record a fairly great value when timeout

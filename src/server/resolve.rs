@@ -7,7 +7,7 @@ use std::{
 
 use collections::HashMap;
 use kvproto::replication_modepb::ReplicationMode;
-use pd_client::{take_peer_address, PdClient};
+use pd_client::{take_peer_address, PdClientCommon};
 use raftstore::store::GlobalReplicationState;
 use tikv_kv::RaftExtension;
 use tikv_util::{
@@ -53,10 +53,10 @@ struct StoreAddr {
 /// A runner for resolving store addresses.
 struct Runner<T, R>
 where
-    T: PdClient,
+    T: PdClientCommon,
     R: RaftExtension,
 {
-    pd_client: Arc<T>,
+    pd_client: T,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
     router: R,
@@ -64,7 +64,7 @@ where
 
 impl<T, R> Runner<T, R>
 where
-    T: PdClient,
+    T: PdClientCommon,
     R: RaftExtension,
 {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
@@ -87,9 +87,8 @@ where
         Ok(addr)
     }
 
-    fn get_address(&self, store_id: u64) -> Result<String> {
-        let pd_client = Arc::clone(&self.pd_client);
-        let mut s = match pd_client.get_store(store_id) {
+    fn get_address(&mut self, store_id: u64) -> Result<String> {
+        let mut s = match self.pd_client.get_store(store_id) {
             Ok(s) => s,
             // `get_store` will filter tombstone store, so here needs to handle
             // it explicitly.
@@ -126,7 +125,7 @@ where
 
 impl<T, R> Runnable for Runner<T, R>
 where
-    T: PdClient,
+    T: PdClientCommon,
     R: RaftExtension,
 {
     type Task = Task;
@@ -153,12 +152,12 @@ impl PdStoreAddrResolver {
 
 /// Creates a new `PdStoreAddrResolver`.
 pub fn new_resolver<T, R>(
-    pd_client: Arc<T>,
+    pd_client: T,
     worker: &Worker,
     router: R,
 ) -> (PdStoreAddrResolver, Arc<Mutex<GlobalReplicationState>>)
 where
-    T: PdClient + 'static,
+    T: PdClientCommon + 'static,
     R: RaftExtension + 'static,
 {
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
@@ -183,24 +182,25 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, ops::Sub, str::FromStr, sync::Arc, thread, time::Duration};
+    use std::{net::SocketAddr, ops::Sub, str::FromStr, thread, time::Duration};
 
     use collections::HashMap;
     use kvproto::metapb;
-    use pd_client::{PdClient, Result};
+    use pd_client::{PdClientCommon, Result};
     use tikv_kv::FakeExtension;
 
     use super::*;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
+    #[derive(Clone)]
     struct MockPdClient {
         start: Instant,
         store: metapb::Store,
     }
 
-    impl PdClient for MockPdClient {
-        fn get_store(&self, _: u64) -> Result<metapb::Store> {
+    impl PdClientCommon for MockPdClient {
+        fn get_store(&mut self, _: u64) -> Result<metapb::Store> {
             if self.store.get_state() == metapb::StoreState::Tombstone {
                 // Simulate the behavior of `get_store` in pd client.
                 return Err(pd_client::Error::StoreTombstone(format!(
@@ -231,7 +231,7 @@ mod tests {
             store,
         };
         Runner {
-            pd_client: Arc::new(client),
+            pd_client: client,
             store_addrs: HashMap::default(),
             state: Default::default(),
             router: FakeExtension,
@@ -243,21 +243,21 @@ mod tests {
     #[test]
     fn test_resolve_store_state_up() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Up);
-        let runner = new_runner(store);
+        let mut runner = new_runner(store);
         runner.get_address(0).unwrap();
     }
 
     #[test]
     fn test_resolve_store_state_offline() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Offline);
-        let runner = new_runner(store);
+        let mut runner = new_runner(store);
         runner.get_address(0).unwrap();
     }
 
     #[test]
     fn test_resolve_store_state_tombstone() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
-        let runner = new_runner(store);
+        let mut runner = new_runner(store);
         runner.get_address(0).unwrap_err();
     }
 
@@ -265,7 +265,7 @@ mod tests {
     fn test_resolve_store_peer_addr() {
         let mut store = new_store("127.0.0.1:12345", metapb::StoreState::Up);
         store.set_peer_address("127.0.0.1:22345".to_string());
-        let runner = new_runner(store);
+        let mut runner = new_runner(store);
         assert_eq!(
             runner.get_address(0).unwrap(),
             "127.0.0.1:22345".to_string()

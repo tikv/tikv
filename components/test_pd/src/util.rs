@@ -16,11 +16,11 @@ pub fn new_config(eps: Vec<(String, u16)>) -> Config {
     }
 }
 
-pub fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> RpcClient {
+pub fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> Arc<RpcClient> {
     let cfg = new_config(eps);
     let mgr =
         mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
-    RpcClient::new(&cfg, None, mgr).unwrap()
+    Arc::new(RpcClient::new(&cfg, None, mgr).unwrap())
 }
 
 pub fn new_client_v2(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> RpcClientV2 {
@@ -34,12 +34,12 @@ pub fn new_client_with_update_interval(
     eps: Vec<(String, u16)>,
     mgr: Option<Arc<SecurityManager>>,
     interval: ReadableDuration,
-) -> RpcClient {
+) -> Arc<RpcClient> {
     let mut cfg = new_config(eps);
     cfg.update_interval = interval;
     let mgr =
         mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
-    RpcClient::new(&cfg, None, mgr).unwrap()
+    Arc::new(RpcClient::new(&cfg, None, mgr).unwrap())
 }
 
 pub fn new_client_v2_with_update_interval(

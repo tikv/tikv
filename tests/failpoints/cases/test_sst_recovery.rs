@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Debug, io::Write, path::Path, sync::Arc, time::Duration};
+use std::{fmt::Debug, io::Write, path::Path, time::Duration};
 
 use engine_rocks::RocksEngine;
 use engine_rocks_helper::sst_recovery::*;
@@ -23,7 +23,7 @@ fn assert_corruption(res: engine_traits::Result<impl Debug>) {
 
 #[test]
 fn test_sst_recovery_basic() {
-    let (mut cluster, pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
+    let (mut cluster, mut pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
 
     // Test that only sst recovery can delete the sst file, remove peer don't delete
     // it.
@@ -75,7 +75,7 @@ fn test_sst_recovery_basic() {
 
 #[test]
 fn test_sst_recovery_overlap_range_sst_exist() {
-    let (mut cluster, pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
+    let (mut cluster, mut pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
 
     // create a new sst [1,7] flushed to L0.
     cluster.must_put_cf(CF_DEFAULT, b"1", b"val_1");
@@ -115,7 +115,7 @@ fn test_sst_recovery_overlap_range_sst_exist() {
 
 #[test]
 fn test_sst_recovery_atomic_when_adding_peer() {
-    let (mut cluster, pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
+    let (mut cluster, mut pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
 
     // To validate atomic of sst recovery.
     fail::cfg("sst_recovery_before_delete_files", "pause").unwrap();
@@ -179,10 +179,10 @@ fn compact_files_to_target_level(
     engine.compact_files_cf(CF_DEFAULT, file_names, Some(level), 1, false)
 }
 
-fn create_tikv_cluster_with_one_node_damaged()
--> (Cluster<ServerCluster>, Arc<TestPdClient>, RocksEngine) {
+fn create_tikv_cluster_with_one_node_damaged() -> (Cluster<ServerCluster>, TestPdClient, RocksEngine)
+{
     let mut cluster = new_server_cluster(0, 3);
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
 

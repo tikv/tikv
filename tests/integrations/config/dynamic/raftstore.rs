@@ -98,7 +98,7 @@ fn start_raftstore(
             cfg_track.clone(),
             engines,
             MockTransport,
-            Arc::new(TestPdClient::new(0, true)),
+            TestPdClient::new(0, true),
             snap_mgr,
             pd_worker,
             store_meta,

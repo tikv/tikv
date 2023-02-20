@@ -103,7 +103,7 @@ impl TestSuite {
         .unwrap();
     }
 
-    pub fn get_causal_ts_provider(&mut self, node_id: u64) -> Option<Arc<CausalTsProviderImpl>> {
+    pub fn get_causal_ts_provider(&mut self, node_id: u64) -> Option<CausalTsProviderImpl> {
         self.cluster.sim.rl().get_causal_ts_provider(node_id)
     }
 
@@ -291,7 +291,7 @@ fn test_raw_put_key_guard() {
     let ctx = suite.get_context(region_id);
     let node_id = region.get_peers()[0].get_id();
     let leader_cm = suite.cluster.sim.rl().get_concurrency_manager(node_id);
-    let ts_provider = suite.get_causal_ts_provider(node_id).unwrap();
+    let mut ts_provider = suite.get_causal_ts_provider(node_id).unwrap();
     let ts = block_on(ts_provider.async_get_ts()).unwrap();
 
     let copy_test_key = test_key.clone();

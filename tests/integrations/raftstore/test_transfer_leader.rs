@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, thread, time::Duration};
+use std::{thread, time::Duration};
 
 use api_version::{test_kv_format_impl, KvFormat};
 use engine_traits::CF_LOCK;
@@ -68,8 +68,7 @@ fn test_server_basic_transfer_leader() {
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_server_pd_transfer_leader() {
     let mut cluster = new_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
+    cluster.pd_client.disable_default_operator();
 
     cluster.run();
 
@@ -86,7 +85,9 @@ fn test_server_pd_transfer_leader() {
 
     for id in 1..4 {
         // select a new leader to transfer
-        pd_client.transfer_leader(region.get_id(), new_peer(id, id), vec![]);
+        cluster
+            .pd_client
+            .transfer_leader(region.get_id(), new_peer(id, id), vec![]);
 
         for _ in 0..100 {
             // reset leader and wait transfer successfully.
@@ -119,8 +120,7 @@ fn test_server_pd_transfer_leader() {
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_server_pd_transfer_leader_multi_target() {
     let mut cluster = new_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
+    cluster.pd_client.disable_default_operator();
 
     cluster.run();
 
@@ -136,7 +136,7 @@ fn test_server_pd_transfer_leader_multi_target() {
     // select multi target leaders to transfer
     // set `peer` to 3, make sure the new leader comes from `peers`
     let mut region = cluster.get_region(b"");
-    pd_client.transfer_leader(
+    cluster.pd_client.transfer_leader(
         region.get_id(),
         new_peer(3, 3),
         vec![new_peer(2, 2), new_peer(3, 3)],
@@ -178,7 +178,7 @@ fn test_server_pd_transfer_leader_multi_target() {
 #[test_case(test_raftstore::new_server_cluster)]
 fn test_server_transfer_leader_during_snapshot() {
     let mut cluster = new_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);

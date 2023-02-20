@@ -159,7 +159,7 @@ mod tests {
     fn test_client_stop() {
         let (_server, client, mut rx) = new_rpc_suite();
 
-        let (tmp, endpoint) = new_endpoint();
+        let (tmp, mut endpoint) = new_endpoint();
         let mut engine = endpoint.engine.clone();
         endpoint.region_info.set_regions(vec![
             (b"".to_vec(), b"2".to_vec(), 1),

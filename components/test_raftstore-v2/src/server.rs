@@ -25,7 +25,7 @@ use kvproto::{
     raft_cmdpb::RaftCmdResponse,
     tikvpb_grpc::TikvClient,
 };
-use pd_client::PdClient;
+use pd_client::{PdClientCommon, TsoGetter, TsoGetterFactory};
 use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
@@ -106,7 +106,7 @@ pub struct ServerCluster {
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
-    pd_client: Arc<TestPdClient>,
+    pd_client: TestPdClient,
     // raft_client: RaftClient<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
@@ -114,11 +114,11 @@ pub struct ServerCluster {
     pub health_services: HashMap<u64, HealthService>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
-    pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
+    pub causal_ts_providers: HashMap<u64, CausalTsProviderImpl>,
 }
 
 impl ServerCluster {
-    pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
+    pub fn new(pd_client: TestPdClient) -> ServerCluster {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(2)
@@ -245,8 +245,8 @@ impl ServerCluster {
             raft_kv_v2.set_txn_extra_scheduler(scheduler);
         }
 
-        let latest_ts =
-            block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
+        let latest_ts = block_on(self.pd_client.new_tso_getter().unwrap().get_tso())
+            .expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
         let (tx, _rx) = std::sync::mpsc::channel();
@@ -262,7 +262,7 @@ impl ServerCluster {
         // todo: resolved ts
 
         if ApiVersion::V2 == F::TAG {
-            let casual_ts_provider: Arc<CausalTsProviderImpl> = Arc::new(
+            let casual_ts_provider: CausalTsProviderImpl =
                 block_on(causal_ts::BatchTsoProvider::new_opt(
                     self.pd_client.clone(),
                     cfg.causal_ts.renew_interval.0,
@@ -271,8 +271,7 @@ impl ServerCluster {
                     cfg.causal_ts.renew_batch_max_size,
                 ))
                 .unwrap()
-                .into(),
-            );
+                .into();
             self.causal_ts_providers.insert(node_id, casual_ts_provider);
         }
 
@@ -324,7 +323,7 @@ impl ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (resolver, state) = resolve::new_resolver(
-            Arc::clone(&self.pd_client),
+            self.pd_client.clone(),
             &bg_worker,
             store.get_engine().raft_extension(),
         );
@@ -443,7 +442,7 @@ impl ServerCluster {
         lock_mgr
             .start(
                 node.id(),
-                Arc::clone(&self.pd_client),
+                self.pd_client.clone(),
                 resolver,
                 Arc::clone(&security_mgr),
                 &pessimistic_txn_cfg,
@@ -470,7 +469,7 @@ impl ServerCluster {
         Ok(node_id)
     }
 
-    pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<CausalTsProviderImpl>> {
+    pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<CausalTsProviderImpl> {
         self.causal_ts_providers.get(&node_id).cloned()
     }
 
@@ -636,14 +635,14 @@ impl Cluster<ServerCluster> {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    let pd_client = Arc::new(TestPdClient::new(id, false));
-    let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
+    let pd_client = TestPdClient::new(id, false);
+    let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
 pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    let pd_client = Arc::new(TestPdClient::new(id, true));
-    let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
+    let pd_client = TestPdClient::new(id, true);
+    let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
@@ -652,8 +651,8 @@ pub fn new_server_cluster_with_api_ver(
     count: usize,
     api_ver: ApiVersion,
 ) -> Cluster<ServerCluster> {
-    let pd_client = Arc::new(TestPdClient::new(id, false));
-    let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
+    let pd_client = TestPdClient::new(id, false);
+    let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
     Cluster::new(id, count, sim, pd_client, api_ver)
 }
 

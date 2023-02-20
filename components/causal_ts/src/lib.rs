@@ -25,16 +25,18 @@ pub use crate::errors::Result;
 #[enum_dispatch]
 pub trait CausalTsProvider: Send + Sync {
     /// Get a new timestamp.
-    async fn async_get_ts(&self) -> Result<TimeStamp>;
+    async fn async_get_ts(&mut self) -> Result<TimeStamp>;
 
     /// Flush (cached) timestamps and return first timestamp to keep causality
     /// on some events, such as "leader transfer".
-    async fn async_flush(&self) -> Result<TimeStamp>;
+    async fn async_flush(&mut self) -> Result<TimeStamp>;
 }
 
+#[derive(Clone)]
 #[enum_dispatch(CausalTsProvider)]
 pub enum CausalTsProviderImpl {
-    BatchTsoProvider(BatchTsoProvider<pd_client::RpcClient>),
+    BatchTsoProvider(BatchTsoProvider<std::sync::Arc<pd_client::RpcClient>>),
+    BatchTsoProviderV2(BatchTsoProvider<pd_client::TsoConnection>),
     #[cfg(any(test, feature = "testexport"))]
     BatchTsoProviderTest(BatchTsoProvider<TestPdClient>),
     TestProvider(tests::TestProvider),
@@ -65,13 +67,13 @@ pub mod tests {
 
     #[async_trait]
     impl CausalTsProvider for TestProvider {
-        async fn async_get_ts(&self) -> Result<TimeStamp> {
+        async fn async_get_ts(&mut self) -> Result<TimeStamp> {
             Ok(self.ts.fetch_add(1, Ordering::Relaxed).into())
         }
 
         // This is used for unit test. Add 100 from current.
         // Do not modify this value as several test cases depend on it.
-        async fn async_flush(&self) -> Result<TimeStamp> {
+        async fn async_flush(&mut self) -> Result<TimeStamp> {
             self.ts.fetch_add(100, Ordering::Relaxed);
             self.async_get_ts().await
         }

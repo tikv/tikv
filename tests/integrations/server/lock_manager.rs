@@ -183,7 +183,7 @@ fn new_cluster_for_deadlock_test(count: usize) -> Cluster<ServerCluster> {
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(500);
     cluster.cfg.pessimistic_txn.pipelined = false;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
     // Region 1 has 3 peers. And peer(1, 1) is the leader of region 1.

@@ -1,15 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{mpsc, Arc},
-    time::*,
-};
+use std::{sync::mpsc, time::*};
 
 use kvproto::{
     metapb::{self, PeerRole, Region},
     raft_cmdpb::{ChangePeerRequest, RaftCmdRequest, RaftCmdResponse},
 };
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::ConfChangeType;
 use raftstore::Result;
 use test_raftstore::*;
@@ -19,7 +16,7 @@ use tikv_util::store::find_peer;
 #[test]
 fn test_joint_consensus_conf_change() {
     let mut cluster = new_node_cluster(0, 4);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
@@ -73,7 +70,7 @@ fn test_joint_consensus_conf_change() {
 #[test]
 fn test_enter_joint_state() {
     let mut cluster = new_node_cluster(0, 4);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
@@ -138,7 +135,7 @@ fn test_enter_joint_state() {
 #[test]
 fn test_request_in_joint_state() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
@@ -203,7 +200,7 @@ fn test_joint_replace_peers() {
     let mut cluster = new_node_cluster(0, 5);
     cluster.cfg.raft_store.allow_remove_leader = false;
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
@@ -276,7 +273,7 @@ fn test_invalid_confchange_request() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.allow_remove_leader = false;
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
     let region = cluster.get_region(b"");
@@ -378,7 +375,7 @@ fn test_invalid_confchange_request() {
 #[test]
 fn test_restart_in_joint_state() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
@@ -426,7 +423,7 @@ fn test_restart_in_joint_state() {
 #[test]
 fn test_leader_down_in_joint_state() {
     let mut cluster = new_node_cluster(0, 5);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 

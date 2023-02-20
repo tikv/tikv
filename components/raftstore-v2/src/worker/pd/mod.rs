@@ -10,7 +10,7 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
-use pd_client::{BucketStat, PdClient};
+use pd_client::{BucketStat, PdClientV2};
 use raftstore::store::{
     util::KeysInfoFormatter, AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor,
     ReadStats, RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TabletSnapManager,
@@ -156,10 +156,11 @@ pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     store_id: u64,
-    pd_client: Arc<T>,
+    pd_client: T,
+    cluster_id: u64,
     raft_engine: ER,
     tablet_registry: TabletRegistry<EK>,
     snap_mgr: TabletSnapManager,
@@ -177,11 +178,13 @@ where
     region_buckets: HashMap<u64, region::ReportBucket>,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
-    is_hb_receiver_scheduled: bool,
+    region_heartbeat_transport: Option<region::HeartbeatTransport>,
+    region_bucket_transport: Option<region::BucketTransport>,
 
     // For update_max_timestamp.
     concurrency_manager: ConcurrencyManager,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    causal_ts_provider: Option<CausalTsProviderImpl>,
+    tso_transport: Option<T::TsoGetter>,
 
     logger: Logger,
     shutdown: Arc<AtomicBool>,
@@ -192,18 +195,18 @@ impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     pub fn new(
         store_id: u64,
-        pd_client: Arc<T>,
+        mut pd_client: T,
         raft_engine: ER,
         tablet_registry: TabletRegistry<EK>,
         snap_mgr: TabletSnapManager,
         router: StoreRouter<EK, ER>,
         remote: Remote<TaskCell>,
         concurrency_manager: ConcurrencyManager,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
         pd_scheduler: Scheduler<Task>,
         auto_split_controller: AutoSplitController,
         region_read_progress: RegionReadProgressRegistry,
@@ -223,9 +226,13 @@ where
             collector_reg_handle,
             store_id,
         )?;
+        let cluster_id = pd_client
+            .fetch_cluster_id()
+            .expect("failed to fetch cluster id from pd");
         Ok(Self {
             store_id,
             pd_client,
+            cluster_id,
             raft_engine,
             tablet_registry,
             snap_mgr,
@@ -237,9 +244,11 @@ where
             region_peers: HashMap::default(),
             region_buckets: HashMap::default(),
             region_cpu_records: HashMap::default(),
-            is_hb_receiver_scheduled: false,
+            region_heartbeat_transport: None,
+            region_bucket_transport: None,
             concurrency_manager,
             causal_ts_provider,
+            tso_transport: None,
             logger,
             shutdown,
             cfg,
@@ -251,12 +260,11 @@ impl<EK, ER, T> Runnable for Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
+    T: PdClientV2 + Clone + 'static,
 {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
-        self.maybe_schedule_heartbeat_receiver();
         match task {
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
             Task::UpdateStoreInfos {

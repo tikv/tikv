@@ -4,26 +4,23 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
-use pd_client::{Error as PdError, PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH};
+use pd_client::{Error as PdError, PdClientCommon, RESOURCE_CONTROL_CONFIG_PATH};
 use tikv_util::{error, timer::GLOBAL_TIMER_HANDLE};
 
 use crate::ResourceGroupManager;
 
 #[derive(Clone)]
-pub struct ResourceManagerService {
+pub struct ResourceManagerService<P: PdClientCommon + Clone> {
     manager: Arc<ResourceGroupManager>,
-    pd_client: Arc<RpcClient>,
+    pd_client: P,
     // record watch revision
     revision: i64,
 }
 
-impl ResourceManagerService {
+impl<P: PdClientCommon + Clone> ResourceManagerService<P> {
     /// Constructs a new `Service` with `ResourceGroupManager` and a `RpcClient`
-    pub fn new(
-        manager: Arc<ResourceGroupManager>,
-        pd_client: Arc<RpcClient>,
-    ) -> ResourceManagerService {
-        ResourceManagerService {
+    pub fn new(manager: Arc<ResourceGroupManager>, pd_client: P) -> Self {
+        Self {
             pd_client,
             manager,
             revision: 0,
@@ -33,7 +30,7 @@ impl ResourceManagerService {
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
 
-impl ResourceManagerService {
+impl<P: PdClientCommon + Clone> ResourceManagerService<P> {
     pub async fn watch_resource_groups(&mut self) {
         'outer: loop {
             // Firstly, load all resource groups as of now.
@@ -156,14 +153,14 @@ pub mod tests {
 
     fn new_test_server_and_client(
         update_interval: ReadableDuration,
-    ) -> (MockServer<Service>, RpcClient) {
+    ) -> (MockServer<Service>, Arc<RpcClient>) {
         let server = MockServer::new(1);
         let eps = server.bind_addrs();
         let client = new_client_with_update_interval(eps, None, update_interval);
         (server, client)
     }
 
-    fn add_resource_group(pd_client: Arc<RpcClient>, group: ResourceGroup) {
+    fn add_resource_group(mut pd_client: Arc<RpcClient>, group: ResourceGroup) {
         let mut item = GlobalConfigItem::default();
         item.set_kind(EventType::Put);
         item.set_name(group.get_name().to_string());
@@ -179,7 +176,7 @@ pub mod tests {
         .unwrap();
     }
 
-    fn delete_resource_group(pd_client: Arc<RpcClient>, name: &str) {
+    fn delete_resource_group(mut pd_client: Arc<RpcClient>, name: &str) {
         let mut item = GlobalConfigItem::default();
         item.set_kind(EventType::Delete);
         item.set_name(name.to_string());
@@ -198,7 +195,7 @@ pub mod tests {
         let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
         let resource_manager = ResourceGroupManager::default();
 
-        let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
+        let mut s = ResourceManagerService::new(Arc::new(resource_manager), client);
         let group = new_resource_group("TEST".into(), true, 100, 100);
         add_resource_group(s.pd_client.clone(), group);
         block_on(s.reload_all_resource_groups());
@@ -218,13 +215,13 @@ pub mod tests {
         let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
         let resource_manager = ResourceGroupManager::default();
 
-        let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
+        let mut s = ResourceManagerService::new(Arc::new(resource_manager), client);
         block_on(s.reload_all_resource_groups());
         assert_eq!(s.manager.get_all_resource_groups().len(), 0);
         assert_eq!(s.revision, 0);
 
         // TODO: find a better way to observe the watch is ready.
-        let wait_watch_ready = |s: &ResourceManagerService, count: usize| {
+        let wait_watch_ready = |s: &ResourceManagerService<Arc<RpcClient>>, count: usize| {
             for _i in 0..100 {
                 if s.manager.get_all_resource_groups().len() == count {
                     return;
@@ -279,7 +276,7 @@ pub mod tests {
         let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
         let resource_manager = ResourceGroupManager::default();
 
-        let s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
+        let s = ResourceManagerService::new(Arc::new(resource_manager), client);
         let background_worker = Builder::new("background").thread_count(1).create();
         let mut s_clone = s.clone();
         background_worker.spawn_async_task(async move {

@@ -1,10 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{mpsc, Arc},
-    thread::sleep,
-    time::Duration,
-};
+use std::{sync::mpsc, thread::sleep, time::Duration};
 
 use test_raftstore::*;
 use tikv_util::{
@@ -13,7 +9,7 @@ use tikv_util::{
     HandyRwLock,
 };
 
-fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
+fn wait_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64, peer: Option<u64>) {
     let mut peers = cluster.get_down_peers();
     for _ in 1..1000 {
         if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
@@ -98,7 +94,7 @@ fn test_server_down_peers_without_hibernate_regions() {
 }
 
 fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 

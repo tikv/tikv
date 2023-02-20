@@ -77,7 +77,7 @@ impl<ER: RaftEngine> RecoveryService<ER> {
                 tikv_util::thread_group::set_properties(props.clone());
                 tikv_alloc::add_thread_memory_accessor();
             })
-            .before_stop_wrapper(|| tikv_alloc::remove_thread_memory_accessor())
+            .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
             .create()
             .unwrap();
 

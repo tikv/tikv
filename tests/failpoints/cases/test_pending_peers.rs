@@ -1,7 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
 use test_raftstore::*;
 use tikv_util::{config::*, time::Instant};
 
@@ -12,7 +10,7 @@ fn test_pending_peers() {
 
     let region_worker_fp = "region_apply_snap";
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -50,7 +48,7 @@ fn test_pending_snapshot() {
     let handle_snapshot_finish_fp = "apply_on_handle_snapshot_finish_1_1";
     fail::cfg("apply_on_handle_snapshot_sync", "return").unwrap();
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 

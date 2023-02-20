@@ -16,7 +16,7 @@ use engine_traits::KvEngine;
 use grpcio::Environment;
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
-use pd_client::PdClient;
+use pd_client::{PdClientCommon, TsoGetterFactory};
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, ObserveId},
     router::RaftStoreRouter,
@@ -266,7 +266,7 @@ impl ObserveRegion {
     }
 }
 
-pub struct Endpoint<T, E: KvEngine> {
+pub struct Endpoint<T, E: KvEngine, P: PdClientCommon + TsoGetterFactory> {
     store_id: Option<u64>,
     cfg: ResolvedTsConfig,
     advance_notify: Arc<Notify>,
@@ -275,21 +275,22 @@ pub struct Endpoint<T, E: KvEngine> {
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task>,
-    advance_worker: AdvanceTsWorker,
+    advance_worker: AdvanceTsWorker<P, P::TsoGetter>,
     _phantom: PhantomData<(T, E)>,
 }
 
-impl<T, E> Endpoint<T, E>
+impl<T, E, P> Endpoint<T, E, P>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
 {
     pub fn new(
         cfg: &ResolvedTsConfig,
         scheduler: Scheduler<Task>,
         raft_router: T,
         store_meta: Arc<Mutex<StoreMeta>>,
-        pd_client: Arc<dyn PdClient>,
+        mut pd_client: P,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
@@ -301,6 +302,7 @@ where
         let advance_worker = AdvanceTsWorker::new(
             cfg.advance_ts_interval.0,
             pd_client.clone(),
+            pd_client.new_tso_getter().unwrap(),
             scheduler.clone(),
             concurrency_manager,
         );
@@ -308,7 +310,6 @@ where
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
             store_id.unwrap(),
-            pd_client.clone(),
             env,
             security_mgr,
             region_read_progress.clone(),
@@ -698,10 +699,11 @@ impl fmt::Display for Task {
     }
 }
 
-impl<T, E> Runnable for Endpoint<T, E>
+impl<T, E, P> Runnable for Endpoint<T, E, P>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
 {
     type Task = Task;
 
@@ -754,10 +756,11 @@ impl ConfigManager for ResolvedTsConfigManager {
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-impl<T, E> RunnableWithTimer for Endpoint<T, E>
+impl<T, E, P> RunnableWithTimer for Endpoint<T, E, P>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
 {
     fn on_timeout(&mut self) {
         let store_id = self.get_or_init_store_id();

@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use futures::{
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
@@ -12,7 +12,7 @@ use kvproto::{
     logbackuppb::{FlushEvent, SubscribeFlushEventResponse},
     metapb::Region,
 };
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use tikv_util::{box_err, defer, info, warn, worker::Scheduler};
 use txn_types::TimeStamp;
 use uuid::Uuid;
@@ -351,18 +351,18 @@ pub trait FlushObserver: Send + 'static {
 }
 
 pub struct BasicFlushObserver<PD> {
-    pd_cli: Arc<PD>,
+    pd_cli: PD,
     store_id: u64,
 }
 
 impl<PD> BasicFlushObserver<PD> {
-    pub fn new(pd_cli: Arc<PD>, store_id: u64) -> Self {
+    pub fn new(pd_cli: PD, store_id: u64) -> Self {
         Self { pd_cli, store_id }
     }
 }
 
 #[async_trait::async_trait]
-impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
+impl<PD: PdClientCommon + 'static> FlushObserver for BasicFlushObserver<PD> {
     async fn before(&mut self, _checkpoints: Vec<(Region, TimeStamp)>) {}
 
     async fn after(&mut self, task: &str, rts: u64) -> Result<()> {
@@ -483,7 +483,7 @@ pub mod tests {
 
     use futures::future::ok;
     use kvproto::metapb::*;
-    use pd_client::{PdClient, PdFuture};
+    use pd_client::{PdClientCommon, PdFuture};
     use txn_types::TimeStamp;
 
     use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
@@ -525,18 +525,18 @@ pub mod tests {
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 24);
     }
 
+    #[derive(Clone)]
     pub struct MockPdClient {
-        safepoint: RwLock<HashMap<String, TimeStamp>>,
+        safepoint: Arc<RwLock<HashMap<String, TimeStamp>>>,
     }
 
-    impl PdClient for MockPdClient {
+    impl PdClientCommon for MockPdClient {
         fn update_service_safe_point(
-            &self,
+            &mut self,
             name: String,
             safepoint: TimeStamp,
             _ttl: Duration,
         ) -> PdFuture<()> {
-            // let _ = self.safepoint.insert(name, safepoint);
             self.safepoint.write().unwrap().insert(name, safepoint);
 
             Box::pin(ok(()))
@@ -546,7 +546,7 @@ pub mod tests {
     impl MockPdClient {
         fn new() -> Self {
             Self {
-                safepoint: RwLock::new(HashMap::default()),
+                safepoint: Arc::new(RwLock::new(HashMap::default())),
             }
         }
 
@@ -558,7 +558,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_after() {
         let store_id = 1;
-        let pd_cli = Arc::new(MockPdClient::new());
+        let pd_cli = MockPdClient::new();
         let mut flush_observer = BasicFlushObserver::new(pd_cli.clone(), store_id);
         let task = String::from("test");
         let rts = 12345;

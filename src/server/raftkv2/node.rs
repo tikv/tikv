@@ -6,7 +6,7 @@ use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletContext, TabletRegistry};
 use kvproto::{metapb, replication_modepb::ReplicationStatus};
-use pd_client::PdClient;
+use pd_client::PdClientV2;
 use raftstore::{
     coprocessor::CoprocessorHost,
     store::{
@@ -25,26 +25,26 @@ use tikv_util::{
 use crate::server::{node::init_store, Result};
 
 // TODO: we will rename another better name like RaftStore later.
-pub struct NodeV2<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
+pub struct NodeV2<C: PdClientV2 + Clone + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     system: Option<(StoreRouter<EK, ER>, StoreSystem<EK, ER>)>,
     has_started: bool,
 
-    pd_client: Arc<C>,
+    pd_client: C,
     logger: Logger,
 }
 
 impl<C, EK, ER> NodeV2<C, EK, ER>
 where
-    C: PdClient,
+    C: PdClientV2 + Clone,
     EK: KvEngine,
     ER: RaftEngine,
 {
     /// Creates a new Node.
     pub fn new(
         cfg: &crate::server::Config,
-        pd_client: Arc<C>,
+        pd_client: C,
         store: Option<metapb::Store>,
     ) -> NodeV2<C, EK, ER> {
         let store = init_store(store, cfg);
@@ -67,7 +67,7 @@ where
         let store_id = Bootstrap::new(
             raft_engine,
             self.cluster_id,
-            &*self.pd_client,
+            &mut self.pd_client,
             self.logger.clone(),
         )
         .bootstrap_store()?;
@@ -94,7 +94,7 @@ where
         trans: T,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
         auto_split_controller: AutoSplitController,
         collector_reg_handle: CollectorRegHandle,
@@ -110,7 +110,7 @@ where
         if let Some(region) = Bootstrap::new(
             &raft_engine,
             self.cluster_id,
-            &*self.pd_client,
+            &mut self.pd_client,
             self.logger.clone(),
         )
         .bootstrap_first_region(&self.store, store_id)?
@@ -194,7 +194,7 @@ where
         trans: T,
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
         coprocessor_host: CoprocessorHost<EK>,
         auto_split_controller: AutoSplitController,
         collector_reg_handle: CollectorRegHandle,

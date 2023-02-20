@@ -123,8 +123,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use api_version::{test_kv_format_impl, ApiV2};
     use causal_ts::CausalTsProviderImpl;
     use concurrency_manager::ConcurrencyManager;
@@ -201,7 +199,7 @@ mod tests {
         engine: &mut E,
         cm: ConcurrencyManager,
         cmd: TypedCommand<(Option<Value>, bool)>,
-        ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        ts_provider: Option<CausalTsProviderImpl>,
     ) -> Result<(Option<Value>, bool)> {
         let snap = engine.snapshot(Default::default())?;
         use kvproto::kvrpcpb::ExtraOp;

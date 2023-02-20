@@ -20,7 +20,7 @@ use kvproto::{
     raft_serverpb::RaftMessage,
     tikvpb::TikvClient,
 };
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{config::Config as RaftstoreConfig, util::is_vote_msg, Callback, PeerMsg},
@@ -37,7 +37,7 @@ use txn_types::{Key, PessimisticLock};
 #[test]
 fn test_follower_slow_split() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run();
     let region = cluster.get_region(b"");
@@ -88,7 +88,7 @@ fn test_follower_slow_split() {
 #[test]
 fn test_split_lost_request_vote() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run();
     let region = cluster.get_region(b"");
@@ -179,7 +179,7 @@ fn gen_split_region() -> (Region, Region, Region) {
 
     let mut range = 1..;
     cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let region = pd_client.get_region(b"").unwrap();
     let last_key = put_till_size(&mut cluster, region_split_size, &mut range);
     let target = pd_client.get_region(&last_key).unwrap();
@@ -272,7 +272,7 @@ fn test_split_not_to_split_existing_region() {
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
@@ -347,7 +347,7 @@ fn test_split_not_to_split_existing_tombstone_region() {
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
     cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
@@ -415,7 +415,7 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
     cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
@@ -502,7 +502,7 @@ fn test_split_should_split_existing_same_uninitialied_peer() {
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
     cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
@@ -555,7 +555,7 @@ fn test_split_not_to_split_existing_different_uninitialied_peer() {
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
     cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
@@ -673,7 +673,7 @@ fn test_split_duplicated_batch() {
     // Use one thread to make it more possible to be fetched into one batch.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
@@ -848,7 +848,7 @@ fn test_split_with_concurrent_pessimistic_locking() {
     let mut cluster = new_server_cluster(0, 2);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -874,7 +874,8 @@ fn test_split_with_concurrent_pessimistic_locking() {
     // The pessimistic lock request has to fallback to propose locks. It should find
     // that the epoch has changed.
     fail::cfg("on_split_invalidate_locks", "pause").unwrap();
-    cluster.split_region(&cluster.get_region(b"key"), b"a", Callback::None);
+    let region = cluster.get_region(b"key");
+    cluster.split_region(&region, b"a", Callback::None);
     thread::sleep(Duration::from_millis(300));
 
     let client2 = client.clone();
@@ -893,7 +894,8 @@ fn test_split_with_concurrent_pessimistic_locking() {
     let res = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(200));
 
-    cluster.split_region(&cluster.get_region(b"key"), b"b", Callback::None);
+    let region = cluster.get_region(b"key");
+    cluster.split_region(&region, b"b", Callback::None);
     thread::sleep(Duration::from_millis(300));
 
     fail::remove("txn_before_process_write");
@@ -906,7 +908,7 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     let mut cluster = new_server_cluster(0, 2);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run();
@@ -984,7 +986,8 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
 
     // In the meantime, split region.
     fail::cfg("on_split_invalidate_locks", "pause").unwrap();
-    cluster.split_region(&cluster.get_region(b"key"), b"a", Callback::None);
+    let region = cluster.get_region(b"key");
+    cluster.split_region(&region, b"a", Callback::None);
     thread::sleep(Duration::from_millis(300));
 
     // PrewriteResponse should contain an EpochNotMatch instead of
@@ -1009,7 +1012,7 @@ fn test_split_replace_skip_log_gc() {
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
 
     // Disable default max peer number check.
     pd_client.disable_default_operator();
@@ -1074,7 +1077,7 @@ fn test_split_store_channel_full() {
     cluster.cfg.raft_store.notify_capacity = 10;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.messages_per_tick = 1;
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run();
     cluster.must_put(b"k1", b"v1");

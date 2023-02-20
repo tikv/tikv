@@ -26,7 +26,7 @@ use kvproto::{
     metapb::Region,
 };
 use online_config::{ConfigChange, OnlineConfig};
-use pd_client::{Feature, PdClient};
+use pd_client::{Feature, PdClientCommon, TsoGetter, TsoGetterFactory};
 use raftstore::{
     coprocessor::{CmdBatch, ObserveId},
     router::RaftStoreRouter,
@@ -319,7 +319,7 @@ impl ResolvedRegionHeap {
     }
 }
 
-pub struct Endpoint<T, E> {
+pub struct Endpoint<T, E, P: TsoGetterFactory> {
     cluster_id: u64,
 
     capture_regions: HashMap<u64, Delegate>,
@@ -329,7 +329,8 @@ pub struct Endpoint<T, E> {
     engine: E,
     observer: CdcObserver,
 
-    pd_client: Arc<dyn PdClient>,
+    pd_client: P,
+    tso_getter: P::TsoGetter,
     timer: SteadyTimer,
     tso_worker: Runtime,
     store_meta: Arc<StdMutex<StoreMeta>>,
@@ -351,7 +352,7 @@ pub struct Endpoint<T, E> {
     old_value_cache: OldValueCache,
     resolved_region_heap: ResolvedRegionHeap,
 
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    causal_ts_provider: Option<CausalTsProviderImpl>,
 
     // Metrics and logging.
     current_ts: TimeStamp,
@@ -362,12 +363,17 @@ pub struct Endpoint<T, E> {
     warn_resolved_ts_repeat_count: usize,
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
+impl<
+    T: 'static + RaftStoreRouter<E>,
+    E: KvEngine,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
+> Endpoint<T, E, P>
+{
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
         api_version: ApiVersion,
-        pd_client: Arc<dyn PdClient>,
+        mut pd_client: P,
         scheduler: Scheduler<Task>,
         raft_router: T,
         engine: E,
@@ -377,8 +383,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: MemoryQuota,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
-    ) -> Endpoint<T, E> {
+        causal_ts_provider: Option<CausalTsProviderImpl>,
+    ) -> Endpoint<T, E, P> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
             .worker_threads(config.incremental_scan_threads)
@@ -416,18 +422,21 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
             store_meta.lock().unwrap().store_id.unwrap(),
-            pd_client.clone(),
             env,
             security_mgr,
             region_read_progress,
             store_resolver_gc_interval,
         );
+        let tso_getter = pd_client
+            .new_tso_getter()
+            .expect("failed to create tso getter");
         let ep = Endpoint {
             cluster_id,
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
             scheduler,
             pd_client,
+            tso_getter,
             tso_worker,
             timer: SteadyTimer::default(),
             scan_speed_limiter: speed_limiter,
@@ -1012,7 +1021,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             .0
             .checked_sub(event_time.saturating_elapsed());
         let timeout = self.timer.delay(interval.unwrap_or_default());
-        let pd_client = self.pd_client.clone();
+        let mut pd_client = self.pd_client.clone();
+        let mut tso_getter = self.tso_getter.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
         let regions: Vec<u64> = self.capture_regions.keys().copied().collect();
@@ -1031,8 +1041,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 // RawKV write requests will get larger TSO after this point.
                 // RawKV CDC's resolved_ts is guaranteed by ConcurrencyManager::global_min_lock_ts,
                 // which lock flying keys's ts in raw put and delete interfaces in `Storage`.
-                Some(provider) => provider.async_get_ts().await.unwrap_or_default(),
-                None => pd_client.get_tso().await.unwrap_or_default(),
+                Some(mut provider) => provider.async_get_ts().await.unwrap_or_default(),
+                None => tso_getter.get_tso().await.unwrap_or_default(),
             };
             let mut min_ts = min_ts_pd;
             let mut min_ts_min_lock = min_ts_pd;
@@ -1075,7 +1085,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let regions =
                 if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    leader_resolver.resolve(regions, min_ts).await
+                    leader_resolver
+                        .resolve(&mut pd_client, regions, min_ts)
+                        .await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
                     leader_resolver
@@ -1112,7 +1124,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
+impl<
+    T: 'static + RaftStoreRouter<E>,
+    E: KvEngine,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
+> Runnable for Endpoint<T, E, P>
+{
     type Task = Task;
 
     fn run(&mut self, task: Task) {
@@ -1188,7 +1205,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoint<T, E> {
+impl<
+    T: 'static + RaftStoreRouter<E>,
+    E: KvEngine,
+    P: PdClientCommon + TsoGetterFactory + Clone + 'static,
+> RunnableWithTimer for Endpoint<T, E, P>
+{
     fn on_timeout(&mut self) {
         CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);
 
@@ -1280,7 +1302,7 @@ mod tests {
 
     struct TestEndpointSuite {
         // The order must ensure `endpoint` be dropped before other fields.
-        endpoint: Endpoint<MockRaftStoreRouter, RocksEngine>,
+        endpoint: Endpoint<MockRaftStoreRouter, RocksEngine, TestPdClient>,
         raft_router: MockRaftStoreRouter,
         task_rx: ReceiverWrapper<Task>,
         raft_rxs: HashMap<u64, tikv_util::mpsc::Receiver<PeerMsg<RocksEngine>>>,
@@ -1321,7 +1343,7 @@ mod tests {
     }
 
     impl Deref for TestEndpointSuite {
-        type Target = Endpoint<MockRaftStoreRouter, RocksEngine>;
+        type Target = Endpoint<MockRaftStoreRouter, RocksEngine, TestPdClient>;
         fn deref(&self) -> &Self::Target {
             &self.endpoint
         }
@@ -1345,20 +1367,19 @@ mod tests {
         cfg: &CdcConfig,
         engine: Option<RocksEngine>,
         api_version: ApiVersion,
-        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        causal_ts_provider: Option<CausalTsProviderImpl>,
     ) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let mut store_meta = StoreMeta::new(0);
         store_meta.store_id = Some(1);
         let region_read_progress = store_meta.region_read_progress.clone();
-        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let pd_client = TestPdClient::new(0, true);
         let env = Arc::new(Environment::new(1));
         let security_mgr = Arc::new(SecurityManager::default());
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
             1,
-            pd_client.clone(),
             env.clone(),
             security_mgr.clone(),
             region_read_progress,
@@ -1900,8 +1921,8 @@ mod tests {
             min_ts_interval: ReadableDuration(sleep_interval),
             ..Default::default()
         };
-        let ts_provider: Arc<CausalTsProviderImpl> =
-            Arc::new(causal_ts::tests::TestProvider::default().into());
+        let mut ts_provider: CausalTsProviderImpl =
+            causal_ts::tests::TestProvider::default().into();
         let start_ts = block_on(ts_provider.async_get_ts()).unwrap();
         let mut suite =
             mock_endpoint_with_ts_provider(&cfg, None, ApiVersion::V2, Some(ts_provider.clone()));

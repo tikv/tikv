@@ -221,7 +221,7 @@ fn test_prevote_reboot_minority_followers() {
 // themselves.
 fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = 1;
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
 
     // Given some nodes A, B, C, D, E, we partition the cluster such that D, E are
     // isolated from the rest.
@@ -283,7 +283,7 @@ fn test_server_isolated_follower_leader_does_not_change() {
 }
 
 fn test_create_peer_from_pre_vote<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();

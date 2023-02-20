@@ -17,7 +17,7 @@ use tikv_util::HandyRwLock;
 #[test]
 fn test_consistency_after_lease_pass() {
     let mut cluster = new_server_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run();
     let leader = new_peer(1, 1);

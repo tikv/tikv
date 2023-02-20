@@ -332,8 +332,8 @@ impl<S: Snapshot> ScannerConfig<S> {
             .range(lower, upper)
             .fill_cache(self.fill_cache)
             .scan_mode(scan_mode)
-            .hint_min_ts(hint_min_ts.map(|ts| Bound::Included(ts)))
-            .hint_max_ts(hint_max_ts.map(|ts| Bound::Included(ts)))
+            .hint_min_ts(hint_min_ts.map(Bound::Included))
+            .hint_max_ts(hint_max_ts.map(Bound::Included))
             .build()?;
         Ok(cursor)
     }

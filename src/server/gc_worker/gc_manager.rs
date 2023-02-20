@@ -664,7 +664,7 @@ mod tests {
     }
 
     impl GcSafePointProvider for MockSafePointProvider {
-        fn get_safe_point(&self) -> Result<TimeStamp> {
+        fn get_safe_point(&mut self) -> Result<TimeStamp> {
             // Error will be ignored by `GcManager`, which is equivalent to that the
             // safe_point is not updated.
             self.rx.try_recv().map_err(|e| box_err!(e))

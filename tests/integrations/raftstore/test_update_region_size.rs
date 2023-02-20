@@ -1,9 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, thread, time};
+use std::{thread, time};
 
 use engine_traits::MiscExt;
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use test_raftstore::*;
 use tikv_util::config::*;
 
@@ -53,7 +53,7 @@ fn test_update_region_size<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Make sure there are multiple regions, so it will cover all cases of
     // function `raftstore.on_compaction_finished`.
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     let region = pd_client.get_region(b"").unwrap();
     cluster.must_split(&region, b"k2000");
 

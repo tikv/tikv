@@ -1,12 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{iter::FromIterator, sync::Arc, time::Duration};
+use std::{iter::FromIterator, time::Duration};
 
 use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftApplyState;
-use pd_client::PdClient;
-use test_raftstore::*;
+use pd_client::PdClientCommon;
+use test_raftstore::{
+    get_raft_msg_or_default, must_get_equal, must_get_none, new_get_cmd, new_request,
+    new_server_cluster,
+};
 use tikv_util::{config::ReadableDuration, store::find_peer};
 
 // Test the case local reader works well with witness peer.
@@ -17,7 +20,7 @@ fn test_witness_update_region_in_local_reader() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -79,7 +82,7 @@ fn test_witness_raftlog_gc_pull_voter_replicated_index() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k0", b"v0");
@@ -164,7 +167,7 @@ fn test_witness_raftlog_gc_after_reboot() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k0", b"v0");
@@ -253,7 +256,7 @@ fn test_request_snapshot_after_reboot() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -305,7 +308,7 @@ fn test_request_snapshot_after_term_change() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -354,7 +357,7 @@ fn test_non_witness_availability(fp: &str) {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -410,7 +413,7 @@ fn test_non_witness_replica_read() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.must_put(b"k0", b"v0");

@@ -385,7 +385,7 @@ fn test_paging_scan_multi_ranges() {
 fn test_read_index_lock_checking_on_follower() {
     let mut cluster = new_server_cluster(0, 2);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
+    let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     let rid = cluster.run_conf_change();

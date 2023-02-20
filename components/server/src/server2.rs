@@ -51,7 +51,7 @@ use kvproto::{
     deadlock::create_deadlock, diagnosticspb::create_diagnostics, kvrpcpb::ApiVersion,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
-use pd_client::{PdClient, RpcClient};
+use pd_client::{PdClientCommon, RpcClientV2, TsoGetter, TsoGetterFactory};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -206,11 +206,11 @@ struct TikvServer<ER: RaftEngine> {
     config: TikvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
-    pd_client: Arc<RpcClient>,
+    pd_client: RpcClientV2,
     flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
     flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     router: Option<RaftRouter<RocksEngine, ER>>,
-    node: Option<NodeV2<RpcClient, RocksEngine, ER>>,
+    node: Option<NodeV2<RpcClientV2, RocksEngine, ER>>,
     resolver: Option<resolve::PdStoreAddrResolver>,
     store_path: PathBuf,
     snap_mgr: Option<TabletSnapManager>, // Will be filled in `init_servers`.
@@ -230,7 +230,7 @@ struct TikvServer<ER: RaftEngine> {
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+    causal_ts_provider: Option<CausalTsProviderImpl>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
 }
 
@@ -266,7 +266,7 @@ where
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );
-        let pd_client =
+        let mut pd_client =
             Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
 
         // Initialize and check config
@@ -281,7 +281,10 @@ where
             .create();
 
         // Initialize concurrency manager
-        let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
+        let mut tso_getter = pd_client
+            .new_tso_getter()
+            .expect("failed to create pd tso stream");
+        let latest_ts = block_on(tso_getter.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
         // use different quota for front-end and back-end requests
@@ -318,7 +321,7 @@ where
         let mut causal_ts_provider = None;
         if let ApiVersion::V2 = F::TAG {
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
-                pd_client.clone(),
+                tso_getter.clone(),
                 config.causal_ts.renew_interval.0,
                 config.causal_ts.alloc_ahead_buffer.0,
                 config.causal_ts.renew_batch_min_size,
@@ -327,7 +330,7 @@ where
             if let Err(e) = tso {
                 fatal!("Causal timestamp provider initialize failed: {:?}", e);
             }
-            causal_ts_provider = Some(Arc::new(tso.unwrap().into()));
+            causal_ts_provider = Some(tso.unwrap().into());
             info!("Causal timestamp provider startup.");
         }
 
@@ -418,15 +421,13 @@ where
         config: &mut TikvConfig,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-    ) -> Arc<RpcClient> {
-        let pd_client = Arc::new(
-            RpcClient::new(&config.pd, Some(env), security_mgr)
-                .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
-        );
+    ) -> RpcClientV2 {
+        let mut pd_client = RpcClientV2::new(&config.pd, Some(env), security_mgr)
+            .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e));
 
         let cluster_id = pd_client
-            .get_cluster_id()
-            .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
+            .fetch_cluster_id()
+            .unwrap_or_else(|e| fatal!("failed to fetch cluster id: {}", e));
         if cluster_id == DEFAULT_CLUSTER_ID {
             fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
         }

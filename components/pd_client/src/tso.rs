@@ -30,13 +30,13 @@ use txn_types::TimeStamp;
 use crate::{metrics::PD_PENDING_TSO_REQUEST_GAUGE, Error, Result};
 
 /// It is an empirical value.
-const MAX_BATCH_SIZE: usize = 64;
+pub const MAX_BATCH_SIZE: usize = 64;
 
 const MAX_PENDING_COUNT: usize = 1 << 16;
 
-struct TimestampRequest {
-    sender: oneshot::Sender<TimeStamp>,
-    count: u32,
+pub struct TimestampRequest {
+    pub sender: oneshot::Sender<TimeStamp>,
+    pub count: u32,
 }
 
 /// The timestamp oracle (TSO) which provides monotonically increasing
@@ -70,7 +70,7 @@ impl TimestampOracle {
                     rpc_sender.sink_err_into(),
                     rpc_receiver.err_into(),
                     request_rx,
-                    close_tx,
+                    Some(close_tx),
                 ))
             })
             .expect("unable to create tso worker thread");
@@ -109,12 +109,12 @@ impl TimestampOracle {
     }
 }
 
-async fn run_tso(
+pub async fn run_tso(
     cluster_id: u64,
     mut rpc_sender: impl Sink<(TsoRequest, WriteFlags), Error = Error> + Unpin,
     mut rpc_receiver: impl Stream<Item = Result<TsoResponse>> + Unpin,
     mut request_rx: mpsc::Receiver<TimestampRequest>,
-    close_tx: watch::Sender<()>,
+    close_tx: Option<watch::Sender<()>>,
 ) {
     // The `TimestampRequest`s which are waiting for the responses from the PD
     // server
@@ -158,7 +158,9 @@ async fn run_tso(
 
     let (send_res, recv_res): (Result<()>, Result<()>) =
         join!(send_requests, receive_and_handle_responses);
-    let _ = close_tx.send(());
+    if let Some(close) = close_tx {
+        let _ = close.send(());
+    }
     info!("TSO worker terminated"; "sender_cause" => ?send_res.err(), "receiver_cause" => ?recv_res.err());
 }
 

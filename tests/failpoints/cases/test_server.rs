@@ -4,7 +4,7 @@ use std::{sync::Arc, thread, time::Duration};
 
 use grpcio::{ChannelBuilder, Environment, ServerBuilder};
 use grpcio_health::{create_health, proto::HealthCheckRequest, HealthClient, ServingStatus};
-use pd_client::PdClient;
+use pd_client::PdClientCommon;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
@@ -24,7 +24,7 @@ fn test_mismatch_store_node() {
     let node1_id = *iter.next().unwrap();
     let node2_id = *iter.next().unwrap();
     let node3_id = *iter.next().unwrap();
-    let pd_client = cluster.pd_client.clone();
+    let mut pd_client = cluster.pd_client.clone();
     must_get_equal(&cluster.get_engine(node1_id), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(node2_id), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(node3_id), b"k1", b"v1");

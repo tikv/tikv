@@ -152,7 +152,7 @@ type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 
 pub struct NodeCluster {
     trans: ChannelTransport,
-    pd_client: Arc<TestPdClient>,
+    pd_client: TestPdClient,
     nodes: HashMap<u64, Node<TestPdClient, RocksEngine, RaftTestEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
     cfg_controller: Option<ConfigController>,
@@ -163,7 +163,7 @@ pub struct NodeCluster {
 }
 
 impl NodeCluster {
-    pub fn new(pd_client: Arc<TestPdClient>) -> NodeCluster {
+    pub fn new(pd_client: TestPdClient) -> NodeCluster {
         NodeCluster {
             trans: ChannelTransport::new(),
             pd_client,
@@ -250,7 +250,7 @@ impl Simulator for NodeCluster {
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
             cfg.storage.api_version(),
-            Arc::clone(&self.pd_client),
+            self.pd_client.clone(),
             Arc::default(),
             bg_worker.clone(),
             None,
@@ -506,13 +506,13 @@ impl Simulator for NodeCluster {
 }
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
-    let pd_client = Arc::new(TestPdClient::new(id, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
+    let pd_client = TestPdClient::new(id, false);
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
 pub fn new_incompatible_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
-    let pd_client = Arc::new(TestPdClient::new(id, true));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
+    let pd_client = TestPdClient::new(id, true);
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }

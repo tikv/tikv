@@ -2654,7 +2654,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (datetime, exp) in cases {
-            let expected = exp.map(|exp| Int::from(exp));
+            let expected = exp.map(Int::from);
             let datetime = datetime
                 .map(|arg1| DateTime::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
             let output = RpnFnScalarEvaluator::new()

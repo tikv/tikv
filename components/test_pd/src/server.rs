@@ -198,18 +198,6 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         hijack_unary(self, ctx, sink, |c| c.load_global_config(&req, cli.clone()))
     }
 
-    fn store_global_config(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: StoreGlobalConfigRequest,
-        sink: UnarySink<StoreGlobalConfigResponse>,
-    ) {
-        let cli = self.etcd_client.clone();
-        hijack_unary(self, ctx, sink, |c| {
-            c.store_global_config(&req, cli.clone())
-        })
-    }
-
     fn watch_global_config(
         &mut self,
         ctx: RpcContext<'_>,
