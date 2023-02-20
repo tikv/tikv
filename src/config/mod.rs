@@ -634,7 +634,7 @@ impl Default for DefaultCfConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
 
         DefaultCfConfig {
-            block_size: ReadableSize::kb(16),
+            block_size: ReadableSize::kb(32),
             block_cache_size: memory_limit_for_cf(false, CF_DEFAULT, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
@@ -759,7 +759,7 @@ impl Default for WriteCfConfig {
         };
 
         WriteCfConfig {
-            block_size: ReadableSize::kb(16),
+            block_size: ReadableSize::kb(32),
             block_cache_size: memory_limit_for_cf(false, CF_WRITE, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
@@ -2745,7 +2745,7 @@ impl Default for ResolvedTsConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            advance_ts_interval: ReadableDuration::secs(1),
+            advance_ts_interval: ReadableDuration::secs(20),
             scan_lock_pool_size: 2,
         }
     }
@@ -3244,7 +3244,8 @@ impl TikvConfig {
             self.coprocessor.enable_region_bucket,
             self.coprocessor.region_bucket_size,
         )?;
-        self.security.validate()?;
+        self.security
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.import.validate()?;
         self.backup.validate()?;
         self.backup_stream.validate()?;
@@ -4730,7 +4731,7 @@ mod tests {
         // Default value
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
-            ReadableDuration::secs(1)
+            ReadableDuration::secs(20)
         );
 
         // Update `advance-ts-interval` to 100ms
@@ -5543,8 +5544,6 @@ mod tests {
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
-        default_cfg.coprocessor.region_split_size =
-            Some(default_cfg.coprocessor.region_split_size());
         default_cfg.coprocessor.region_split_keys =
             Some(default_cfg.coprocessor.region_split_keys());
         default_cfg.raft_store.raft_log_gc_size_limit =

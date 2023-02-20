@@ -613,16 +613,15 @@ fn test_cdc_scan_impl<F: KvFormat>() {
 fn test_cdc_rawkv_scan() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
 
-    suite.set_tso(10);
-    suite.flush_causal_timestamp_for_region(1);
     let (k1, v1) = (b"rkey1".to_vec(), b"value1".to_vec());
     suite.must_kv_put(1, k1, v1);
 
     let (k2, v2) = (b"rkey2".to_vec(), b"value2".to_vec());
     suite.must_kv_put(1, k2, v2);
 
-    suite.set_tso(1000);
+    let ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.flush_causal_timestamp_for_region(1);
+
     let (k3, v3) = (b"rkey3".to_vec(), b"value3".to_vec());
     suite.must_kv_put(1, k3.clone(), v3.clone());
 
@@ -631,7 +630,7 @@ fn test_cdc_rawkv_scan() {
 
     let mut req = suite.new_changedata_request(1);
     req.set_kv_api(ChangeDataRequestKvApi::RawKv);
-    req.set_checkpoint_ts(999);
+    req.set_checkpoint_ts(ts.into_inner());
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
@@ -2597,4 +2596,137 @@ fn test_flashback() {
             }
         }
     }
+}
+
+#[test]
+fn test_cdc_filter_key_range() {
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
+
+    let req = suite.new_changedata_request(1);
+
+    // Observe range [key1, key3).
+    let mut req_1_3 = req.clone();
+    req_1_3.request_id = 13;
+    req_1_3.start_key = Key::from_raw(b"key1").into_encoded();
+    req_1_3.end_key = Key::from_raw(b"key3").into_encoded();
+    let (mut req_tx13, _event_feed_wrap13, receive_event13) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx13.send((req_1_3, WriteFlags::default()))).unwrap();
+    let event = receive_event13(false);
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            other => panic!("unknown event {:?}", other),
+        });
+
+    let (mut req_tx24, _event_feed_wrap24, receive_event24) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    let mut req_2_4 = req;
+    req_2_4.request_id = 24;
+    req_2_4.start_key = Key::from_raw(b"key2").into_encoded();
+    req_2_4.end_key = Key::from_raw(b"key4").into_encoded();
+    block_on(req_tx24.send((req_2_4, WriteFlags::default()))).unwrap();
+    let event = receive_event24(false);
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            other => panic!("unknown event {:?}", other),
+        });
+
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(1000);
+
+    let receive_and_check_events = |is13: bool, is24: bool| -> Vec<Event> {
+        if is13 && is24 {
+            let mut events = receive_event13(false).events.to_vec();
+            let mut events24 = receive_event24(false).events.to_vec();
+            events.append(&mut events24);
+            events
+        } else if is13 {
+            let events = receive_event13(false).events.to_vec();
+            let event = receive_event24(true);
+            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            events
+        } else if is24 {
+            let events = receive_event24(false).events.to_vec();
+            let event = receive_event13(true);
+            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            events
+        } else {
+            let event = receive_event13(true);
+            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            let event = receive_event24(true);
+            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            vec![]
+        }
+    };
+    for case in &[
+        ("key1", true, false, true /* commit */),
+        ("key1", true, false, false /* rollback */),
+        ("key2", true, true, true),
+        ("key3", false, true, true),
+        ("key4", false, false, true),
+    ] {
+        let (k, v) = (case.0.to_owned(), "value".to_owned());
+        // Prewrite
+        let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.key = k.clone().into_bytes();
+        mutation.value = v.into_bytes();
+        suite.must_kv_prewrite(1, vec![mutation], k.clone().into_bytes(), start_ts);
+        let mut events = receive_and_check_events(case.1, case.2);
+        while let Some(event) = events.pop() {
+            match event.event.unwrap() {
+                Event_oneof_event::Entries(entries) => {
+                    assert_eq!(entries.entries.len(), 1);
+                    assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+
+        if case.3 {
+            // Commit
+            let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+            suite.must_kv_commit(1, vec![k.into_bytes()], start_ts, commit_ts);
+            let mut events = receive_and_check_events(case.1, case.2);
+            while let Some(event) = events.pop() {
+                match event.event.unwrap() {
+                    Event_oneof_event::Entries(entries) => {
+                        assert_eq!(entries.entries.len(), 1);
+                        assert_eq!(entries.entries[0].get_type(), EventLogType::Commit);
+                    }
+                    other => panic!("unknown event {:?}", other),
+                }
+            }
+        } else {
+            // Rollback
+            suite.must_kv_rollback(1, vec![k.into_bytes()], start_ts);
+            let mut events = receive_and_check_events(case.1, case.2);
+            while let Some(event) = events.pop() {
+                match event.event.unwrap() {
+                    Event_oneof_event::Entries(entries) => {
+                        assert_eq!(entries.entries.len(), 1);
+                        assert_eq!(entries.entries[0].get_type(), EventLogType::Rollback);
+                    }
+                    other => panic!("unknown event {:?}", other),
+                }
+            }
+        }
+    }
+
+    suite.stop();
 }

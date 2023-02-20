@@ -84,6 +84,10 @@ impl UnixSecs {
         self.0
     }
 
+    pub fn from_inner(s: u64) -> Self {
+        UnixSecs(s)
+    }
+
     pub fn is_zero(self) -> bool {
         self.0 == 0
     }

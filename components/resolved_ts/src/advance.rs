@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp,
     ffi::CString,
     sync::{
         atomic::{AtomicI32, Ordering},
@@ -45,11 +46,12 @@ use txn_types::TimeStamp;
 
 use crate::{endpoint::Task, metrics::*};
 
-const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
+const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 
 pub struct AdvanceTsWorker<P, T> {
     pd_client: P,
     tso_getter: T,
+    advance_ts_interval: Duration,
     timer: SteadyTimer,
     worker: Runtime,
     scheduler: Scheduler<Task>,
@@ -60,6 +62,7 @@ pub struct AdvanceTsWorker<P, T> {
 
 impl<P: PdClientCommon + Clone, T: TsoGetter + Clone> AdvanceTsWorker<P, T> {
     pub fn new(
+        advance_ts_interval: Duration,
         pd_client: P,
         tso_getter: T,
         scheduler: Scheduler<Task>,
@@ -76,6 +79,7 @@ impl<P: PdClientCommon + Clone, T: TsoGetter + Clone> AdvanceTsWorker<P, T> {
         Self {
             pd_client,
             tso_getter,
+            advance_ts_interval,
             timer: SteadyTimer::default(),
             worker,
             scheduler,
@@ -91,13 +95,17 @@ impl<P: PdClientCommon + Clone + 'static, T: TsoGetter + Clone + 'static> Advanc
         regions: Vec<u64>,
         mut leader_resolver: LeadershipResolver,
         advance_ts_interval: Duration,
-        cfg_update_notify: Arc<Notify>,
+        advance_notify: Arc<Notify>,
     ) {
         let cm = self.concurrency_manager.clone();
         let mut tso_getter = self.tso_getter.clone();
         let mut pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let timeout = self.timer.delay(advance_ts_interval);
+        let min_timeout = self.timer.delay(cmp::min(
+            DEFAULT_CHECK_LEADER_TIMEOUT_DURATION,
+            self.advance_ts_interval,
+        ));
 
         let fut = async move {
             // Ignore get tso errors since we will retry every `advance_ts_interval`.
@@ -128,9 +136,12 @@ impl<P: PdClientCommon + Clone + 'static, T: TsoGetter + Clone + 'static> Advanc
 
             futures::select! {
                 _ = timeout.compat().fuse() => (),
-                // Skip wait timeout if cfg is updated.
-                _ = cfg_update_notify.notified().fuse() => (),
+                // Skip wait timeout if a notify is arrived.
+                _ = advance_notify.notified().fuse() => (),
             };
+            // Wait min timeout to prevent from overloading advancing resolved ts.
+            let _ = min_timeout.compat().await;
+
             // NB: We must schedule the leader resolver even if there is no region,
             //     otherwise we can not advance resolved ts next time.
             if let Err(e) = scheduler.schedule(Task::AdvanceResolvedTs { leader_resolver }) {
@@ -396,7 +407,7 @@ impl LeadershipResolver {
 
                 PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
                 defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
-                let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
+                let timeout = DEFAULT_CHECK_LEADER_TIMEOUT_DURATION;
                 let resp = tokio::time::timeout(timeout, rpc)
                     .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
                     .await?
@@ -519,7 +530,7 @@ async fn get_tikv_client(
             return Ok(client);
         }
     }
-    let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
+    let timeout = DEFAULT_CHECK_LEADER_TIMEOUT_DURATION;
     let store = tokio::time::timeout(timeout, pd_client.get_store_and_stats(store_id))
         .await
         .map_err(|e| pd_client::Error::Other(Box::new(e)))

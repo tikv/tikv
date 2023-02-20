@@ -138,9 +138,8 @@ fn test_stale_learner_restart() {
 #[test]
 fn test_stale_peer_destroy_when_apply_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     let mut pd_client = cluster.pd_client.clone();
-    pd_client.disable_default_operator();
 
     cluster.run();
 

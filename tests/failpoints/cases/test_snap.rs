@@ -62,7 +62,7 @@ fn test_overlap_cleanup() {
 #[test]
 fn test_server_snapshot_on_resolve_failure() {
     let mut cluster = new_server_cluster(1, 2);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
 
     let on_send_store_fp = "transport_on_send_snapshot";
 
@@ -195,7 +195,7 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
 #[test]
 fn test_destroy_peer_on_pending_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     let mut pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
@@ -261,9 +261,8 @@ fn test_destroy_peer_on_pending_snapshot() {
 #[test]
 fn test_destroy_peer_on_pending_snapshot_and_restart() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     let mut pd_client = cluster.pd_client.clone();
-    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));
@@ -387,7 +386,7 @@ fn test_shutdown_when_snap_gc() {
 #[test]
 fn test_receive_old_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
 
     let mut pd_client = cluster.pd_client.clone();
@@ -482,7 +481,7 @@ fn test_receive_old_snapshot() {
 #[test]
 fn test_gen_snapshot_with_no_committed_entries_ready() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
 
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
@@ -571,7 +570,7 @@ fn test_cancel_snapshot_generating() {
 #[test]
 fn test_snapshot_gc_after_failed() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 
     let mut pd_client = cluster.pd_client.clone();
@@ -641,7 +640,7 @@ fn test_snapshot_gc_after_failed() {
 #[test]
 fn test_sending_fail_with_net_error() {
     let mut cluster = new_server_cluster(1, 2);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 
     let mut pd_client = cluster.pd_client.clone();
@@ -742,7 +741,7 @@ fn test_snapshot_clean_up_logs_with_unfinished_log_gc() {
 #[test]
 fn test_snapshot_recover_from_raft_write_failure() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     // Avoid triggering snapshot at final step.
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
     let mut pd_client = cluster.pd_client.clone();
@@ -800,7 +799,7 @@ fn test_snapshot_recover_from_raft_write_failure() {
 #[test]
 fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     // Avoid triggering snapshot at final step.
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
     let pd_client = cluster.pd_client.clone();

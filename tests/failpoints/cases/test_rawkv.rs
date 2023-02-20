@@ -24,7 +24,7 @@ impl TestSuite {
         // Disable background renew by setting `renew_interval` to 0, to make timestamp
         // allocation predictable.
         configure_for_causal_ts(&mut cluster, "0s", 100);
-        configure_for_merge(&mut cluster);
+        configure_for_merge(&mut cluster.cfg);
         cluster.run();
         cluster.pd_client.disable_default_operator();
 

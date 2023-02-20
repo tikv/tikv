@@ -4,6 +4,7 @@ use std::{convert::TryFrom, sync::Arc};
 
 use api_version::KvFormat;
 use fail::fail_point;
+use itertools::Itertools;
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
 use tidb_query_common::{
@@ -348,17 +349,36 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     order_exprs_def.push(item.take_expr());
                     order_is_desc.push(item.get_desc());
                 }
+                let partition_by = d
+                    .take_partition_by()
+                    .into_iter()
+                    .map(|mut item| item.take_expr())
+                    .collect_vec();
 
-                Box::new(
-                    BatchTopNExecutor::new(
-                        config.clone(),
-                        executor,
-                        order_exprs_def,
-                        order_is_desc,
-                        d.get_limit() as usize,
-                    )?
-                    .collect_summary(summary_slot_index),
-                )
+                if partition_by.is_empty() {
+                    Box::new(
+                        BatchTopNExecutor::new(
+                            config.clone(),
+                            executor,
+                            order_exprs_def,
+                            order_is_desc,
+                            d.get_limit() as usize,
+                        )?
+                        .collect_summary(summary_slot_index),
+                    )
+                } else {
+                    Box::new(
+                        BatchPartitionTopNExecutor::new(
+                            config.clone(),
+                            executor,
+                            partition_by,
+                            order_exprs_def,
+                            order_is_desc,
+                            d.get_limit() as usize,
+                        )?
+                        .collect_summary(summary_slot_index),
+                    )
+                }
             }
             _ => {
                 return Err(other_err!(

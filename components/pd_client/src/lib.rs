@@ -355,6 +355,11 @@ pub trait PdClientCommon: Sync + Send {
         unimplemented!()
     }
 
+    // Gets Buckets by Region id.
+    fn get_buckets_by_id(&mut self, _region_id: u64) -> PdFuture<Option<metapb::Buckets>> {
+        unimplemented!();
+    }
+
     /// Gets Region and its leader by Region id.
     fn get_region_leader_by_id(
         &mut self,
@@ -495,24 +500,26 @@ pub trait PdClientExt {
 pub trait PdClient: PdClientCommon + TsoGetterFactory + PdClientExt + TsoGetter {}
 
 pub trait PdClientExtV2 {
-    // type TsoStream: TsoGetter + Clone;
-
-    fn subscribe_reconnect(&self) -> BoxStream<()>;
+    fn subscribe_reconnect(&self) -> BoxStream<()> {
+        Box::pin(futures::stream::empty())
+    }
 
     fn create_region_heartbeat_stream(
         &mut self,
-        wake_policy: mpsc::WakePolicy,
+        _wake_policy: mpsc::WakePolicy,
     ) -> Result<(
         mpsc::Sender<pdpb::RegionHeartbeatRequest>,
         BoxStream<Result<pdpb::RegionHeartbeatResponse>>,
-    )>;
+    )> {
+        unimplemented!()
+    }
 
     fn create_report_region_buckets_stream(
         &mut self,
-        wake_policy: mpsc::WakePolicy,
-    ) -> Result<mpsc::Sender<pdpb::ReportBucketsRequest>>;
-
-    // fn create_tso_stream(&mut self) -> Result<Self::TsoStream>;
+        _wake_policy: mpsc::WakePolicy,
+    ) -> Result<mpsc::Sender<pdpb::ReportBucketsRequest>> {
+        unimplemented!()
+    }
 }
 
 pub trait PdClientV2: PdClientCommon + TsoGetterFactory + PdClientExtV2 {}

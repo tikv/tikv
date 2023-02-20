@@ -36,14 +36,16 @@ use kvproto::{
     },
 };
 use pd_client::{
-    BucketStat, Error, FeatureGate, Key, PdClientCommon, PdClientExt, PdFuture, RegionInfo,
-    RegionStat, Result, TsoGetter, TsoGetterFactory,
+    BucketMeta, BucketStat, Error, FeatureGate, Key, PdClientCommon, PdClientExt, PdClientExtV2,
+    PdFuture, RegionInfo, RegionStat, Result, TsoGetter, TsoGetterFactory,
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
+    mpsc::future as tikv_mpsc,
     store::{check_key_in_region, find_peer, find_peer_by_id, is_learner, new_peer, QueryStats},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
+    yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either, HandyRwLock,
 };
 use tokio_timer::timer::Handle;
@@ -454,6 +456,8 @@ struct PdCluster {
 
     unsafe_recovery_store_reports: HashMap<u64, pdpb::StoreReport>,
     unsafe_recovery_plan: HashMap<u64, pdpb::RecoveryPlan>,
+
+    pool: Option<FuturePool>,
 }
 
 impl PdCluster {
@@ -490,6 +494,8 @@ impl PdCluster {
             unsafe_recovery_store_reports: HashMap::default(),
             unsafe_recovery_plan: HashMap::default(),
             buckets: HashMap::default(),
+
+            pool: None,
         }
     }
 
@@ -877,6 +883,15 @@ impl PdCluster {
 
     fn set_store_report(&mut self, store_id: u64, report: pdpb::StoreReport) {
         let _ = self.unsafe_recovery_store_reports.insert(store_id, report);
+    }
+
+    fn get_or_init_pool(&mut self) -> &mut FuturePool {
+        self.pool.get_or_insert_with(|| {
+            YatpPoolBuilder::new(DefaultTicker::default())
+                .name_prefix("test-pd-client")
+                .thread_count(0, 1, 1)
+                .build_future_pool()
+        })
     }
 }
 
@@ -1985,3 +2000,80 @@ impl PdClientExt for TestPdClient {
 }
 
 impl pd_client::PdClient for TestPdClient {}
+
+pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
+
+impl PdClientExtV2 for TestPdClient {
+    fn create_region_heartbeat_stream(
+        &mut self,
+        wake_policy: tikv_mpsc::WakePolicy,
+    ) -> Result<(
+        tikv_mpsc::Sender<pdpb::RegionHeartbeatRequest>,
+        BoxStream<Result<pdpb::RegionHeartbeatResponse>>,
+    )> {
+        let (tx, rx) = tikv_mpsc::unbounded(wake_policy);
+        let mut client = self.clone();
+        let resp = rx.map(move |mut r: pdpb::RegionHeartbeatRequest| {
+            client.check_bootstrap()?;
+            let mut region_stat = RegionStat::default();
+            region_stat.down_peers = r.take_down_peers().to_vec();
+            region_stat.pending_peers = r.take_pending_peers().to_vec();
+            region_stat.written_bytes = r.get_bytes_written();
+            region_stat.written_keys = r.get_keys_written();
+            region_stat.read_bytes = r.get_bytes_read();
+            region_stat.read_keys = r.get_keys_read();
+            region_stat.query_stats = r.take_query_stats();
+            region_stat.approximate_size = r.get_approximate_size();
+            region_stat.approximate_keys = r.get_approximate_keys();
+            region_stat.cpu_usage = r.get_cpu_usage();
+            region_stat.last_report_ts =
+                UnixSecs::from_inner(r.take_interval().get_start_timestamp());
+            let resp = client.0.cluster.wl().region_heartbeat(
+                r.get_term(),
+                r.take_region(),
+                r.take_leader(),
+                region_stat,
+                if r.has_replication_status() {
+                    Some(r.take_replication_status())
+                } else {
+                    None
+                },
+            );
+            resp
+        });
+        Ok((tx, Box::pin(resp)))
+    }
+
+    fn create_report_region_buckets_stream(
+        &mut self,
+        wake_policy: tikv_mpsc::WakePolicy,
+    ) -> Result<tikv_mpsc::Sender<pdpb::ReportBucketsRequest>> {
+        let (tx, mut rx) = tikv_mpsc::unbounded::<pdpb::ReportBucketsRequest>(wake_policy);
+        let mut client = self.clone();
+        self.0
+            .cluster
+            .wl()
+            .get_or_init_pool()
+            .spawn(async move {
+                while let Some(mut r) = rx.next().await {
+                    let mut buckets = r.take_buckets();
+                    let mut meta = BucketMeta::default();
+                    meta.region_id = buckets.get_region_id();
+                    meta.version = buckets.get_version();
+                    meta.keys = buckets.take_keys().to_vec();
+                    meta.region_epoch = r.take_region_epoch();
+                    let stats = buckets.take_stats();
+                    let bucket_stat = BucketStat::new(Arc::new(meta), stats);
+                    let period = Duration::from_millis(buckets.get_period_in_ms());
+                    client
+                        .report_region_buckets(&bucket_stat, period)
+                        .await
+                        .unwrap();
+                }
+            })
+            .unwrap();
+        Ok(tx)
+    }
+}
+
+impl pd_client::PdClientV2 for TestPdClient {}
