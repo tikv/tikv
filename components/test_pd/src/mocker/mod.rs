@@ -133,6 +133,10 @@ pub trait PdMocker {
         None
     }
 
+    fn report_buckets(&self, _: &ReportBucketsRequest) -> Option<Result<ReportBucketsResponse>> {
+        None
+    }
+
     fn get_region(&self, _: &GetRegionRequest) -> Option<Result<GetRegionResponse>> {
         None
     }

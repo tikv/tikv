@@ -43,7 +43,7 @@ use crate::{
     Task,
 };
 
-const MAX_GET_SNAPSHOT_RETRY: usize = 3;
+const MAX_GET_SNAPSHOT_RETRY: usize = 5;
 
 #[derive(Clone)]
 pub struct PendingMemoryQuota(Arc<Semaphore>);
@@ -269,7 +269,7 @@ where
                     if !can_retry {
                         break;
                     }
-                    std::thread::sleep(Duration::from_millis(500));
+                    std::thread::sleep(Duration::from_secs(1));
                     continue;
                 }
             }

@@ -195,6 +195,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
         }
+        self.fsm.peer.maybe_gen_approximate_buckets(self.store_ctx);
         // Speed up setup if there is only one peer.
         if self.fsm.peer.is_leader() {
             self.fsm.peer.set_has_ready();
@@ -223,7 +224,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::ReactivateMemoryLock => {
                 self.fsm.peer.on_reactivate_memory_lock_tick(self.store_ctx)
             }
-            PeerTick::ReportBuckets => unimplemented!(),
+            PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted(),
             PeerTick::GcPeer => self.fsm.peer_mut().on_gc_peer_tick(self.store_ctx),
         }
@@ -305,6 +306,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         .peer_mut()
                         .on_request_split(self.store_ctx, request, ch)
                 }
+                PeerMsg::RefreshRegionBuckets {
+                    region_epoch,
+                    buckets,
+                    bucket_ranges,
+                } => self.on_refresh_region_buckets(region_epoch, buckets, bucket_ranges),
+                PeerMsg::RequestHalfSplit { request, ch } => self
+                    .fsm
+                    .peer_mut()
+                    .on_request_half_split(self.store_ctx, request, ch),
                 PeerMsg::UpdateRegionSize { size } => {
                     self.fsm.peer_mut().on_update_region_size(size)
                 }

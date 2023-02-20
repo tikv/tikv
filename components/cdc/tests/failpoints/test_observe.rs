@@ -130,7 +130,7 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
 #[allow(dead_code)]
 fn test_delayed_change_cmd() {
     let mut cluster = new_server_cluster(1, 3);
-    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
     cluster.pd_client.disable_default_operator();
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();

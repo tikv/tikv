@@ -58,7 +58,7 @@ fn test_replica_read_not_applied() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(50), Some(30));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(30));
     let max_lease = Duration::from_secs(1);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
     // After the leader has committed to its term, pending reads on followers can be
@@ -129,7 +129,7 @@ fn test_replica_read_not_applied() {
 fn test_replica_read_on_hibernate() {
     let mut cluster = new_node_cluster(0, 3);
 
-    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
 
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -191,7 +191,7 @@ fn test_replica_read_on_hibernate() {
 fn test_read_hibernated_region() {
     let mut cluster = new_node_cluster(0, 3);
     // Initialize the cluster.
-    configure_for_lease_read(&mut cluster, Some(100), Some(8));
+    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(8));
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(Duration::from_millis(1));
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
     cluster.pd_client.disable_default_operator();
@@ -254,7 +254,7 @@ fn test_read_hibernated_region() {
 fn test_replica_read_on_stale_peer() {
     let mut cluster = new_node_cluster(0, 3);
 
-    configure_for_lease_read(&mut cluster, Some(50), Some(30));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(30));
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -288,7 +288,7 @@ fn test_read_index_out_of_order() {
     let mut cluster = new_node_cluster(0, 2);
 
     // Use long election timeout and short lease.
-    configure_for_lease_read(&mut cluster, Some(1000), Some(10));
+    configure_for_lease_read(&mut cluster.cfg, Some(1000), Some(10));
     cluster.cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(Duration::from_millis(100));
 
@@ -328,7 +328,7 @@ fn test_read_index_retry_lock_checking() {
     let mut cluster = new_node_cluster(0, 2);
 
     // Use long election timeout and short lease.
-    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
     cluster.cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(Duration::from_millis(100));
 
@@ -402,7 +402,7 @@ fn test_split_isolation() {
     let mut cluster = new_node_cluster(0, 2);
     // Use long election timeout and short lease.
     configure_for_hibernate(&mut cluster);
-    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -461,7 +461,7 @@ fn test_split_isolation() {
 #[test]
 fn test_read_local_after_snapshpot_replace_peer() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), None);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
 
@@ -527,7 +527,7 @@ fn test_read_local_after_snapshpot_replace_peer() {
 #[test]
 fn test_malformed_read_index() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), None);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
     cluster.cfg.raft_store.hibernate_regions = true;

@@ -929,14 +929,13 @@ pub(crate) mod tests {
         },
     };
 
-    const PENDING_APPLY_CHECK_INTERVAL: u64 = 200;
+    const PENDING_APPLY_CHECK_INTERVAL: Duration = Duration::from_millis(200);
     const STALE_PEER_CHECK_TICK: usize = 1;
 
     pub fn make_raftstore_cfg(use_delete_range: bool) -> Arc<VersionTrack<Config>> {
         let mut store_cfg = Config::default();
         store_cfg.snap_apply_batch_size = ReadableSize(0);
-        store_cfg.region_worker_tick_interval =
-            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
+        store_cfg.region_worker_tick_interval = ReadableDuration(PENDING_APPLY_CHECK_INTERVAL);
         store_cfg.clean_stale_ranges_tick = STALE_PEER_CHECK_TICK;
         store_cfg.use_delete_range = use_delete_range;
         store_cfg.snap_generator_pool_size = 2;
@@ -1349,7 +1348,7 @@ pub(crate) mod tests {
         );
         gen_and_apply_snap(5);
         destroy_region(6);
-        thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+        thread::sleep(PENDING_APPLY_CHECK_INTERVAL * 2);
         assert!(check_region_exist(6));
         assert_eq!(
             engine
@@ -1406,7 +1405,7 @@ pub(crate) mod tests {
                 .unwrap(),
             2
         );
-        thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+        thread::sleep(PENDING_APPLY_CHECK_INTERVAL * 2);
         assert!(!check_region_exist(6));
 
         #[cfg(feature = "failpoints")]
@@ -1414,12 +1413,16 @@ pub(crate) mod tests {
             engine.kv.compact_files_in_range(None, None, None).unwrap();
             fail::cfg("handle_new_pending_applies", "return").unwrap();
             gen_and_apply_snap(7);
-            thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+            thread::sleep(PENDING_APPLY_CHECK_INTERVAL * 2);
             must_not_finish(&[7]);
             fail::remove("handle_new_pending_applies");
-            thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+            thread::sleep(PENDING_APPLY_CHECK_INTERVAL * 2);
             wait_apply_finish(&[7]);
         }
+        bg_worker.stop();
+        // Wait the timer fired. Otherwise deletion of directory may race with timer
+        // task.
+        thread::sleep(PENDING_APPLY_CHECK_INTERVAL * 2);
     }
 
     #[derive(Clone, Default)]
