@@ -15,7 +15,7 @@ use super::{
     checkpoint_cache::CheckpointCache,
     keys::{self, KeyValue, MetaKey},
     store::{
-        CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot,
+        CondTransaction, Condition, Keys, KvEvent, KvEventType, MetaStore, Snapshot,
         Subscription, Transaction, WithRevision,
     },
 };

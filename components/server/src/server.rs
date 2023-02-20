@@ -29,9 +29,7 @@ use std::{
 
 use api_version::{dispatch_api_version, KvFormat};
 use backup_stream::{
-    config::BackupStreamConfigManager,
-    metadata::{store::PdStore, ConnectionConfig, LazyEtcdClient},
-    observer::BackupStreamObserver,
+    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};

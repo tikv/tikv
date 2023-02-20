@@ -1,6 +1,5 @@
 use std::{
     collections::VecDeque,
-    convert::TryInto,
     fmt::Display,
     pin::Pin,
     sync::{
@@ -14,7 +13,7 @@ use std::{
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use grpcio::ClientSStreamReceiver;
-use kvproto::pdpb::{self, GlobalConfigItem, WatchGlobalConfigResponse};
+use kvproto::pdpb::{self, WatchGlobalConfigResponse};
 use pd_client::{GlobalConfigSelector, PdClient};
 use tikv_util::{box_err, info, warn};
 
@@ -274,13 +273,13 @@ impl<PD: PdClient> MetaStore for PdStore<PD> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::OnceCell, sync::Arc, time::Duration};
+    use std::{sync::Arc, time::Duration};
 
     use futures::{Future, StreamExt};
     use pd_client::RpcClient;
     use test_pd::{mocker::Service, util::*, Server as PdServer};
     use tikv_util::config::ReadableDuration;
-    use tokio::runtime::Runtime;
+    
 
     use super::PdStore;
     use crate::metadata::{
