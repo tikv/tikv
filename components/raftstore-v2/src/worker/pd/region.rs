@@ -5,9 +5,7 @@ use std::{sync::Arc, time::Duration};
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{metapb, pdpb};
-use pd_client::{
-    merge_bucket_stats, metrics::PD_HEARTBEAT_COUNTER_VEC, BucketStat, PdClient, RegionStat,
-};
+use pd_client::{metrics::PD_HEARTBEAT_COUNTER_VEC, BucketStat, PdClient, RegionStat};
 use raftstore::store::{ReadStats, WriteStats};
 use resource_metering::RawRecords;
 use slog::{debug, error, info};
@@ -72,17 +70,9 @@ impl ReportBucket {
         self.last_report_ts = report_ts;
         match self.last_report_stat.replace(self.current_stat.clone()) {
             Some(last) => {
-                let mut delta = BucketStat::new(
-                    self.current_stat.meta.clone(),
-                    pd_client::new_bucket_stats(&self.current_stat.meta),
-                );
+                let mut delta = BucketStat::from_meta(self.current_stat.meta.clone());
                 // Buckets may be changed, recalculate last stats according to current meta.
-                merge_bucket_stats(
-                    &delta.meta.keys,
-                    &mut delta.stats,
-                    &last.meta.keys,
-                    &last.stats,
-                );
+                delta.merge(&last);
                 for i in 0..delta.meta.keys.len() - 1 {
                     delta.stats.write_bytes[i] =
                         self.current_stat.stats.write_bytes[i] - delta.stats.write_bytes[i];
@@ -438,13 +428,7 @@ where
                 if current.meta < buckets.meta {
                     std::mem::swap(current, &mut buckets);
                 }
-
-                merge_bucket_stats(
-                    &current.meta.keys,
-                    &mut current.stats,
-                    &buckets.meta.keys,
-                    &buckets.stats,
-                );
+                current.merge(&buckets);
             })
             .or_insert_with(|| ReportBucket::new(buckets));
     }
