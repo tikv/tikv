@@ -3941,8 +3941,12 @@ where
 
         self.delegate.term = apply.term;
         if let Some(meta) = apply.bucket_meta.clone() {
-            let new = BucketStat::from_meta(meta);
-            self.delegate.buckets.replace(new);
+            if let Some(old) = &mut self.delegate.buckets {
+                old.set_meta(meta);
+            } else {
+                let new = BucketStat::from_meta(meta);
+                self.delegate.buckets.replace(new);
+            }
         }
 
         let prev_state = (

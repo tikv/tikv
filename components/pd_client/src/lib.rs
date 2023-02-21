@@ -157,6 +157,11 @@ impl BucketStat {
         Self::new(meta, stats)
     }
 
+    pub fn set_meta(&mut self, meta: Arc<BucketMeta>) {
+        self.stats = new_bucket_stats(&meta);
+        self.meta = meta;
+    }
+
     pub fn merge(&mut self, delta: &BucketStat) {
         merge_bucket_stats(
             &self.meta.keys,
