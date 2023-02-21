@@ -140,6 +140,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // may become MergingRegion incorrectly. So, we have to revert it here.
             // Note: The `is_merging` check from v1 is removed because proposed
             // `PrepareMerge` rejects all writes (in `ProposalControl::check_conflict`).
+            assert!(!self.proposal_control().is_merging());
             self.take_merge_context();
             self.proposal_control_mut().set_pending_prepare_merge(false);
             let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
@@ -451,7 +452,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         self.region_state_mut().set_region(region.clone());
         self.region_state_mut().set_state(PeerState::Merging);
-        assert!(!self.region_state().has_merge_state());
+        assert!(
+            !self.region_state().has_merge_state(),
+            "{:?}",
+            self.region_state().get_merge_state()
+        );
         self.region_state_mut()
             .set_merge_state(merging_state.clone());
 
