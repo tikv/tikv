@@ -22,11 +22,16 @@ use crate::{
     timer::GLOBAL_TIMER_HANDLE,
 };
 
-const DEFAULT_CLEANUP_INTERVAL: Duration = Duration::from_secs(10);
+const DEFAULT_CLEANUP_INTERVAL: Duration = if cfg!(test) {
+    Duration::from_millis(100)
+} else {
+    Duration::from_secs(10)
+};
 
-fn background_cleanup_task(
-    cleanup: impl Fn() -> Option<std::time::Instant> + Send + 'static,
-) -> TaskCell {
+fn background_cleanup_task<F>(cleanup: F) -> TaskCell
+where
+    F: Fn() -> Option<std::time::Instant> + Send + 'static,
+{
     let mut interval = GLOBAL_TIMER_HANDLE
         .interval(
             std::time::Instant::now() + DEFAULT_CLEANUP_INTERVAL,
@@ -60,10 +65,10 @@ impl CleanupMethod {
         }
     }
 
-    fn try_spawn(
-        &self,
-        cleanup: impl Fn() -> Option<std::time::Instant> + Send + 'static,
-    ) -> Option<TaskCell> {
+    fn try_spawn<F>(&self, cleanup: F) -> Option<TaskCell>
+    where
+        F: Fn() -> Option<std::time::Instant> + Send + 'static,
+    {
         match self {
             Self::InPlace => None,
             Self::Local => Some(background_cleanup_task(cleanup)),
@@ -236,6 +241,7 @@ pub struct YatpPoolBuilder<T: PoolTicker> {
     stack_size: usize,
     max_tasks: usize,
     cleanup_method: CleanupMethod,
+    background_cleanup_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl<T: PoolTicker> YatpPoolBuilder<T> {
@@ -252,6 +258,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             stack_size: 0,
             max_tasks: std::usize::MAX,
             cleanup_method: CleanupMethod::InPlace,
+            background_cleanup_hook: None,
         }
     }
 
@@ -362,9 +369,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
                 .name(Some(name))
                 .cleanup_interval(self.cleanup_method.preferred_interval()),
         );
-        let cleanup_task = self
-            .cleanup_method
-            .try_spawn(multilevel_builder.cleanup_fn());
+        let cleanup_task = self.try_spawn_cleanup(multilevel_builder.cleanup_fn());
         let (builder, read_pool_runner) = self.create_builder();
         let runner_builder =
             multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
@@ -390,7 +395,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
                 .cleanup_interval(self.cleanup_method.preferred_interval()),
             priority_provider,
         );
-        let cleanup_task = self.cleanup_method.try_spawn(priority_builder.cleanup_fn());
+        let cleanup_task = self.try_spawn_cleanup(priority_builder.cleanup_fn());
         let (builder, read_pool_runner) = self.create_builder();
         let runner_builder = priority_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
         let pool = builder
@@ -399,6 +404,30 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             pool.spawn(task);
         }
         pool
+    }
+
+    #[cfg(test)]
+    fn background_cleanup_hook<F>(mut self, f: F) -> Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.background_cleanup_hook = Some(Arc::new(f));
+        self
+    }
+
+    fn try_spawn_cleanup<F>(&self, cleanup: F) -> Option<TaskCell>
+    where
+        F: Fn() -> Option<std::time::Instant> + Send + 'static,
+    {
+        if let Some(hook) = &self.background_cleanup_hook {
+            let on_cleanup = hook.clone();
+            self.cleanup_method.try_spawn(move || {
+                on_cleanup();
+                cleanup()
+            })
+        } else {
+            self.cleanup_method.try_spawn(cleanup)
+        }
     }
 
     fn create_builder(mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
@@ -429,12 +458,15 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
+    use std::{
+        sync::{atomic, mpsc},
+        thread,
+    };
 
     use futures::compat::Future01CompatExt;
 
     use super::*;
-    use crate::timer::GLOBAL_TIMER_HANDLE;
+    use crate::{timer::GLOBAL_TIMER_HANDLE, worker};
 
     #[test]
     fn test_record_schedule_wait_duration() {
@@ -461,5 +493,69 @@ mod tests {
         drop(pool);
         let histogram = metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name]);
         assert_eq!(histogram.get_sample_count() as u32, 6, "{:?}", histogram);
+    }
+
+    #[test]
+    fn test_cleanup_in_place_by_default() {
+        let name = "test_cleanup_default";
+        let count = Arc::new(atomic::AtomicU32::new(0));
+        let n = count.clone();
+        let pool = YatpPoolBuilder::new(DefaultTicker::default())
+            .name_prefix(name)
+            .background_cleanup_hook(move || {
+                n.fetch_add(1, atomic::Ordering::SeqCst);
+            })
+            .build_multi_level_pool();
+
+        thread::sleep(3 * DEFAULT_CLEANUP_INTERVAL);
+        drop(pool);
+        assert_eq!(0, count.load(atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_cleanup_in_local_pool() {
+        let name = "test_cleanup_local";
+        let count = Arc::new(atomic::AtomicU32::new(0));
+        let n = count.clone();
+        let pool = YatpPoolBuilder::new(DefaultTicker::default())
+            .name_prefix(name)
+            .cleanup_method(CleanupMethod::Local)
+            .background_cleanup_hook(move || {
+                n.fetch_add(1, atomic::Ordering::SeqCst);
+                let t = thread::current();
+                assert!(t.name().unwrap().starts_with(name));
+            })
+            .build_multi_level_pool();
+
+        thread::sleep(3 * DEFAULT_CLEANUP_INTERVAL + DEFAULT_CLEANUP_INTERVAL / 2);
+        drop(pool);
+        thread::sleep(2 * DEFAULT_CLEANUP_INTERVAL);
+        assert!(3 == count.load(atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_cleanup_in_other_pool() {
+        let name = "test_cleanup_other";
+        let bg_name = "test_background";
+        let bg_pool = worker::Builder::new(bg_name).create();
+        let count = Arc::new(atomic::AtomicU32::new(0));
+        let n = count.clone();
+        let pool = YatpPoolBuilder::new(DefaultTicker::default())
+            .name_prefix(name)
+            .cleanup_method(CleanupMethod::Other(bg_pool.remote()))
+            .background_cleanup_hook(move || {
+                n.fetch_add(1, atomic::Ordering::SeqCst);
+                let t = thread::current();
+                assert!(t.name().unwrap().starts_with(bg_name));
+            })
+            .build_multi_level_pool();
+
+        thread::sleep(3 * DEFAULT_CLEANUP_INTERVAL + DEFAULT_CLEANUP_INTERVAL / 2);
+        drop(pool);
+        thread::sleep(2 * DEFAULT_CLEANUP_INTERVAL);
+        assert!(5 == count.load(atomic::Ordering::SeqCst));
+        drop(bg_pool);
+        thread::sleep(2 * DEFAULT_CLEANUP_INTERVAL);
+        assert!(5 == count.load(atomic::Ordering::SeqCst));
     }
 }
