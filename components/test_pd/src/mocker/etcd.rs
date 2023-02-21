@@ -50,7 +50,7 @@ impl Etcd {
                 let (k, v) = group.last()?;
                 match v {
                     Value::Val(val) => Some(KeyValue(MetaKey(k.0.clone()), val.clone())),
-                    Value::Del => None,
+                    Value::Del(_) => None,
                 }
             })
             .fold(Vec::new(), |mut items, item| {
@@ -88,13 +88,14 @@ impl Etcd {
                 Bound::Included(Key(start_key, 0)),
                 Bound::Excluded(Key(end_key, self.revision)),
             ))
-            .map(|(k, _)| Key::clone(k))
+            .map(|(k, v)| (Key::clone(k), v.clone()))
             .collect::<Vec<_>>();
         v.dedup_by(|k1, k2| k1.0 == k2.0);
 
-        for mut victim in v {
+        for (victim, data) in v {
             let k = Key(victim.0.clone(), rev);
-            self.items.insert(k, Value::Del);
+            let data = data.take_data();
+            self.items.insert(k, Value::Del(data.clone()));
 
             for sub in self.subs.values() {
                 if victim.0.as_slice() < sub.end_key.as_slice()
@@ -103,7 +104,7 @@ impl Etcd {
                     sub.tx
                         .send(KvEvent {
                             kind: KvEventType::Delete,
-                            pair: KeyValue(MetaKey(std::mem::take(&mut victim.0)), vec![]),
+                            pair: KeyValue(MetaKey(victim.0.clone()), data.clone()),
                         })
                         .await
                         .unwrap();
@@ -135,9 +136,9 @@ impl Etcd {
                     kind: KvEventType::Put,
                     pair: KeyValue(MetaKey(k.0.clone()), val.clone()),
                 },
-                Value::Del => KvEvent {
+                Value::Del(val) => KvEvent {
                     kind: KvEventType::Delete,
-                    pair: KeyValue(MetaKey(k.0.clone()), vec![]),
+                    pair: KeyValue(MetaKey(k.0.clone()), val.clone()),
                 },
             };
             tx.send(event).await.expect("too many pending events");
@@ -259,7 +260,17 @@ impl std::fmt::Debug for Key {
 #[derive(Debug, PartialEq, Clone)]
 enum Value {
     Val(Vec<u8>),
-    Del,
+    // the value is the last put val. This is used for watch changes.
+    Del(Vec<u8>),
+}
+
+impl Value {
+    fn take_data(self) -> Vec<u8> {
+        match self {
+            Value::Val(d) => d,
+            Value::Del(d) => d,
+        }
+    }
 }
 
 /// The key set for getting.

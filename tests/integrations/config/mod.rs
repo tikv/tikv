@@ -256,6 +256,8 @@ fn test_serde_custom_tikv_config() {
         unreachable_backoff: ReadableDuration::secs(111),
         check_peers_availability_interval: ReadableDuration::secs(30),
         check_request_snapshot_interval: ReadableDuration::minutes(1),
+        slow_trend_unsensitive_cause: 10.0,
+        slow_trend_unsensitive_result: 0.5,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -726,7 +728,7 @@ fn test_serde_custom_tikv_config() {
         split_region_on_table: false,
         batch_split_limit: 1,
         region_max_size: Some(ReadableSize::mb(12)),
-        region_split_size: ReadableSize::mb(12),
+        region_split_size: Some(ReadableSize::mb(12)),
         region_max_keys: Some(100000),
         region_split_keys: Some(100000),
         consistency_check_method: ConsistencyCheckMethod::Raw,

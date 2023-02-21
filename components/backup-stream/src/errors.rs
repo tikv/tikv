@@ -22,7 +22,7 @@ pub enum Error {
     #[error("gRPC meet error {0}")]
     Grpc(#[from] GrpcError),
     #[error("Etcd meet error {0}")]
-    Etcd(#[from] EtcdError),
+    Etcd(#[from] EtcdErrorExt),
     #[error("Protobuf meet error {0}")]
     Protobuf(#[from] ProtobufError),
     #[error("No such task {task_name:?}")]
@@ -50,6 +50,22 @@ pub enum Error {
     },
     #[error("Other Error: {0}")]
     Other(#[from] Box<dyn StdError + Send + Sync + 'static>),
+}
+
+impl From<EtcdError> for Error {
+    fn from(value: EtcdError) -> Self {
+        Self::Etcd(value.into())
+    }
+}
+
+#[derive(ThisError, Debug)]
+pub enum EtcdErrorExt {
+    #[error("{0}")]
+    Normal(#[from] EtcdError),
+    #[error("the watch canceled")]
+    WatchCanceled,
+    #[error("the required revision has been compacted, current is {current}")]
+    RevisionCompacted { current: i64 },
 }
 
 impl ErrorCodeExt for Error {

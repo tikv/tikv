@@ -2790,8 +2790,8 @@ where
             ExtraMessageType::MsgVoterReplicatedIndexResponse => {
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
-            ExtraMessageType::MsgGcPeerRequest => unimplemented!(),
-            ExtraMessageType::MsgGcPeerResponse => unimplemented!(),
+            // It's v2 only message and ignore does no harm.
+            ExtraMessageType::MsgGcPeerRequest | ExtraMessageType::MsgGcPeerResponse => (),
         }
     }
 
@@ -5234,7 +5234,7 @@ where
             true,
         ) {
             match e {
-                Error::FlashbackInProgress(_) => self
+                Error::FlashbackInProgress(..) => self
                     .ctx
                     .raft_metrics
                     .invalid_proposal

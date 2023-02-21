@@ -10,10 +10,14 @@ use pd_client::{
 };
 use raftstore::store::{ReadStats, WriteStats};
 use resource_metering::RawRecords;
-use slog::{debug, info};
+use slog::{debug, error, info};
 use tikv_util::{store::QueryStats, time::UnixSecs};
 
 use super::{requests::*, Runner};
+use crate::{
+    operation::{RequestHalfSplit, RequestSplit},
+    router::{CmdResChannel, PeerMsg},
+};
 
 pub struct RegionHeartbeatTask {
     pub term: u64,
@@ -276,8 +280,47 @@ where
                         );
                         send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
                     } else if resp.has_split_region() {
-                        // TODO
-                        info!(logger, "pd asks for split but ignored");
+                        PD_HEARTBEAT_COUNTER_VEC
+                            .with_label_values(&["split region"])
+                            .inc();
+
+                        let mut split_region = resp.take_split_region();
+                        info!(
+                            logger,
+                            "try to split";
+                            "region_id" => region_id,
+                            "region_epoch" => ?epoch,
+                        );
+
+                        let (ch, _) = CmdResChannel::pair();
+                        let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
+                            PeerMsg::RequestSplit {
+                                request: RequestSplit {
+                                    epoch,
+                                    split_keys: split_region.take_keys().into(),
+                                    source: "pd".into(),
+                                },
+                                ch,
+                            }
+                        } else {
+                            PeerMsg::RequestHalfSplit {
+                                request: RequestHalfSplit {
+                                    epoch,
+                                    start_key: None,
+                                    end_key: None,
+                                    policy: split_region.get_policy(),
+                                    source: "pd".into(),
+                                },
+                                ch,
+                            }
+                        };
+                        if let Err(e) = router.send(region_id, msg) {
+                            error!(logger,
+                                "send split request failed";
+                                "region_id" => region_id,
+                                "err" => ?e
+                            );
+                        }
                     } else if resp.has_merge() {
                         // TODO
                         info!(logger, "pd asks for merge but ignored");

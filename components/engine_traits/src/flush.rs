@@ -20,17 +20,20 @@ use std::{
     },
 };
 
-use crate::{RaftEngine, RaftLogBatch};
+use slog_global::info;
+use tikv_util::set_panic_mark;
+
+use crate::{data_cf_offset, RaftEngine, RaftLogBatch, DATA_CFS_LEN};
 
 #[derive(Debug)]
-pub struct FlushProgress {
+pub struct ApplyProgress {
     cf: String,
     apply_index: u64,
     earliest_seqno: u64,
 }
 
-impl FlushProgress {
-    fn merge(&mut self, pr: FlushProgress) {
+impl ApplyProgress {
+    fn merge(&mut self, pr: ApplyProgress) {
         debug_assert_eq!(self.cf, pr.cf);
         debug_assert!(self.apply_index <= pr.apply_index);
         self.apply_index = pr.apply_index;
@@ -43,6 +46,12 @@ impl FlushProgress {
     pub fn cf(&self) -> &str {
         &self.cf
     }
+}
+
+#[derive(Default, Debug)]
+struct FlushProgress {
+    prs: LinkedList<ApplyProgress>,
+    last_flushed: [u64; DATA_CFS_LEN],
 }
 
 /// A share state between raftstore and underlying engine.
@@ -77,7 +86,7 @@ impl FlushState {
 
 /// A helper trait to avoid exposing `RaftEngine` to `TabletFactory`.
 pub trait StateStorage: Sync + Send {
-    fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: FlushProgress);
+    fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: ApplyProgress);
 }
 
 /// A flush listener that maps memtable to apply index and persist the relation
@@ -86,7 +95,7 @@ pub struct PersistenceListener {
     region_id: u64,
     tablet_index: u64,
     state: Arc<FlushState>,
-    progress: Mutex<LinkedList<FlushProgress>>,
+    progress: Mutex<FlushProgress>,
     storage: Arc<dyn StateStorage>,
 }
 
@@ -101,7 +110,7 @@ impl PersistenceListener {
             region_id,
             tablet_index,
             state,
-            progress: Mutex::new(LinkedList::new()),
+            progress: Mutex::new(FlushProgress::default()),
             storage,
         }
     }
@@ -120,8 +129,17 @@ impl PersistenceListener {
         // thread writting to the DB and increasing apply index.
         // Apply index will be set within DB lock, so it's correct even with manual
         // flush.
+        let offset = data_cf_offset(&cf);
         let apply_index = self.state.applied_index.load(Ordering::SeqCst);
-        self.progress.lock().unwrap().push_back(FlushProgress {
+        let mut prs = self.progress.lock().unwrap();
+        let flushed = prs.last_flushed[offset];
+        if flushed > earliest_seqno {
+            panic!(
+                "sealed seqno has been flushed {} {} {} <= {}",
+                cf, apply_index, earliest_seqno, flushed
+            );
+        }
+        prs.prs.push_back(ApplyProgress {
             cf,
             apply_index,
             earliest_seqno,
@@ -131,12 +149,21 @@ impl PersistenceListener {
     /// Called a memtable finished flushing.
     ///
     /// `largest_seqno` should be the largest seqno of the generated file.
-    pub fn on_flush_completed(&self, cf: &str, largest_seqno: u64) {
+    pub fn on_flush_completed(&self, cf: &str, largest_seqno: u64, file_no: u64) {
         // Maybe we should hook the compaction to avoid the file is compacted before
         // being recorded.
+        let offset = data_cf_offset(cf);
         let pr = {
             let mut prs = self.progress.lock().unwrap();
-            let mut cursor = prs.cursor_front_mut();
+            let flushed = prs.last_flushed[offset];
+            if flushed >= largest_seqno {
+                // According to facebook/rocksdb#11183, it's possible OnFlushCompleted can be
+                // called out of order. But it's guaranteed files are installed in order.
+                info!("flush complete reorder found"; "flushed" => flushed, "largest_seqno" => largest_seqno, "file_no" => file_no, "cf" => cf);
+                return;
+            }
+            prs.last_flushed[offset] = largest_seqno;
+            let mut cursor = prs.prs.cursor_front_mut();
             let mut flushed_pr = None;
             while let Some(pr) = cursor.current() {
                 if pr.cf != cf {
@@ -157,10 +184,13 @@ impl PersistenceListener {
             }
             match flushed_pr {
                 Some(pr) => pr,
-                None => panic!(
-                    "[region_id={}] [tablet_index={}] {} not found in {:?}",
-                    self.region_id, self.tablet_index, cf, prs
-                ),
+                None => {
+                    set_panic_mark();
+                    panic!(
+                        "[region_id={}] [tablet_index={}] {} {} {} not found in {:?}",
+                        self.region_id, self.tablet_index, cf, largest_seqno, file_no, prs
+                    )
+                }
             }
         };
         self.storage
@@ -169,7 +199,7 @@ impl PersistenceListener {
 }
 
 impl<R: RaftEngine> StateStorage for R {
-    fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: FlushProgress) {
+    fn persist_progress(&self, region_id: u64, tablet_index: u64, pr: ApplyProgress) {
         if pr.apply_index == 0 {
             return;
         }

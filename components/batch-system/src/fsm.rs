@@ -10,7 +10,7 @@ use std::{
     usize,
 };
 
-use collections::HashMap;
+use resource_control::ResourceMetered;
 
 use crate::mailbox::BasicMailbox;
 
@@ -34,12 +34,6 @@ pub trait FsmScheduler {
     /// Consume the resources of msg in resource controller if enabled,
     /// otherwise do nothing.
     fn consume_msg_resource(&self, msg: &<Self::Fsm as Fsm>::Message);
-}
-
-pub trait ResourceMetered {
-    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
-        None
-    }
 }
 
 /// A `Fsm` is a finite state machine. It should be able to be notified for
