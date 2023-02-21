@@ -58,8 +58,8 @@ pub enum CleanupMethod {
     InPlace,
     /// Cleanup in this pool (the one to be built) locally.
     Local,
-    /// Cleanup in the other remote pool.
-    Other(Remote<TaskCell>),
+    /// Cleanup in the given remote pool.
+    Remote(Remote<TaskCell>),
 }
 
 impl CleanupMethod {
@@ -82,7 +82,7 @@ impl CleanupMethod {
         match self {
             Self::InPlace => None,
             Self::Local => Some(background_cleanup_task(cleanup)),
-            Self::Other(remote) => {
+            Self::Remote(remote) => {
                 remote.spawn(background_cleanup_task(cleanup));
                 None
             }
@@ -557,15 +557,15 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_in_other_pool() {
-        let name = "test_cleanup_other";
+    fn test_cleanup_in_remote_pool() {
+        let name = "test_cleanup_remote";
         let bg_name = "test_background";
         let bg_pool = worker::Builder::new(bg_name).create();
         let count = Arc::new(atomic::AtomicU32::new(0));
         let n = count.clone();
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(name)
-            .cleanup_method(CleanupMethod::Other(bg_pool.remote()))
+            .cleanup_method(CleanupMethod::Remote(bg_pool.remote()))
             .background_cleanup_hook(move || {
                 n.fetch_add(1, atomic::Ordering::SeqCst);
                 let t = thread::current();

@@ -665,7 +665,7 @@ where
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
-                CleanupMethod::Other(self.background_worker.remote()),
+                CleanupMethod::Remote(self.background_worker.remote()),
             ))
         } else {
             None
