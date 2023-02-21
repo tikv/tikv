@@ -48,6 +48,11 @@ where
     )
 }
 
+/// CleanupMethod describes how a pool cleanup its internal task-elapsed map. A
+/// task-elapsed map is used for tracking how long each task has been running,
+/// so that the pool can adjust the level of a task according to its running
+/// time. To prevent a task-elapsed map from growing too large, the following
+/// strategies are provided for cleaning up it periodically.
 pub enum CleanupMethod {
     /// Cleanup in place on spawning.
     InPlace,
@@ -58,6 +63,8 @@ pub enum CleanupMethod {
 }
 
 impl CleanupMethod {
+    /// Returns the perferred cleanup interval used for creating a queue
+    /// builder.
     fn preferred_interval(&self) -> Option<std::time::Duration> {
         match self {
             Self::InPlace => Some(DEFAULT_CLEANUP_INTERVAL),
@@ -65,6 +72,9 @@ impl CleanupMethod {
         }
     }
 
+    /// Tries to create a task from the cleanup function and spawn it if
+    /// possible, returns Some(task) if there is a task shall be spawned but
+    /// hasn't been spawned (that is, need to be spawned locally later).
     fn try_spawn<F>(&self, cleanup: F) -> Option<TaskCell>
     where
         F: Fn() -> Option<std::time::Instant> + Send + 'static,
@@ -241,6 +251,8 @@ pub struct YatpPoolBuilder<T: PoolTicker> {
     stack_size: usize,
     max_tasks: usize,
     cleanup_method: CleanupMethod,
+
+    #[cfg(test)]
     background_cleanup_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -258,6 +270,8 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             stack_size: 0,
             max_tasks: std::usize::MAX,
             cleanup_method: CleanupMethod::InPlace,
+
+            #[cfg(test)]
             background_cleanup_hook: None,
         }
     }
@@ -369,13 +383,13 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
                 .name(Some(name))
                 .cleanup_interval(self.cleanup_method.preferred_interval()),
         );
-        let cleanup_task = self.try_spawn_cleanup(multilevel_builder.cleanup_fn());
+        let pending_task = self.try_spawn_cleanup(multilevel_builder.cleanup_fn());
         let (builder, read_pool_runner) = self.create_builder();
         let runner_builder =
             multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
         let pool = builder
             .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
-        if let Some(task) = cleanup_task {
+        if let Some(task) = pending_task {
             pool.spawn(task);
         }
         pool
@@ -395,12 +409,12 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
                 .cleanup_interval(self.cleanup_method.preferred_interval()),
             priority_provider,
         );
-        let cleanup_task = self.try_spawn_cleanup(priority_builder.cleanup_fn());
+        let pending_task = self.try_spawn_cleanup(priority_builder.cleanup_fn());
         let (builder, read_pool_runner) = self.create_builder();
         let runner_builder = priority_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
         let pool = builder
             .build_with_queue_and_runner(QueueType::Priority(priority_builder), runner_builder);
-        if let Some(task) = cleanup_task {
+        if let Some(task) = pending_task {
             pool.spawn(task);
         }
         pool
@@ -415,6 +429,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
+    #[cfg(test)]
     fn try_spawn_cleanup<F>(&self, cleanup: F) -> Option<TaskCell>
     where
         F: Fn() -> Option<std::time::Instant> + Send + 'static,
@@ -428,6 +443,14 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         } else {
             self.cleanup_method.try_spawn(cleanup)
         }
+    }
+
+    #[cfg(not(test))]
+    fn try_spawn_cleanup<F>(&self, cleanup: F) -> Option<TaskCell>
+    where
+        F: Fn() -> Option<std::time::Instant> + Send + 'static,
+    {
+        self.cleanup_method.try_spawn(cleanup)
     }
 
     fn create_builder(mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
