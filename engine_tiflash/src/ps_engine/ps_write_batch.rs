@@ -7,7 +7,7 @@ use engine_traits::{self, Mutable, Result, WriteBatchExt, WriteOptions};
 use proxy_ffi::interfaces_ffi::RawCppPtr;
 use rocksdb::{WriteBatch as RawWriteBatch, DB};
 
-use crate::{engine::RocksEngine, r2e, PageStorageExt};
+use crate::{engine::RocksEngine, ps_engine::add_prefix, r2e, PageStorageExt};
 
 const WRITE_BATCH_MAX_BATCH: usize = 16;
 const WRITE_BATCH_LIMIT: usize = 16;
@@ -219,10 +219,11 @@ impl Mutable for RocksWriteBatchVec {
         if !self.do_write(engine_traits::CF_DEFAULT, key) {
             return Ok(());
         }
-        self.ps_ext
-            .as_ref()
-            .unwrap()
-            .write_batch_put_page(self.ps_wb.ptr, key, value);
+        self.ps_ext.as_ref().unwrap().write_batch_put_page(
+            self.ps_wb.ptr,
+            add_prefix(key).as_slice(),
+            value,
+        );
         Ok(())
     }
 
@@ -230,10 +231,11 @@ impl Mutable for RocksWriteBatchVec {
         if !self.do_write(cf, key) {
             return Ok(());
         }
-        self.ps_ext
-            .as_ref()
-            .unwrap()
-            .write_batch_put_page(self.ps_wb.ptr, key, value);
+        self.ps_ext.as_ref().unwrap().write_batch_put_page(
+            self.ps_wb.ptr,
+            add_prefix(key).as_slice(),
+            value,
+        );
         Ok(())
     }
 
@@ -244,7 +246,7 @@ impl Mutable for RocksWriteBatchVec {
         self.ps_ext
             .as_ref()
             .unwrap()
-            .write_batch_del_page(self.ps_wb.ptr, key);
+            .write_batch_del_page(self.ps_wb.ptr, add_prefix(key).as_slice());
         Ok(())
     }
 
@@ -255,7 +257,7 @@ impl Mutable for RocksWriteBatchVec {
         self.ps_ext
             .as_ref()
             .unwrap()
-            .write_batch_del_page(self.ps_wb.ptr, key);
+            .write_batch_del_page(self.ps_wb.ptr, add_prefix(key).as_slice());
         Ok(())
     }
 

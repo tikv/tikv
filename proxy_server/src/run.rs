@@ -1803,6 +1803,12 @@ impl ConfiguredRaftEngine for PSLogEngine {
         _key_manager: &Option<Arc<DataKeyManager>>,
         _block_cache: &Cache,
     ) -> (Self, Option<Arc<RocksStatistics>>) {
+        // create a dummy file in raft engine dir to pass initial config check
+        let raft_engine_path = _config.raft_engine.config().dir + "/ps_engine";
+        let path = Path::new(&raft_engine_path);
+        if !path.exists() {
+            File::create(path).unwrap();
+        }
         (PSLogEngine::new(), None)
     }
 
