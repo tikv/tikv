@@ -30,7 +30,7 @@ use kvproto::{
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    coprocessor::CoprocessorHost,
+    coprocessor::{Config as CopConfig, CoprocessorHost},
     store::{
         region_meta::{RegionLocalState, RegionMeta},
         AutoSplitController, Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport,
@@ -98,7 +98,10 @@ impl TestRouter {
                 thread::sleep(Duration::from_millis(10));
                 continue;
             }
-            return block_on(sub.result());
+            let res = block_on(sub.result());
+            if res.is_some() {
+                return res;
+            }
         }
         None
     }
@@ -234,6 +237,7 @@ pub struct RunningState {
     pub registry: TabletRegistry<KvTestEngine>,
     pub system: StoreSystem<KvTestEngine, RaftTestEngine>,
     pub cfg: Arc<VersionTrack<Config>>,
+    pub cop_cfg: Arc<VersionTrack<CopConfig>>,
     pub transport: TestTransport,
     snap_mgr: TabletSnapManager,
     background: Worker,
@@ -244,6 +248,7 @@ impl RunningState {
         pd_client: &Arc<RpcClient>,
         path: &Path,
         cfg: Arc<VersionTrack<Config>>,
+        cop_cfg: Arc<VersionTrack<CopConfig>>,
         transport: TestTransport,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
@@ -290,11 +295,9 @@ impl RunningState {
         let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
         let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap()).unwrap();
+        let coprocessor_host =
+            CoprocessorHost::new(router.store_router().clone(), cop_cfg.value().clone());
 
-        let coprocessor_host = CoprocessorHost::new(
-            router.store_router().clone(),
-            raftstore::coprocessor::Config::default(),
-        );
         let background = Worker::new("background");
         let pd_worker = LazyWorker::new("pd-worker");
         system
@@ -327,6 +330,7 @@ impl RunningState {
             transport,
             snap_mgr,
             background,
+            cop_cfg,
         };
         (TestRouter(router), state)
     }
@@ -358,11 +362,17 @@ impl TestNode {
         }
     }
 
-    fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
+    fn start(
+        &mut self,
+        cfg: Arc<VersionTrack<Config>>,
+        cop_cfg: Arc<VersionTrack<CopConfig>>,
+        trans: TestTransport,
+    ) -> TestRouter {
         let (router, state) = RunningState::new(
             &self.pd_client,
             self.path.path(),
             cfg,
+            cop_cfg,
             trans,
             ConcurrencyManager::new(1.into()),
             None,
@@ -389,8 +399,9 @@ impl TestNode {
         let state = self.running_state().unwrap();
         let prev_transport = state.transport.clone();
         let cfg = state.cfg.clone();
+        let cop_cfg = state.cop_cfg.clone();
         self.stop();
-        self.start(cfg, prev_transport)
+        self.start(cfg, cop_cfg, prev_transport)
     }
 
     pub fn running_state(&self) -> Option<&RunningState> {
@@ -489,6 +500,14 @@ impl Cluster {
     }
 
     pub fn with_node_count(count: usize, config: Option<Config>) -> Self {
+        Cluster::with_configs(count, config, None)
+    }
+
+    pub fn with_cop_cfg(coprocessor_cfg: CopConfig) -> Cluster {
+        Cluster::with_configs(1, None, Some(coprocessor_cfg))
+    }
+
+    pub fn with_configs(count: usize, config: Option<Config>, cop_cfg: Option<CopConfig>) -> Self {
         let pd_server = test_pd::Server::new(1);
         let logger = slog_global::borrow_global().new(o!());
         let mut cluster = Cluster {
@@ -504,10 +523,15 @@ impl Cluster {
             v2_default_config()
         };
         disable_all_auto_ticks(&mut cfg);
+        let cop_cfg = cop_cfg.unwrap_or_default();
         for _ in 1..=count {
             let mut node = TestNode::with_pd(&cluster.pd_server, cluster.logger.clone());
             let (tx, rx) = new_test_transport();
-            let router = node.start(Arc::new(VersionTrack::new(cfg.clone())), tx);
+            let router = node.start(
+                Arc::new(VersionTrack::new(cfg.clone())),
+                Arc::new(VersionTrack::new(cop_cfg.clone())),
+                tx,
+            );
             cluster.nodes.push(node);
             cluster.receivers.push(rx);
             cluster.routers.push(router);
@@ -719,5 +743,75 @@ pub mod split_helper {
         assert_eq!(region.get_end_key(), right.get_end_key());
 
         (left, right)
+    }
+}
+
+pub mod life_helper {
+    use std::assert_matches::assert_matches;
+
+    use engine_traits::RaftEngine;
+    use kvproto::raft_serverpb::{ExtraMessageType, PeerState};
+
+    use super::*;
+
+    pub fn assert_peer_not_exist(region_id: u64, peer_id: u64, router: &TestRouter) {
+        let timer = Instant::now();
+        loop {
+            let (ch, sub) = DebugInfoChannel::pair();
+            let msg = PeerMsg::QueryDebugInfo(ch);
+            match router.send(region_id, msg) {
+                Err(TrySendError::Disconnected(_)) => return,
+                Ok(()) => {
+                    if let Some(m) = block_on(sub.result()) {
+                        if m.raft_status.id != peer_id {
+                            return;
+                        }
+                    }
+                }
+                Err(_) => (),
+            }
+            if timer.elapsed() < Duration::from_secs(3) {
+                thread::sleep(Duration::from_millis(10));
+            } else {
+                panic!("peer of {} still exists", region_id);
+            }
+        }
+    }
+
+    // TODO: make raft engine support more suitable way to verify range is empty.
+    /// Verify all states in raft engine are cleared.
+    pub fn assert_tombstone(raft_engine: &impl RaftEngine, region_id: u64, peer: &metapb::Peer) {
+        let mut buf = vec![];
+        raft_engine.get_all_entries_to(region_id, &mut buf).unwrap();
+        assert!(buf.is_empty(), "{:?}", buf);
+        assert_matches!(raft_engine.get_raft_state(region_id), Ok(None));
+        assert_matches!(raft_engine.get_apply_state(region_id, u64::MAX), Ok(None));
+        let region_state = raft_engine
+            .get_region_state(region_id, u64::MAX)
+            .unwrap()
+            .unwrap();
+        assert_matches!(region_state.get_state(), PeerState::Tombstone);
+        assert!(
+            region_state.get_region().get_peers().contains(peer),
+            "{:?}",
+            region_state
+        );
+    }
+
+    #[track_caller]
+    pub fn assert_valid_report(report: &RaftMessage, region_id: u64, peer_id: u64) {
+        assert_eq!(
+            report.get_extra_msg().get_type(),
+            ExtraMessageType::MsgGcPeerResponse
+        );
+        assert_eq!(report.get_region_id(), region_id);
+        assert_eq!(report.get_from_peer().get_id(), peer_id);
+    }
+
+    #[track_caller]
+    pub fn assert_tombstone_msg(msg: &RaftMessage, region_id: u64, peer_id: u64) {
+        assert_eq!(msg.get_region_id(), region_id);
+        assert_eq!(msg.get_to_peer().get_id(), peer_id);
+        assert!(msg.get_is_tombstone());
     }
 }
