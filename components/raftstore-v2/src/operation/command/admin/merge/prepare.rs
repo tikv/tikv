@@ -95,8 +95,8 @@ pub enum PrepareStatus {
 
 #[derive(Debug)]
 pub struct PrepareMergeResult {
-    pub region_state: RegionLocalState,
-    pub state: MergeState,
+    region_state: RegionLocalState,
+    state: MergeState,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -143,6 +143,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // the boolean expression below.
             if !self.proposal_control().is_merging() {
                 self.take_merge_context();
+                self.proposal_control_mut().set_pending_prepare_merge(false);
                 let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
                 if pessimistic_locks.status == LocksStatus::MergingRegion {
                     pessimistic_locks.status = LocksStatus::Normal;
@@ -453,6 +454,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         self.region_state_mut().set_region(region.clone());
         self.region_state_mut().set_state(PeerState::Merging);
+        assert!(!self.region_state().has_merge_state());
         self.region_state_mut()
             .set_merge_state(merging_state.clone());
 
