@@ -805,6 +805,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.storage_mut().cancel_generating_snap(None);
                     self.txn_context()
                         .on_became_follower(self.term(), self.region());
+                    self.update_merge_progress_on_became_follower();
                 }
                 _ => {}
             }

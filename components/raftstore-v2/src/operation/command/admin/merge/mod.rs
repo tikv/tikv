@@ -59,6 +59,11 @@ impl MergeContext {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    #[inline]
+    pub fn update_merge_progress_on_became_follower(&mut self) {
+        self.take_merge_context();
+    }
+
     /// Returns (minimal matched, minimal committed)
     pub fn calculate_min_progress(&self) -> Result<(u64, u64)> {
         let (mut min_m, mut min_c) = (None, None);
