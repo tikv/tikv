@@ -138,16 +138,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Match v1::post_propose_fail.
             // If we just failed to propose PrepareMerge, the pessimistic locks status
             // may become MergingRegion incorrectly. So, we have to revert it here.
-            // But we have to rule out the case when the region has successfully
-            // proposed PrepareMerge or has been in merging, which is decided by
-            // the boolean expression below.
-            if !self.proposal_control().is_merging() {
-                self.take_merge_context();
-                self.proposal_control_mut().set_pending_prepare_merge(false);
-                let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
-                if pessimistic_locks.status == LocksStatus::MergingRegion {
-                    pessimistic_locks.status = LocksStatus::Normal;
-                }
+            // Note: The `is_merging` check from v1 is removed because proposed
+            // `PrepareMerge` rejects all writes (in `ProposalControl::check_conflict`).
+            self.take_merge_context();
+            self.proposal_control_mut().set_pending_prepare_merge(false);
+            let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
+            if pessimistic_locks.status == LocksStatus::MergingRegion {
+                pessimistic_locks.status = LocksStatus::Normal;
             }
         }
         r
