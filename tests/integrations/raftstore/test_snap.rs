@@ -436,6 +436,8 @@ impl Filter for SnapshotAppendFilter {
     }
 }
 
+// todo(SpadeA): to be removed when receive filter is supported on ServerCluster
+// V2
 fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     configure_for_snapshot(&mut cluster.cfg);
 
@@ -462,10 +464,30 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine4, b"k2", b"v2");
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_snapshot_with_append() {
-    let mut cluster = new_node_cluster(0, 4);
-    test_snapshot_with_append(&mut cluster);
+    let mut cluster = new_cluster(0, 4);
+    configure_for_snapshot(&mut cluster.cfg);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+    cluster.run();
+
+    // In case of removing leader, let's transfer leader to some node first.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    pd_client.must_remove_peer(1, new_peer(4, 4));
+
+    let (tx, rx) = mpsc::channel();
+    cluster.add_recv_filter_on_node(4, Box::new(SnapshotAppendFilter::new(tx)));
+    pd_client.add_peer(1, new_peer(4, 5));
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    let engine4 = cluster.get_engine(4);
+    must_get_equal(&engine4, b"k1", b"v1");
+    must_get_equal(&engine4, b"k2", b"v2");
 }
 
 #[test]
