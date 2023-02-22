@@ -236,6 +236,11 @@ impl ProposalControl {
         }
     }
 
+    #[inline]
+    pub fn has_applied_prepare_merge(&self) -> bool {
+        self.applied_prepare_merge_index != 0
+    }
+
     /// Check if there is an on-going split command on current term.
     ///
     /// The answer is reliable only when the peer is leader.

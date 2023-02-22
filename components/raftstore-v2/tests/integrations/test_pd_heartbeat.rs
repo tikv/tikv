@@ -72,7 +72,7 @@ fn test_store_heartbeat() {
 fn test_report_buckets() {
     let region_id = 2;
     let mut cop_cfg = CopConfig::default();
-    cop_cfg.enable_region_bucket = true;
+    cop_cfg.enable_region_bucket = Some(true);
     cop_cfg.region_bucket_size = ReadableSize::kb(1);
     let cluster = Cluster::with_cop_cfg(cop_cfg);
     let store_id = cluster.node(0).id();

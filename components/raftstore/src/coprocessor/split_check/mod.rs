@@ -120,7 +120,7 @@ impl<'a, E> Host<'a, E> {
 
     #[inline]
     pub fn enable_region_bucket(&self) -> bool {
-        self.cfg.enable_region_bucket
+        self.cfg.enable_region_bucket()
     }
 
     #[inline]
