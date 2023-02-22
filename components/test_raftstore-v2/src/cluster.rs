@@ -1403,9 +1403,8 @@ impl WrapFactory {
 
     fn region_id_of_key(&self, mut key: &[u8]) -> u64 {
         // Strip the data prefix if the key is the data key
-        if validate_data_key(key) {
-            key = &key[DATA_PREFIX_KEY.len()..];
-        }
+        assert!(validate_data_key(key));
+        key = &key[DATA_PREFIX_KEY.len()..];
         self.pd_client.get_region(key).unwrap().get_id()
     }
 
