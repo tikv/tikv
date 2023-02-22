@@ -414,7 +414,12 @@ fn test_node_split_overlap_snapshot() {
     must_get_equal(&engine3, b"k3", b"v3");
 }
 
-fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_apply_new_version_snapshot() {
+    let mut cluster = new_cluster(0, 3);
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
@@ -467,21 +472,10 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine3, b"k2", b"v2");
 }
 
-#[test]
-fn test_node_apply_new_version_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_apply_new_version_snapshot(&mut cluster);
-}
-
-#[test]
-fn test_server_apply_new_version_snapshot() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_apply_new_version_snapshot(&mut cluster);
-}
-
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_server_split_with_stale_peer() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     // disable raft log gc.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
