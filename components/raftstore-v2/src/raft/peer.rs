@@ -211,6 +211,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn region_buckets(&self) -> &Option<BucketStat> {
+        &self.region_buckets
+    }
+
+    #[inline]
+    pub fn set_region_buckets(&mut self, buckets: Option<BucketStat>) {
+        if let Some(b) = self.region_buckets.take() {
+            self.last_region_buckets = Some(b);
+        }
+        self.region_buckets = buckets;
+    }
+
+    #[inline]
+    pub fn last_region_buckets(&self) -> &Option<BucketStat> {
+        &self.last_region_buckets
+    }
+
+    #[inline]
     pub fn region(&self) -> &metapb::Region {
         self.raft_group.store().region()
     }
@@ -646,13 +664,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn post_split(&mut self) {
-        self.reset_region_buckets();
-    }
-
-    pub fn reset_region_buckets(&mut self) {
-        if self.region_buckets.is_some() {
-            self.last_region_buckets = self.region_buckets.take();
-        }
+        self.set_region_buckets(None);
     }
 
     pub fn maybe_campaign(&mut self) -> bool {

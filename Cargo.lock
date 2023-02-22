@@ -1616,6 +1616,7 @@ dependencies = [
  "file_system",
  "keys",
  "kvproto",
+ "lazy_static",
  "log_wrappers",
  "protobuf",
  "raft",
@@ -3208,10 +3209,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "murmur3"
-version = "0.5.1"
+name = "mur3"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ead5388e485d38e622630c6b05afd3761a6701ff15c55b279ea5b31dcb62cff"
+checksum = "97af489e1e21b68de4c390ecca6703318bc1aa16e9733bcb62c089b73c6fbb1b"
 
 [[package]]
 name = "native-tls"
@@ -5942,6 +5943,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_raftstore-v2"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "backtrace",
+ "causal_ts",
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "encryption_export",
+ "engine_rocks",
+ "engine_rocks_helper",
+ "engine_test",
+ "engine_traits",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "grpcio",
+ "grpcio-health",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "pd_client",
+ "protobuf",
+ "raft",
+ "raftstore",
+ "raftstore-v2",
+ "rand 0.8.5",
+ "resolved_ts",
+ "resource_control",
+ "resource_metering",
+ "security",
+ "server",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_pd_client",
+ "test_raftstore",
+ "test_util",
+ "tikv",
+ "tikv_util",
+ "tokio",
+ "tokio-timer",
+ "txn_types",
+]
+
+[[package]]
 name = "test_raftstore_macro"
 version = "0.0.1"
 dependencies = [
@@ -6061,6 +6110,7 @@ dependencies = [
  "test_pd",
  "test_pd_client",
  "test_raftstore",
+ "test_raftstore-v2",
  "test_raftstore_macro",
  "test_sst_importer",
  "test_storage",
@@ -6284,7 +6334,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.6.0-alpha"
+version = "6.7.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6342,7 +6392,7 @@ dependencies = [
  "memory_trace_macros",
  "mime",
  "more-asserts",
- "murmur3",
+ "mur3",
  "nom 5.1.0",
  "notify",
  "num-traits",
@@ -7441,7 +7491,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#bcf431a2619c06ab7fa0c72073a0c775646c484f"
+source = "git+https://github.com/tikv/yatp.git?branch=master#7ed25299d60a5338bea4ac0ed7470887ab74a010"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",

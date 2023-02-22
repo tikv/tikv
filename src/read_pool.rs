@@ -15,14 +15,14 @@ use file_system::{set_io_type, IoType};
 use futures::{channel::oneshot, future::TryFutureExt};
 use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
-use prometheus::{Histogram, IntCounter, IntGauge};
+use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
 use resource_control::{ControlledFuture, ResourceController};
 use thiserror::Error;
 use tikv_util::{
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
-    yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder},
+    yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
 };
 use tracker::TrackedFuture;
 use yatp::{
@@ -355,11 +355,15 @@ impl TimeSliceInspector {
         // Now, we simplify the problem by merging samples from all levels. If we want
         // more accurate answer in the future, calculate for each level separately.
         for hist in &inner.time_slice_hist {
-            new_sum += Duration::from_secs_f64(hist.get_sample_sum());
-            new_count += hist.get_sample_count();
+            // Call `metric` to get a consistent snapshot of sum and count.
+            let metric_proto = hist.metric();
+            let hist_proto = metric_proto.get_histogram();
+            new_sum += Duration::from_secs_f64(hist_proto.get_sample_sum());
+            new_count += hist_proto.get_sample_count();
         }
-        let time_diff = new_sum - inner.last_sum;
-        if time_diff < MIN_TIME_DIFF {
+        let time_diff = new_sum.saturating_sub(inner.last_sum);
+        let count_diff = new_count.saturating_sub(inner.last_count);
+        if time_diff < MIN_TIME_DIFF || count_diff == 0 {
             return;
         }
         let new_val = time_diff / ((new_count - inner.last_count) as u32);
@@ -414,11 +418,13 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     reporter: R,
     engine: E,
     resource_ctl: Option<Arc<ResourceController>>,
+    cleanup_method: CleanupMethod,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
     let raftkv = Arc::new(Mutex::new(engine));
     let builder = YatpPoolBuilder::new(ReporterTicker { reporter })
         .name_prefix(&unified_read_pool_name)
+        .cleanup_method(cleanup_method)
         .stack_size(config.stack_size.0 as usize)
         .thread_count(
             config.min_thread_count,
@@ -761,7 +767,8 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
+        let pool =
+            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -802,7 +809,8 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
+        let pool =
+            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -851,7 +859,8 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
+        let pool =
+            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();

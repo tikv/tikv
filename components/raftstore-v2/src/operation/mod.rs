@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod bucket;
 mod command;
 mod life;
 mod pd;
@@ -9,7 +10,7 @@ mod txn_ext;
 
 pub use command::{
     AdminCmdResult, ApplyFlowControl, CommittedEntries, CompactLogContext, ProposalControl,
-    RequestSplit, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
+    RequestHalfSplit, RequestSplit, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
     SimpleWriteReqEncoder, SplitFlowControl, SPLIT_PREFIX,
 };
 pub use life::{DestroyProgress, GcPeerContext};
