@@ -16,7 +16,7 @@
 //! Raft proposal. To guarantee the consistency of lock serialization, we might
 //! need to wait for some in-flight logs to be applied. During the wait, all
 //! incoming write proposals will be rejected. Read the comments of
-//! `MergeContext::prepare_fence` for more details.
+//! `PrepareStatus::WaitForFence` for more details.
 //!
 //! ## Apply (`Apply::apply_prepare_merge`)
 //!
@@ -48,7 +48,6 @@ use raftstore::{
 use slog::{debug, info};
 use tikv_util::{box_err, log::SlogFormat, store::region_on_same_stores};
 
-use super::MergeContext;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
@@ -56,13 +55,6 @@ use crate::{
     raft::{Apply, Peer},
     router::CmdResChannel,
 };
-
-impl MergeContext {
-    #[inline]
-    pub fn has_applied_prepare_merge(&self) -> bool {
-        matches!(self.prepare_status, Some(PrepareStatus::Applied(_)))
-    }
-}
 
 #[derive(Clone)]
 pub struct PreProposeContext {
