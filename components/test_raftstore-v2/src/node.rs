@@ -105,7 +105,6 @@ impl Transport for ChannelTransport {
             Some(h) => {
                 h.send_raft_msg(msg)?;
                 if is_snapshot {
-                    // should report snapshot finish
                     let _ = core.routers[&from_store].report_snapshot_status(
                         region_id,
                         to_peer_id,
