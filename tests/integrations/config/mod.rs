@@ -733,7 +733,7 @@ fn test_serde_custom_tikv_config() {
         region_split_keys: Some(100000),
         consistency_check_method: ConsistencyCheckMethod::Raw,
         perf_level: PerfLevel::Uninitialized,
-        enable_region_bucket: true,
+        enable_region_bucket: Some(true),
         region_bucket_size: ReadableSize::mb(1),
         region_size_threshold_for_approximate: ReadableSize::mb(3),
         prefer_approximate_bucket: false,

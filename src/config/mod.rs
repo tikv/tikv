@@ -3241,7 +3241,7 @@ impl TikvConfig {
         self.coprocessor.validate()?;
         self.raft_store.validate(
             self.coprocessor.region_split_size(),
-            self.coprocessor.enable_region_bucket,
+            self.coprocessor.enable_region_bucket(),
             self.coprocessor.region_bucket_size,
         )?;
         self.security
@@ -4177,7 +4177,7 @@ mod tests {
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::{
-        config::{LARGE_REGION_SPLIT_SIZE_MB, RAFTSTORE_V2_SPLIT_SIZE_MB, SPLIT_SIZE_MB},
+        config::{LARGE_REGION_SPLIT_SIZE, RAFTSTORE_V2_SPLIT_SIZE, SPLIT_SIZE},
         region_info_accessor::MockRegionInfoProvider,
     };
     use slog::Level;
@@ -5596,27 +5596,27 @@ mod tests {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.optimize_for(false);
         default_cfg.coprocessor.validate().unwrap();
-        assert_eq!(
-            default_cfg.coprocessor.region_split_size(),
-            ReadableSize::mb(SPLIT_SIZE_MB)
-        );
+        assert_eq!(default_cfg.coprocessor.region_split_size(), SPLIT_SIZE);
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
-        default_cfg.coprocessor.enable_region_bucket = true;
+        default_cfg.coprocessor.enable_region_bucket = Some(true);
         default_cfg.coprocessor.optimize_for(false);
         default_cfg.coprocessor.validate().unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
-            ReadableSize::mb(LARGE_REGION_SPLIT_SIZE_MB)
+            LARGE_REGION_SPLIT_SIZE
         );
+        assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.optimize_for(true);
         default_cfg.coprocessor.validate().unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
-            ReadableSize::mb(RAFTSTORE_V2_SPLIT_SIZE_MB)
+            RAFTSTORE_V2_SPLIT_SIZE
         );
+        assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
@@ -5626,6 +5626,7 @@ mod tests {
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
@@ -5635,6 +5636,7 @@ mod tests {
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(default_cfg.coprocessor.enable_region_bucket());
     }
 
     #[test]
