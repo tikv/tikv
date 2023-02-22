@@ -15,12 +15,8 @@ use kvproto::{
 use raftstore::store::{AsyncReadNotifier, FetchedLogs, GenSnapRes, RegionSnapshot};
 use slog::warn;
 
-use super::{CmdResChannel, PeerMsg};
-use crate::{
-    batch::StoreRouter,
-    operation::{LocalReader, RequestSplit},
-    StoreMeta,
-};
+use super::PeerMsg;
+use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
     fn notify_logs_fetched(&self, region_id: u64, fetched_logs: FetchedLogs) {
@@ -48,18 +44,8 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
         split_keys: Vec<Vec<u8>>,
         source: Cow<'static, str>,
     ) {
-        let (ch, _) = CmdResChannel::pair();
-        let res = self.send(
-            region_id,
-            PeerMsg::RequestSplit {
-                request: RequestSplit {
-                    epoch: region_epoch,
-                    split_keys,
-                    source,
-                },
-                ch,
-            },
-        );
+        let (msg, _) = PeerMsg::request_split(region_epoch, split_keys, source.to_string());
+        let res = self.send(region_id, msg);
         if let Err(e) = res {
             warn!(
                 self.logger(),
