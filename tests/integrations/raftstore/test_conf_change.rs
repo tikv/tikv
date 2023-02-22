@@ -732,6 +732,7 @@ fn test_node_learner_conf_change() {
 }
 
 #[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_learner_with_slow_snapshot() {
     let mut cluster = new_cluster(0, 3);
     configure_for_snapshot(&mut cluster.cfg);

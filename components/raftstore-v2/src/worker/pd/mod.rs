@@ -455,4 +455,12 @@ mod requests {
         req.mut_transfer_leader().set_peers(peers.into());
         req
     }
+
+    pub fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
+        let mut req = AdminRequest::default();
+        req.set_cmd_type(AdminCmdType::PrepareMerge);
+        req.mut_prepare_merge()
+            .set_target(merge.get_target().to_owned());
+        req
+    }
 }
