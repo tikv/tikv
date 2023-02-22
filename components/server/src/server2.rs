@@ -828,7 +828,7 @@ where
             .raft_store
             .validate(
                 self.config.coprocessor.region_split_size(),
-                self.config.coprocessor.enable_region_bucket,
+                self.config.coprocessor.enable_region_bucket(),
                 self.config.coprocessor.region_bucket_size,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));

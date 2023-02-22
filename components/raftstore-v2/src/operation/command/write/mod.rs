@@ -9,7 +9,7 @@ use raftstore::{
         msg::ErrorCallback,
         util::{self, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER},
     },
-    Result,
+    Error, Result,
 };
 use tikv_util::slog_panic;
 
@@ -56,6 +56,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.propose_pending_writes(ctx);
         if let Some(conflict) = self.proposal_control_mut().check_conflict(None) {
             conflict.delay_channel(ch);
+            return;
+        }
+        if self.proposal_control().has_pending_prepare_merge()
+            || self.proposal_control().is_merging()
+        {
+            let resp = cmd_resp::new_error(Error::ProposalInMergingMode(self.region_id()));
+            ch.report_error(resp);
             return;
         }
         // ProposalControl is reliable only when applied to current term.
@@ -132,7 +139,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         if self.should_skip(off, index) {
             return Ok(());
         }
-        util::check_key_in_region(key, self.region_state().get_region())?;
+        util::check_key_in_region(key, self.region())?;
         // Technically it's OK to remove prefix for raftstore v2. But rocksdb doesn't
         // support specifying infinite upper bound in various APIs.
         keys::data_key_with_buffer(key, &mut self.key_buffer);
@@ -175,7 +182,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         if self.should_skip(off, index) {
             return Ok(());
         }
-        util::check_key_in_region(key, self.region_state().get_region())?;
+        util::check_key_in_region(key, self.region())?;
         keys::data_key_with_buffer(key, &mut self.key_buffer);
         self.ensure_write_buffer();
         let res = if cf.is_empty() || cf == CF_DEFAULT {

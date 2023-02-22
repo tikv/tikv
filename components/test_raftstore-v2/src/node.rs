@@ -191,7 +191,7 @@ impl Simulator for NodeCluster {
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
-                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();
@@ -286,7 +286,7 @@ impl Simulator for NodeCluster {
         let node_id = node.id();
 
         let region_split_size = cfg.coprocessor.region_split_size();
-        let enable_region_bucket = cfg.coprocessor.enable_region_bucket;
+        let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg
@@ -403,6 +403,16 @@ impl Simulator for NodeCluster {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        let mut trans = self.trans.core.lock().unwrap();
+        trans.routers.get_mut(&node_id).unwrap().add_filter(filter);
+    }
+
+    fn clear_recv_filters(&mut self, node_id: u64) {
+        let mut trans = self.trans.core.lock().unwrap();
+        trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 }
 

@@ -1339,6 +1339,10 @@ impl<T: Simulator> Cluster<T> {
         self.sim.wl().add_send_filter(node_id, filter);
     }
 
+    pub fn add_recv_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        self.sim.wl().add_recv_filter(node_id, filter);
+    }
+
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
