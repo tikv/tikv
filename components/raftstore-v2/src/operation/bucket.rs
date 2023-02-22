@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::metapb::RegionEpoch;
-use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
+use pd_client::{BucketMeta, BucketStat};
 use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
@@ -135,8 +135,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // padding the boundary keys and initialize the flow.
             meta.keys.insert(0, region.get_start_key().to_vec());
             meta.keys.push(region.get_end_key().to_vec());
-            let stats = new_bucket_stats(&meta);
-            region_buckets = BucketStat::new(Arc::new(meta), stats);
+            region_buckets = BucketStat::from_meta(Arc::new(meta));
         }
 
         let buckets_count = region_buckets.meta.keys.len() - 1;

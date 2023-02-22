@@ -259,6 +259,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 meta.region_read_progress
                     .insert(region_id, self.read_progress().clone());
             }
+
+            let region_state = self.raft_group().store().region_state().clone();
+            self.storage_mut().set_region_state(region_state);
+
             if let Some(tablet) = self.set_tablet(tablet) {
                 self.record_tombstone_tablet(ctx, tablet, snapshot_index);
             }

@@ -152,6 +152,29 @@ impl BucketStat {
         }
     }
 
+    pub fn from_meta(meta: Arc<BucketMeta>) -> Self {
+        let stats = new_bucket_stats(&meta);
+        Self::new(meta, stats)
+    }
+
+    pub fn set_meta(&mut self, meta: Arc<BucketMeta>) {
+        self.stats = new_bucket_stats(&meta);
+        self.meta = meta;
+    }
+
+    pub fn merge(&mut self, delta: &BucketStat) {
+        merge_bucket_stats(
+            &self.meta.keys,
+            &mut self.stats,
+            &delta.meta.keys,
+            &delta.stats,
+        );
+    }
+
+    pub fn add_flows<I: AsRef<[u8]>>(&mut self, incoming: &[I], delta_stats: &metapb::BucketStats) {
+        merge_bucket_stats(&self.meta.keys, &mut self.stats, incoming, delta_stats);
+    }
+
     pub fn write_key(&mut self, key: &[u8], value_size: u64) {
         let idx = match util::find_bucket_index(key, &self.meta.keys) {
             Some(idx) => idx,
