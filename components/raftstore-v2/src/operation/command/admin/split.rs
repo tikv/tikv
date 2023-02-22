@@ -27,7 +27,6 @@
 
 use std::{any::Any, borrow::Cow, cmp, path::PathBuf};
 
-use batch_system::FsmScheduler;
 use collections::HashSet;
 use crossbeam::channel::SendError;
 use engine_traits::{
@@ -721,7 +720,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             } else {
                 // None means the node is shutdown concurrently and thus the
                 // mailboxes in router have been cleared
-                assert!(store_ctx.router.shutdown());
+                assert!(store_ctx.router.is_shutdown());
                 return;
             }
         }
