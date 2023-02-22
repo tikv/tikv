@@ -2552,7 +2552,7 @@ impl Default for BackupConfig {
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             batch_size: 8,
-            sst_max_size: default_coprocessor.region_max_size(),
+            sst_max_size: default_coprocessor.region_bucket_size * 3 / 2,
             enable_auto_tune: true,
             auto_tune_remain_threads: (cpu_num * 0.2).round() as usize,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
@@ -3524,18 +3524,20 @@ impl TikvConfig {
                     + self.raftdb.defaultcf.block_cache_size.0,
             ));
         }
-        if self.backup.sst_max_size.0 < default_coprocessor.region_max_size().0 / 10 {
+        let sst_min_size = default_coprocessor.region_bucket_size.0 * 3 / 2 / 10;
+        let sst_max_size = default_coprocessor.region_bucket_size.0 * 3;
+        if self.backup.sst_max_size.0 < sst_min_size {
             warn!(
                 "override backup.sst-max-size with min sst-max-size, {:?}",
-                default_coprocessor.region_max_size() / 10
+                sst_min_size
             );
-            self.backup.sst_max_size = default_coprocessor.region_max_size() / 10;
-        } else if self.backup.sst_max_size.0 > default_coprocessor.region_max_size().0 * 2 {
+            self.backup.sst_max_size = ReadableSize(sst_min_size);
+        } else if self.backup.sst_max_size.0 > sst_max_size {
             warn!(
                 "override backup.sst-max-size with max sst-max-size, {:?}",
-                default_coprocessor.region_max_size() * 2
+                sst_max_size
             );
-            self.backup.sst_max_size = default_coprocessor.region_max_size() * 2;
+            self.backup.sst_max_size = ReadableSize(sst_max_size);
         }
 
         self.readpool.adjust_use_unified_pool();
@@ -5594,6 +5596,7 @@ mod tests {
     #[test]
     fn test_region_size_config() {
         let mut default_cfg = TikvConfig::default();
+        default_cfg.coprocessor.enable_region_bucket = false;
         default_cfg.coprocessor.optimize_for(false);
         default_cfg.coprocessor.validate().unwrap();
         assert_eq!(

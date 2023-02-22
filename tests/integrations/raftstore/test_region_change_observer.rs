@@ -198,6 +198,7 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
 
 #[test]
 fn test_region_change_observer() {
-    let cluster = new_node_cluster(1, 3);
+    let mut cluster = new_node_cluster(1, 3);
+    cluster.cfg.coprocessor.enable_region_bucket = false;
     test_region_change_observer_impl(cluster);
 }

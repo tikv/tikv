@@ -2025,7 +2025,7 @@ fn test_buckets() {
 
     let req = DagSelect::from(&product).build_with(ctx, &[0]);
     let resp = handle_request(&endpoint, req.clone());
-    assert_eq!(resp.get_latest_buckets_version(), 0);
+    let old_buckets_ver = resp.get_latest_buckets_version();
 
     let mut bucket_key = product.get_record_range_all().get_start().to_owned();
     bucket_key.push(0);
@@ -2048,7 +2048,7 @@ fn test_buckets() {
         assert_ne!(resp.get_latest_buckets_version(), old_buckets_ver);
     };
 
-    wait_refresh_buckets(0);
+    wait_refresh_buckets(old_buckets_ver);
 }
 
 #[test]

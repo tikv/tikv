@@ -154,7 +154,7 @@
 # advertise-addr = ""
 
 ## Status address.
-## This is used for reporting the status of TiKV directly through 
+## This is used for reporting the status of TiKV directly through
 ## the HTTP address. Notice that there is a risk of leaking status
 ## information if this port is exposed to the public.
 ## Empty string means disabling it.
@@ -297,7 +297,7 @@
 ##   * throttle at scheduler, so raftstore and apply won't be blocked anymore
 ##   * better control on the throttle rate to avoid QPS drop under heavy write
 ##
-## Support change dynamically. 
+## Support change dynamically.
 ## When enabled, it disables kvdb's write stall and raftdb's write stall(except memtable) and vice versa.
 # enable = true
 
@@ -307,12 +307,12 @@
 ## When the number of SST files of level-0 of kvdb reaches the threshold, the flow controller begins to work
 # l0-files-threshold = 20
 
-## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
-## reject some write requests with `ServerIsBusy` error. 
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to
+## reject some write requests with `ServerIsBusy` error.
 # soft-pending-compaction-bytes-limit = "192GB"
 
-## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
-## reject all write requests with `ServerIsBusy` error. 
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to
+## reject all write requests with `ServerIsBusy` error.
 # hard-pending-compaction-bytes-limit = "1024GB"
 
 [storage.io-rate-limit]
@@ -380,8 +380,8 @@
 ## The threshold of triggering Region split check.
 ## When Region size change exceeds this config, TiKV will check whether the Region should be split
 ## or not. To reduce the cost of scanning data in the checking process, you can set the value to
-## 32MB during checking and set it back to the default value in normal operations.
-# region-split-check-diff = "6MB"
+## 256MB during checking and set it back to the default value in normal operations.
+# region-split-check-diff = "64MB"
 
 ## The interval of triggering Region split check.
 # split-region-check-tick-interval = "10s"
@@ -399,11 +399,11 @@
 # raft-log-gc-threshold = 50
 
 ## When the entry count exceeds this value, GC will be forced to trigger.
-# raft-log-gc-count-limit = 73728
+# raft-log-gc-count-limit = 786432
 
 ## When the approximate size of Raft log entries exceeds this value, GC will be forced trigger.
 ## It's recommanded to set it to 3/4 of `region-split-size`.
-# raft-log-gc-size-limit = "72MB"
+# raft-log-gc-size-limit = "768MB"
 
 ## Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
 ## GC them after ticks `raft_log_reserve_max_ticks` times.
@@ -473,14 +473,14 @@
 ## When Region [a,e) size exceeds `region_max_size`, it will be split into several Regions [a,b),
 ## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `region_split_size` (or a
 ## little larger).
-# region-max-size = "144MB"
-# region-split-size = "96MB"
+# region-max-size = "1536MB"
+# region-split-size = "1024MB"
 
 ## When the number of keys in Region [a,e) exceeds the `region_max_keys`, it will be split into
 ## several Regions [a,b), [b,c), [c,d), [d,e) and the number of keys in [a,b), [b,c), [c,d) will be
 ## `region_split_keys`.
-# region-max-keys = 1440000
-# region-split-keys = 960000
+# region-max-keys = 15360000
+# region-split-keys = 10240000
 
 ## Set to "mvcc" to do consistency check for MVCC data, or "raw" for raw data.
 # consistency-check-method = "mvcc"
@@ -1139,7 +1139,7 @@
 ##     Plaintext as master key means no master key is given and only applicable when
 ##     encryption is not enabled, i.e. data-encryption-method = "plaintext". This type doesn't
 ##     have sub-config items. Example:
-##     
+##
 ##     [security.encryption.master-key]
 ##     type = "plaintext"
 ##
@@ -1163,7 +1163,7 @@
 ##
 ##     Supply a custom encryption key stored in a file. It is recommended NOT to use in production,
 ##     as it breaks the purpose of encryption at rest, unless the file is stored in tempfs.
-##     The file must contain a 256-bits (32 bytes, regardless of key length implied by 
+##     The file must contain a 256-bits (32 bytes, regardless of key length implied by
 ##     data-encryption-method) key encoded as hex string and end with newline ("\n"). Example:
 ##
 ##     [security.encryption.master-key]
@@ -1201,16 +1201,16 @@
 
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
-# enable-auto-tune = true 
+# enable-auto-tune = true
 
-[log-backup] 
+[log-backup]
 ## Number of threads to perform backup stream tasks.
 ## The default value is CPU_NUM * 0.5, and limited to [2, 12].
 # num-threads = 8
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
 ## The default value is false.
-# enable = true 
+# enable = true
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.
