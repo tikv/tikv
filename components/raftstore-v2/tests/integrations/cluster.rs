@@ -452,6 +452,9 @@ impl Transport for TestTransport {
 pub fn v2_default_config() -> Config {
     let mut config = Config::default();
     config.store_io_pool_size = 1;
+    if config.region_split_check_diff.is_none() {
+        config.region_split_check_diff = Some(ReadableSize::mb(96 / 16));
+    }
     config
 }
 
@@ -522,10 +525,6 @@ impl Cluster {
         } else {
             v2_default_config()
         };
-        // TODO: validate the cfg.
-        if cfg.region_split_check_diff.is_none() {
-            cfg.region_split_check_diff = Some(ReadableSize::mb(96 / 16));
-        }
         disable_all_auto_ticks(&mut cfg);
         let cop_cfg = cop_cfg.unwrap_or_default();
         for _ in 1..=count {
