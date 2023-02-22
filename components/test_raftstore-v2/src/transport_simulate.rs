@@ -105,7 +105,12 @@ pub trait RaftStoreRouter {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Reports the sending snapshot status to the peer of the Region.
-    fn report_snapshot_status(&self, region_id: u64, to_peer_id: u64, status: SnapshotStatus);
+    fn report_snapshot_status(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    ) -> RaftStoreResult<()>;
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter for RaftRouter<EK, ER> {
@@ -120,8 +125,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter for RaftRouter<EK, ER> {
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn report_snapshot_status(&self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
-        let _ = self.send_peer_msg(region_id, PeerMsg::SnapshotSent { to_peer_id, status });
+    fn report_snapshot_status(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    ) -> RaftStoreResult<()> {
+        self.send_peer_msg(region_id, PeerMsg::SnapshotSent { to_peer_id, status })
     }
 }
 
@@ -134,7 +144,12 @@ impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
         filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
     }
 
-    fn report_snapshot_status(&self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
+    fn report_snapshot_status(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    ) -> RaftStoreResult<()> {
         self.ch
             .report_snapshot_status(region_id, to_peer_id, status)
     }
