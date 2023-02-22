@@ -35,7 +35,7 @@ use raftstore::{
         local_metrics::RaftMetrics,
         metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
         msg::ErrorCallback,
-        util, Config, WriteCallback,
+        util, Config, Transport, WriteCallback,
     },
     Error, Result,
 };
@@ -59,8 +59,8 @@ mod control;
 mod write;
 
 pub use admin::{
-    report_split_init_finish, temp_split_path, AdminCmdResult, CompactLogContext, RequestHalfSplit,
-    RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
+    report_split_init_finish, temp_split_path, AdminCmdResult, CompactLogContext, MergeContext,
+    RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
 pub use write::{
@@ -319,7 +319,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn on_apply_res<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, apply_res: ApplyRes) {
+    pub fn on_apply_res<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        apply_res: ApplyRes,
+    ) {
         if !self.serving() || !apply_res.admin_result.is_empty() {
             // TODO: remove following log once stable.
             info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
@@ -346,6 +350,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
                 AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
                 AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
+                AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
             }
         }
 
@@ -364,6 +369,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         entry_storage.set_applied_term(apply_res.applied_term);
         if !is_leader {
             entry_storage.compact_entry_cache(apply_res.applied_index + 1);
+        }
+        if is_leader {
+            self.retry_pending_prepare_merge(ctx, apply_res.applied_index);
         }
         self.on_data_modified(apply_res.modifications);
         self.handle_read_on_apply(
@@ -482,7 +490,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
         for (e, ch) in ce.entry_and_proposals {
             if self.tombstone() {
-                apply::notify_req_region_removed(self.region_state().get_region().get_id(), ch);
+                apply::notify_req_region_removed(self.region_id(), ch);
                 continue;
             }
             if !e.get_data().is_empty() {
@@ -528,7 +536,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 Ok(decoder) => {
                     util::compare_region_epoch(
                         decoder.header().get_region_epoch(),
-                        self.region_state().get_region(),
+                        self.region(),
                         false,
                         true,
                         true,
@@ -575,14 +583,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
         };
 
-        util::check_req_region_epoch(&req, self.region_state().get_region(), true)?;
+        util::check_req_region_epoch(&req, self.region(), true)?;
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
-                AdminCmdType::CompactLog => self.apply_compact_log(admin_req, entry.index)?,
+                AdminCmdType::CompactLog => self.apply_compact_log(admin_req, log_index)?,
                 AdminCmdType::Split => self.apply_split(admin_req, log_index)?,
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index)?,
-                AdminCmdType::PrepareMerge => unimplemented!(),
+                AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
                 AdminCmdType::CommitMerge => unimplemented!(),
                 AdminCmdType::RollbackMerge => unimplemented!(),
                 AdminCmdType::TransferLeader => {
