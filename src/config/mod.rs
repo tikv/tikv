@@ -4177,7 +4177,7 @@ mod tests {
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::{
-        config::{LARGE_REGION_SPLIT_SIZE, RAFTSTORE_V2_SPLIT_SIZE, SPLIT_SIZE},
+        config::{RAFTSTORE_V2_SPLIT_SIZE, SPLIT_SIZE},
         region_info_accessor::MockRegionInfoProvider,
     };
     use slog::Level;
@@ -5598,16 +5598,6 @@ mod tests {
         default_cfg.coprocessor.validate().unwrap();
         assert_eq!(default_cfg.coprocessor.region_split_size(), SPLIT_SIZE);
         assert!(!default_cfg.coprocessor.enable_region_bucket());
-
-        let mut default_cfg = TikvConfig::default();
-        default_cfg.coprocessor.enable_region_bucket = Some(true);
-        default_cfg.coprocessor.optimize_for(false);
-        default_cfg.coprocessor.validate().unwrap();
-        assert_eq!(
-            default_cfg.coprocessor.region_split_size(),
-            LARGE_REGION_SPLIT_SIZE
-        );
-        assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.optimize_for(true);

@@ -71,7 +71,6 @@ pub enum ConsistencyCheckMethod {
 
 /// Default region split size.
 pub const SPLIT_SIZE: ReadableSize = ReadableSize::mb(96);
-pub const LARGE_REGION_SPLIT_SIZE: ReadableSize = ReadableSize::gb(1);
 pub const RAFTSTORE_V2_SPLIT_SIZE: ReadableSize = ReadableSize::gb(10);
 
 /// Default batch split limit.
@@ -103,14 +102,7 @@ impl Default for Config {
 
 impl Config {
     pub fn region_split_size(&self) -> ReadableSize {
-        self.region_split_size.unwrap_or(
-            // v1 only
-            if self.enable_region_bucket == Some(true) {
-                LARGE_REGION_SPLIT_SIZE
-            } else {
-                SPLIT_SIZE
-            },
-        )
+        self.region_split_size.unwrap_or(SPLIT_SIZE)
     }
 
     pub fn region_max_keys(&self) -> u64 {
