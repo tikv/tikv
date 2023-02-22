@@ -21,14 +21,17 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use super::{
     etcd::{EtcdSnapshot, TopologyUpdater},
-    EtcdStore, MetaStore,
+    EtcdStore, GetExtra, GetResponse, Keys, MetaStore, Snapshot,
 };
-use crate::errors::{ContextualResultExt, Result};
+use crate::{
+    annotate,
+    errors::{ContextualResultExt, Result},
+};
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
-pub struct LazyEtcdClient(Arc<AsyncMutex<LazyEtcdClientInner>>);
+pub struct LazyEtcdClient(Arc<AsyncMutex<LazyEtcdClientInner>>, ConnectionConfig);
 
 #[derive(Clone)]
 pub struct ConnectionConfig {
@@ -57,6 +60,15 @@ impl std::fmt::Debug for ConnectionConfig {
 }
 
 impl ConnectionConfig {
+    /// Get the timeout for unary RPCs.
+    fn unary_timeout(&self) -> Duration {
+        // Note: It is not so sane to choose unary RPC timeout by the keep-alive-timeout
+        // (the former is defined by how the server handles the RPC, while the latter is
+        // fully about the network environment).
+        // Perhaps we'd better add a independent config.
+        5 * self.keep_alive_timeout
+    }
+
     /// Convert the config to the connection option.
     fn to_connection_options(&self) -> ConnectOptions {
         let mut opts = ConnectOptions::new();
@@ -102,9 +114,9 @@ impl ConnectionConfig {
 
 impl LazyEtcdClient {
     pub fn new(endpoints: &[String], conf: ConnectionConfig) -> Self {
-        let mut inner = LazyEtcdClientInner::new(endpoints, conf);
+        let mut inner = LazyEtcdClientInner::new(endpoints, conf.clone());
         inner.normalize_urls();
-        Self(Arc::new(AsyncMutex::new(inner)))
+        Self(Arc::new(AsyncMutex::new(inner)), conf)
     }
 
     // For testing -- check whether the endpoints are properly normalized.
@@ -240,12 +252,39 @@ impl LazyEtcdClientInner {
     }
 }
 
+pub struct SnapshotWithRpcTimeOut<S> {
+    inner: S,
+    timeout: Duration,
+}
+
+#[async_trait::async_trait]
+impl<S: Snapshot> Snapshot for SnapshotWithRpcTimeOut<S> {
+    async fn get_extra(&self, keys: Keys, extra: GetExtra) -> Result<GetResponse> {
+        tokio::time::timeout(self.timeout, self.inner.get_extra(keys, extra))
+            .await
+            .map_err(|err| annotate!(err, "timed out during getting from snapshot"))
+            .and_then(|x| x)
+    }
+
+    fn revision(&self) -> i64 {
+        self.inner.revision()
+    }
+}
+
 #[async_trait::async_trait]
 impl MetaStore for LazyEtcdClient {
-    type Snap = EtcdSnapshot;
+    type Snap = SnapshotWithRpcTimeOut<EtcdSnapshot>;
 
     async fn snapshot(&self) -> Result<Self::Snap> {
-        self.get_cli().await?.snapshot().await
+        let fut = async { self.get_cli().await?.snapshot().await };
+        tokio::time::timeout(self.1.unary_timeout(), fut)
+            .await
+            .map_err(|err| annotate!(err, "timed out during getting snapshot"))
+            .and_then(|x| x)
+            .map(|snap| SnapshotWithRpcTimeOut {
+                inner: snap,
+                timeout: self.1.unary_timeout(),
+            })
     }
 
     async fn watch(
@@ -253,15 +292,27 @@ impl MetaStore for LazyEtcdClient {
         keys: super::Keys,
         start_rev: i64,
     ) -> Result<super::KvChangeSubscription> {
-        self.get_cli().await?.watch(keys, start_rev).await
+        let fut = async { self.get_cli().await?.watch(keys, start_rev).await };
+        tokio::time::timeout(self.1.unary_timeout(), fut)
+            .await
+            .map_err(|err| annotate!(err, "timed out during start watching"))
+            .and_then(|x| x)
     }
 
     async fn txn(&self, txn: super::Transaction) -> Result<()> {
-        self.get_cli().await?.txn(txn).await
+        let fut = async { self.get_cli().await?.txn(txn).await };
+        tokio::time::timeout(self.1.unary_timeout(), fut)
+            .await
+            .map_err(|err| annotate!(err, "timed out during executing txn"))
+            .and_then(|x| x)
     }
 
     async fn txn_cond(&self, txn: super::CondTransaction) -> Result<()> {
-        self.get_cli().await?.txn_cond(txn).await
+        let fut = async { self.get_cli().await?.txn_cond(txn).await };
+        tokio::time::timeout(self.1.unary_timeout(), fut)
+            .await
+            .map_err(|err| annotate!(err, "timed out during running conditional txn"))
+            .and_then(|x| x)
     }
 }
 
