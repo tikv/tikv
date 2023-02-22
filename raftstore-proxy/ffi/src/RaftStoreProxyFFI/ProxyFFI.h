@@ -223,6 +223,25 @@ struct RaftStoreProxyFFIHelper {
                                            RawCppStringPtr *error_msg);
 };
 
+struct PageStorageInterfaces {
+  RawCppPtr (*fn_create_write_batch)(const EngineStoreServerWrap *);
+  void (*fn_wb_put_page)(RawVoidPtr, BaseBuffView, BaseBuffView);
+  void (*fn_wb_del_page)(RawVoidPtr, BaseBuffView);
+  uint64_t (*fn_get_wb_size)(RawVoidPtr);
+  uint8_t (*fn_is_wb_empty)(RawVoidPtr);
+  void (*fn_handle_merge_wb)(RawVoidPtr, RawVoidPtr);
+  void (*fn_handle_clear_wb)(RawVoidPtr);
+  void (*fn_handle_consume_wb)(const EngineStoreServerWrap *, RawVoidPtr);
+  CppStrWithView (*fn_handle_read_page)(const EngineStoreServerWrap *,
+                                        BaseBuffView);
+  RawCppPtrCarr (*fn_handle_scan_page)(const EngineStoreServerWrap *,
+                                       BaseBuffView, BaseBuffView);
+  CppStrWithView (*fn_handle_get_lower_bound)(const EngineStoreServerWrap *,
+                                              BaseBuffView);
+  uint8_t (*fn_is_ps_empty)(const EngineStoreServerWrap *);
+  void (*fn_handle_purge_ps)(const EngineStoreServerWrap *);
+};
+
 struct EngineStoreServerHelper {
   uint32_t magic_number;  // use a very special number to check whether this
                           // struct is legal
@@ -230,6 +249,7 @@ struct EngineStoreServerHelper {
   //
 
   EngineStoreServerWrap *inner;
+  PageStorageInterfaces ps;
   RawCppPtr (*fn_gen_cpp_string)(BaseBuffView);
   EngineStoreApplyRes (*fn_handle_write_raft_cmd)(const EngineStoreServerWrap *,
                                                   WriteCmdsView, RaftCmdHeader);
@@ -239,22 +259,6 @@ struct EngineStoreServerHelper {
   uint8_t (*fn_need_flush_data)(EngineStoreServerWrap *, uint64_t);
   uint8_t (*fn_try_flush_data)(EngineStoreServerWrap *, uint64_t, uint8_t,
                                uint64_t, uint64_t);
-  RawCppPtr (*fn_ps_create_write_batch)(const EngineStoreServerWrap *);
-  void (*fn_ps_wb_put_page)(RawVoidPtr, BaseBuffView, BaseBuffView);
-  void (*fn_ps_wb_del_page)(RawVoidPtr, BaseBuffView);
-  uint64_t (*fn_ps_get_wb_size)(RawVoidPtr);
-  uint8_t (*fn_ps_is_wb_empty)(RawVoidPtr);
-  void (*fn_ps_handle_merge_wb)(RawVoidPtr, RawVoidPtr);
-  void (*fn_ps_handle_clear_wb)(RawVoidPtr);
-  void (*fn_ps_handle_consume_wb)(const EngineStoreServerWrap *, RawVoidPtr);
-  CppStrWithView (*fn_ps_handle_read_page)(const EngineStoreServerWrap *,
-                                           BaseBuffView);
-  RawCppPtrCarr (*fn_ps_handle_scan_page)(const EngineStoreServerWrap *,
-                                          BaseBuffView, BaseBuffView);
-  CppStrWithView (*fn_ps_handle_get_lower_bound)(const EngineStoreServerWrap *,
-                                                 BaseBuffView);
-  uint8_t (*fn_ps_is_ps_empty)(const EngineStoreServerWrap *);
-  void (*fn_ps_handle_purge_ps)(const EngineStoreServerWrap *);
   void (*fn_atomic_update_proxy)(EngineStoreServerWrap *,
                                  RaftStoreProxyFFIHelper *);
   void (*fn_handle_destroy)(EngineStoreServerWrap *, uint64_t);
