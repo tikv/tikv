@@ -21,7 +21,7 @@ pub struct Resolver {
     // The highest index `Resolver` had been tracked
     tracked_index: u64,
     // The region read progress used to utilize `resolved_ts` to serve stale read request
-    read_progress: Option<Arc<RegionReadProgress>>,
+    pub(crate) read_progress: Option<Arc<RegionReadProgress>>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
     // Whether the `Resolver` is stopped

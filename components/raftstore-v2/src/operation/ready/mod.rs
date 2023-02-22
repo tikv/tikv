@@ -236,6 +236,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             cmp::Ordering::Greater => {
                 // We need to create the target peer.
+                info!(self.logger, "mark for destroy for larger ID"; "larger_id" => to_peer.get_id());
                 self.mark_for_destroy(Some(msg));
                 return;
             }
@@ -789,6 +790,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.add_pending_tick(PeerTick::CompactLog);
                     self.add_pending_tick(PeerTick::SplitRegionCheck);
                     self.add_pending_tick(PeerTick::CheckLongUncommitted);
+                    self.add_pending_tick(PeerTick::ReportBuckets);
                     self.maybe_schedule_gc_peer_tick();
                 }
                 StateRole::Follower => {
@@ -943,6 +945,19 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         }
         // If snapshot initializes the peer, we don't need to write apply trace again.
         if !self.ever_persisted() {
+            let region_id = self.region().get_id();
+            let entry_storage = self.entry_storage();
+            let raft_engine = entry_storage.raft_engine();
+            if write_task.raft_wb.is_none() {
+                write_task.raft_wb = Some(raft_engine.log_batch(64));
+            }
+            let wb = write_task.raft_wb.as_mut().unwrap();
+            // There may be tombstone key from last peer.
+            raft_engine
+                .clean(region_id, 0, entry_storage.raft_state(), wb)
+                .unwrap_or_else(|e| {
+                    slog_panic!(self.logger(), "failed to clean up region"; "error" => ?e);
+                });
             self.init_apply_trace(write_task);
             self.set_ever_persisted();
         }
