@@ -404,6 +404,16 @@ impl Simulator for NodeCluster {
             .unwrap()
             .to_owned()
     }
+
+    fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        let mut trans = self.trans.core.lock().unwrap();
+        trans.routers.get_mut(&node_id).unwrap().add_filter(filter);
+    }
+
+    fn clear_recv_filters(&mut self, node_id: u64) {
+        let mut trans = self.trans.core.lock().unwrap();
+        trans.routers.get_mut(&node_id).unwrap().clear_filters();
+    }
 }
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {

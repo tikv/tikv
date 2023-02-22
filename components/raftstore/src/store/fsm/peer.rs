@@ -5627,7 +5627,7 @@ where
     }
 
     fn register_split_region_check_tick(&mut self) {
-        self.schedule_tick(PeerTick::SplitRegionCheck)
+        self.schedule_tick(PeerTick::SplitRegionCheck);
     }
 
     #[inline]

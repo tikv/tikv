@@ -525,6 +525,14 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
+    fn add_recv_filter(&mut self, _node_id: u64, _filter: Box<dyn test_raftstore::Filter>) {
+        unimplemented!()
+    }
+
+    fn clear_recv_filters(&mut self, _node_id: u64) {
+        unimplemented!()
+    }
+
     fn run_node(
         &mut self,
         node_id: u64,
