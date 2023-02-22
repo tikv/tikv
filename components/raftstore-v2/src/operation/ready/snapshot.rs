@@ -250,9 +250,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(snapshot_index);
-            if self.merge_context().pending.is_some() {
+            if self.proposal_control().is_merging() {
                 // After applying a snapshot, merge is rollbacked implicitly.
-                self.rollback_merge(ctx);
+                // TODO: self.rollback_merge(ctx);
             }
             let read_tablet = SharedReadTablet::new(tablet.clone());
             {

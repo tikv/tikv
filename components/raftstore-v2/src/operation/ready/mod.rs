@@ -215,10 +215,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 ExtraMessageType::MsgWantRollbackMerge => {
                     if self.is_leader() {
-                        self.merge_context_mut().maybe_add_rollback_peer(
-                            msg.get_from_peer().get_id(),
-                            msg.get_extra_msg(),
-                        );
+                        // TODO:
+                        // self.merge_context_mut().maybe_add_rollback_peer();
                         return;
                     }
                 }
@@ -563,7 +561,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
-        self.maybe_consume_pending_merge_result(ctx, &mut write_task);
+        self.maybe_process_pending_merge_result(ctx, &mut write_task);
         self.report_send_to_queue_duration(ctx, &mut write_task, ready.entries());
         let prev_persisted = self.storage().apply_trace().persisted_apply_index();
         self.merge_state_changes_to(&mut write_task);
@@ -815,6 +813,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.storage_mut().cancel_generating_snap(None);
                     self.txn_context()
                         .on_became_follower(self.term(), self.region());
+                    self.update_merge_progress_on_became_follower();
                 }
                 _ => {}
             }

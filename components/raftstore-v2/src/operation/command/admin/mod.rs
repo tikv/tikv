@@ -1,24 +1,23 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod commit_merge;
 mod compact_log;
 mod conf_change;
-mod prepare_merge;
-mod rollback_merge;
+mod merge;
 mod split;
 mod transfer_leader;
 
-use commit_merge::CommitMergeResult;
-pub use commit_merge::{CatchUpLogs, MergeContext};
 pub use compact_log::CompactLogContext;
 use compact_log::CompactLogResult;
 use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
-use prepare_merge::PrepareMergeResult;
+pub use merge::{commit::CatchUpLogs, MergeContext};
+use merge::{commit::CommitMergeResult, prepare::PrepareMergeResult};
 use protobuf::Message;
-use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
-use rollback_merge::RollbackMergeResult;
+use raftstore::{
+    store::{cmd_resp, fsm::apply, msg::ErrorCallback},
+    Error,
+};
 use slog::info;
 use split::SplitResult;
 pub use split::{
@@ -41,7 +40,6 @@ pub enum AdminCmdResult {
     UpdateGcPeers(UpdateGcPeersResult),
     PrepareMerge(PrepareMergeResult),
     CommitMerge(CommitMergeResult),
-    RollbackMerge(RollbackMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -101,6 +99,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
             conflict.delay_channel(ch);
+            return;
+        }
+        if self.proposal_control().has_pending_prepare_merge()
+            && cmd_type != AdminCmdType::PrepareMerge
+            || self.proposal_control().is_merging() && cmd_type != AdminCmdType::RollbackMerge
+        {
+            let resp = cmd_resp::new_error(Error::ProposalInMergingMode(self.region_id()));
+            ch.report_error(resp);
             return;
         }
         // To maintain propose order, we need to make pending proposal first.

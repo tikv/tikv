@@ -16,7 +16,7 @@ use kvproto::{
     raft_serverpb::{RaftMessage, RegionLocalState},
 };
 use pd_client::BucketStat;
-use raft::{ProgressState, RawNode, StateRole, INVALID_INDEX};
+use raft::{RawNode, StateRole};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
@@ -26,8 +26,8 @@ use raftstore::{
         TabletSnapManager, WriteTask,
     },
 };
-use slog::{warn, Logger};
-use tikv_util::{box_err, slog_panic};
+use slog::Logger;
+use tikv_util::slog_panic;
 
 use super::storage::Storage;
 use crate::{
@@ -60,7 +60,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// For raft log compaction.
     compact_log_context: CompactLogContext,
 
-    merge_context: MergeContext,
+    merge_context: Option<Box<MergeContext>>,
     last_sent_snapshot_index: u64,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
@@ -136,8 +136,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let raft_cfg = cfg.new_raft_config(peer_id, applied_index);
 
         let region_id = storage.region().get_id();
-        let region_state = storage.region_state().clone();
-        let tablet_index = region_state.get_tablet_index();
+        let tablet_index = storage.region_state().get_tablet_index();
+        let merge_context = MergeContext::from_region_state(&logger, storage.region_state());
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
@@ -162,7 +162,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
             compact_log_context: CompactLogContext::new(applied_index),
-            merge_context: MergeContext::from_region_state(&logger, &region_state),
+            merge_context: merge_context.map(|c| Box::new(c)),
             last_sent_snapshot_index: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
@@ -387,6 +387,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn merge_context(&self) -> Option<&MergeContext> {
+        self.merge_context.as_deref()
+    }
+
+    #[inline]
+    pub fn merge_context_mut(&mut self) -> &mut MergeContext {
+        self.merge_context.get_or_insert_default()
+    }
+
+    #[inline]
+    pub fn take_merge_context(&mut self) -> Option<Box<MergeContext>> {
+        self.merge_context.take()
+    }
+
+    #[inline]
     pub fn raft_group(&self) -> &RawNode<Storage<EK, ER>> {
         &self.raft_group
     }
@@ -586,7 +601,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         false
     }
 
-    #[inline]
     pub fn serving(&self) -> bool {
         matches!(self.destroy_progress, DestroyProgress::None)
     }
@@ -770,16 +784,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn merge_context(&self) -> &MergeContext {
-        &self.merge_context
-    }
-
-    #[inline]
-    pub fn merge_context_mut(&mut self) -> &mut MergeContext {
-        &mut self.merge_context
-    }
-
-    #[inline]
     pub fn refresh_leader_transferee(&mut self) -> u64 {
         mem::replace(
             &mut self.leader_transferee,
@@ -825,63 +829,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self.gc_peer_context
     }
 
-    /// Returns (minimal matched, minimal committed)
-    pub fn get_min_progress(&self) -> Result<(u64, u64)> {
-        let (mut min_m, mut min_c) = (None, None);
-        if let Some(progress) = self.raft_group().status().progress {
-            for (id, pr) in progress.iter() {
-                // Reject merge if there is any pending request snapshot,
-                // because a target region may merge a source region which is in
-                // an invalid state.
-                if pr.state == ProgressState::Snapshot
-                    || pr.pending_request_snapshot != INVALID_INDEX
-                {
-                    return Err(box_err!(
-                        "there is a pending snapshot peer {} [{:?}], skip merge",
-                        id,
-                        pr
-                    ));
-                }
-                if min_m.unwrap_or(u64::MAX) > pr.matched {
-                    min_m = Some(pr.matched);
-                }
-                if min_c.unwrap_or(u64::MAX) > pr.committed_index {
-                    min_c = Some(pr.committed_index);
-                }
-            }
-        }
-        let (mut min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
-        if min_m < min_c {
-            warn!(
-                self.logger,
-                "min_matched < min_committed, raft progress is inaccurate";
-                "min_matched" => min_m,
-                "min_committed" => min_c,
-            );
-            // Reset `min_matched` to `min_committed`, since the raft log at `min_committed`
-            // is known to be committed in all peers, all of the peers should also have
-            // replicated it
-            min_m = min_c;
-        }
-        Ok((min_m, min_c))
-    }
-
-    #[inline]
-    pub fn quorum_want_to_rollback_merge(&self) -> bool {
-        self.raft_group
-            .raft
-            .prs()
-            .has_quorum(&self.merge_context.rollback_peers)
-    }
-
-    #[inline]
-    pub fn get_index_term(&self, idx: u64) -> u64 {
-        match self.raft_group.raft.raft_log.term(idx) {
-            Ok(t) => t,
-            Err(e) => slog_panic!(self.logger, "failed to load term"; "index" => idx, "err" => ?e),
-        }
-    }
-
     #[inline]
     pub fn update_last_sent_snapshot_index(&mut self, i: u64) {
         if i > self.last_sent_snapshot_index {
@@ -892,5 +839,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn last_sent_snapshot_index(&self) -> u64 {
         self.last_sent_snapshot_index
+    }
+
+    #[inline]
+    pub fn get_index_term(&self, idx: u64) -> u64 {
+        match self.raft_group.raft.raft_log.term(idx) {
+            Ok(t) => t,
+            Err(e) => slog_panic!(self.logger, "failed to load term"; "index" => idx, "err" => ?e),
+        }
     }
 }
