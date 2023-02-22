@@ -66,8 +66,7 @@ impl ReportBucket {
         }
     }
 
-    fn report(&mut self, report_ts: UnixSecs) -> BucketStat {
-        self.last_report_ts = report_ts;
+    fn report(&mut self) -> BucketStat {
         match self.last_report_stat.replace(self.current_stat.clone()) {
             Some(last) => {
                 let mut delta = BucketStat::from_meta(self.current_stat.meta.clone());
@@ -350,7 +349,8 @@ where
         };
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - last_report_ts.into_inner();
-        let delta = report_buckets.report(now);
+        report_buckets.last_report_ts = now;
+        let delta = report_buckets.report();
         let resp = self
             .pd_client
             .report_region_buckets(&delta, Duration::from_secs(interval_second));
@@ -388,6 +388,15 @@ where
                 .add_query_stats(&region_info.query_stats.0);
         }
         for (_, region_buckets) in std::mem::take(&mut stats.region_buckets) {
+            info!(
+                self.logger,
+                "handle_update_read_stats";
+                "region_id" => ?region_buckets.meta.region_id,
+                "start_key" => ?log_wrappers::Value::key(&region_buckets.meta.keys.first().unwrap()),
+                "start_key" => ?log_wrappers::Value::key(&region_buckets.meta.keys.last().unwrap()),
+                "read_bytes"=> ?region_buckets.stats.get_read_bytes(),
+                "read_keys" => ?region_buckets.stats.get_read_keys(),
+            );
             self.merge_buckets(region_buckets);
         }
         if !stats.region_infos.is_empty() {

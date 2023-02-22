@@ -5,15 +5,21 @@
 use std::sync::Arc;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::metapb::RegionEpoch;
+use kvproto::metapb::{self, RegionEpoch};
 use pd_client::{BucketMeta, BucketStat};
 use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
 };
-use slog::{error, warn};
+use slog::{error, info, warn};
 
-use crate::{batch::StoreContext, fsm::PeerFsmDelegate, raft::Peer, router::PeerTick, worker::pd};
+use crate::{
+    batch::StoreContext,
+    fsm::PeerFsmDelegate,
+    raft::Peer,
+    router::{ApplyTask, PeerTick},
+    worker::pd,
+};
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
@@ -145,17 +151,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.state_role(),
         );
         let meta = region_buckets.meta.clone();
-        self.set_region_buckets(Some(region_buckets));
+        self.set_region_buckets(Some(region_buckets.clone()));
+
         let mut store_meta = store_ctx.store_meta.lock().unwrap();
         if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
             reader.0.update(ReadProgress::region_buckets(meta));
         }
+        self.apply_scheduler()
+            .unwrap()
+            .send(ApplyTask::RefreshBucketStat(region_buckets.meta.clone()));
     }
 
     #[inline]
     pub fn report_region_buckets_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
-        let region_buckets = self.region_buckets().as_ref().unwrap();
-        let task = pd::Task::ReportBuckets(region_buckets.clone());
+        let report_region_buckets = self.report_region_buckets().as_ref().unwrap();
+        let task = pd::Task::ReportBuckets(report_region_buckets.clone());
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
                 self.logger,
@@ -163,6 +173,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "err" => ?e,
             );
         }
+        self.clear_report_buckets();
     }
 
     pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &StoreContext<EK, ER, T>) {
@@ -179,6 +190,58 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 );
             }
         }
+    }
+
+    // generate bucket range list to run split-check (to further split buckets)
+    // it will returns the suspected bucket range that it's write bytes is more the
+    // threshold.
+    pub fn gen_bucket_range_for_update<T>(
+        &self,
+        ctx: &StoreContext<EK, ER, T>,
+    ) -> Option<Vec<BucketRange>> {
+        if !ctx.coprocessor_host.cfg.enable_region_bucket {
+            return None;
+        }
+        let region_buckets = self.region_buckets().as_ref()?;
+        let stats = &region_buckets.stats;
+        let keys = &region_buckets.meta.keys;
+
+        let empty_last_keys = vec![];
+        let empty_last_stats = metapb::BucketStats::default();
+        let (last_keys, last_stats, stats_reset) = self
+            .last_region_buckets()
+            .as_ref()
+            .map(|b| {
+                (
+                    &b.meta.keys,
+                    &b.stats,
+                    region_buckets.create_time != b.create_time,
+                )
+            })
+            .unwrap_or((&empty_last_keys, &empty_last_stats, false));
+
+        let mut bucket_ranges = vec![];
+        let mut j = 0;
+        assert_eq!(keys.len(), stats.write_bytes.len() + 1);
+        // if the bucket's write_bytes exceed half of the configured region_bucket_size,
+        // add it to the bucket_ranges for checking update
+        let bucket_update_diff_size_threshold = ctx.coprocessor_host.cfg.region_bucket_size.0 / 2;
+        for i in 0..stats.write_bytes.len() {
+            let mut diff_in_bytes = stats.write_bytes[i];
+            while j < last_keys.len() && keys[i] > last_keys[j] {
+                j += 1;
+            }
+            if j < last_keys.len() && keys[i] == last_keys[j] {
+                if !stats_reset {
+                    diff_in_bytes -= last_stats.write_bytes[j];
+                }
+                j += 1;
+            }
+            if diff_in_bytes >= bucket_update_diff_size_threshold {
+                bucket_ranges.push(BucketRange(keys[i].clone(), keys[i + 1].clone()));
+            }
+        }
+        Some(bucket_ranges)
     }
 }
 

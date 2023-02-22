@@ -162,6 +162,10 @@ impl BucketStat {
         self.meta = meta;
     }
 
+    pub fn clear_stats(&mut self) {
+        self.stats = new_bucket_stats(&self.meta);
+    }
+
     pub fn merge(&mut self, delta: &BucketStat) {
         merge_bucket_stats(
             &self.meta.keys,

@@ -6,6 +6,7 @@ use engine_traits::{
     FlushState, KvEngine, PerfContextKind, TabletRegistry, WriteBatch, DATA_CFS_LEN,
 };
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
+use pd_client::BucketStat;
 use raftstore::store::{
     fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
     Config, ReadTask,
@@ -58,6 +59,8 @@ pub struct Apply<EK: KvEngine, R> {
     read_scheduler: Scheduler<ReadTask<EK>>,
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
+
+    pub(crate) buckets: Option<BucketStat>,
 }
 
 impl<EK: KvEngine, R> Apply<EK, R> {
@@ -73,6 +76,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
         logger: Logger,
+        buckets: Option<BucketStat>,
     ) -> Self {
         let mut remote_tablet = tablet_registry
             .get(region_state.get_region().get_id())
@@ -103,6 +107,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             log_recovery,
             metrics: ApplyMetrics::default(),
             logger,
+            buckets,
         }
     }
 

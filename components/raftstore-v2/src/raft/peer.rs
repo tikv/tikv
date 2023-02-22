@@ -85,7 +85,11 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// region buckets.
     region_buckets: Option<BucketStat>,
+    // the last buckets records the stats that the recently refreshed.
     last_region_buckets: Option<BucketStat>,
+    // the report region buckets records the increment stats after last report pd.
+    // it will be reset after report pd.
+    report_region_buckets: Option<BucketStat>,
 
     /// Transaction extensions related to this peer.
     txn_context: TxnContext,
@@ -186,6 +190,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ),
             region_buckets: None,
             last_region_buckets: None,
+            report_region_buckets: None,
             txn_context: TxnContext::default(),
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
@@ -223,16 +228,41 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn add_bucket_flow(&mut self, delta: &Option<Box<BucketStat>>) {
+        if let (Some(buckets), Some(report_buckets), Some(delta)) = (
+            self.region_buckets.as_mut(),
+            self.report_region_buckets.as_mut(),
+            delta,
+        ) {
+            buckets.merge(&delta);
+            report_buckets.merge(&delta);
+        }
+    }
+
+    #[inline]
     pub fn set_region_buckets(&mut self, buckets: Option<BucketStat>) {
         if let Some(b) = self.region_buckets.take() {
             self.last_region_buckets = Some(b);
         }
+        self.report_region_buckets = buckets.clone();
         self.region_buckets = buckets;
+    }
+
+    #[inline]
+    pub fn clear_report_buckets(&mut self) {
+        if let Some(buckets) = self.report_region_buckets.as_mut() {
+            buckets.clear_stats();
+        }
     }
 
     #[inline]
     pub fn last_region_buckets(&self) -> &Option<BucketStat> {
         &self.last_region_buckets
+    }
+
+    #[inline]
+    pub fn report_region_buckets(&self) -> &Option<BucketStat> {
+        &self.report_region_buckets
     }
 
     #[inline]
