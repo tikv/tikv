@@ -134,9 +134,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // `PrepareMerge` rejects all writes (in `ProposalControl::check_conflict`).
             assert!(
                 !self.proposal_control().is_merging(),
-                "{}-{}",
-                self.region_id(),
-                self.peer_id()
+                "{}",
+                SlogFormat(&self.logger)
             );
             self.take_merge_context();
             self.proposal_control_mut().set_pending_prepare_merge(false);
