@@ -2273,7 +2273,7 @@ where
                 let applied_index = res.apply_state.applied_index;
                 let buckets = self.fsm.peer.region_buckets.as_mut();
                 if let (Some(delta), Some(buckets)) = (res.bucket_stat, buckets) {
-                    buckets.merge(&delta);
+                    buckets.merge(delta);
                 }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,

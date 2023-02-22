@@ -47,7 +47,7 @@ use slog::{debug, o, Logger};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::{
-    config::{ReadableDuration, ReadableSize, VersionTrack},
+    config::{ReadableDuration, VersionTrack},
     store::new_peer,
     worker::{LazyWorker, Worker},
 };
@@ -452,7 +452,6 @@ impl Transport for TestTransport {
 pub fn v2_default_config() -> Config {
     let mut config = Config::default();
     config.store_io_pool_size = 1;
-    config.region_split_check_diff = Some(ReadableSize::kb(1));
     config
 }
 
@@ -504,8 +503,8 @@ impl Cluster {
         Cluster::with_configs(count, config, None)
     }
 
-    pub fn with_cop_cfg(coprocessor_cfg: CopConfig) -> Cluster {
-        Cluster::with_configs(1, None, Some(coprocessor_cfg))
+    pub fn with_cop_cfg(config: Option<Config>, coprocessor_cfg: CopConfig) -> Cluster {
+        Cluster::with_configs(1, config, Some(coprocessor_cfg))
     }
 
     pub fn with_configs(count: usize, config: Option<Config>, cop_cfg: Option<CopConfig>) -> Self {

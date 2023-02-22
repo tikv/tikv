@@ -59,7 +59,6 @@ pub struct Apply<EK: KvEngine, R> {
     read_scheduler: Scheduler<ReadTask<EK>>,
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
-
     pub(crate) buckets: Option<BucketStat>,
 }
 

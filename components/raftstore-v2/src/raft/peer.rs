@@ -234,7 +234,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.report_region_buckets.as_mut(),
             delta,
         ) {
-            buckets.merge(&delta);
+            buckets.merge(delta);
             report_buckets.merge(&delta);
         }
     }

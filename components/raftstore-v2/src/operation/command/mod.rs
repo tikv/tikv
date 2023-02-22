@@ -494,7 +494,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let new = match &self.buckets {
             Some(origin) => {
                 let mut new = BucketStat::from_meta(meta);
-                new.merge(&origin);
+                new.merge(origin);
                 new
             }
             None => BucketStat::from_meta(meta),

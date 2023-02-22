@@ -11,7 +11,7 @@ use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
 };
-use slog::{error, info, warn};
+use slog::{error, warn};
 
 use crate::{
     batch::StoreContext,
@@ -193,13 +193,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     // generate bucket range list to run split-check (to further split buckets)
-    // it will returns the suspected bucket range that it's write bytes is more the
+    // It will return the suspected bucket range that it's write bytes is more the
     // threshold.
     pub fn gen_bucket_range_for_update<T>(
         &self,
         ctx: &StoreContext<EK, ER, T>,
     ) -> Option<Vec<BucketRange>> {
-        if !ctx.coprocessor_host.cfg.enable_region_bucket {
+        if !ctx.coprocessor_host.cfg.enable_region_bucket() {
             return None;
         }
         let region_buckets = self.region_buckets().as_ref()?;
