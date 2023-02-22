@@ -1946,13 +1946,7 @@ impl PdClient for TestPdClient {
                 if current.meta < buckets.meta {
                     std::mem::swap(current, &mut buckets);
                 }
-
-                pd_client::merge_bucket_stats(
-                    &current.meta.keys,
-                    &mut current.stats,
-                    &buckets.meta.keys,
-                    &buckets.stats,
-                );
+                current.merge(&buckets);
             })
             .or_insert(buckets);
         ready(Ok(())).boxed()

@@ -79,10 +79,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
+        let pre_transfer_leader = cmd_type == AdminCmdType::TransferLeader
+            && !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+                .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL);
+
         // The admin request is rejected because it may need to update epoch checker
         // which introduces an uncertainty and may breaks the correctness of epoch
         // checker.
-        if !self.applied_to_current_term() {
+        // As pre transfer leader is just a warmup phase, applying to the current term
+        // is not required.
+        if !self.applied_to_current_term() && !pre_transfer_leader {
             let e = box_err!(
                 "{} peer has not applied to current term, applied_term {}, current_term {}",
                 SlogFormat(&self.logger),

@@ -327,11 +327,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         apply_res: ApplyRes,
     ) {
-        if !self.serving() {
-            return;
+        if !self.serving() || !apply_res.admin_result.is_empty() {
+            // TODO: remove following log once stable.
+            info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         }
-        // TODO: remove following log once stable.
-        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
             // Ignore admin command side effects, otherwise it may split incomplete
@@ -404,7 +403,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let last_applying_index = self.compact_log_context().last_applying_index();
         let committed_index = self.entry_storage().commit_index();
-        if last_applying_index < committed_index {
+        if last_applying_index < committed_index || !self.serving() {
             // We need to continue to apply after previous page is finished.
             self.set_has_ready();
         }

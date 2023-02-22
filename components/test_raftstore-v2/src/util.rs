@@ -124,12 +124,12 @@ pub fn put_cf_till_size<T: Simulator>(
     key.into_bytes()
 }
 
-pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_snapshot(config: &mut Config) {
     // Truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
-    cluster.cfg.raft_store.merge_max_log_gap = 1;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    config.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    config.raft_store.raft_log_gc_count_limit = Some(2);
+    config.raft_store.merge_max_log_gap = 1;
+    config.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
 
 pub fn configure_for_lease_read_v2<T: Simulator>(

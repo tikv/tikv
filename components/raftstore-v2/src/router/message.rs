@@ -4,6 +4,7 @@
 
 use kvproto::{
     metapb,
+    metapb::RegionEpoch,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
@@ -184,6 +185,11 @@ pub enum PeerMsg {
     RequestSplit {
         request: RequestSplit,
         ch: CmdResChannel,
+    },
+    RefreshRegionBuckets {
+        region_epoch: RegionEpoch,
+        buckets: Vec<raftstore::store::Bucket>,
+        bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
     },
     RequestHalfSplit {
         request: RequestHalfSplit,

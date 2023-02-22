@@ -108,6 +108,7 @@ use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
+    yatp_pool::CleanupMethod,
     Either,
 };
 use tokio::runtime::Builder;
@@ -664,6 +665,7 @@ where
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
+                CleanupMethod::Remote(self.background_worker.remote()),
             ))
         } else {
             None
