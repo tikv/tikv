@@ -199,7 +199,7 @@ impl Config {
         if let Ok(()) = res && self.enable_region_bucket.is_none() {
             let useful = self.region_split_size() >= self.region_bucket_size * 2;
             self.enable_region_bucket = Some(useful);
-        } else if let Err(e) = res && self.enable_region_bucket == Some(true) {
+        } else if let Err(e) = res && self.enable_region_bucket() {
             return Err(e);
         }
         Ok(())
