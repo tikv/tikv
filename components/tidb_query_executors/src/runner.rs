@@ -510,9 +510,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
 
-                let range = self
-                    .paging_size
-                    .map(|_| self.out_most_executor.take_scanned_range());
+                let range = if drained {
+                    None
+                } else {
+                    self.paging_size
+                        .map(|_| self.out_most_executor.take_scanned_range())
+                };
 
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());

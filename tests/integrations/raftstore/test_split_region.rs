@@ -545,6 +545,8 @@ fn test_server_split_with_stale_peer() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_split_region_diff_check() {
     let count = 1;
     let mut cluster = new_cluster(0, count);
@@ -596,15 +598,16 @@ fn test_split_region_diff_check() {
 // set max region size/split size 2000 and put data till 1000
 // set max region size/split size < 1000 and reboot
 // verify the region is splitted.
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_node_split_region_after_reboot_with_config_change() {
     let count = 1;
-    let mut cluster = new_server_cluster(0, count);
+    let mut cluster = new_cluster(0, count);
     let region_max_size = 2000;
     let region_split_size = 2000;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(20);
-    cluster.cfg.coprocessor.enable_region_bucket = true;
+    cluster.cfg.coprocessor.enable_region_bucket = Some(true);
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
     cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(region_split_size);
@@ -1171,7 +1174,7 @@ fn test_gen_split_check_bucket_ranges() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(5);
-    cluster.cfg.coprocessor.enable_region_bucket = true;
+    cluster.cfg.coprocessor.enable_region_bucket = Some(true);
     // disable report buckets; as it will reset the user traffic stats to randomize
     // the test result
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::secs(5);

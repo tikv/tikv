@@ -187,7 +187,7 @@ pub fn temp_split_path<EK>(registry: &TabletRegistry<EK>, region_id: u64) -> Pat
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
     pub fn on_split_region_check(&mut self) {
         if !self.fsm.peer_mut().on_split_region_check(self.store_ctx) {
-            self.schedule_tick(PeerTick::SplitRegionCheck)
+            self.schedule_tick(PeerTick::SplitRegionCheck);
         }
     }
 }
@@ -382,16 +382,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
-        let region = self.region_state().get_region();
+        let region = self.region();
         let region_id = region.get_id();
-        validate_batch_split(req, self.region_state().get_region())?;
+        validate_batch_split(req, self.region())?;
 
         let mut boundaries: Vec<&[u8]> = Vec::default();
-        boundaries.push(self.region_state().get_region().get_start_key());
+        boundaries.push(self.region().get_start_key());
         for req in req.get_splits().get_requests() {
             boundaries.push(req.get_split_key());
         }
-        boundaries.push(self.region_state().get_region().get_end_key());
+        boundaries.push(self.region().get_end_key());
 
         info!(
             self.logger,
@@ -706,17 +706,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_id = self.region_id();
         if self.storage().has_dirty_data() {
             let tablet_index = self.storage().tablet_index();
-            let mailbox = store_ctx.router.mailbox(region_id).unwrap();
-            let _ = store_ctx
-                .schedulers
-                .tablet_gc
-                .schedule(tablet_gc::Task::trim(
-                    self.tablet().unwrap().clone(),
-                    self.region(),
-                    move || {
-                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
-                    },
-                ));
+            if let Some(mailbox) = store_ctx.router.mailbox(region_id) {
+                let _ = store_ctx
+                    .schedulers
+                    .tablet_gc
+                    .schedule(tablet_gc::Task::trim(
+                        self.tablet().unwrap().clone(),
+                        self.region(),
+                        move || {
+                            let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                        },
+                    ));
+            } else {
+                // None means the node is shutdown concurrently and thus the
+                // mailboxes in router have been cleared
+                assert!(store_ctx.router.is_shutdown());
+                return;
+            }
         }
         if split_init.derived_leader
             && self.leader_id() == INVALID_ID
