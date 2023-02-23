@@ -127,7 +127,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
-        let buckets = self.region_buckets().clone();
+        let buckets = self.region_buckets_info().region_buckets().clone();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
             &store_ctx.cfg,
             self.peer().clone(),
@@ -360,7 +360,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
             }
         }
-        self.add_bucket_flow(&apply_res.bucket_stat);
+        self.region_buckets_info_mut()
+            .add_bucket_flow(&apply_res.bucket_stat);
         self.update_split_flow_control(&apply_res.metrics);
         self.update_stat(&apply_res.metrics);
 
@@ -490,15 +491,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.maybe_reschedule(written_bytes).await
     }
 
-    pub async fn on_refresh_buckets(&mut self, meta: Arc<BucketMeta>) {
-        let new = match &self.buckets {
-            Some(origin) => {
-                let mut new = BucketStat::from_meta(meta);
-                new.merge(origin);
-                new
-            }
-            None => BucketStat::from_meta(meta),
-        };
+    pub fn on_refresh_buckets(&mut self, meta: Arc<BucketMeta>) {
+        let mut new = BucketStat::from_meta(meta);
+        if let Some(origin) = self.buckets.as_ref() {
+            new.merge(origin);
+        }
         self.buckets.replace(new);
     }
 
@@ -746,7 +743,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.admin_result = self.take_admin_result().into_boxed_slice();
         apply_res.modifications = *self.modifications_mut();
         apply_res.metrics = mem::take(&mut self.metrics);
-        apply_res.bucket_stat = self.buckets.clone().map(Box::new);
+        apply_res.bucket_stat = self.buckets.clone();
         let written_bytes = apply_res.metrics.written_bytes;
         self.res_reporter().report(apply_res);
         if let Some(buckets) = &mut self.buckets {

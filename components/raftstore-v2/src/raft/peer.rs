@@ -15,7 +15,6 @@ use kvproto::{
     pdpb,
     raft_serverpb::{RaftMessage, RegionLocalState},
 };
-use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
@@ -32,8 +31,8 @@ use super::storage::Storage;
 use crate::{
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext, MergeContext,
-        ProposalControl, SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
+        AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress, GcPeerContext,
+        MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -83,13 +82,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
 
-    /// region buckets.
-    region_buckets: Option<BucketStat>,
-    // the last buckets records the stats that the recently refreshed.
-    last_region_buckets: Option<BucketStat>,
-    // the report region buckets records the increment stats after last report pd.
-    // it will be reset after report pd.
-    report_region_buckets: Option<BucketStat>,
+    pub region_buckets_info: BucketStatsInfo,
 
     /// Transaction extensions related to this peer.
     txn_context: TxnContext,
@@ -188,9 +181,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
             ),
-            region_buckets: None,
-            last_region_buckets: None,
-            report_region_buckets: None,
+            region_buckets_info: BucketStatsInfo::default(),
             txn_context: TxnContext::default(),
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
@@ -222,47 +213,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(peer)
     }
 
-    #[inline]
-    pub fn region_buckets(&self) -> &Option<BucketStat> {
-        &self.region_buckets
+    pub fn region_buckets_info_mut(&mut self) -> &mut BucketStatsInfo {
+        &mut self.region_buckets_info
     }
 
-    #[inline]
-    pub fn add_bucket_flow(&mut self, delta: &Option<Box<BucketStat>>) {
-        if let (Some(buckets), Some(report_buckets), Some(delta)) = (
-            self.region_buckets.as_mut(),
-            self.report_region_buckets.as_mut(),
-            delta,
-        ) {
-            buckets.merge(delta);
-            report_buckets.merge(&delta);
-        }
-    }
-
-    #[inline]
-    pub fn set_region_buckets(&mut self, buckets: Option<BucketStat>) {
-        if let Some(b) = self.region_buckets.take() {
-            self.last_region_buckets = Some(b);
-        }
-        self.report_region_buckets = buckets.clone();
-        self.region_buckets = buckets;
-    }
-
-    #[inline]
-    pub fn clear_report_buckets(&mut self) {
-        if let Some(buckets) = self.report_region_buckets.as_mut() {
-            buckets.clear_stats();
-        }
-    }
-
-    #[inline]
-    pub fn last_region_buckets(&self) -> &Option<BucketStat> {
-        &self.last_region_buckets
-    }
-
-    #[inline]
-    pub fn report_region_buckets(&self) -> &Option<BucketStat> {
-        &self.report_region_buckets
+    pub fn region_buckets_info(&self) -> &BucketStatsInfo {
+        &self.region_buckets_info
     }
 
     #[inline]
@@ -710,7 +666,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn post_split(&mut self) {
-        self.set_region_buckets(None);
+        self.region_buckets_info_mut().set_region_buckets(None);
     }
 
     pub fn maybe_campaign(&mut self) -> bool {
@@ -746,7 +702,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.txn_context.extra_op().clone(),
             self.txn_context.ext().clone(),
             self.read_progress().clone(),
-            self.region_buckets.as_ref().map(|b| b.meta.clone()),
+            self.region_buckets_info()
+                .region_buckets()
+                .as_ref()
+                .map(|b| b.meta.clone()),
         )
     }
 

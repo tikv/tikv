@@ -22,5 +22,5 @@ pub struct ApplyRes {
     pub admin_result: Box<[AdminCmdResult]>,
     pub modifications: DataTrace,
     pub metrics: ApplyMetrics,
-    pub bucket_stat: Option<Box<BucketStat>>,
+    pub bucket_stat: Option<BucketStat>,
 }
