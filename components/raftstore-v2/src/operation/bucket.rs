@@ -21,7 +21,7 @@ use crate::{
     worker::pd,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BucketStatsInfo {
     /// region buckets.
     region_buckets: Option<BucketStat>,
@@ -30,16 +30,6 @@ pub struct BucketStatsInfo {
     // the report region buckets records the increment stats after last report pd.
     // it will be reset after report pd.
     report_region_buckets: Option<BucketStat>,
-}
-
-impl Default for BucketStatsInfo {
-    fn default() -> Self {
-        Self {
-            region_buckets: None,
-            last_region_buckets: None,
-            report_region_buckets: None,
-        }
-    }
 }
 
 impl BucketStatsInfo {
@@ -92,7 +82,7 @@ impl BucketStatsInfo {
     pub fn version(&self) -> u64 {
         self.region_buckets
             .as_ref()
-            .or_else(|| self.last_region_buckets.as_ref())
+            .or(self.last_region_buckets.as_ref())
             .map(|b| b.meta.version)
             .unwrap_or_default()
     }
@@ -305,7 +295,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     // generate bucket range list to run split-check (to further split buckets)
-    // It will return the suspected bucket range that it's write bytes is more the
+    // It will return the suspected bucket ranges whose write bytes exceed the
     // threshold.
     pub fn gen_bucket_range_for_update<T>(
         &self,
@@ -331,7 +321,7 @@ where
             || self
                 .fsm
                 .peer()
-                .region_buckets_info
+                .region_buckets_info()
                 .region_buckets()
                 .is_none()
         {

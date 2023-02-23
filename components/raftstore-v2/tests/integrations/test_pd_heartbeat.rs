@@ -187,7 +187,7 @@ fn test_report_buckets() {
         for i in 0..repeat {
             let mut put = SimpleWriteEncoder::with_capacity(64);
             let mut key = format!("key-{}", i);
-            key.push_str(&suffix);
+            key.push_str(suffix);
             put.put(CF_DEFAULT, key.as_bytes(), b"value");
             let (msg, sub) = PeerMsg::simple_write(header.clone(), put.clone().encode());
             router.send(region_id, msg).unwrap();
