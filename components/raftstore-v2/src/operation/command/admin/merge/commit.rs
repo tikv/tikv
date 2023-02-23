@@ -396,7 +396,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         self.flush();
 
-        // Note: doesn't validate region state from kvdb any more.
+        // Note: compared to v1, doesn't validate region state from kvdb any more.
         let merge = req.get_commit_merge();
         let source_region = merge.get_source();
         let (tx, rx) = oneshot::channel();
@@ -418,7 +418,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             "index" => index,
             "source_region" => ?source_region
         );
-
         let mut region = self.region().clone();
         // Use a max value so that pd can ensure overlapped region has a priority.
         let version = cmp::max(
@@ -461,8 +460,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         self.region_state_mut().set_region(region.clone());
         self.region_state_mut().set_state(PeerState::Normal);
-        self.region_state_mut()
-            .set_merge_state(MergeState::default());
+        self.region_state_mut().clear_merge_state();
         self.region_state_mut().set_tablet_index(index);
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
