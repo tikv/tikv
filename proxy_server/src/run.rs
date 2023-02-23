@@ -413,7 +413,11 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         flow_listener: engine_rocks::FlowListener,
         engine_store_server_helper: isize,
     ) -> (Engines<TiFlashEngine, CER>, Arc<EnginesResourceInfo>) {
-        let block_cache = self.config.storage.block_cache.build_shared_cache();
+        let block_cache = self
+            .config
+            .storage
+            .block_cache
+            .build_shared_cache(self.config.storage.engine);
         let env = self
             .config
             .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
@@ -1179,7 +1183,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         self.config
             .raft_store
             .validate(
-                self.config.coprocessor.region_split_size,
+                self.config.coprocessor.region_split_size(),
                 self.config.coprocessor.enable_region_bucket,
                 self.config.coprocessor.region_bucket_size,
             )
