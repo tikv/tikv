@@ -275,8 +275,8 @@ impl Simulator<TiFlashEngine> for NodeCluster {
         let mut raft_store = cfg.raft_store.clone();
         raft_store
             .validate(
-                cfg.coprocessor.region_split_size,
-                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.region_split_size(),
+                cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();
@@ -404,12 +404,11 @@ impl Simulator<TiFlashEngine> for NodeCluster {
                 .map(|p| p.path().to_str().unwrap().to_owned())
         );
 
-        let region_split_size = cfg.coprocessor.region_split_size;
         let mut raftstore_cfg = cfg.tikv.raft_store.clone();
         raftstore_cfg
             .validate(
-                region_split_size,
-                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.region_split_size(),
+                cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();
