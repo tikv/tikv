@@ -24,7 +24,10 @@ use raft::{StateRole, INVALID_ID};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent},
     store::{
-        fsm::store::{PeerTickBatch, ENTRY_CACHE_EVICT_TICK_DURATION},
+        fsm::{
+            store::{PeerTickBatch, ENTRY_CACHE_EVICT_TICK_DURATION},
+            GlobalStoreStat, LocalStoreStat,
+        },
         local_metrics::RaftMetrics,
         AutoSplitController, Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask,
         StoreWriters, TabletSnapManager, Transport, WriteSenders,
@@ -84,6 +87,9 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub self_disk_usage: DiskUsage,
 
     pub snap_mgr: TabletSnapManager,
+
+    pub global_stat: GlobalStoreStat,
+    pub store_stat: LocalStoreStat,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
@@ -160,6 +166,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePoller<EK, ER, T> {
     fn flush_events(&mut self) {
         self.schedule_ticks();
         self.poll_ctx.raft_metrics.maybe_flush();
+        self.poll_ctx.store_stat.flush();
     }
 
     fn schedule_ticks(&mut self) {
@@ -277,6 +284,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
     shutdown: Arc<AtomicBool>,
     snap_mgr: TabletSnapManager,
+    global_stat: GlobalStoreStat,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -304,6 +312,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             .after_start(move || set_io_type(IoType::ForegroundWrite))
             .name_prefix("apply")
             .build_future_pool();
+        let global_stat = GlobalStoreStat::default();
         StorePollerBuilder {
             cfg,
             store_id,
@@ -318,6 +327,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             snap_mgr,
             shutdown,
             coprocessor_host,
+            global_stat,
         }
     }
 
@@ -435,6 +445,8 @@ where
             self_disk_usage: DiskUsage::Normal,
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
+            global_stat: self.global_stat.clone(),
+            store_stat: self.global_stat.local(),
         };
         poll_ctx.update_ticks_timeout();
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());

@@ -20,6 +20,13 @@ pub struct SimpleWriteBinary {
     buf: Box<[u8]>,
 }
 
+impl SimpleWriteBinary {
+    #[inline]
+    pub fn data_size(&self) -> usize {
+        self.buf.len()
+    }
+}
+
 /// We usually use `RaftCmdRequest` for read write request. But the codec is
 /// not efficient enough for simple request. `SimpleWrite` is introduce to make
 /// codec alloc less and fast.
