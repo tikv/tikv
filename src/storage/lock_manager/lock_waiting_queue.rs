@@ -76,7 +76,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     lock_manager::{
         lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
-        KeyLockWaitInfo, LockDigest, LockManagerTrait, LockWaitToken, UpdateWaitForEvent,
+        KeyLockWaitInfo, LockDigest, LockWaitToken, UpdateWaitForEvent,
     },
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
@@ -214,26 +214,30 @@ impl KeyLockWaitState {
 
 pub type DelayedNotifyAllFuture = Pin<Box<dyn Future<Output = Option<Box<LockWaitEntry>>> + Send>>;
 
-pub struct LockWaitQueueInner<L: LockManagerTrait> {
+pub struct LockWaitQueueInner {
     queue_map: dashmap::DashMap<Key, KeyLockWaitState>,
     id_allocated: AtomicU64,
     entries_count: AtomicUsize,
-    lock_mgr: L,
 }
 
 #[derive(Clone)]
-pub struct LockWaitQueues<L: LockManagerTrait> {
-    inner: Arc<LockWaitQueueInner<L>>,
+pub struct LockWaitQueues {
+    inner: Arc<LockWaitQueueInner>,
 }
 
-impl<L: LockManagerTrait> LockWaitQueues<L> {
-    pub fn new(lock_mgr: L) -> Self {
+impl Default for LockWaitQueues {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LockWaitQueues {
+    pub fn new() -> Self {
         Self {
             inner: Arc::new(LockWaitQueueInner {
                 queue_map: dashmap::DashMap::new(),
                 id_allocated: AtomicU64::new(1),
                 entries_count: AtomicUsize::new(0),
-                lock_mgr,
             }),
         }
     }
@@ -599,7 +603,7 @@ impl<L: LockManagerTrait> LockWaitQueues<L> {
         result
     }
 
-    pub fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) {
+    pub fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
         let mut update_wait_for_events = vec![];
         for lock_info in lock_info {
             let key = Key::from_raw(lock_info.get_key());
@@ -624,9 +628,7 @@ impl<L: LockManagerTrait> LockWaitQueues<L> {
                 }
             }
         }
-        if !update_wait_for_events.is_empty() {
-            self.inner.lock_mgr.update_wait_for(update_wait_for_events);
-        }
+        UpdateLockWaitResult(update_wait_for_events)
     }
 
     /// Gets the count of entries currently waiting in queues.
@@ -641,11 +643,6 @@ impl<L: LockManagerTrait> LockWaitQueues<L> {
     /// Mind that the contents of the queues may be changed concurrently.
     pub fn is_empty(&self) -> bool {
         self.entry_count() == 0
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn get_lock_mgr(&self) -> &L {
-        &self.inner.lock_mgr
     }
 
     #[cfg(test)]
@@ -671,6 +668,16 @@ impl<L: LockManagerTrait> LockWaitQueues<L> {
     }
 }
 
+// The result should be updated in the lock manager.
+#[must_use]
+pub struct UpdateLockWaitResult(Vec<UpdateWaitForEvent>);
+
+impl From<UpdateLockWaitResult> for Vec<UpdateWaitForEvent> {
+    fn from(result: UpdateLockWaitResult) -> Self {
+        result.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -681,7 +688,9 @@ mod tests {
     use super::*;
     use crate::storage::{
         errors::SharedError,
-        lock_manager::{lock_wait_context::LockWaitContext, MockLockManager, WaitTimeout},
+        lock_manager::{
+            lock_wait_context::LockWaitContext, LockManagerTrait, MockLockManager, WaitTimeout,
+        },
         txn::ErrorInner as TxnErrorInner,
         ErrorInner as StorageErrorInner, PessimisticLockKeyResult, StorageCallback,
     };
@@ -720,7 +729,7 @@ mod tests {
 
     // Additionally add some helper functions to the LockWaitQueues for simplifying
     // test code.
-    impl<L: LockManagerTrait> LockWaitQueues<L> {
+    impl LockWaitQueues {
         pub fn make_lock_info_pb(&self, key: &[u8], ts: impl Into<TimeStamp>) -> kvrpcpb::LockInfo {
             let ts = ts.into();
             let mut lock_info = kvrpcpb::LockInfo::default();
@@ -736,10 +745,11 @@ mod tests {
             key: &[u8],
             start_ts: impl Into<TimeStamp>,
             lock_info_pb: kvrpcpb::LockInfo,
+            lock_mgr: impl LockManagerTrait,
         ) -> (Box<LockWaitEntry>, TestLockWaitEntryHandle) {
             let start_ts = start_ts.into();
-            let token = self.inner.lock_mgr.allocate_token();
             let dummy_request_cb = StorageCallback::PessimisticLock(Box::new(|_| ()));
+            let token = lock_mgr.allocate_token();
             let dummy_ctx = LockWaitContext::new(
                 Key::from_raw(key),
                 self.clone(),
@@ -779,7 +789,7 @@ mod tests {
                 }))),
             });
 
-            let cancel_callback = dummy_ctx.get_callback_for_cancellation();
+            let cancel_callback = dummy_ctx.get_callback_for_cancellation(lock_mgr);
             let cancel = move || {
                 cancel_callback(StorageError::from(TxnError::from(MvccError::from(
                     MvccErrorInner::KeyIsLocked(lock_info_pb),
@@ -802,10 +812,15 @@ mod tests {
             start_ts: impl Into<TimeStamp>,
             encountered_lock_ts: impl Into<TimeStamp>,
             resumable: bool,
+            lock_mgr: &impl LockManagerTrait,
         ) -> TestLockWaitEntryHandle {
             let lock_info_pb = self.make_lock_info_pb(key, encountered_lock_ts);
-            let (mut entry, handle) =
-                self.make_mock_lock_wait_entry(key, start_ts, lock_info_pb.clone());
+            let (mut entry, handle) = self.make_mock_lock_wait_entry(
+                key,
+                start_ts,
+                lock_info_pb.clone(),
+                lock_mgr.clone(),
+            );
             entry.parameters.allow_lock_with_conflict = resumable;
             self.push_lock_wait(entry, lock_info_pb);
             handle
@@ -934,12 +949,13 @@ mod tests {
 
     #[test]
     fn test_simple_push_pop() {
-        let queues = LockWaitQueues::new(MockLockManager::new());
+        let lock_mgr = MockLockManager::new();
+        let queues = LockWaitQueues::new();
         assert_eq!(queues.entry_count(), 0);
         assert_eq!(queues.is_empty(), true);
 
-        queues.mock_lock_wait(b"k1", 10, 5, false);
-        queues.mock_lock_wait(b"k2", 11, 5, false);
+        queues.mock_lock_wait(b"k1", 10, 5, false, &lock_mgr);
+        queues.mock_lock_wait(b"k2", 11, 5, false, &lock_mgr);
         assert_eq!(queues.entry_count(), 2);
         assert_eq!(queues.is_empty(), false);
 
@@ -964,15 +980,16 @@ mod tests {
 
     #[test]
     fn test_popping_priority() {
-        let queues = LockWaitQueues::new(MockLockManager::new());
+        let lock_mgr = MockLockManager::new();
+        let queues = LockWaitQueues::new();
         assert_eq!(queues.entry_count(), 0);
 
-        queues.mock_lock_wait(b"k1", 10, 5, false);
-        queues.mock_lock_wait(b"k1", 20, 5, false);
-        queues.mock_lock_wait(b"k1", 12, 5, false);
-        queues.mock_lock_wait(b"k1", 13, 5, false);
+        queues.mock_lock_wait(b"k1", 10, 5, false, &lock_mgr);
+        queues.mock_lock_wait(b"k1", 20, 5, false, &lock_mgr);
+        queues.mock_lock_wait(b"k1", 12, 5, false, &lock_mgr);
+        queues.mock_lock_wait(b"k1", 13, 5, false, &lock_mgr);
         // Duplication is possible considering network issues and RPC retrying.
-        queues.mock_lock_wait(b"k1", 12, 5, false);
+        queues.mock_lock_wait(b"k1", 12, 5, false, &lock_mgr);
         assert_eq!(queues.entry_count(), 5);
 
         // Ordered by start_ts
@@ -989,14 +1006,15 @@ mod tests {
 
     #[test]
     fn test_removing_by_token() {
-        let queues = LockWaitQueues::new(MockLockManager::new());
+        let lock_mgr = MockLockManager::new();
+        let queues = LockWaitQueues::new();
         assert_eq!(queues.entry_count(), 0);
 
-        queues.mock_lock_wait(b"k1", 10, 5, false);
-        let token11 = queues.mock_lock_wait(b"k1", 11, 5, false).token;
-        queues.mock_lock_wait(b"k1", 12, 5, false);
-        let token13 = queues.mock_lock_wait(b"k1", 13, 5, false).token;
-        queues.mock_lock_wait(b"k1", 14, 5, false);
+        queues.mock_lock_wait(b"k1", 10, 5, false, &lock_mgr);
+        let token11 = queues.mock_lock_wait(b"k1", 11, 5, false, &lock_mgr).token;
+        queues.mock_lock_wait(b"k1", 12, 5, false, &lock_mgr);
+        let token13 = queues.mock_lock_wait(b"k1", 13, 5, false, &lock_mgr).token;
+        queues.mock_lock_wait(b"k1", 14, 5, false, &lock_mgr);
         assert_eq!(queues.get_queue_length_of_key(b"k1"), 5);
         assert_eq!(queues.entry_count(), 5);
 
@@ -1036,14 +1054,15 @@ mod tests {
 
     #[test]
     fn test_dropping_cancelled_entries() {
-        let queues = LockWaitQueues::new(MockLockManager::new());
+        let lock_mgr = MockLockManager::new();
+        let queues = LockWaitQueues::new();
         assert_eq!(queues.entry_count(), 0);
 
-        let h10 = queues.mock_lock_wait(b"k1", 10, 5, false);
-        let h11 = queues.mock_lock_wait(b"k1", 11, 5, false);
-        queues.mock_lock_wait(b"k1", 12, 5, false);
-        let h13 = queues.mock_lock_wait(b"k1", 13, 5, false);
-        queues.mock_lock_wait(b"k1", 14, 5, false);
+        let h10 = queues.mock_lock_wait(b"k1", 10, 5, false, &lock_mgr);
+        let h11 = queues.mock_lock_wait(b"k1", 11, 5, false, &lock_mgr);
+        queues.mock_lock_wait(b"k1", 12, 5, false, &lock_mgr);
+        let h13 = queues.mock_lock_wait(b"k1", 13, 5, false, &lock_mgr);
+        queues.mock_lock_wait(b"k1", 14, 5, false, &lock_mgr);
 
         assert_eq!(queues.get_queue_length_of_key(b"k1"), 5);
         assert_eq!(queues.entry_count(), 5);
@@ -1066,15 +1085,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_delayed_notify_all() {
-        let queues = LockWaitQueues::new(MockLockManager::new());
+        let lock_mgr = MockLockManager::new();
+        let queues = LockWaitQueues::new();
         assert_eq!(queues.entry_count(), 0);
 
-        queues.mock_lock_wait(b"k1", 8, 5, false);
+        queues.mock_lock_wait(b"k1", 8, 5, false, &lock_mgr);
 
         let handles1 = vec![
-            queues.mock_lock_wait(b"k1", 11, 5, false),
-            queues.mock_lock_wait(b"k1", 12, 5, false),
-            queues.mock_lock_wait(b"k1", 13, 5, false),
+            queues.mock_lock_wait(b"k1", 11, 5, false, &lock_mgr),
+            queues.mock_lock_wait(b"k1", 12, 5, false, &lock_mgr),
+            queues.mock_lock_wait(b"k1", 13, 5, false, &lock_mgr),
         ];
 
         // Current queue: [8, 11, 12, 13]
@@ -1089,9 +1109,9 @@ mod tests {
         assert_eq!(queues.entry_count(), 3);
 
         let handles2 = vec![
-            queues.mock_lock_wait(b"k1", 14, 5, false),
-            queues.mock_lock_wait(b"k1", 15, 5, true),
-            queues.mock_lock_wait(b"k1", 16, 5, false),
+            queues.mock_lock_wait(b"k1", 14, 5, false, &lock_mgr),
+            queues.mock_lock_wait(b"k1", 15, 5, true, &lock_mgr),
+            queues.mock_lock_wait(b"k1", 16, 5, false, &lock_mgr),
         ];
 
         // Current queue: [11*, 12*, 13*, 14, 15, 16]
@@ -1119,7 +1139,7 @@ mod tests {
         // Current queue: [14, 15, 16]
         assert_eq!(queues.entry_count(), 3);
 
-        queues.mock_lock_wait(b"k1", 9, 5, false);
+        queues.mock_lock_wait(b"k1", 9, 5, false, &lock_mgr);
         // Current queue: [9, 14, 15, 16]
         assert_eq!(queues.entry_count(), 4);
 
@@ -1133,8 +1153,8 @@ mod tests {
         // Current queue: [14*, 15*, 16*]
         assert_eq!(queues.entry_count(), 3);
 
-        queues.mock_lock_wait(b"k1", 17, 5, false);
-        let handle18 = queues.mock_lock_wait(b"k1", 18, 5, false);
+        queues.mock_lock_wait(b"k1", 17, 5, false, &lock_mgr);
+        let handle18 = queues.mock_lock_wait(b"k1", 18, 5, false, &lock_mgr);
 
         // Current queue: [14*, 15*, 16*, 17, 18]
         assert_eq!(queues.entry_count(), 5);
@@ -1209,7 +1229,7 @@ mod tests {
         // Current queue: [18*]
         assert_eq!(queues.entry_count(), 1);
 
-        queues.mock_lock_wait(b"k1", 19, 5, false);
+        queues.mock_lock_wait(b"k1", 19, 5, false, &lock_mgr);
         // Current queue: [18*, 19]
         assert_eq!(queues.entry_count(), 2);
         assert!(delayed_wake_up_future.await.is_none());
@@ -1238,8 +1258,9 @@ mod tests {
 
     #[bench]
     fn bench_update_lock_wait_empty(b: &mut test::Bencher) {
-        let queues = LockWaitQueues::new(MockLockManager::new());
-        queues.mock_lock_wait(b"k1", 5, 6, false);
+        let lock_mgr = MockLockManager::new();
+        let queues = LockWaitQueues::new();
+        queues.mock_lock_wait(b"k1", 5, 6, false, &lock_mgr);
 
         let mut lock_info = kvrpcpb::LockInfo::default();
         let key = b"t\x00\x00\x00\x00\x00\x00\x00\x01_r\x00\x00\x00\x00\x00\x00\x00\x01";
@@ -1250,18 +1271,20 @@ mod tests {
         let lock_info = vec![lock_info];
 
         b.iter(|| {
-            queues.update_lock_wait(lock_info.clone());
+            let res = queues.update_lock_wait(lock_info.clone());
+            lock_mgr.update_wait_for(res.into());
         });
     }
 
     #[bench]
     fn bench_update_lock_wait_queue_len_512(b: &mut test::Bencher) {
-        let queues = LockWaitQueues::new(MockLockManager::new());
+        let lock_mgr = MockLockManager::new();
+        let queues = LockWaitQueues::new();
 
         let key = b"t\x00\x00\x00\x00\x00\x00\x00\x01_r\x00\x00\x00\x00\x00\x00\x00\x01";
 
         for i in 0..512 {
-            queues.mock_lock_wait(key, 15 + i, 10, true);
+            queues.mock_lock_wait(key, 15 + i, 10, true, &lock_mgr);
         }
 
         let mut lock_info = kvrpcpb::LockInfo::default();
@@ -1272,7 +1295,8 @@ mod tests {
         let lock_info = vec![lock_info];
 
         b.iter(|| {
-            queues.update_lock_wait(lock_info.clone());
+            let res = queues.update_lock_wait(lock_info.clone());
+            lock_mgr.update_wait_for(res.into())
         });
     }
 }

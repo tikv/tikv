@@ -274,7 +274,7 @@ struct TxnSchedulerInner<L: LockManagerTrait> {
 
     resource_tag_factory: ResourceTagFactory,
 
-    lock_wait_queues: LockWaitQueues<L>,
+    lock_wait_queues: LockWaitQueues,
 
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
@@ -435,7 +435,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             task_slots.push(Mutex::new(Default::default()).into());
         }
 
-        let lock_wait_queues = LockWaitQueues::new(lock_mgr.clone());
+        let lock_wait_queues = LockWaitQueues::new();
 
         let inner = Arc::new(TxnSchedulerInner {
             task_slots,
@@ -903,7 +903,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             wait_info,
             is_first_lock,
             wait_timeout,
-            lock_req_ctx.get_callback_for_cancellation(),
+            lock_req_ctx.get_callback_for_cancellation(self.inner.lock_mgr.clone()),
             diag_ctx,
         );
     }
@@ -975,14 +975,18 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         // If there are not too many new locks, do not spawn the task to the high
         // priority pool since it may consume more CPU.
         if new_acquired_locks.len() < 30 {
-            self.inner
+            let res = self
+                .inner
                 .lock_wait_queues
                 .update_lock_wait(new_acquired_locks);
+            self.inner.lock_mgr.update_wait_for(res.into())
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
+            let lock_mgr = self.inner.lock_mgr.clone();
             self.get_sched_pool()
                 .spawn(group_name, CommandPri::High, async move {
-                    lock_wait_queues.update_lock_wait(new_acquired_locks);
+                    let res = lock_wait_queues.update_lock_wait(new_acquired_locks);
+                    lock_mgr.update_wait_for(res.into())
                 })
                 .unwrap();
         }
@@ -1612,7 +1616,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         cid: u64,
         lock_wait_token: LockWaitToken,
         lock_info: WriteResultLockInfo,
-    ) -> (LockWaitContext<L>, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
+    ) -> (LockWaitContext, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
         let cb = task_ctx.cb.take().unwrap();
@@ -1638,7 +1642,10 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             lock_wait_token,
             req_states: ctx.get_shared_states().clone(),
             legacy_wake_up_index: None,
-            key_cb: Some(ctx.get_callback_for_blocked_key().into()),
+            key_cb: Some(
+                ctx.get_callback_for_blocked_key(self.inner.lock_mgr.clone())
+                    .into(),
+            ),
         });
 
         (ctx, lock_wait_entry, lock_info.lock_info_pb)

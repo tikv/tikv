@@ -437,6 +437,9 @@ impl Scheduler {
     }
 
     pub fn update_wait_for(&self, events: Vec<UpdateWaitForEvent>) {
+        if events.is_empty() {
+            return;
+        }
         self.notify_scheduler(Task::UpdateWaitFor { events });
     }
 
