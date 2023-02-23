@@ -8,10 +8,11 @@ use crate::RocksEngine;
 // Some data may be migrated from kv engine to raft engine in the future,
 // so kv engine and raft engine may write and delete the same key in the code
 // base. To distinguish data managed by kv engine and raft engine, we prepend an
-// `0x01` to the key written by kv engine.
+// `0x02` to the key written by kv engine.
+// So kv engine won't scan any key from raft engine, and vice versa.
 pub fn add_prefix(key: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(key.len() + 1);
-    v.push(0x01);
+    v.push(0x02);
     v.extend_from_slice(key);
     v
 }
