@@ -128,6 +128,7 @@ use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
+    yatp_pool::CleanupMethod,
     Either,
 };
 use tokio::runtime::Builder;
@@ -768,6 +769,7 @@ where
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
+                CleanupMethod::Remote(self.background_worker.remote()),
             ))
         } else {
             None
@@ -967,7 +969,7 @@ where
             .raft_store
             .validate(
                 self.config.coprocessor.region_split_size(),
-                self.config.coprocessor.enable_region_bucket,
+                self.config.coprocessor.enable_region_bucket(),
                 self.config.coprocessor.region_bucket_size,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));

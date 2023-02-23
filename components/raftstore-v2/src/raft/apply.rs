@@ -162,6 +162,16 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         &mut self.region_state
     }
 
+    #[inline]
+    pub fn region(&self) -> &metapb::Region {
+        self.region_state.get_region()
+    }
+
+    #[inline]
+    pub fn region_id(&self) -> u64 {
+        self.region().get_id()
+    }
+
     /// The tablet can't be public yet, otherwise content of latest tablet
     /// doesn't matches its epoch in both readers and peer fsm.
     #[inline]
