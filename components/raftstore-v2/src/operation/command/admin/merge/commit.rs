@@ -640,7 +640,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn on_logs_up_to_date(&mut self, catch_up_logs: CatchUpLogs) {
         info!(self.logger, "source logs are all applied now");
         let _ = self.flush();
-        // TODO: make it async?
         if let Err(e) = self.tablet().flush_cfs(&[], true) {
             error!(self.logger, "failed to flush: {:?}", e);
         }
@@ -674,11 +673,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
 
-            // Remove source region.
-            let prev_source = meta.remove_region(res.source.get_id()).unwrap();
+            // In v2 we don't remove source region immediately.
+            let source_region = &meta.regions.get(&res.source.get_id()).unwrap().0;
             assert!(
-                prev_source.get_end_key() == res.region.get_end_key()
-                    || prev_source.get_start_key() == res.region.get_start_key()
+                source_region.get_end_key() == res.region.get_end_key()
+                    || source_region.get_start_key() == res.region.get_start_key()
             );
             if let Some((d, _)) = meta.readers.get_mut(&res.source.get_id()) {
                 d.mark_pending_remove();
@@ -690,7 +689,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 &store_ctx.coprocessor_host,
                 reader,
                 res.region.clone(),
-                RegionChangeReason::Split,
+                RegionChangeReason::CommitMerge,
                 res.index,
             );
 
