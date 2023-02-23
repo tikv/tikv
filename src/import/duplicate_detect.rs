@@ -239,12 +239,12 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::{LockManager, MockLockManager},
+        lock_manager::{LockManagerTrait, MockLockManager},
         txn::commands,
         Storage, TestStorageBuilderApiV1,
     };
 
-    fn prewrite_data<E: Engine, L: LockManager, F: KvFormat>(
+    fn prewrite_data<E: Engine, L: LockManagerTrait, F: KvFormat>(
         storage: &Storage<E, L, F>,
         primary: Vec<u8>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
@@ -276,7 +276,7 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn rollback_data<E: Engine, L: LockManager, F: KvFormat>(
+    fn rollback_data<E: Engine, L: LockManagerTrait, F: KvFormat>(
         storage: &Storage<E, L, F>,
         data: Vec<Vec<u8>>,
         start_ts: u64,
@@ -299,7 +299,7 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn write_data<E: Engine, L: LockManager, F: KvFormat>(
+    fn write_data<E: Engine, L: LockManagerTrait, F: KvFormat>(
         storage: &Storage<E, L, F>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         ts: u64,

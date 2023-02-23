@@ -65,7 +65,7 @@ use txn_types::{Key, TimeStamp, Value, Write};
 use crate::storage::{
     kv::WriteData,
     lock_manager::{
-        self, lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken,
+        self, lock_wait_context::LockWaitContextSharedState, LockManagerTrait, LockWaitToken,
         WaitTimeout,
     },
     metrics,
@@ -564,7 +564,7 @@ pub struct RawExt {
     pub key_guard: KeyHandleGuard,
 }
 
-pub struct WriteContext<'a, L: LockManager> {
+pub struct WriteContext<'a, L: LockManagerTrait> {
     pub lock_mgr: &'a L,
     pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
@@ -673,7 +673,7 @@ impl Command {
         }
     }
 
-    pub(crate) fn process_write<S: Snapshot, L: LockManager>(
+    pub(crate) fn process_write<S: Snapshot, L: LockManagerTrait>(
         self,
         snapshot: S,
         context: WriteContext<'_, L>,
@@ -783,7 +783,7 @@ pub trait ReadCommand<S: Snapshot>: CommandExt {
 
 /// Commands that need to modify the database during execution will implement
 /// this trait.
-pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
+pub trait WriteCommand<S: Snapshot, L: LockManagerTrait>: CommandExt {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
 }
 

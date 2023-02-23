@@ -9,7 +9,6 @@ mod engine_factory;
 pub mod errors;
 pub mod gc_worker;
 pub mod load_statistics;
-pub mod lock_manager;
 pub mod node;
 mod proxy;
 pub mod raftkv;

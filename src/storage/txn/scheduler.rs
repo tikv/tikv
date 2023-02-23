@@ -55,39 +55,36 @@ use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
 use txn_types::TimeStamp;
 
-use crate::{
-    server::lock_manager::waiter_manager,
-    storage::{
-        config::Config,
-        errors::SharedError,
-        get_causal_ts, get_priority_tag, get_raw_key_guard,
-        kv::{
-            self, with_tls_engine, Engine, FlowStatsReporter, Result as EngineResult, SnapContext,
-            Statistics,
-        },
-        lock_manager::{
-            self,
-            lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
-            lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
-            DiagnosticContext, LockManager, LockWaitToken,
-        },
-        metrics::*,
-        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
-        txn::{
-            commands,
-            commands::{
-                Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
-                WriteResultLockInfo,
-            },
-            flow_controller::FlowController,
-            latch::{Latches, Lock},
-            sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
-            Error, ErrorInner, ProcessResult,
-        },
-        types::StorageCallback,
-        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
-        PessimisticLockKeyResult, PessimisticLockResults,
+use crate::storage::{
+    config::Config,
+    errors::SharedError,
+    get_causal_ts, get_priority_tag, get_raw_key_guard,
+    kv::{
+        self, with_tls_engine, Engine, FlowStatsReporter, Result as EngineResult, SnapContext,
+        Statistics,
     },
+    lock_manager::{
+        self,
+        lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
+        lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
+        waiter_manager, DiagnosticContext, LockManagerTrait, LockWaitToken,
+    },
+    metrics::*,
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
+    txn::{
+        commands,
+        commands::{
+            Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
+            WriteResultLockInfo,
+        },
+        flow_controller::FlowController,
+        latch::{Latches, Lock},
+        sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+        Error, ErrorInner, ProcessResult,
+    },
+    types::StorageCallback,
+    DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
+    PessimisticLockKeyResult, PessimisticLockResults,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -238,7 +235,7 @@ impl SchedulerTaskCallback {
     }
 }
 
-struct TxnSchedulerInner<L: LockManager> {
+struct TxnSchedulerInner<L: LockManagerTrait> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_slots: Vec<CachePadded<Mutex<HashMap<u64, TaskContext>>>>,
 
@@ -288,7 +285,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl<L: LockManager> TxnSchedulerInner<L> {
+impl<L: LockManagerTrait> TxnSchedulerInner<L> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -407,16 +404,16 @@ impl<L: LockManager> TxnSchedulerInner<L> {
 
 /// TxnScheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
-pub struct TxnScheduler<E: Engine, L: LockManager> {
+pub struct TxnScheduler<E: Engine, L: LockManagerTrait> {
     inner: Arc<TxnSchedulerInner<L>>,
     // The engine can be fetched from the thread local storage of scheduler threads.
     // So, we don't store the engine here.
     _engine: PhantomData<E>,
 }
 
-unsafe impl<E: Engine, L: LockManager> Send for TxnScheduler<E, L> {}
+unsafe impl<E: Engine, L: LockManagerTrait> Send for TxnScheduler<E, L> {}
 
-impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
+impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
     /// Creates a scheduler.
     pub(in crate::storage) fn new<R: FlowStatsReporter>(
         engine: E,

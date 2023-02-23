@@ -6,7 +6,7 @@ use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     mvcc::{
         Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
         MAX_TXN_WRITE_SIZE,
@@ -70,7 +70,7 @@ impl CommandExt for ResolveLock {
     gen_lock!(key_locks: multiple(|(key, _)| key));
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for ResolveLock {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
 

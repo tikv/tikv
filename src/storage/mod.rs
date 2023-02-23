@@ -121,11 +121,10 @@ pub use self::{
 use self::{kv::SnapContext, test_util::latest_feature_gate};
 use crate::{
     read_pool::{ReadPool, ReadPoolHandle},
-    server::lock_manager::waiter_manager,
     storage::{
         config::Config,
         kv::{with_tls_engine, Modify, WriteData},
-        lock_manager::{LockManager, MockLockManager},
+        lock_manager::{waiter_manager, LockManagerTrait, MockLockManager},
         metrics::{CommandKind, *},
         mvcc::{MvccReader, PointGetterBuilder},
         txn::{
@@ -166,7 +165,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// that multiple versions can be saved at the same time. Raw operations use raw
 /// keys, which are saved directly to the engine without memcomparable- encoding
 /// and appending timestamp.
-pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
+pub struct Storage<E: Engine, L: LockManagerTrait, F: KvFormat> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
@@ -200,7 +199,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 /// To be convenience for test cases unrelated to RawKV.
 pub type StorageApiV1<E, L> = Storage<E, L, ApiV1>;
 
-impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
+impl<E: Engine, L: LockManagerTrait, F: KvFormat> Clone for Storage<E, L, F> {
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -225,7 +224,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
     }
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
+impl<E: Engine, L: LockManagerTrait, F: KvFormat> Drop for Storage<E, L, F> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -257,7 +256,7 @@ macro_rules! check_key_size {
     };
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
+impl<E: Engine, L: LockManagerTrait, F: KvFormat> Storage<E, L, F> {
     /// Create a `Storage` from given engine.
     pub fn from_engine<R: FlowStatsReporter>(
         engine: E,
@@ -2992,7 +2991,7 @@ pub fn point_key_range(key: Key) -> KeyRange {
 ///
 /// Only used for test purpose.
 #[must_use]
-pub struct TestStorageBuilder<E: Engine, L: LockManager, F: KvFormat> {
+pub struct TestStorageBuilder<E: Engine, L: LockManagerTrait, F: KvFormat> {
     engine: E,
     config: Config,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
@@ -3119,7 +3118,7 @@ impl FlowStatsReporter for DummyReporter {
     fn report_write_stats(&self, _write_stats: WriteStats) {}
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
+impl<E: Engine, L: LockManagerTrait, F: KvFormat> TestStorageBuilder<E, L, F> {
     pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
         let mut config = Config::default();
         config.set_api_version(F::TAG);
@@ -3492,7 +3491,7 @@ pub mod test_util {
         )
     }
 
-    pub fn delete_pessimistic_lock<E: Engine, L: LockManager, F: KvFormat>(
+    pub fn delete_pessimistic_lock<E: Engine, L: LockManagerTrait, F: KvFormat>(
         storage: &Storage<E, L, F>,
         key: Key,
         start_ts: u64,
@@ -3577,7 +3576,7 @@ pub mod test_util {
         feature_gate
     }
 
-    pub fn must_have_locks<E: Engine, L: LockManager, F: KvFormat>(
+    pub fn must_have_locks<E: Engine, L: LockManagerTrait, F: KvFormat>(
         storage: &Storage<E, L, F>,
         ts: u64,
         start_key: &[u8],
@@ -8896,7 +8895,7 @@ mod tests {
         }
     }
 
-    impl LockManager for ProxyLockMgr {
+    impl LockManagerTrait for ProxyLockMgr {
         fn allocate_token(&self) -> LockWaitToken {
             LockWaitToken(Some(1))
         }

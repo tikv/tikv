@@ -76,7 +76,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     lock_manager::{
         lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
-        KeyLockWaitInfo, LockDigest, LockManager, LockWaitToken, UpdateWaitForEvent,
+        KeyLockWaitInfo, LockDigest, LockManagerTrait, LockWaitToken, UpdateWaitForEvent,
     },
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
@@ -214,7 +214,7 @@ impl KeyLockWaitState {
 
 pub type DelayedNotifyAllFuture = Pin<Box<dyn Future<Output = Option<Box<LockWaitEntry>>> + Send>>;
 
-pub struct LockWaitQueueInner<L: LockManager> {
+pub struct LockWaitQueueInner<L: LockManagerTrait> {
     queue_map: dashmap::DashMap<Key, KeyLockWaitState>,
     id_allocated: AtomicU64,
     entries_count: AtomicUsize,
@@ -222,11 +222,11 @@ pub struct LockWaitQueueInner<L: LockManager> {
 }
 
 #[derive(Clone)]
-pub struct LockWaitQueues<L: LockManager> {
+pub struct LockWaitQueues<L: LockManagerTrait> {
     inner: Arc<LockWaitQueueInner<L>>,
 }
 
-impl<L: LockManager> LockWaitQueues<L> {
+impl<L: LockManagerTrait> LockWaitQueues<L> {
     pub fn new(lock_mgr: L) -> Self {
         Self {
             inner: Arc::new(LockWaitQueueInner {
@@ -720,7 +720,7 @@ mod tests {
 
     // Additionally add some helper functions to the LockWaitQueues for simplifying
     // test code.
-    impl<L: LockManager> LockWaitQueues<L> {
+    impl<L: LockManagerTrait> LockWaitQueues<L> {
         pub fn make_lock_info_pb(&self, key: &[u8], ts: impl Into<TimeStamp>) -> kvrpcpb::LockInfo {
             let ts = ts.into();
             let mut lock_info = kvrpcpb::LockInfo::default();

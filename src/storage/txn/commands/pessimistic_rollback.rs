@@ -7,7 +7,7 @@ use txn_types::{Key, LockType, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     mvcc::{MvccTxn, Result as MvccResult, SnapshotReader},
     txn::{
         commands::{
@@ -44,7 +44,7 @@ impl CommandExt for PessimisticRollback {
     gen_lock!(keys: multiple);
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for PessimisticRollback {
     /// Delete any pessimistic lock with small for_update_ts belongs to this
     /// transaction.
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {

@@ -17,20 +17,20 @@ use tikv_util::{
 use crate::{
     config::ConfigurableDb,
     server::{ttl::TtlCheckerTask, CONFIG_ROCKSDB_GAUGE},
-    storage::{lock_manager::LockManager, txn::flow_controller::FlowController, TxnScheduler},
+    storage::{lock_manager::LockManagerTrait, txn::flow_controller::FlowController, TxnScheduler},
 };
 
-pub struct StorageConfigManger<E: Engine, K, L: LockManager> {
+pub struct StorageConfigManger<E: Engine, K, L: LockManagerTrait> {
     configurable_db: K,
     ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
     flow_controller: Arc<FlowController>,
     scheduler: TxnScheduler<E, L>,
 }
 
-unsafe impl<E: Engine, K, L: LockManager> Send for StorageConfigManger<E, K, L> {}
-unsafe impl<E: Engine, K, L: LockManager> Sync for StorageConfigManger<E, K, L> {}
+unsafe impl<E: Engine, K, L: LockManagerTrait> Send for StorageConfigManger<E, K, L> {}
+unsafe impl<E: Engine, K, L: LockManagerTrait> Sync for StorageConfigManger<E, K, L> {}
 
-impl<E: Engine, K, L: LockManager> StorageConfigManger<E, K, L> {
+impl<E: Engine, K, L: LockManagerTrait> StorageConfigManger<E, K, L> {
     pub fn new(
         configurable_db: K,
         ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
@@ -46,7 +46,7 @@ impl<E: Engine, K, L: LockManager> StorageConfigManger<E, K, L> {
     }
 }
 
-impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
+impl<EK: Engine, K: ConfigurableDb, L: LockManagerTrait> ConfigManager
     for StorageConfigManger<EK, K, L>
 {
     fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {

@@ -7,7 +7,7 @@ use txn_types::Key;
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     txn::{
         commands::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
@@ -40,7 +40,7 @@ impl CommandExt for Pause {
     gen_lock!(keys: multiple);
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Pause {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for Pause {
     fn process_write(self, _snapshot: S, _context: WriteContext<'_, L>) -> Result<WriteResult> {
         thread::sleep(Duration::from_millis(self.duration));
         Ok(WriteResult {

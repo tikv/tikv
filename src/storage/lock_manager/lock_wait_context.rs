@@ -25,7 +25,7 @@ use txn_types::Key;
 
 use crate::storage::{
     errors::SharedError,
-    lock_manager::{lock_waiting_queue::LockWaitQueues, LockManager, LockWaitToken},
+    lock_manager::{lock_waiting_queue::LockWaitQueues, LockManagerTrait, LockWaitToken},
     types::PessimisticLockKeyResult,
     Error as StorageError, PessimisticLockResults, ProcessResult, StorageCallback,
 };
@@ -182,13 +182,13 @@ enum FinishRequestKind {
 }
 
 #[derive(Clone)]
-pub struct LockWaitContext<L: LockManager> {
+pub struct LockWaitContext<L: LockManagerTrait> {
     shared_states: Arc<LockWaitContextSharedState>,
     lock_wait_queues: LockWaitQueues<L>,
     allow_lock_with_conflict: bool,
 }
 
-impl<L: LockManager> LockWaitContext<L> {
+impl<L: LockManagerTrait> LockWaitContext<L> {
     pub fn new(
         key: Key,
         lock_wait_queues: LockWaitQueues<L>,
@@ -341,10 +341,10 @@ mod tests {
 
     fn create_test_lock_wait_ctx(
         key: &Key,
-        lock_wait_queues: &LockWaitQueues<impl LockManager>,
+        lock_wait_queues: &LockWaitQueues<impl LockManagerTrait>,
     ) -> (
         LockWaitToken,
-        LockWaitContext<impl LockManager>,
+        LockWaitContext<impl LockManagerTrait>,
         Receiver<StorageResult<StorageResult<PessimisticLockResults>>>,
     ) {
         let (cb, rx) = create_storage_cb();

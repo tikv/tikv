@@ -5,7 +5,7 @@ use txn_types::Key;
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
         commands::{
@@ -43,7 +43,7 @@ impl CommandExt for Commit {
     gen_lock!(keys: multiple);
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for Commit {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         if self.commit_ts <= self.lock_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {

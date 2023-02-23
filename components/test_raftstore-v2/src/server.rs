@@ -47,14 +47,14 @@ use tikv::{
     coprocessor, coprocessor_v2,
     read_pool::ReadPool,
     server::{
-        gc_worker::GcWorker, load_statistics::ThreadLoadPool, lock_manager::LockManager,
-        raftkv::ReplicaReadLockChecker, resolve, service::DiagnosticsService, ConnectionBuilder,
-        Error, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2, Result as ServerResult, Server,
-        ServerTransport,
+        gc_worker::GcWorker, load_statistics::ThreadLoadPool, raftkv::ReplicaReadLockChecker,
+        resolve, service::DiagnosticsService, ConnectionBuilder, Error, NodeV2,
+        PdStoreAddrResolver, RaftClient, RaftKv2, Result as ServerResult, Server, ServerTransport,
     },
     storage::{
         self,
         kv::{FakeExtension, SnapContext},
+        lock_manager::LockManager,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },

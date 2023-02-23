@@ -18,7 +18,7 @@ use crate::{
     storage::{
         errors::{extract_key_error, extract_region_error},
         kv::{Engine, Statistics},
-        lock_manager::LockManager,
+        lock_manager::LockManagerTrait,
         ResponseBatchConsumer, Result, Storage,
     },
 };
@@ -75,7 +75,7 @@ impl ReqBatcher {
         self.raw_get_ids.push(id);
     }
 
-    pub fn maybe_commit<E: Engine, L: LockManager, F: KvFormat>(
+    pub fn maybe_commit<E: Engine, L: LockManagerTrait, F: KvFormat>(
         &mut self,
         storage: &Storage<E, L, F>,
         tx: &Sender<MeasuredSingleResponse>,
@@ -94,7 +94,7 @@ impl ReqBatcher {
         }
     }
 
-    pub fn commit<E: Engine, L: LockManager, F: KvFormat>(
+    pub fn commit<E: Engine, L: LockManagerTrait, F: KvFormat>(
         self,
         storage: &Storage<E, L, F>,
         tx: &Sender<MeasuredSingleResponse>,
@@ -225,7 +225,7 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
     }
 }
 
-fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
+fn future_batch_get_command<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     requests: Vec<u64>,
     gets: Vec<GetRequest>,
@@ -277,7 +277,7 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
     poll_future_notify(f);
 }
 
-fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
+fn future_batch_raw_get_command<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     requests: Vec<u64>,
     gets: Vec<RawGetRequest>,

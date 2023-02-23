@@ -40,7 +40,7 @@ use crate::{
     coprocessor_v2,
     read_pool::ReadPool,
     server::{gc_worker::GcWorker, tablet_snap::TabletRunner, Proxy},
-    storage::{lock_manager::LockManager, Engine, Storage},
+    storage::{lock_manager::LockManagerTrait, Engine, Storage},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -86,7 +86,7 @@ where
     E::RaftExtension: Unpin,
 {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<L: LockManager, F: KvFormat>(
+    pub fn new<L: LockManagerTrait, F: KvFormat>(
         store_id: u64,
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,

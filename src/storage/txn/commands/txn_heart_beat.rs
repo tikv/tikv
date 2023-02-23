@@ -5,7 +5,7 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
         commands::{
@@ -46,7 +46,7 @@ impl CommandExt for TxnHeartBeat {
     gen_lock!(primary_key);
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for TxnHeartBeat {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         // TxnHeartBeat never remove locks. No need to wake up waiters.
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
