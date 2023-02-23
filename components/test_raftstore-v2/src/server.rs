@@ -415,7 +415,7 @@ impl ServerCluster {
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
         node.start(
             raft_engine,
-            tablet_registry,
+            tablet_registry.clone(),
             &raft_router,
             simulate_trans.clone(),
             snap_mgr.clone(),
@@ -450,7 +450,9 @@ impl ServerCluster {
             )
             .unwrap();
 
-        server.start(server_cfg, security_mgr).unwrap();
+        server
+            .start(server_cfg, security_mgr, tablet_registry)
+            .unwrap();
 
         self.metas.insert(
             node_id,

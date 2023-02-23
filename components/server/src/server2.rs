@@ -1299,7 +1299,11 @@ where
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
             .server
-            .start(server_config, self.security_mgr.clone())
+            .start(
+                server_config,
+                self.security_mgr.clone(),
+                self.tablet_registry.clone().unwrap(),
+            )
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
     }
 

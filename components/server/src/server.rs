@@ -103,6 +103,7 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
+        tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
         KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
         GRPC_THREAD_PREFIX,
@@ -1685,7 +1686,7 @@ where
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
             .server
-            .start(server_config, self.security_mgr.clone())
+            .start(server_config, self.security_mgr.clone(), NoSnapshotCache)
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
     }
 

@@ -59,6 +59,7 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
         service::DebugService,
+        tablet_snap::NoSnapshotCache,
         ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
@@ -620,7 +621,9 @@ impl ServerCluster {
             )
             .unwrap();
 
-        server.start(server_cfg, security_mgr).unwrap();
+        server
+            .start(server_cfg, security_mgr, NoSnapshotCache)
+            .unwrap();
 
         self.metas.insert(
             node_id,

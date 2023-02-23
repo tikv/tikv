@@ -10,7 +10,7 @@ use std::{
     result, str,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc, RwLock,
+        Arc, Mutex, RwLock,
     },
     thread, time, u64,
 };
@@ -1932,6 +1932,19 @@ impl Display for TabletSnapKey {
     }
 }
 
+pub struct ReceivingGuard<'a> {
+    receiving: &'a Mutex<Vec<TabletSnapKey>>,
+    key: TabletSnapKey,
+}
+
+impl Drop for ReceivingGuard<'_> {
+    fn drop(&mut self) {
+        let mut receiving = self.receiving.lock().unwrap();
+        let pos = receiving.iter().position(|k| k == &self.key).unwrap();
+        receiving.swap_remove(pos);
+    }
+}
+
 /// `TabletSnapManager` manager tablet snapshot and shared between raftstore v2.
 /// It's similar `SnapManager`, but simpler in tablet version.
 ///
@@ -1941,6 +1954,7 @@ impl Display for TabletSnapKey {
 pub struct TabletSnapManager {
     // directory to store snapfile.
     base: PathBuf,
+    receiving: Arc<Mutex<Vec<TabletSnapKey>>>,
 }
 
 impl TabletSnapManager {
@@ -1956,7 +1970,10 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        Ok(Self { base: path })
+        Ok(Self {
+            base: path,
+            receiving: Arc::default(),
+        })
     }
 
     pub fn tablet_gen_path(&self, key: &TabletSnapKey) -> PathBuf {
@@ -2025,6 +2042,18 @@ impl TabletSnapManager {
     #[inline]
     pub fn root_path(&self) -> &Path {
         self.base.as_path()
+    }
+
+    pub fn start_receive(&self, key: TabletSnapKey) -> Option<ReceivingGuard<'_>> {
+        let mut receiving = self.receiving.lock().unwrap();
+        if receiving.iter().any(|k| k == &key) {
+            return None;
+        }
+        receiving.push(key.clone());
+        Some(ReceivingGuard {
+            receiving: &self.receiving,
+            key,
+        })
     }
 }
 
