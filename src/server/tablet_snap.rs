@@ -281,6 +281,7 @@ async fn accept_one_file(
         limiter.consume(chunk_len).await;
         f.write_all(&chunk.data)?;
         if exp_size == file_size {
+            f.sync_data()?;
             return Ok(exp_size);
         }
         chunk = match stream.next().await {
@@ -313,7 +314,10 @@ async fn accept_missing(
     // Now receive other files.
     loop {
         let chunk = match stream.next().await {
-            None => return Ok(received_bytes),
+            None => {
+                File::open(path)?.sync_data()?;
+                return Ok(received_bytes);
+            },
             Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
             res => return Err(protocol_error("chunk", res)),
         };
