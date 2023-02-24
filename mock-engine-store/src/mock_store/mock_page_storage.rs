@@ -148,11 +148,11 @@ pub unsafe extern "C" fn ffi_mockps_handle_consume_wb(
     for (_, write) in wb.data.drain(..) {
         match write {
             MockPSSingleWrite::Put(w) => {
-                assert!(w.0.starts_with(&[0x01]));
+                assert!(w.0.starts_with(&[0x02]));
                 guard.insert(w.0, w.1);
             }
             MockPSSingleWrite::Delete(w) => {
-                assert!(w.starts_with(&[0x01]));
+                assert!(w.starts_with(&[0x02]));
                 guard.remove(&w);
             }
         }
