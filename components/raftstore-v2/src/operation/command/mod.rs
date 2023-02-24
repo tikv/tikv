@@ -127,7 +127,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
-        let buckets = self.region_buckets_info().region_buckets().clone();
+        let buckets = self.region_buckets_info().bucket_stat().clone();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
             &store_ctx.cfg,
             self.peer().clone(),

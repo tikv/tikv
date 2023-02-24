@@ -23,13 +23,12 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub struct BucketStatsInfo {
-    /// region buckets.
-    region_buckets: Option<BucketStat>,
+    bucket_stat: Option<BucketStat>,
     // the last buckets records the stats that the recently refreshed.
-    last_region_buckets: Option<BucketStat>,
-    // the report region buckets records the increment stats after last report pd.
+    last_bucket_stat: Option<BucketStat>,
+    // the report bucket stat records the increment stats after last report pd.
     // it will be reset after report pd.
-    report_region_buckets: Option<BucketStat>,
+    report_bucket_stat: Option<BucketStat>,
 }
 
 impl BucketStatsInfo {
@@ -39,14 +38,14 @@ impl BucketStatsInfo {
         &self,
         diff_size_threshold: u64,
     ) -> Option<Vec<BucketRange>> {
-        let region_buckets = self.region_buckets.as_ref()?;
+        let region_buckets = self.bucket_stat.as_ref()?;
         let stats = &region_buckets.stats;
         let keys = &region_buckets.meta.keys;
 
         let empty_last_keys = vec![];
         let empty_last_stats = metapb::BucketStats::default();
         let (last_keys, last_stats, stats_reset) = self
-            .last_region_buckets
+            .last_bucket_stat
             .as_ref()
             .map(|b| {
                 (
@@ -80,17 +79,17 @@ impl BucketStatsInfo {
 
     #[inline]
     pub fn version(&self) -> u64 {
-        self.region_buckets
+        self.bucket_stat
             .as_ref()
-            .or(self.last_region_buckets.as_ref())
+            .or(self.last_bucket_stat.as_ref())
             .map(|b| b.meta.version)
             .unwrap_or_default()
     }
     #[inline]
     pub fn add_bucket_flow(&mut self, delta: &Option<BucketStat>) {
         if let (Some(buckets), Some(report_buckets), Some(delta)) = (
-            self.region_buckets.as_mut(),
-            self.report_region_buckets.as_mut(),
+            self.bucket_stat.as_mut(),
+            self.report_bucket_stat.as_mut(),
             delta,
         ) {
             buckets.merge(delta);
@@ -99,32 +98,32 @@ impl BucketStatsInfo {
     }
 
     #[inline]
-    pub fn set_region_buckets(&mut self, buckets: Option<BucketStat>) {
-        if let Some(b) = self.region_buckets.take() {
-            self.last_region_buckets = Some(b);
+    pub fn set_bucket_stat(&mut self, buckets: Option<BucketStat>) {
+        if let Some(b) = self.bucket_stat.take() {
+            self.last_bucket_stat = Some(b);
         }
-        self.report_region_buckets = buckets.clone();
-        self.region_buckets = buckets;
+        self.report_bucket_stat = buckets.clone();
+        self.bucket_stat = buckets;
     }
 
     #[inline]
-    pub fn clear_report_buckets(&mut self) {
-        if let Some(buckets) = self.report_region_buckets.as_mut() {
-            buckets.clear_stats();
+    pub fn clear_bucket_stat(&mut self) {
+        if let Some(bucket) = self.report_bucket_stat.as_mut() {
+            bucket.clear_stats();
         }
     }
 
     #[inline]
-    pub fn report_region_buckets(&mut self) -> BucketStat {
-        let current = self.report_region_buckets.as_mut().unwrap();
+    pub fn report_bucket_stat(&mut self) -> BucketStat {
+        let current = self.report_bucket_stat.as_mut().unwrap();
         let delta = current.clone();
         current.clear_stats();
         delta
     }
 
     #[inline]
-    pub fn region_buckets(&self) -> &Option<BucketStat> {
-        &self.region_buckets
+    pub fn bucket_stat(&self) -> &Option<BucketStat> {
+        &self.bucket_stat
     }
 }
 
@@ -169,7 +168,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // So this condition indicates that the region buckets needs to refresh not
         // renew.
         if let (Some(bucket_ranges), Some(peer_region_buckets)) =
-            (bucket_ranges, self.region_buckets_info().region_buckets())
+            (bucket_ranges, self.region_buckets_info().bucket_stat())
         {
             assert_eq!(buckets.len(), bucket_ranges.len());
             let mut meta_idx = 0;
@@ -254,7 +253,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         let meta = region_buckets.meta.clone();
         self.region_buckets_info_mut()
-            .set_region_buckets(Some(region_buckets.clone()));
+            .set_bucket_stat(Some(region_buckets.clone()));
 
         let mut store_meta = store_ctx.store_meta.lock().unwrap();
         if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
@@ -267,7 +266,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn report_region_buckets_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
-        let delta = self.region_buckets_info_mut().report_region_buckets();
+        let delta = self.region_buckets_info_mut().report_bucket_stat();
         let task = pd::Task::ReportBuckets(delta);
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(
@@ -305,7 +304,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return None;
         }
         let bucket_update_diff_size_threshold = ctx.coprocessor_host.cfg.region_bucket_size.0 / 2;
-        self.region_buckets_info
+        self.region_buckets_info()
             .gen_bucket_range_for_update(bucket_update_diff_size_threshold)
     }
 }
@@ -322,7 +321,7 @@ where
                 .fsm
                 .peer()
                 .region_buckets_info()
-                .region_buckets()
+                .bucket_stat()
                 .is_none()
         {
             return;

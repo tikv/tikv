@@ -82,7 +82,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
 
-    pub region_buckets_info: BucketStatsInfo,
+    region_buckets_info: BucketStatsInfo,
 
     /// Transaction extensions related to this peer.
     txn_context: TxnContext,
@@ -666,7 +666,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn post_split(&mut self) {
-        self.region_buckets_info_mut().set_region_buckets(None);
+        self.region_buckets_info_mut().set_bucket_stat(None);
     }
 
     pub fn maybe_campaign(&mut self) -> bool {
@@ -703,7 +703,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.txn_context.ext().clone(),
             self.read_progress().clone(),
             self.region_buckets_info()
-                .region_buckets()
+                .bucket_stat()
                 .as_ref()
                 .map(|b| b.meta.clone()),
         )
