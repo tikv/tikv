@@ -67,7 +67,7 @@ use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
         fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, util, MergeResultKind,
-        ProposalContext, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
+        ProposalContext, Transport, WriteTask,
     },
     Error, Result,
 };
@@ -110,16 +110,10 @@ impl Debug for CatchUpLogs {
 }
 
 const MERGE_SOURCE_PREFIX: &str = "merge-source";
-const MERGE_TEMP_PREFIX: &str = "merge-temp";
 
 // Index is the commit index of `CommitMergeRequest`.
 fn merge_source_path<EK>(registry: &TabletRegistry<EK>, region_id: u64, index: u64) -> PathBuf {
     let tablet_name = registry.tablet_name(MERGE_SOURCE_PREFIX, region_id, index);
-    registry.tablet_root().join(tablet_name)
-}
-
-fn merge_temp_path<EK>(registry: &TabletRegistry<EK>, region_id: u64) -> PathBuf {
-    let tablet_name = registry.tablet_name(MERGE_TEMP_PREFIX, region_id, RAFT_INIT_LOG_INDEX);
     registry.tablet_root().join(tablet_name)
 }
 
@@ -439,25 +433,18 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
 
         // TODO: check both are trimmed.
-        let tmp_path = merge_temp_path(reg, self.region_id());
-        if tmp_path.exists() {
-            std::fs::remove_dir_all(&tmp_path).unwrap();
+
+        let path = reg.tablet_path(self.region_id(), index);
+        // The last merge is incomplete.
+        if path.exists() {
+            std::fs::remove_dir_all(&path).unwrap();
         }
         let mut ctx = TabletContext::new(&region, Some(index));
-        {
-            let tablet = reg
-                .tablet_factory()
-                .open_tablet(ctx.clone(), &tmp_path)
-                .unwrap();
-            tablet.merge(&[&source_tablet, self.tablet()]).unwrap();
-            tablet.flush_cfs(&[], true).unwrap();
-        }
-        let path = reg.tablet_path(self.region_id(), index);
-        std::fs::rename(&tmp_path, &path).unwrap();
-        // Now the tablet is flushed, so all previous states should be persisted.
-        // Reusing the tablet should not be a problem.
         ctx.flush_state = Some(self.flush_state().clone());
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
+        tablet.merge(&[&source_tablet, self.tablet()]).unwrap();
+        // This is only to force compaction. Remove this once trim check is finished.
+        tablet.flush_cfs(&[], true).unwrap();
         self.set_tablet(tablet.clone());
 
         self.region_state_mut().set_region(region.clone());

@@ -16,7 +16,7 @@
 //! Raft proposal. To guarantee the consistency of lock serialization, we might
 //! need to wait for some in-flight logs to be applied. During the wait, all
 //! incoming write proposals will be rejected. Read the comments of
-//! `MergeContext::prepare_fence` for more details.
+//! `MergeContext::WaitForFence` for more details.
 //!
 //! ## Apply (`Apply::apply_prepare_merge`)
 //!
@@ -134,9 +134,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // `PrepareMerge` rejects all writes (in `ProposalControl::check_conflict`).
             assert!(
                 !self.proposal_control().is_merging(),
-                "{}-{}",
-                self.region_id(),
-                self.peer_id()
+                "{}",
+                SlogFormat(&self.logger)
             );
             self.take_merge_context();
             self.proposal_control_mut().set_pending_prepare_merge(false);
