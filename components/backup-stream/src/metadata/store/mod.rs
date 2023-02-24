@@ -1,6 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod lazy_etcd;
+cfg_if::cfg_if! {
+    if #[cfg(feature = "metastore-etcd")] {
+        pub mod etcd;
+        pub mod lazy_etcd;
+        pub use etcd::EtcdStore;
+    }
+}
 
 // Note: these mods also used for integration tests,
 //       so we cannot compile them only when `#[cfg(test)]`.
@@ -9,7 +15,6 @@ pub mod lazy_etcd;
 pub mod slash_etc;
 pub use slash_etc::SlashEtcStore;
 
-pub mod etcd;
 pub mod pd;
 
 use std::{cmp::Ordering, future::Future, pin::Pin, time::Duration};
@@ -23,7 +28,6 @@ use crate::errors::Result;
 
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
-pub use etcd::EtcdStore;
 pub use pd::PdStore;
 
 #[derive(Debug, Default)]

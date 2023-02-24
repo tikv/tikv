@@ -279,7 +279,6 @@ mod tests {
     use pd_client::RpcClient;
     use test_pd::{mocker::Service, util::*, Server as PdServer};
     use tikv_util::config::ReadableDuration;
-    
 
     use super::PdStore;
     use crate::metadata::{
@@ -307,25 +306,31 @@ mod tests {
     fn test_query() {
         let (_s, c) = new_test_server_and_client();
 
-        w(c.set(KeyValue(MetaKey::task_of("a"), b"alpha".to_vec()))).unwrap();
-        w(c.set(KeyValue(MetaKey::task_of("b"), b"beta".to_vec()))).unwrap();
-        w(c.set(KeyValue(MetaKey::task_of("t"), b"theta".to_vec()))).unwrap();
+        let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
+        let insert = |k, v| w(c.set(kv(k, v))).unwrap();
+        insert("a", "the signpost of flowers");
+        insert("b", "the milky hills");
+        insert("c", "the rusty sky");
 
         let k = w(c.get_latest(Keys::Key(MetaKey::task_of("a")))).unwrap();
         assert_eq!(
             k.inner.as_slice(),
-            [KeyValue(MetaKey::task_of("a"), b"alpha".to_vec())].as_slice()
+            [KeyValue(
+                MetaKey::task_of("a"),
+                b"the signpost of flowers".to_vec()
+            )]
+            .as_slice()
         );
-        let k = w(c.get_latest(Keys::Key(MetaKey::task_of("c")))).unwrap();
+        let k = w(c.get_latest(Keys::Key(MetaKey::task_of("d")))).unwrap();
         assert_eq!(k.inner.as_slice(), [].as_slice());
 
         let k = w(c.get_latest(Keys::Prefix(MetaKey::tasks()))).unwrap();
         assert_eq!(
             k.inner.as_slice(),
             [
-                KeyValue(MetaKey::task_of("a"), b"alpha".to_vec()),
-                KeyValue(MetaKey::task_of("b"), b"beta".to_vec()),
-                KeyValue(MetaKey::task_of("t"), b"theta".to_vec())
+                kv("a", "the signpost of flowers"),
+                kv("b", "the milky hills"),
+                kv("c", "the rusty sky"),
             ]
             .as_slice()
         )
@@ -348,7 +353,7 @@ mod tests {
         let mut items = vec![];
         insert("a", "looking up at the ocean");
         items.push(w(ws.stream.next()).unwrap().unwrap());
-        insert("b", "a folk tale in the polar day");
+        insert("b", "a folktale in the polar day");
         delete("a");
         items.push(w(ws.stream.next()).unwrap().unwrap());
         items.push(w(ws.stream.next()).unwrap().unwrap());
@@ -356,7 +361,7 @@ mod tests {
         assert!(w(ws.stream.next()).is_none());
 
         assert_eq!(items[0].pair, kv("a", "looking up at the ocean"));
-        assert_eq!(items[1].pair, kv("b", "a folk tale in the polar day"));
+        assert_eq!(items[1].pair, kv("b", "a folktale in the polar day"));
         assert_eq!(items[2].kind, KvEventType::Delete);
         assert_eq!(items[2].pair.0, MetaKey::task_of("a"));
     }
