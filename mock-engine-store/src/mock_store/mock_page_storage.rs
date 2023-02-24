@@ -92,7 +92,7 @@ impl From<RawVoidPtr> for &mut MockPSWriteBatch {
     }
 }
 
-pub unsafe extern "C" fn ffi_mockps_write_batch_put_page(
+pub unsafe extern "C" fn ffi_mockps_wb_put_page(
     wb: RawVoidPtr,
     page_id: BaseBuffView,
     page: BaseBuffView,
@@ -103,35 +103,35 @@ pub unsafe extern "C" fn ffi_mockps_write_batch_put_page(
     wb.data.push((wid, write));
 }
 
-pub unsafe extern "C" fn ffi_mockps_write_batch_del_page(wb: RawVoidPtr, page_id: BaseBuffView) {
+pub unsafe extern "C" fn ffi_mockps_wb_del_page(wb: RawVoidPtr, page_id: BaseBuffView) {
     let wb: &mut MockPSWriteBatch = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
     let wid = wb.core.write().unwrap().alloc_id();
     let write = MockPSSingleWrite::Delete(page_id.to_slice().to_vec());
     wb.data.push((wid, write));
 }
 
-pub unsafe extern "C" fn ffi_mockps_write_batch_size(wb: RawVoidPtr) -> u64 {
+pub unsafe extern "C" fn ffi_mockps_get_wb_size(wb: RawVoidPtr) -> u64 {
     let wb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
     wb.data.len() as u64
 }
 
-pub unsafe extern "C" fn ffi_mockps_write_batch_is_empty(wb: RawVoidPtr) -> u8 {
+pub unsafe extern "C" fn ffi_mockps_is_wb_empty(wb: RawVoidPtr) -> u8 {
     let wb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
     u8::from(wb.data.is_empty())
 }
 
-pub unsafe extern "C" fn ffi_mockps_write_batch_merge(lwb: RawVoidPtr, rwb: RawVoidPtr) {
+pub unsafe extern "C" fn ffi_mockps_handle_merge_wb(lwb: RawVoidPtr, rwb: RawVoidPtr) {
     let lwb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(lwb);
     let rwb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(rwb);
     lwb.data.append(&mut rwb.data);
 }
 
-pub unsafe extern "C" fn ffi_mockps_write_batch_clear(wb: RawVoidPtr) {
+pub unsafe extern "C" fn ffi_mockps_handle_clear_wb(wb: RawVoidPtr) {
     let wb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
     wb.data.clear();
 }
 
-pub unsafe extern "C" fn ffi_mockps_consume_write_batch(
+pub unsafe extern "C" fn ffi_mockps_handle_consume_wb(
     wrap: *const interfaces_ffi::EngineStoreServerWrap,
     wb: RawVoidPtr,
 ) {
@@ -148,9 +148,11 @@ pub unsafe extern "C" fn ffi_mockps_consume_write_batch(
     for (_, write) in wb.data.drain(..) {
         match write {
             MockPSSingleWrite::Put(w) => {
+                assert!(w.0.starts_with(&[0x01]));
                 guard.insert(w.0, w.1);
             }
             MockPSSingleWrite::Delete(w) => {
+                assert!(w.starts_with(&[0x01]));
                 guard.remove(&w);
             }
         }
@@ -211,13 +213,7 @@ pub unsafe extern "C" fn ffi_mockps_handle_scan_page(
     }
 }
 
-pub unsafe extern "C" fn ffi_mockps_handle_purge_pagestorage(
-    _wrap: *const interfaces_ffi::EngineStoreServerWrap,
-) {
-    // TODO
-}
-
-pub unsafe extern "C" fn ffi_mockps_handle_seek_ps_key(
+pub unsafe extern "C" fn ffi_mockps_handle_get_lower_bound(
     wrap: *const interfaces_ffi::EngineStoreServerWrap,
     page_id: BaseBuffView,
 ) -> CppStrWithView {
@@ -233,7 +229,7 @@ pub unsafe extern "C" fn ffi_mockps_handle_seek_ps_key(
     create_cpp_str(Some(kv.0.clone()))
 }
 
-pub unsafe extern "C" fn ffi_mockps_ps_is_empty(
+pub unsafe extern "C" fn ffi_mockps_is_ps_empty(
     wrap: *const interfaces_ffi::EngineStoreServerWrap,
 ) -> u8 {
     let store = into_engine_store_server_wrap(wrap);
@@ -243,4 +239,10 @@ pub unsafe extern "C" fn ffi_mockps_ps_is_empty(
         .read()
         .unwrap();
     u8::from(guard.is_empty())
+}
+
+pub unsafe extern "C" fn ffi_mockps_handle_purge_ps(
+    _wrap: *const interfaces_ffi::EngineStoreServerWrap,
+) {
+    // TODO
 }

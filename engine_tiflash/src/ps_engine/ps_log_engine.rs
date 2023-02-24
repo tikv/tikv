@@ -10,7 +10,7 @@ use std::{
 
 use engine_traits::{
     Error, PerfContext, PerfContextExt, PerfContextKind, PerfLevel, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, Result,
+    RaftEngineReadOnly, RaftLogBatch, Result, RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::{
     metapb::Region,
@@ -44,13 +44,13 @@ impl PSEngineWriteBatch {
 
     fn put_page(&mut self, page_id: &[u8], value: &[u8]) -> Result<()> {
         let helper = gen_engine_store_server_helper(self.engine_store_server_helper);
-        helper.write_batch_put_page(self.raw_write_batch.ptr, page_id.into(), value.into());
+        helper.wb_put_page(self.raw_write_batch.ptr, page_id.into(), value.into());
         Ok(())
     }
 
     fn del_page(&mut self, page_id: &[u8]) -> Result<()> {
         let helper = gen_engine_store_server_helper(self.engine_store_server_helper);
-        helper.write_batch_del_page(self.raw_write_batch.ptr, page_id.into());
+        helper.wb_del_page(self.raw_write_batch.ptr, page_id.into());
         Ok(())
     }
 
@@ -75,12 +75,12 @@ impl PSEngineWriteBatch {
 
     fn data_size(&self) -> usize {
         let helper = gen_engine_store_server_helper(self.engine_store_server_helper);
-        helper.write_batch_size(self.raw_write_batch.ptr) as usize
+        helper.get_wb_size(self.raw_write_batch.ptr) as usize
     }
 
     fn clear(&self) {
         let helper = gen_engine_store_server_helper(self.engine_store_server_helper);
-        helper.write_batch_clear(self.raw_write_batch.ptr);
+        helper.clear_wb(self.raw_write_batch.ptr);
     }
 }
 
@@ -93,36 +93,15 @@ impl RaftLogBatch for PSEngineWriteBatch {
     ) -> Result<()> {
         let overwrite_to = overwrite_to.unwrap_or(0);
         if let Some(last) = entries.last() && last.get_index() + 1 < overwrite_to {
-            // TODO
-            panic!("PSEngineWriteBatch has no delete method !!!!!");
-            // for index in last.get_index() + 1..overwrite_to {
-            //     let key = keys::raft_log_key(raft_group_id, index);
-            //     self.delete(&key).unwrap();
-            // }
+            for index in last.get_index() + 1..overwrite_to {
+                let key = keys::raft_log_key(raft_group_id, index);
+                self.del_page(&key).unwrap();
+            }
         }
         if let Some(max_size) = entries.iter().map(|e| e.compute_size()).max() {
             let ser_buf = Vec::with_capacity(max_size as usize);
             return self.append_impl(raft_group_id, &entries, ser_buf);
         }
-        Ok(())
-    }
-
-    fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        self.put_msg(&keys::raft_state_key(raft_group_id), state)
-    }
-
-    fn persist_size(&self) -> usize {
-        self.data_size()
-    }
-
-    fn is_empty(&self) -> bool {
-        let helper = gen_engine_store_server_helper(self.engine_store_server_helper);
-        helper.write_batch_is_empty(self.raw_write_batch.ptr) != 0
-    }
-
-    fn merge(&mut self, src: Self) -> Result<()> {
-        let helper = gen_engine_store_server_helper(self.engine_store_server_helper);
-        helper.write_batch_merge(self.raw_write_batch.ptr, src.raw_write_batch.ptr);
         Ok(())
     }
 
@@ -136,6 +115,10 @@ impl RaftLogBatch for PSEngineWriteBatch {
 
     fn remove_prepare_bootstrap_region(&mut self) -> Result<()> {
         self.del_page(keys::PREPARE_BOOTSTRAP_KEY)
+    }
+
+    fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
+        self.put_msg(&keys::raft_state_key(raft_group_id), state)
     }
 
     fn put_region_state(
@@ -177,6 +160,21 @@ impl RaftLogBatch for PSEngineWriteBatch {
 
     fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {
         self.put_msg(keys::RECOVER_STATE_KEY, state)
+    }
+
+    fn persist_size(&self) -> usize {
+        self.data_size()
+    }
+
+    fn is_empty(&self) -> bool {
+        let helper = gen_engine_store_server_helper(self.engine_store_server_helper);
+        helper.is_wb_empty(self.raw_write_batch.ptr) != 0
+    }
+
+    fn merge(&mut self, src: Self) -> Result<()> {
+        let helper = gen_engine_store_server_helper(self.engine_store_server_helper);
+        helper.merge_wb(self.raw_write_batch.ptr, src.raw_write_batch.ptr);
+        Ok(())
     }
 }
 
@@ -234,7 +232,7 @@ impl PSLogEngine {
     // Seek the first key >= given key, if not found, return None.
     fn seek(&self, key: &[u8]) -> Option<Vec<u8>> {
         let helper = gen_engine_store_server_helper(self.engine_store_server_helper);
-        let target_key = helper.seek_ps_key(key.into());
+        let target_key = helper.get_lower_bound(key.into());
         if target_key.view.len == 0 {
             None
         } else {
@@ -253,9 +251,7 @@ impl PSLogEngine {
         let arr = values.inner as *mut PageAndCppStrWithView;
         for i in 0..values.len {
             let value = unsafe { &*arr.offset(i as isize) };
-            if value.page_view.len != 0
-                && !f(value.key_view.to_slice(), value.page_view.to_slice())?
-            {
+            if !f(value.key_view.to_slice(), value.page_view.to_slice())? {
                 break;
             }
         }
@@ -272,8 +268,6 @@ impl PSLogEngine {
         if from == 0 {
             let start_key = keys::raft_log_key(raft_group_id, 0);
             let prefix = keys::raft_log_prefix(raft_group_id);
-            // TODO: make sure the seek can skip other raft related key and to the first log
-            // key
             match self.seek(&start_key) {
                 Some(target_key) if target_key.starts_with(&prefix) => {
                     from = box_try!(keys::raft_log_index(&target_key))
@@ -302,53 +296,6 @@ impl PSLogEngine {
 }
 
 impl RaftEngineReadOnly for PSLogEngine {
-    fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
-        let key = keys::raft_state_key(raft_group_id);
-        self.get_msg_cf(&key)
-    }
-
-    fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
-        let key = keys::raft_log_key(raft_group_id, index);
-        self.get_msg_cf(&key)
-    }
-
-    fn fetch_entries_to(
-        &self,
-        region_id: u64,
-        low: u64,
-        high: u64,
-        max_size: Option<usize>,
-        buf: &mut Vec<Entry>,
-    ) -> Result<usize> {
-        let (max_size, mut total_size, mut count) = (max_size.unwrap_or(usize::MAX), 0, 0);
-
-        let start_key = keys::raft_log_key(region_id, low);
-        let end_key = keys::raft_log_key(region_id, high);
-
-        self.scan(&start_key, &end_key, |_, page| {
-            let mut entry = Entry::default();
-            entry.merge_from_bytes(page)?;
-            buf.push(entry);
-            total_size += page.len();
-            count += 1;
-            Ok(total_size < max_size)
-        })?;
-
-        Ok(count)
-    }
-
-    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
-        let start_key = keys::raft_log_key(region_id, 0);
-        let end_key = keys::raft_log_key(region_id, u64::MAX);
-        self.scan(&start_key, &end_key, |_, page| {
-            let mut entry = Entry::default();
-            entry.merge_from_bytes(page)?;
-            buf.push(entry);
-            Ok(true)
-        })?;
-        Ok(())
-    }
-
     fn is_empty(&self) -> Result<bool> {
         Ok(self.is_empty())
     }
@@ -359,6 +306,11 @@ impl RaftEngineReadOnly for PSLogEngine {
 
     fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
         self.get_msg_cf(keys::PREPARE_BOOTSTRAP_KEY)
+    }
+
+    fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
+        let key = keys::raft_state_key(raft_group_id);
+        self.get_msg_cf(&key)
     }
 
     fn get_region_state(
@@ -379,16 +331,106 @@ impl RaftEngineReadOnly for PSLogEngine {
         self.get_msg_cf(&key)
     }
 
-    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
-        self.get_msg_cf(keys::RECOVER_STATE_KEY)
-    }
-
     fn get_flushed_index(&self, _raft_group_id: u64, _cf: &str) -> Result<Option<u64>> {
         panic!()
     }
 
     fn get_dirty_mark(&self, _raft_group_id: u64, _tablet_index: u64) -> Result<bool> {
         panic!()
+    }
+
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        self.get_msg_cf(keys::RECOVER_STATE_KEY)
+    }
+
+    fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
+        let key = keys::raft_log_key(raft_group_id, index);
+        self.get_msg_cf(&key)
+    }
+
+    fn fetch_entries_to(
+        &self,
+        region_id: u64,
+        low: u64,
+        high: u64,
+        max_size: Option<usize>,
+        buf: &mut Vec<Entry>,
+    ) -> Result<usize> {
+        let (max_size, mut total_size, mut count) = (max_size.unwrap_or(usize::MAX), 0, 0);
+
+        if high - low <= RAFT_LOG_MULTI_GET_CNT {
+            // If election happens in inactive regions, they will just try to fetch one
+            // empty log.
+            for i in low..high {
+                if total_size > 0 && total_size >= max_size {
+                    break;
+                }
+                let key = keys::raft_log_key(region_id, i);
+                match self.get_value(&key) {
+                    None => return Err(Error::EntriesCompacted),
+                    Some(v) => {
+                        let mut entry = Entry::default();
+                        entry.merge_from_bytes(&v)?;
+                        assert_eq!(entry.get_index(), i);
+                        buf.push(entry);
+                        total_size += v.len();
+                        count += 1;
+                    }
+                }
+            }
+            return Ok(count);
+        }
+
+        let (mut check_compacted, mut compacted, mut next_index) = (true, false, low);
+        let start_key = keys::raft_log_key(region_id, low);
+        let end_key = keys::raft_log_key(region_id, high);
+
+        self.scan(&start_key, &end_key, |_, page| {
+            let mut entry = Entry::default();
+            entry.merge_from_bytes(page)?;
+
+            if check_compacted {
+                if entry.get_index() != low {
+                    compacted = true;
+                    // May meet gap or has been compacted.
+                    return Ok(false);
+                }
+                check_compacted = false;
+            } else {
+                assert_eq!(entry.get_index(), next_index);
+            }
+            next_index += 1;
+
+            buf.push(entry);
+            total_size += page.len();
+            count += 1;
+            Ok(total_size < max_size)
+        })?;
+
+        // If we get the correct number of entries, returns.
+        // Or the total size almost exceeds max_size, returns.
+        if count == (high - low) as usize || total_size >= max_size {
+            return Ok(count);
+        }
+
+        if compacted {
+            return Err(Error::EntriesCompacted);
+        }
+
+        // Here means we don't fetch enough entries.
+        Err(Error::EntriesUnavailable)
+    }
+
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
+        let start_key = keys::raft_log_key(region_id, 0);
+        let end_key = keys::raft_log_key(region_id, u64::MAX);
+        self.scan(&start_key, &end_key, |_, page| {
+            let mut entry = Entry::default();
+            entry.merge_from_bytes(page)?;
+            buf.push(entry);
+            Ok(true)
+        })?;
+        Ok(())
     }
 }
 
@@ -422,7 +464,7 @@ impl RaftEngine for PSLogEngine {
     fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
         let bytes = batch.data_size();
         let helper = gen_engine_store_server_helper(self.engine_store_server_helper);
-        helper.consume_write_batch(batch.raw_write_batch.ptr);
+        helper.consume_wb(batch.raw_write_batch.ptr);
         batch.clear();
         Ok(bytes)
     }
@@ -444,16 +486,12 @@ impl RaftEngine for PSLogEngine {
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()> {
-        // info!("try clean raft_group_id {} from {} to {}", raft_group_id, first_index,
-        // state.last_index);
         batch.del_page(&keys::raft_state_key(raft_group_id))?;
         batch.del_page(&keys::region_state_key(raft_group_id))?;
         batch.del_page(&keys::apply_state_key(raft_group_id))?;
         if first_index == 0 {
             let start_key = keys::raft_log_key(raft_group_id, 0);
             let prefix = keys::raft_log_prefix(raft_group_id);
-            // TODO: make sure the seek can skip other raft related key and to the first log
-            // key
             match self.seek(&start_key) {
                 Some(target_key) if target_key.starts_with(&prefix) => {
                     first_index = box_try!(keys::raft_log_index(&target_key))
@@ -469,7 +507,6 @@ impl RaftEngine for PSLogEngine {
             "clean raft_group_id {} from {} to {}",
             raft_group_id, first_index, state.last_index
         );
-        // TODO: find the first raft log index of this raft group
         if first_index <= state.last_index {
             for index in first_index..=state.last_index {
                 batch.del_page(&keys::raft_log_key(raft_group_id, index))?;
@@ -499,12 +536,12 @@ impl RaftEngine for PSLogEngine {
         Ok(String::from(""))
     }
 
-    fn get_engine_path(&self) -> &str {
-        ""
-    }
-
     fn get_engine_size(&self) -> Result<u64> {
         Ok(0)
+    }
+
+    fn get_engine_path(&self) -> &str {
+        ""
     }
 
     fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>

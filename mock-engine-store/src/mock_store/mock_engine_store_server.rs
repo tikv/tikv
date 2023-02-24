@@ -3,7 +3,10 @@
 use std::{cell::RefCell, pin::Pin, sync::atomic::Ordering};
 
 use super::{
-    common::{interfaces_ffi::PageAndCppStrWithView, *},
+    common::{
+        interfaces_ffi::{PageAndCppStrWithView, PageStorageInterfaces},
+        *,
+    },
     mock_core::*,
     mock_fast_add_peer_impls::*,
     mock_ffi::*,
@@ -295,19 +298,21 @@ pub fn gen_engine_store_server_helper(
         fn_set_pb_msg_by_bytes: Some(ffi_set_pb_msg_by_bytes),
         fn_handle_safe_ts_update: Some(ffi_handle_safe_ts_update),
         fn_fast_add_peer: Some(ffi_fast_add_peer),
-        fn_create_write_batch: Some(ffi_mockps_create_write_batch),
-        fn_write_batch_put_page: Some(ffi_mockps_write_batch_put_page),
-        fn_write_batch_del_page: Some(ffi_mockps_write_batch_del_page),
-        fn_write_batch_size: Some(ffi_mockps_write_batch_size),
-        fn_write_batch_is_empty: Some(ffi_mockps_write_batch_is_empty),
-        fn_write_batch_merge: Some(ffi_mockps_write_batch_merge),
-        fn_write_batch_clear: Some(ffi_mockps_write_batch_clear),
-        fn_consume_write_batch: Some(ffi_mockps_consume_write_batch),
-        fn_handle_read_page: Some(ffi_mockps_handle_read_page),
-        fn_handle_purge_pagestorage: Some(ffi_mockps_handle_purge_pagestorage),
-        fn_handle_scan_page: Some(ffi_mockps_handle_scan_page),
-        fn_handle_seek_ps_key: Some(ffi_mockps_handle_seek_ps_key),
-        fn_ps_is_empty: Some(ffi_mockps_ps_is_empty),
+        ps: PageStorageInterfaces {
+            fn_create_write_batch: Some(ffi_mockps_create_write_batch),
+            fn_wb_put_page: Some(ffi_mockps_wb_put_page),
+            fn_wb_del_page: Some(ffi_mockps_wb_del_page),
+            fn_get_wb_size: Some(ffi_mockps_get_wb_size),
+            fn_is_wb_empty: Some(ffi_mockps_is_wb_empty),
+            fn_handle_merge_wb: Some(ffi_mockps_handle_merge_wb),
+            fn_handle_clear_wb: Some(ffi_mockps_handle_clear_wb),
+            fn_handle_consume_wb: Some(ffi_mockps_handle_consume_wb),
+            fn_handle_read_page: Some(ffi_mockps_handle_read_page),
+            fn_handle_scan_page: Some(ffi_mockps_handle_scan_page),
+            fn_handle_get_lower_bound: Some(ffi_mockps_handle_get_lower_bound),
+            fn_is_ps_empty: Some(ffi_mockps_is_ps_empty),
+            fn_handle_purge_ps: Some(ffi_mockps_handle_purge_ps),
+        },
     }
 }
 

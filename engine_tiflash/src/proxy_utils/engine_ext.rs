@@ -41,32 +41,31 @@ impl PageStorageExt {
     }
 
     pub fn consume_write_batch(&self, wb: RawVoidPtr) {
-        self.helper().consume_write_batch(wb)
+        self.helper().consume_wb(wb)
     }
 
     pub fn write_batch_size(&self, wb: RawVoidPtr) -> usize {
-        self.helper().write_batch_size(wb) as usize
+        self.helper().get_wb_size(wb) as usize
     }
 
     pub fn write_batch_is_empty(&self, wb: RawVoidPtr) -> bool {
-        self.helper().write_batch_is_empty(wb) != 0
+        self.helper().is_wb_empty(wb) != 0
     }
 
     pub fn write_batch_merge(&self, lwb: RawVoidPtr, rwb: RawVoidPtr) {
-        self.helper().write_batch_merge(lwb, rwb)
+        self.helper().merge_wb(lwb, rwb)
     }
 
     pub fn write_batch_clear(&self, wb: RawVoidPtr) {
-        self.helper().write_batch_clear(wb)
+        self.helper().clear_wb(wb)
     }
 
     pub fn write_batch_put_page(&self, wb: RawVoidPtr, page_id: &[u8], page: &[u8]) {
-        self.helper()
-            .write_batch_put_page(wb, page_id.into(), page.into())
+        self.helper().wb_put_page(wb, page_id.into(), page.into())
     }
 
     pub fn write_batch_del_page(&self, wb: RawVoidPtr, page_id: &[u8]) {
-        self.helper().write_batch_del_page(wb, page_id.into())
+        self.helper().wb_del_page(wb, page_id.into())
     }
 
     pub fn read_page(&self, page_id: &[u8]) -> Option<Vec<u8>> {
@@ -92,7 +91,12 @@ impl PageStorageExt {
         for i in 0..values.len {
             let value = unsafe { &*arr.offset(i as isize) };
             if value.page_view.len != 0 {
-                f(value.key_view.to_slice(), value.page_view.to_slice()).unwrap();
+                // remove the prefix 0x01 added to all kv engine key
+                f(
+                    &(value.key_view.to_slice()[1..]),
+                    value.page_view.to_slice(),
+                )
+                .unwrap();
             }
         }
     }
