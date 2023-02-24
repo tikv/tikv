@@ -8,8 +8,8 @@ use std::{
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{FlushState, KvEngine, TabletRegistry};
-use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
-use kvproto::{metapb, raft_serverpb::RegionLocalState};
+use futures::{channel::oneshot, compat::Future01CompatExt, FutureExt, StreamExt};
+use kvproto::{metapb, raft_cmdpb::CommitMergeRequest, raft_serverpb::RegionLocalState};
 use raftstore::store::{Config, ReadTask};
 use slog::Logger;
 use tikv_util::{
@@ -19,7 +19,7 @@ use tikv_util::{
 };
 
 use crate::{
-    operation::DataTrace,
+    operation::{CatchUpLogs, DataTrace},
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
 };
@@ -28,17 +28,33 @@ use crate::{
 ///
 /// Using a trait to make signiture simpler.
 pub trait ApplyResReporter {
-    #[inline]
-    fn report(&self, apply_res: ApplyRes) {
-        self.send(PeerMsg::ApplyRes(apply_res));
-    }
+    fn report(&self, apply_res: ApplyRes);
 
-    fn send(&self, msg: PeerMsg);
+    fn report_catch_up_logs(
+        &self,
+        target_region_id: u64,
+        merge: CommitMergeRequest,
+        tx: oneshot::Sender<()>,
+    );
 }
 
 impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for Mailbox<F, S> {
-    fn send(&self, msg: PeerMsg) {
+    fn report(&self, apply_res: ApplyRes) {
         // TODO: check shutdown.
+        let _ = self.force_send(PeerMsg::ApplyRes(apply_res));
+    }
+
+    fn report_catch_up_logs(
+        &self,
+        target_region_id: u64,
+        merge: CommitMergeRequest,
+        tx: oneshot::Sender<()>,
+    ) {
+        let msg = PeerMsg::CatchUpLogs(CatchUpLogs {
+            target_region_id,
+            merge,
+            tx,
+        });
         let _ = self.force_send(msg);
     }
 }

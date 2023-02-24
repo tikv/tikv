@@ -804,9 +804,10 @@ mod test {
     use engine_traits::{
         FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
     };
+    use futures::channel::oneshot;
     use kvproto::{
         metapb::RegionEpoch,
-        raft_cmdpb::{BatchSplitRequest, SplitRequest},
+        raft_cmdpb::{BatchSplitRequest, CommitMergeRequest, SplitRequest},
         raft_serverpb::{PeerState, RegionLocalState},
     };
     use raftstore::store::{cmd_resp::new_error, Config};
@@ -836,7 +837,13 @@ mod test {
             let _ = self.sender.send(apply_res);
         }
 
-        fn send(&self, _msg: PeerMsg) {}
+        fn report_catch_up_logs(
+            &self,
+            _target_region_id: u64,
+            _merge: CommitMergeRequest,
+            _tx: oneshot::Sender<()>,
+        ) {
+        }
     }
 
     fn new_split_req(key: &[u8], id: u64, children: Vec<u64>) -> SplitRequest {

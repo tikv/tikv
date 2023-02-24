@@ -25,7 +25,7 @@
 //! +---^--+-------+                     +-----^v------+          |
 //!     |  +-------------------------------(redirect)             |
 //!     |                                       |                 |
-//!     | (4) SourceReady                       | (2) CatchUpLogs |
+//!     | (4) signal                            | (2) CatchUpLogs |
 //!     |                                       |                 |
 //! +---+----------+  (3) LogsUpToDate   +------v------+          |
 //! | source apply <---------------------+ source peer <----------+
@@ -52,12 +52,14 @@ use std::{
     path::PathBuf,
 };
 
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry};
+use engine_traits::{
+    Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
+};
 use futures::channel::oneshot;
 use kvproto::{
     metapb::{self, Region},
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CommitMergeRequest, RaftCmdRequest},
-    raft_serverpb::{MergeState, PeerState, RegionLocalState},
+    raft_serverpb::PeerState,
 };
 use protobuf::Message;
 use raft::{GetEntriesContext, Storage, INVALID_ID, NO_LIMIT};
@@ -86,21 +88,16 @@ use crate::{
 #[derive(Debug)]
 pub struct CommitMergeResult {
     pub index: u64,
+    source_path: PathBuf,
     region: Region,
-    source_index: u64,
     source: Region,
     tablet: Box<dyn Any + Send + Sync>,
 }
 
-struct SourceReady {
-    index: u64,
-    tablet: Box<dyn Any + Send + Sync>,
-}
-
 pub struct CatchUpLogs {
-    target_region_id: u64,
-    merge: CommitMergeRequest,
-    tx: oneshot::Sender<SourceReady>,
+    pub target_region_id: u64,
+    pub merge: CommitMergeRequest,
+    pub tx: oneshot::Sender<()>,
 }
 
 impl Debug for CatchUpLogs {
@@ -112,10 +109,17 @@ impl Debug for CatchUpLogs {
     }
 }
 
-const MERGE_PREFIX: &str = "merge";
+const MERGE_SOURCE_PREFIX: &str = "merge-source";
+const MERGE_TEMP_PREFIX: &str = "merge-temp";
 
-fn temp_merge_path<EK>(registry: &TabletRegistry<EK>, region_id: u64) -> PathBuf {
-    let tablet_name = registry.tablet_name(MERGE_PREFIX, region_id, RAFT_INIT_LOG_INDEX);
+// Index is the commit index of `CommitMergeRequest`.
+fn merge_source_path<EK>(registry: &TabletRegistry<EK>, region_id: u64, index: u64) -> PathBuf {
+    let tablet_name = registry.tablet_name(MERGE_SOURCE_PREFIX, region_id, index);
+    registry.tablet_root().join(tablet_name)
+}
+
+fn merge_temp_path<EK>(registry: &TabletRegistry<EK>, region_id: u64) -> PathBuf {
+    let tablet_name = registry.tablet_name(MERGE_TEMP_PREFIX, region_id, RAFT_INIT_LOG_INDEX);
     registry.tablet_root().join(tablet_name)
 }
 
@@ -397,18 +401,21 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.flush();
 
         // Note: compared to v1, doesn't validate region state from kvdb any more.
+        let reg = self.tablet_registry();
         let merge = req.get_commit_merge();
         let source_region = merge.get_source();
-        let (tx, rx) = oneshot::channel();
-        self.res_reporter().send(PeerMsg::CatchUpLogs(CatchUpLogs {
-            target_region_id: self.region_id(),
-            merge: merge.clone(),
-            tx,
-        }));
-        let source_ready = rx.await.unwrap_or_else(|_| {
-            // TODO: handle this gracefully.
-            slog_panic!(self.logger, "source peer is missing");
-        });
+        let source_path = merge_source_path(reg, source_region.get_id(), merge.get_commit());
+        if !source_path.exists() {
+            let (tx, rx) = oneshot::channel();
+            self.res_reporter()
+                .report_catch_up_logs(self.region_id(), merge.clone(), tx);
+            rx.await.unwrap_or_else(|_| {
+                // TODO: handle this gracefully.
+                slog_panic!(self.logger, "source peer is missing");
+            });
+        }
+        let ctx = TabletContext::new(source_region, None);
+        let source_tablet = reg.tablet_factory().open_tablet(ctx, &source_path).unwrap();
 
         info!(
             self.logger,
@@ -416,7 +423,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             "commit" => merge.get_commit(),
             "entries" => merge.get_entries().len(),
             "index" => index,
-            "source_region" => ?source_region
+            "source_region" => ?source_region,
         );
         let mut region = self.region().clone();
         // Use a max value so that pd can ensure overlapped region has a priority.
@@ -431,14 +438,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
 
-        let source_tablet: EK = match source_ready.tablet.downcast() {
-            Ok(t) => *t,
-            Err(t) => unreachable!("tablet type should be the same: {:?}", t),
-        };
-        self.tablet().flush_cfs(&[], true).unwrap();
         // TODO: check both are trimmed.
-        let reg = self.tablet_registry();
-        let tmp_path = temp_merge_path(reg, self.region_id());
+        let tmp_path = merge_temp_path(reg, self.region_id());
         if tmp_path.exists() {
             std::fs::remove_dir_all(&tmp_path).unwrap();
         }
@@ -449,6 +450,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 .open_tablet(ctx.clone(), &tmp_path)
                 .unwrap();
             tablet.merge(&[&source_tablet, self.tablet()]).unwrap();
+            tablet.flush_cfs(&[], true).unwrap();
         }
         let path = reg.tablet_path(self.region_id(), index);
         std::fs::rename(&tmp_path, &path).unwrap();
@@ -469,8 +471,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             AdminResponse::default(),
             AdminCmdResult::CommitMerge(CommitMergeResult {
                 index,
+                source_path,
                 region,
-                source_index: source_ready.index,
                 source: source_region.to_owned(),
                 tablet: Box::new(tablet),
             }),
@@ -525,8 +527,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             slog_panic!(
                 self.logger,
                 "get conflicting catch_up_logs";
-                "new" => target_id,
-                "current" => cul.target_region_id,
+                "new" => ?catch_up_logs.merge,
+                "current" => ?cul.merge,
             );
         }
         if !self.catch_up_logs_ready(&catch_up_logs) {
@@ -640,17 +642,25 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn on_logs_up_to_date(&mut self, catch_up_logs: CatchUpLogs) {
         info!(self.logger, "source logs are all applied now");
         let _ = self.flush();
-        if let Err(e) = self.tablet().flush_cfs(&[], true) {
-            error!(self.logger, "failed to flush: {:?}", e);
-        }
-        if catch_up_logs
-            .tx
-            .send(SourceReady {
-                index: self.apply_progress().0,
-                tablet: Box::new(self.tablet().clone()),
-            })
-            .is_err()
-        {
+        let tablet = self.tablet().clone();
+        let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
+            slog_panic!(
+                self.logger,
+                "fails to create checkpoint object";
+                "error" => ?e
+            )
+        });
+        let reg = self.tablet_registry();
+        let path = merge_source_path(reg, self.region_id(), catch_up_logs.merge.get_commit());
+        checkpointer.create_at(&path, None, 0).unwrap_or_else(|e| {
+            slog_panic!(
+                self.logger,
+                "fails to create checkpoint";
+                "path" => %path.display(),
+                "error" => ?e
+            )
+        });
+        if catch_up_logs.tx.send(()).is_err() {
             error!(
                 self.logger,
                 "failed to respond to merge target, are we shutting down?"
@@ -711,6 +721,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Some(tablet) = self.set_tablet(tablet) {
             self.record_tombstone_tablet(store_ctx, tablet, res.index);
         }
+        self.record_tombstone_tablet_path(store_ctx, res.source_path, res.index);
 
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
@@ -741,29 +752,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.state_changes_mut()
             .put_region_state(region_id, res.index, &region_state)
             .unwrap();
-        let mut source_region_state = RegionLocalState::default();
-        // TODO: maybe all information needs to be filled?
-        let mut merging_state = MergeState::default();
-        merging_state.set_target(self.region().clone());
-        source_region_state.set_merge_state(merging_state);
-        source_region_state.set_region(res.source.clone());
-        source_region_state.set_state(PeerState::Tombstone);
-        self.state_changes_mut()
-            .put_region_state(res.source.get_id(), res.source_index, &source_region_state)
-            .unwrap();
         self.storage_mut()
             .apply_trace_mut()
             .on_admin_flush(res.index);
         self.set_has_extra_write();
-        // after persisted, destroy source.
-        self.merge_context_mut().pending_merge_result = Some((
+        // destroy source.
+        let _ = store_ctx.router.send(
             res.source.get_id(),
             PeerMsg::MergeResult {
                 target_region_id: self.region_id(),
                 target: self.peer().clone(),
                 result: MergeResultKind::FromTargetLog,
             },
-        ));
+        );
     }
 
     #[inline]

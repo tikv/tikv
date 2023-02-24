@@ -13,6 +13,8 @@
 //! Updates truncated index, and compacts logs if the corresponding changes have
 //! been persisted in kvdb.
 
+use std::path::PathBuf;
+
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
 use protobuf::Message;
@@ -288,6 +290,32 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .schedulers
             .tablet_gc
             .schedule(tablet_gc::Task::prepare_destroy(
+                old_tablet,
+                self.region_id(),
+                new_tablet_index,
+            ));
+    }
+
+    #[inline]
+    pub fn record_tombstone_tablet_path<T>(
+        &mut self,
+        ctx: &StoreContext<EK, ER, T>,
+        old_tablet: PathBuf,
+        new_tablet_index: u64,
+    ) {
+        info!(self.logger,
+            "record tombstone tablet";
+            "prev_tablet_path" => old_tablet.display(),
+            "new_tablet_index" => new_tablet_index
+        );
+        let compact_log_context = self.compact_log_context_mut();
+        compact_log_context
+            .tombstone_tablets_wait_index
+            .push(new_tablet_index);
+        let _ = ctx
+            .schedulers
+            .tablet_gc
+            .schedule(tablet_gc::Task::prepare_destroy_path(
                 old_tablet,
                 self.region_id(),
                 new_tablet_index,

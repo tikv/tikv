@@ -323,8 +323,10 @@ mod tests {
     use engine_traits::{
         FlushState, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
     };
+    use futures::channel::oneshot;
     use kvproto::{
         metapb::{Peer, Region},
+        raft_cmdpb::CommitMergeRequest,
         raft_serverpb::PeerState,
     };
     use raft::{Error as RaftError, StorageError};
@@ -339,7 +341,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        fsm::ApplyResReporter, operation::write_initial_states, raft::Apply, router::PeerMsg,
+        fsm::ApplyResReporter, operation::write_initial_states, raft::Apply, router::ApplyRes,
     };
 
     #[derive(Clone)]
@@ -365,7 +367,14 @@ mod tests {
     }
 
     impl ApplyResReporter for TestRouter {
-        fn send(&self, _msg: PeerMsg) {}
+        fn report(&self, _res: ApplyRes) {}
+        fn report_catch_up_logs(
+            &self,
+            _target_region_id: u64,
+            _merge: CommitMergeRequest,
+            _tx: oneshot::Sender<()>,
+        ) {
+        }
     }
 
     fn new_region() -> Region {
