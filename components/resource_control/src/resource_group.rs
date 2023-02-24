@@ -15,6 +15,7 @@ use kvproto::{
 };
 use tikv_util::info;
 use yatp::queue::priority::TaskPriorityProvider;
+use crate::metrics;
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
@@ -277,8 +278,14 @@ impl ResourceController {
 
 impl TaskPriorityProvider for ResourceController {
     fn priority_of(&self, extras: &yatp::queue::Extras) -> u64 {
-        self.resource_group(extras.metadata())
-            .get_priority(extras.current_level() as usize)
+        let priority = self.resource_group(extras.metadata())
+            .get_priority(extras.current_level() as usize);
+
+        metrics::PRIORITY_FOR_DIFFERENT_LEVEL
+            .with_label_values(&[extras.current_level().to_string().as_str()])
+            .observe(priority as f64);
+
+        priority
     }
 }
 

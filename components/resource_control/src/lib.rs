@@ -24,3 +24,5 @@ pub struct Config {
     #[online_config(skip)]
     pub enabled: bool,
 }
+
+mod metrics;
