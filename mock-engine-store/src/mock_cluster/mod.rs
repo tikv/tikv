@@ -10,6 +10,7 @@ pub mod transport_simulate;
 pub mod util;
 
 pub use cluster::*;
+pub use cluster_ext::*;
 pub use common::*;
 pub use config::{Config, MockConfig};
 pub use test_raftstore::{

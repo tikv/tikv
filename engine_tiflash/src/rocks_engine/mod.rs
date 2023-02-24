@@ -4,3 +4,8 @@
 mod engine;
 #[cfg(not(feature = "enable-pagestorage"))]
 pub use engine::*;
+
+#[cfg(not(feature = "enable-pagestorage"))]
+pub mod write_batch;
+#[cfg(not(feature = "enable-pagestorage"))]
+pub use write_batch::*;
