@@ -670,7 +670,7 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         if cur_rng >= self.sample_rate {
             return;
         }
-        let sample: Vec<Vec<u8>> = data.iter().cloned().collect();
+        let sample = data.to_vec();
         self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
         self.base.report_memory_usage(false);
         self.samples.push(sample);
@@ -760,7 +760,7 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
         }
 
         if need_push {
-            let sample: Vec<Vec<u8>> = data.iter().cloned().collect();
+            let sample = data.to_vec();
             self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
             self.base.report_memory_usage(false);
             self.samples.push(Reverse((cur_rng, sample)));
