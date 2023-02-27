@@ -22,6 +22,7 @@ use grpcio::{
     Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
 };
 use kvproto::{
+    meta_storagepb::MetaStorageClient as MetaStorageStub,
     metapb::BucketStats,
     pdpb::{
         ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
@@ -104,6 +105,7 @@ pub struct Inner {
     pub pending_heartbeat: Arc<AtomicU64>,
     pub pending_buckets: Arc<AtomicU64>,
     pub tso: TimestampOracle,
+    pub meta_storage: MetaStorageStub,
 
     last_try_reconnect: Instant,
 }
@@ -181,6 +183,8 @@ impl Client {
         let (buckets_tx, buckets_resp) = client_stub
             .report_buckets_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "report_buckets", e));
+        let meta_storage =
+            kvproto::meta_storagepb::MetaStorageClient::new(client_stub.client.channel().clone());
         Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: RwLock::new(Inner {
@@ -198,6 +202,7 @@ impl Client {
                 pending_buckets: Arc::default(),
                 last_try_reconnect: Instant::now(),
                 tso,
+                meta_storage,
             }),
             feature_gate: FeatureGate::default(),
             enable_forwarding,
@@ -239,6 +244,7 @@ impl Client {
         inner.buckets_resp = Some(buckets_resp);
 
         inner.client_stub = client_stub;
+        inner.meta_storage = MetaStorageStub::new(client_stub.client.channel().clone());
         inner.members = members;
         inner.tso = tso;
         if let Some(ref on_reconnect) = inner.on_reconnect {

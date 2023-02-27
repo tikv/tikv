@@ -14,6 +14,7 @@ mod util;
 
 mod config;
 pub mod errors;
+mod meta_storage;
 use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
@@ -31,6 +32,7 @@ pub use self::{
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
+    meta_storage::MetaStorageClient,
     util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
 };
 

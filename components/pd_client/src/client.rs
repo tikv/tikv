@@ -20,6 +20,7 @@ use futures::{
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
+    meta_storagepb::{GetRequest, GetResponse},
     metapb,
     pdpb::{self, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
@@ -35,8 +36,8 @@ use yatp::{task::future::TaskCell, ThreadPool};
 use super::{
     metrics::*,
     util::{call_option_inner, check_resp_header, sync_request, Client, PdConnector},
-    BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
-    UnixSecs, REQUEST_TIMEOUT,
+    BucketStat, Config, Error, FeatureGate, MetaStorageClient, PdClient, PdFuture, RegionInfo,
+    RegionStat, Result, UnixSecs, REQUEST_TIMEOUT,
 };
 
 pub const CQ_COUNT: usize = 1;
@@ -1116,4 +1117,48 @@ impl PdClient for RpcClient {
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
+}
+
+impl MetaStorageClient for RpcClient {
+    fn get(&self, req: GetRequest) -> PdFuture<Result<GetResponse>> {
+        let timer = Instant::now();
+        let executor = move |client: &Client, req: GetRequest| {
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .meta_storage
+                    .get_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "metastorage::get", e)
+                    })
+            };
+            Box::pin(async move {
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .meta_storage_get
+                    .observe(timer.saturating_elapsed_secs());
+                Ok(())
+            }) as _
+        };
+
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn put(
+        &self,
+        req: kvproto::meta_storagepb::PutRequest,
+    ) -> PdFuture<Result<kvproto::meta_storagepb::PutResponse>> {
+        todo!()
+    }
+
+    fn watch(
+        &self,
+        req: kvproto::meta_storagepb::WatchRequest,
+    ) -> PdFuture<Result<Self::WatchStream<kvproto::meta_storagepb::WatchResponse>>> {
+        todo!()
+    }
+
+    type WatchStream<T> = grpcio::ClientSStreamReceiver<T>;
 }
