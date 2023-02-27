@@ -723,7 +723,10 @@ mod tests {
             let expect_rows = *expect_rows;
             let expect_drained = start_row + expect_rows > total_rows;
             let result = block_on(executor.next_batch(expect_rows));
-            assert_eq!(*result.is_drained.as_ref().unwrap(), expect_drained);
+            assert_eq!(
+                result.is_drained.as_ref().unwrap().is_drain(),
+                expect_drained
+            );
             if expect_drained {
                 // all remaining rows are fetched
                 helper.expect_table_values(
@@ -1286,7 +1289,7 @@ mod tests {
         .unwrap();
 
         let mut result = block_on(executor.next_batch(10));
-        assert_eq!(result.is_drained.unwrap(), true);
+        assert!(result.is_drained.unwrap().is_drain());
         assert_eq!(result.logical_rows.len(), 1);
         assert_eq!(result.physical_columns.columns_len(), columns_is_pk.len());
         for i in 0..columns_is_pk.len() {
@@ -1394,7 +1397,7 @@ mod tests {
         .unwrap();
 
         let mut result = block_on(executor.next_batch(10));
-        assert_eq!(result.is_drained.unwrap(), true);
+        assert!(result.is_drained.unwrap().is_drain());
         assert_eq!(result.logical_rows.len(), 1);
 
         // We expect we fill the primary column with the value embedded in the common
@@ -1575,7 +1578,7 @@ mod tests {
         .unwrap();
 
         let mut result = block_on(executor.next_batch(10));
-        assert_eq!(result.is_drained.unwrap(), true);
+        assert!(result.is_drained.unwrap().is_drain());
         if !columns_info.is_empty() {
             assert_eq!(result.logical_rows.len(), 1);
         }
