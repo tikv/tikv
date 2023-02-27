@@ -240,7 +240,7 @@ impl Simulator for NodeCluster {
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
-                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();
@@ -348,7 +348,7 @@ impl Simulator for NodeCluster {
         );
 
         let region_split_size = cfg.coprocessor.region_split_size();
-        let enable_region_bucket = cfg.coprocessor.enable_region_bucket;
+        let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg

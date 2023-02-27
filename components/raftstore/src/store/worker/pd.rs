@@ -32,7 +32,7 @@ use kvproto::{
     replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
 };
 use ordered_float::OrderedFloat;
-use pd_client::{merge_bucket_stats, metrics::*, BucketStat, Error, PdClient, RegionStat};
+use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
@@ -287,17 +287,9 @@ impl ReportBucket {
         self.last_report_ts = report_ts;
         match self.last_report_stat.replace(self.current_stat.clone()) {
             Some(last) => {
-                let mut delta = BucketStat::new(
-                    self.current_stat.meta.clone(),
-                    pd_client::new_bucket_stats(&self.current_stat.meta),
-                );
+                let mut delta = BucketStat::from_meta(self.current_stat.meta.clone());
                 // Buckets may be changed, recalculate last stats according to current meta.
-                merge_bucket_stats(
-                    &delta.meta.keys,
-                    &mut delta.stats,
-                    &last.meta.keys,
-                    &last.stats,
-                );
+                delta.merge(&last);
                 for i in 0..delta.meta.keys.len() - 1 {
                     delta.stats.write_bytes[i] =
                         self.current_stat.stats.write_bytes[i] - delta.stats.write_bytes[i];
@@ -1891,13 +1883,7 @@ where
                 if current.meta < buckets.meta {
                     mem::swap(current, &mut buckets);
                 }
-
-                merge_bucket_stats(
-                    &current.meta.keys,
-                    &mut current.stats,
-                    &buckets.meta.keys,
-                    &buckets.stats,
-                );
+                current.merge(&buckets);
             })
             .or_insert_with(|| ReportBucket::new(buckets));
     }

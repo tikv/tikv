@@ -500,7 +500,7 @@ impl ServerCluster {
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
-                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();

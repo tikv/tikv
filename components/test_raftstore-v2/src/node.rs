@@ -15,7 +15,7 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
-use raft::prelude::MessageType;
+use raft::{prelude::MessageType, SnapshotStatus};
 use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
@@ -73,6 +73,8 @@ impl Transport for ChannelTransport {
     fn send(&mut self, msg: RaftMessage) -> raftstore::Result<()> {
         let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
+        let to_peer_id = msg.get_to_peer().get_id();
+        let region_id = msg.get_region_id();
         let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
         if is_snapshot {
@@ -102,7 +104,13 @@ impl Transport for ChannelTransport {
         match core.routers.get(&to_store) {
             Some(h) => {
                 h.send_raft_msg(msg)?;
-                // report snapshot status if needed
+                if is_snapshot {
+                    let _ = core.routers[&from_store].report_snapshot_status(
+                        region_id,
+                        to_peer_id,
+                        SnapshotStatus::Finish,
+                    );
+                }
                 Ok(())
             }
             _ => Err(box_err!("missing sender for store {}", to_store)),
@@ -191,7 +199,7 @@ impl Simulator for NodeCluster {
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
-                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();
@@ -286,7 +294,7 @@ impl Simulator for NodeCluster {
         let node_id = node.id();
 
         let region_split_size = cfg.coprocessor.region_split_size();
-        let enable_region_bucket = cfg.coprocessor.enable_region_bucket;
+        let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg
@@ -403,6 +411,16 @@ impl Simulator for NodeCluster {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        let mut trans = self.trans.core.lock().unwrap();
+        trans.routers.get_mut(&node_id).unwrap().add_filter(filter);
+    }
+
+    fn clear_recv_filters(&mut self, node_id: u64) {
+        let mut trans = self.trans.core.lock().unwrap();
+        trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 }
 

@@ -18,7 +18,7 @@ use engine_traits::{
 };
 use file_system::IoRateLimiter;
 use futures::{compat::Future01CompatExt, executor::block_on, select, FutureExt};
-use keys::data_key;
+use keys::{data_key, validate_data_key, DATA_PREFIX_KEY};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::ApiVersion,
@@ -81,8 +81,13 @@ pub trait Simulator {
 
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
+
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
+
+    fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
+    fn clear_recv_filters(&mut self, node_id: u64);
+
     fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>>;
     fn get_snap_dir(&self, node_id: u64) -> String;
 
@@ -1102,6 +1107,10 @@ impl<T: Simulator> Cluster<T> {
         self.sim.wl().add_send_filter(node_id, filter);
     }
 
+    pub fn add_recv_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        self.sim.wl().add_recv_filter(node_id, filter);
+    }
+
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
@@ -1392,7 +1401,9 @@ impl WrapFactory {
         }
     }
 
-    fn region_id_of_key(&self, key: &[u8]) -> u64 {
+    fn region_id_of_key(&self, mut key: &[u8]) -> u64 {
+        assert!(validate_data_key(key));
+        key = &key[DATA_PREFIX_KEY.len()..];
         self.pd_client.get_region(key).unwrap().get_id()
     }
 
