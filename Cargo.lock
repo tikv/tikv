@@ -2964,15 +2964,9 @@ checksum = "77af24da69f9d9341038eba93a073b1fdaaa1b788221b00a69bce9e762cb32de"
 
 [[package]]
 name = "openssl-src"
-<<<<<<< HEAD
-version = "111.15.0+1.1.1k"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1a5f6ae2ac04393b217ea9f700cd04fa9bf3d93fae2872069f3d15d908af70a"
-=======
 version = "111.25.0+1.1.1t"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3173cd3626c43e3854b1b727422a276e568d9ec5fe8cec197822cf52cfb743d6"
->>>>>>> 0368d0a6e5 (*: update openssl-src version to fix CVE-2023-0286 (#14258))
 dependencies = [
  "cc",
 ]
