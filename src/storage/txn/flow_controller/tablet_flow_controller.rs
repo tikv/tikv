@@ -199,16 +199,30 @@ impl FlowInfoDispatcher {
                             };
                         }
                         Ok(FlowInfo::Destroyed(region_id)) => {
-                            let mut checkers = flow_checkers.as_ref().write().unwrap();
-                            checkers.remove(&region_id);
+                            {
+                                let mut checkers = flow_checkers.as_ref().write().unwrap();
+                                checkers.remove(&region_id);
+                            }
                             limiters.as_ref().write().unwrap().remove(&region_id);
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             let mut total_rate = 0.0;
+                            let mut cf_throttle_flags = HashMap::default();
                             for checker in (*checkers).values_mut() {
-                                total_rate += checker.update_statistics();
-                                SCHED_WRITE_FLOW_GAUGE.set(total_rate as i64);
+                                let (rate, tablet_cf_throttle_flags) = checker.update_statistics();
+                                total_rate += rate;
+                                for (key, val) in tablet_cf_throttle_flags {
+                                    if let Some(value) = cf_throttle_flags.get_mut(key) {
+                                        *value += val;
+                                    } else {
+                                        cf_throttle_flags.insert(key, val);
+                                    }
+                                }
+                            }
+                            SCHED_WRITE_FLOW_GAUGE.set(total_rate as i64);
+                            for (cf, val) in cf_throttle_flags {
+                                SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(val);
                             }
                             deadline = std::time::Instant::now() + TICK_DURATION;
                         }

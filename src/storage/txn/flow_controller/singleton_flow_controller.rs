@@ -649,7 +649,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
 
                     let msg = flow_info_receiver.recv_deadline(deadline);
                     if let Err(RecvTimeoutError::Timeout) = msg {
-                        checker.update_statistics();
+                        let (rate, cf_throttle_flags) = checker.update_statistics();
+                        for (cf, val) in cf_throttle_flags {
+                            SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(val);
+                        }
+                        SCHED_WRITE_FLOW_GAUGE.set(rate as i64);
                         deadline = std::time::Instant::now() + TICK_DURATION;
                     } else {
                         checker.on_flow_info_msg(enabled, msg);
@@ -680,26 +684,25 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         self.discard_ratio.store(0, Ordering::Relaxed);
     }
 
-    pub fn update_statistics(&mut self) -> f64 {
+    pub fn update_statistics(&mut self) -> (f64, HashMap<&str, i64>) {
+        let mut cf_throttle_flags = HashMap::default();
         if let Some(throttle_cf) = self.throttle_cf.as_ref() {
-            SCHED_THROTTLE_CF_GAUGE
-                .with_label_values(&[throttle_cf])
-                .set(1);
+            cf_throttle_flags.insert(throttle_cf.as_str(), 1);
             for cf in self.cf_checkers.keys() {
                 if cf != throttle_cf {
-                    SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(0);
+                    cf_throttle_flags.insert(cf.as_str(), 0);
                 }
             }
         } else {
             for cf in self.cf_checkers.keys() {
-                SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(0);
+                cf_throttle_flags.insert(cf.as_str(), 0);
             }
         }
 
         // calculate foreground write flow
         let dur = self.last_record_time.saturating_elapsed_secs();
         if dur < f64::EPSILON {
-            return 0.0;
+            return (0.0, cf_throttle_flags);
         }
         let rate = self.limiter.total_bytes_consumed() as f64 / dur;
         // don't record those write rate of 0.
@@ -710,13 +713,10 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             self.write_flow_recorder.observe(rate as u64);
         }
 
-        if self.region_id == 0 {
-            SCHED_WRITE_FLOW_GAUGE.set(rate as i64);
-        }
         self.last_record_time = Instant::now_coarse();
 
         self.limiter.reset_statistics();
-        return rate;
+        return (rate, cf_throttle_flags);
     }
 
     fn on_pending_compaction_bytes_change(&mut self, cf: String) {
