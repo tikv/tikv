@@ -166,7 +166,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        if ctx.coprocessor_host.cfg.enable_region_bucket && self.storage().is_initialized() {
+        if ctx.coprocessor_host.cfg.enable_region_bucket() && self.storage().is_initialized() {
             if let Err(e) = ctx
                 .schedulers
                 .split_check

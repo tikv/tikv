@@ -77,10 +77,12 @@ impl ProposedAdminCmd {
 /// Compared to `CmdEpochChecker`, `ProposalControl` also traces the whole
 /// lifetime of prepare merge.
 pub struct ProposalControl {
+    // Admin commands that are proposed but not applied.
     // Use `LinkedList` to reduce memory footprint. In most cases, the list
     // should be empty or 1 element. And access speed is not a concern.
     proposed_admin_cmd: LinkedList<ProposedAdminCmd>,
-    pending_merge_index: u64,
+    has_pending_prepare_merge: bool,
+    applied_prepare_merge_index: u64,
     term: u64,
 }
 
@@ -88,7 +90,8 @@ impl ProposalControl {
     pub fn new(term: u64) -> ProposalControl {
         ProposalControl {
             proposed_admin_cmd: LinkedList::new(),
-            pending_merge_index: 0,
+            has_pending_prepare_merge: false,
+            applied_prepare_merge_index: 0,
             term,
         }
     }
@@ -135,6 +138,7 @@ impl ProposalControl {
         self.proposed_admin_cmd.iter_mut().rev().find(|cmd| {
             (check_ver && cmd.epoch_state.change_ver)
                 || (check_conf_ver && cmd.epoch_state.change_conf_ver)
+                || cmd.cmd_type == AdminCmdType::PrepareMerge
         })
     }
 
@@ -210,16 +214,31 @@ impl ProposalControl {
     }
 
     #[inline]
+    pub fn set_pending_prepare_merge(&mut self, v: bool) {
+        self.has_pending_prepare_merge = v;
+    }
+
+    #[inline]
+    pub fn has_pending_prepare_merge(&self) -> bool {
+        self.has_pending_prepare_merge
+    }
+
+    #[inline]
     pub fn enter_prepare_merge(&mut self, prepare_merge_index: u64) {
-        self.pending_merge_index = prepare_merge_index;
+        self.applied_prepare_merge_index = prepare_merge_index;
     }
 
     #[inline]
     pub fn leave_prepare_merge(&mut self, prepare_merge_index: u64) {
-        if self.pending_merge_index != 0 {
-            assert_eq!(self.pending_merge_index, prepare_merge_index);
-            self.pending_merge_index = 0;
+        if self.applied_prepare_merge_index != 0 {
+            assert_eq!(self.applied_prepare_merge_index, prepare_merge_index);
+            self.applied_prepare_merge_index = 0;
         }
+    }
+
+    #[inline]
+    pub fn has_applied_prepare_merge(&self) -> bool {
+        self.applied_prepare_merge_index != 0
     }
 
     /// Check if there is an on-going split command on current term.
@@ -242,8 +261,8 @@ impl ProposalControl {
     /// applied.
     #[inline]
     pub fn is_merging(&self) -> bool {
-        if self.proposed_admin_cmd.is_empty() {
-            return self.pending_merge_index != 0;
+        if self.applied_prepare_merge_index != 0 {
+            return true;
         }
         self.proposed_admin_cmd
             .iter()
