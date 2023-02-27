@@ -25,7 +25,7 @@ use engine_traits::{
 use external_storage_export::{
     compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
 };
-use file_system::{get_io_rate_limiter, OpenOptions};
+use file_system::{get_io_rate_limiter, IoType, OpenOptions};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     import_sstpb::*,
@@ -34,7 +34,7 @@ use kvproto::{
 use tikv_util::{
     codec::stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     config::ReadableSize,
-    sys::SysQuota,
+    sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
 };
 use tokio::runtime::{Handle, Runtime};
@@ -282,7 +282,20 @@ impl SstImporter {
     ) -> Result<SstImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
         let cached_storage = CacheMap::default();
-        let download_rt = tokio::runtime::Builder::new_current_thread()
+        // We are going to run some background tasks here, (hyper needs to maintain the
+        // connection, the cache map needs gc intervally.) so we must create a
+        // multi-thread runtime, given there isn't blocking, a single thread runtime is
+        // enough.
+        let download_rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("sst_import_tiny_runtime")
+            .after_start_wrapper(|| {
+                tikv_alloc::add_thread_memory_accessor();
+                file_system::set_io_type(IoType::Import);
+            })
+            .before_stop_wrapper(|| {
+                tikv_alloc::remove_thread_memory_accessor();
+            })
             .enable_all()
             .build()?;
         download_rt.spawn(cached_storage.gc_loop());
