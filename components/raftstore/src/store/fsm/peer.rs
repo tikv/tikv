@@ -2660,6 +2660,13 @@ where
                 "receive peer ready info";
                 "peer_id" => self.fsm.peer.peer.get_id(),
             );
+            info!(
+               "notify pd with change peer region";
+               "region_id" => self.fsm.region_id(),
+               "peer_id" => from.get_id(),
+               "region" => ?self.fsm.peer.region(),
+            );
+            self.fsm.peer.heartbeat_pd(self.ctx);
             return;
         }
         self.register_check_peers_availability_tick();
