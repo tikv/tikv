@@ -34,7 +34,6 @@ use kvproto::{
 use tikv_util::{
     codec::stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     config::ReadableSize,
-    stream::block_on_external_io,
     sys::SysQuota,
     time::{Instant, Limiter},
 };
@@ -780,13 +779,15 @@ impl SstImporter {
             encrypt_wrap_reader(file_crypter, inner)?
         };
 
-        let r = block_on_external_io(external_storage_export::read_external_storage_info_buff(
-            &mut reader,
-            speed_limiter,
-            file_length,
-            expected_sha256,
-            external_storage_export::MIN_READ_SPEED,
-        ));
+        let r =
+            self.download_rt
+                .block_on(external_storage_export::read_external_storage_info_buff(
+                    &mut reader,
+                    speed_limiter,
+                    file_length,
+                    expected_sha256,
+                    external_storage_export::MIN_READ_SPEED,
+                ));
         let url = ext_storage.url()?.to_string();
         let buff = r.map_err(|e| Error::CannotReadExternalStorage {
             url: url.to_string(),
