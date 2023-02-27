@@ -7,7 +7,7 @@ use raftstore::store::{INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX};
 use tikv_util::store::new_peer;
 use txn_types::{Key, TimeStamp};
 
-use crate::cluster::{helper::split_region, Cluster};
+use crate::cluster::{split_helper::split_region, Cluster};
 
 #[test]
 fn test_split() {

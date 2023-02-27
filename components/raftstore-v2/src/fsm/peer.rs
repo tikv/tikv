@@ -331,11 +331,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::MergeResult {
                     target_region_id,
                     target,
-                    result,
                 } => self
                     .fsm
                     .peer_mut()
-                    .on_merge_result(target_region_id, target, result),
+                    .on_merge_result(target_region_id, target),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }

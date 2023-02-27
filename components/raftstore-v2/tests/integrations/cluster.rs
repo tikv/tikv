@@ -631,7 +631,7 @@ impl Drop for Cluster {
     }
 }
 
-pub mod helper {
+pub mod split_helper {
     use std::{thread, time::Duration};
 
     use engine_traits::CF_DEFAULT;
@@ -747,6 +747,19 @@ pub mod helper {
 
         (left, right)
     }
+}
+
+pub mod merge_helper {
+    use std::{thread, time::Duration};
+
+    use futures::executor::block_on;
+    use kvproto::{
+        metapb,
+        raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest},
+    };
+    use raftstore_v2::router::PeerMsg;
+
+    use super::TestRouter;
 
     pub fn merge_region(
         router: &mut TestRouter,

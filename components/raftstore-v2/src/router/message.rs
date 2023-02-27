@@ -8,7 +8,7 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes, MergeResultKind};
+use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
 
@@ -211,7 +211,6 @@ pub enum PeerMsg {
     MergeResult {
         target_region_id: u64,
         target: metapb::Peer,
-        result: MergeResultKind,
     },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]

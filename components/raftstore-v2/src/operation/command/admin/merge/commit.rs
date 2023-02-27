@@ -66,8 +66,8 @@ use raft::{GetEntriesContext, Storage, INVALID_ID, NO_LIMIT};
 use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
-        fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, util, MergeResultKind,
-        ProposalContext, Transport, WriteTask,
+        fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, util, ProposalContext, Transport,
+        WriteTask,
     },
     Error, Result,
 };
@@ -685,7 +685,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             PeerMsg::MergeResult {
                 target_region_id: self.region_id(),
                 target: self.peer().clone(),
-                result: MergeResultKind::FromTargetLog,
             },
         );
     }
@@ -713,12 +712,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     // Match v1::on_merge_result. Called on source peer.
-    pub fn on_merge_result(
-        &mut self,
-        target_region_id: u64,
-        target: metapb::Peer,
-        result: MergeResultKind,
-    ) {
+    pub fn on_merge_result(&mut self, target_region_id: u64, target: metapb::Peer) {
         let exists = self.applied_merge_state().map_or(true, |s| {
             s.get_target()
                 .get_peers()
@@ -731,7 +725,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "unexpected merge result";
                 "merge_state" => ?self.applied_merge_state(),
                 "target" => ?target,
-                "result" => ?result,
             );
         }
         if self.is_handling_snapshot() {
@@ -740,7 +733,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "applying snapshot on getting merge result";
                 "target_region_id" => target_region_id,
                 "target" => ?target,
-                "result" => ?result,
             );
         }
         if !self.storage().is_initialized() {
@@ -749,34 +741,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "not initialized on getting merge result";
                 "target_region_id" => target_region_id,
                 "target" => ?target,
-                "result" => ?result,
             );
         }
-        match result {
-            MergeResultKind::FromTargetLog => {
-                info!(
-                    self.logger,
-                    "merge finished";
-                    "merge_state" => ?self.applied_merge_state(),
-                );
-            }
-            MergeResultKind::FromTargetSnapshotStep1 | MergeResultKind::FromTargetSnapshotStep2 => {
-                info!(
-                    self.logger,
-                    "merge finished with target snapshot";
-                    "target_region_id" => target_region_id,
-                );
-            }
-            MergeResultKind::Stale => {
-                // Match v1::on_stale_merge.
-                info!(
-                    self.logger,
-                    "successful merge can't be continued, try to gc stale peer";
-                    "target_region_id" => target_region_id,
-                    "merge_state" => ?self.applied_merge_state(),
-                );
-            }
-        };
+        info!(
+            self.logger,
+            "merge finished";
+            "merge_state" => ?self.applied_merge_state(),
+        );
         self.mark_for_destroy(None);
     }
 }
