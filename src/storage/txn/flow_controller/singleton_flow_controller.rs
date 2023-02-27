@@ -716,7 +716,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         self.last_record_time = Instant::now_coarse();
 
         self.limiter.reset_statistics();
-        return (rate, cf_throttle_flags);
+        (rate, cf_throttle_flags)
     }
 
     fn on_pending_compaction_bytes_change(&mut self, cf: String) {
