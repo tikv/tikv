@@ -288,7 +288,7 @@ impl SstImporter {
         // enough.
         let download_rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
-            .thread_name("sst_import_tiny_runtime")
+            .thread_name("sst_import_misc")
             .after_start_wrapper(|| {
                 tikv_alloc::add_thread_memory_accessor();
                 file_system::set_io_type(IoType::Import);

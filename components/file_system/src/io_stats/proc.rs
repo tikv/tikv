@@ -141,6 +141,11 @@ pub fn init() -> Result<(), String> {
     Ok(())
 }
 
+/// Bind I/O type for the current thread.
+/// Following calls to the [`file_system`](crate) APIs would be throttled and
+/// recorded via this information.
+/// Generally, when you are creating new threads playing with the local disks,
+/// you should call this before doing so.
 pub fn set_io_type(new_io_type: IoType) {
     IO_TYPE.with(|io_type| {
         if io_type.get() != new_io_type {
