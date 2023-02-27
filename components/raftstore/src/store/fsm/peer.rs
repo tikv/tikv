@@ -5570,6 +5570,10 @@ where
         if !self.fsm.peer.wait_data || self.fsm.peer.is_leader() {
             return;
         }
+        if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
+            self.schedule_tick(PeerTick::RequestSnapshot);
+            return;
+        }
         self.fsm.peer.request_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
         let last_term = self.fsm.peer.get_index_term(self.fsm.peer.request_index);
         if last_term == self.fsm.peer.term() {
@@ -6455,7 +6459,7 @@ where
         for s in sw.switches {
             let (peer_id, is_witness) = (s.get_peer_id(), s.get_is_witness());
             if self.fsm.peer_id() == peer_id {
-                if is_witness && !self.fsm.peer.is_leader() {
+                if is_witness {
                     let _ = self.fsm.peer.get_store().clear_data();
                     self.fsm.peer.raft_group.set_priority(-1);
                 } else {

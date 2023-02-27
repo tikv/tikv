@@ -2614,6 +2614,7 @@ where
                     ctx.apply_router
                         .schedule_task(self.region_id, ApplyTask::Recover(self.region_id));
                     self.wait_data = false;
+                    self.should_reject_msgappend = false;
                     return false;
                 }
             }
