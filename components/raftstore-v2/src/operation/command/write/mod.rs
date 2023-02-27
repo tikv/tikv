@@ -140,6 +140,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             return Ok(());
         }
         util::check_key_in_region(key, self.region())?;
+        if let Some(s) = self.buckets.as_mut() {
+            s.write_key(key, value.len() as u64);
+        }
         // Technically it's OK to remove prefix for raftstore v2. But rocksdb doesn't
         // support specifying infinite upper bound in various APIs.
         keys::data_key_with_buffer(key, &mut self.key_buffer);
@@ -183,6 +186,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             return Ok(());
         }
         util::check_key_in_region(key, self.region())?;
+        if let Some(s) = self.buckets.as_mut() {
+            s.write_key(key, 0);
+        }
         keys::data_key_with_buffer(key, &mut self.key_buffer);
         self.ensure_write_buffer();
         let res = if cf.is_empty() || cf == CF_DEFAULT {

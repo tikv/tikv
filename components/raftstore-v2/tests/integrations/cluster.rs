@@ -503,8 +503,8 @@ impl Cluster {
         Cluster::with_configs(count, config, None)
     }
 
-    pub fn with_cop_cfg(coprocessor_cfg: CopConfig) -> Cluster {
-        Cluster::with_configs(1, None, Some(coprocessor_cfg))
+    pub fn with_cop_cfg(config: Option<Config>, coprocessor_cfg: CopConfig) -> Cluster {
+        Cluster::with_configs(1, config, Some(coprocessor_cfg))
     }
 
     pub fn with_configs(count: usize, config: Option<Config>, cop_cfg: Option<CopConfig>) -> Self {

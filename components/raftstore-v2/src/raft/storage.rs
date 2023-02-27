@@ -507,6 +507,7 @@ mod tests {
             None,
             5,
             logger,
+            None,
         );
 
         // Test get snapshot
