@@ -1,7 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::assert_matches::debug_assert_matches;
+
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
+use kvproto::{
+    import_sstpb::SstMeta,
+    raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
+};
 use protobuf::{CodedInputStream, Message};
 use raftstore::store::WriteCallback;
 use slog::Logger;
@@ -15,9 +20,16 @@ use crate::{operation::command::parse_at, router::CmdResChannel};
 const MAGIC_PREFIX: u8 = 0x00;
 
 #[derive(Clone, Debug)]
-#[repr(transparent)]
 pub struct SimpleWriteBinary {
     buf: Box<[u8]>,
+    write_type: WriteType,
+}
+
+impl SimpleWriteBinary {
+    /// Freeze the binary will forbid further batching.
+    pub fn freeze(&mut self) {
+        self.write_type = WriteType::Unspecified;
+    }
 }
 
 /// We usually use `RaftCmdRequest` for read write request. But the codec is
@@ -29,6 +41,7 @@ pub struct SimpleWriteReqEncoder {
     buf: Vec<u8>,
     channels: Vec<CmdResChannel>,
     size_limit: usize,
+    write_type: WriteType,
     notify_proposed: bool,
 }
 
@@ -53,11 +66,12 @@ impl SimpleWriteReqEncoder {
             buf,
             channels: vec![],
             size_limit,
+            write_type: bin.write_type,
             notify_proposed,
         }
     }
 
-    /// Encode the simple write into the buffer dispite header check.
+    /// Encode the simple write into the buffer.
     ///
     /// Return false if the buffer limit is reached or the write can be amended.
     #[inline]
@@ -65,7 +79,10 @@ impl SimpleWriteReqEncoder {
         if *self.header != *header {
             return false;
         }
-        if self.buf.len() + bin.buf.len() < self.size_limit {
+        if self.write_type == bin.write_type
+            && bin.write_type != WriteType::Unspecified
+            && self.buf.len() + bin.buf.len() < self.size_limit
+        {
             self.buf.extend_from_slice(&bin.buf);
             true
         } else {
@@ -128,11 +145,21 @@ pub enum SimpleWrite<'a> {
     Put(Put<'a>),
     Delete(Delete<'a>),
     DeleteRange(DeleteRange<'a>),
+    Ingest(Vec<SstMeta>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WriteType {
+    Unspecified,
+    PutDelete,
+    DeleteRange,
+    Ingest,
 }
 
 #[derive(Clone)]
 pub struct SimpleWriteEncoder {
     buf: Vec<u8>,
+    write_type: WriteType,
 }
 
 impl SimpleWriteEncoder {
@@ -140,21 +167,36 @@ impl SimpleWriteEncoder {
     pub fn with_capacity(cap: usize) -> SimpleWriteEncoder {
         SimpleWriteEncoder {
             buf: Vec::with_capacity(cap),
+            write_type: WriteType::Unspecified,
         }
     }
 
     #[inline]
     pub fn put(&mut self, cf: &str, key: &[u8], value: &[u8]) {
+        debug_assert_matches!(
+            self.write_type,
+            WriteType::Unspecified | WriteType::PutDelete
+        );
         encode(SimpleWrite::Put(Put { cf, key, value }), &mut self.buf);
+        self.write_type = WriteType::PutDelete;
     }
 
     #[inline]
     pub fn delete(&mut self, cf: &str, key: &[u8]) {
+        debug_assert_matches!(
+            self.write_type,
+            WriteType::Unspecified | WriteType::PutDelete
+        );
         encode(SimpleWrite::Delete(Delete { cf, key }), &mut self.buf);
+        self.write_type = WriteType::PutDelete;
     }
 
     #[inline]
     pub fn delete_range(&mut self, cf: &str, start_key: &[u8], end_key: &[u8], notify_only: bool) {
+        debug_assert_matches!(
+            self.write_type,
+            WriteType::Unspecified | WriteType::DeleteRange
+        );
         encode(
             SimpleWrite::DeleteRange(DeleteRange {
                 cf,
@@ -164,12 +206,21 @@ impl SimpleWriteEncoder {
             }),
             &mut self.buf,
         );
+        self.write_type = WriteType::DeleteRange;
+    }
+
+    #[inline]
+    pub fn ingest(&mut self, sst: Vec<SstMeta>) {
+        debug_assert_matches!(self.write_type, WriteType::Unspecified | WriteType::Ingest);
+        encode(SimpleWrite::Ingest(sst), &mut self.buf);
+        self.write_type = WriteType::Ingest;
     }
 
     #[inline]
     pub fn encode(self) -> SimpleWriteBinary {
         SimpleWriteBinary {
             buf: self.buf.into_boxed_slice(),
+            write_type: self.write_type,
         }
     }
 }
@@ -228,6 +279,7 @@ impl<'a> Iterator for SimpleWriteReqDecoder<'a> {
 const PUT_TAG: u8 = 0;
 const DELETE_TAG: u8 = 1;
 const DELETE_RANGE_TAG: u8 = 2;
+const INGEST_TAG: u8 = 3;
 
 const DEFAULT_CF_TAG: u8 = 0;
 const WRITE_CF_TAG: u8 = 1;
@@ -353,6 +405,14 @@ fn encode(simple_write: SimpleWrite<'_>, buf: &mut Vec<u8>) {
             encode_bytes(dr.end_key, buf);
             buf.push(dr.notify_only as u8);
         }
+        SimpleWrite::Ingest(ssts) => {
+            buf.push(INGEST_TAG);
+            encode_len(ssts.len() as u32, buf);
+            // IngestSST is not a frequent operation, use protobuf to reduce complexity.
+            for sst in ssts {
+                sst.write_length_delimited_to_vec(buf).unwrap();
+            }
+        }
     }
 }
 
@@ -385,6 +445,20 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
                 end_key,
                 notify_only: *notify_only != 0,
             }))
+        }
+        INGEST_TAG => {
+            let (len, left) = decode_len(left);
+            let mut ssts = Vec::with_capacity(len as usize);
+            let mut is = CodedInputStream::from_bytes(left);
+            for _ in 0..len {
+                let sst = match is.read_message() {
+                    Ok(sst) => sst,
+                    Err(e) => panic!("data corrupted {:?}", e),
+                };
+                ssts.push(sst);
+            }
+            *buf = left;
+            Some(SimpleWrite::Ingest(ssts))
         }
         tag => panic!("corrupted data: invalid tag {}", tag),
     }
