@@ -73,8 +73,8 @@ async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> sto
 #[derive(Clone)]
 pub struct ImportSstService<E: Engine> {
     cfg: Config,
-    engine: E::Local,
-    raftkv: E,
+    local_backend: E::Local,
+    engine: E,
     threads: Arc<Runtime>,
     // For now, PiTR cannot be executed in the tokio runtime because it is synchronous and may
     // blocks. (tokio is so strict... it panics if we do insane things like blocking in an async
@@ -237,8 +237,8 @@ impl<E: Engine> ImportSstService<E> {
     pub fn new(
         cfg: Config,
         raft_entry_max_size: ReadableSize,
-        raftkv: E,
-        engine: E::Local,
+        engine: E,
+        local_backend: E::Local,
         importer: Arc<SstImporter>,
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
@@ -266,15 +266,15 @@ impl<E: Engine> ImportSstService<E> {
             .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        importer.start_switch_mode_check(threads.handle(), engine.clone());
+        importer.start_switch_mode_check(threads.handle(), local_backend.clone());
         threads.spawn(Self::tick(importer.clone()));
 
         ImportSstService {
             cfg,
-            engine,
+            local_backend,
             threads: Arc::new(threads),
             block_threads: Arc::new(block_threads),
-            raftkv,
+            engine,
             importer,
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
@@ -302,10 +302,10 @@ impl<E: Engine> ImportSstService<E> {
     }
 
     fn async_snapshot(
-        raftkv: &mut E,
+        engine: &mut E,
         context: &Context,
     ) -> impl Future<Output = std::result::Result<E::Snap, errorpb::Error>> {
-        let res = raftkv.async_snapshot(SnapContext {
+        let res = engine.async_snapshot(SnapContext {
             pb_ctx: context,
             ..Default::default()
         });
@@ -326,11 +326,11 @@ impl<E: Engine> ImportSstService<E> {
     fn check_write_stall(&self) -> Option<errorpb::Error> {
         if self.importer.get_mode() == SwitchMode::Normal
             && self
-                .engine
+                .local_backend
                 .ingest_maybe_slowdown_writes(CF_WRITE)
                 .expect("cf")
         {
-            match self.engine.get_sst_key_ranges(CF_WRITE, 0) {
+            match self.local_backend.get_sst_key_ranges(CF_WRITE, 0) {
                 Ok(l0_sst_ranges) => {
                     warn!(
                         "sst ingest is too slow";
@@ -358,8 +358,8 @@ impl<E: Engine> ImportSstService<E> {
         label: &'static str,
         ssts: Vec<SstMeta>,
     ) -> impl Future<Output = Result<IngestResponse>> {
-        let snapshot_res = Self::async_snapshot(&mut self.raftkv, &context);
-        let raftkv = self.raftkv.clone();
+        let snapshot_res = Self::async_snapshot(&mut self.engine, &context);
+        let engine = self.engine.clone();
         let importer = self.importer.clone();
         async move {
             // check api version
@@ -402,7 +402,7 @@ impl<E: Engine> ImportSstService<E> {
                 .collect();
             context.set_term(res.ext().get_term().unwrap().into());
             let region_id = context.get_region_id();
-            let res = raftkv.async_write(
+            let res = engine.async_write(
                 &context,
                 WriteData::from_modifies(modifies),
                 WriteEvent::BASIC_EVENT,
@@ -429,7 +429,7 @@ impl<E: Engine> ImportSstService<E> {
     async fn apply_imp(
         mut req: ApplyRequest,
         importer: Arc<SstImporter>,
-        raftkv: E,
+        engine: E,
         limiter: Limiter,
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {
@@ -479,7 +479,7 @@ impl<E: Engine> ImportSstService<E> {
 
             let is_last_task = tasks.peek().is_none();
             for req in collector.drain_pending_writes(is_last_task) {
-                let f = raftkv.async_write(&context, req, WriteEvent::BASIC_EVENT, None);
+                let f = engine.async_write(&context, req, WriteEvent::BASIC_EVENT, None);
                 inflight_futures.push_back(f);
                 if inflight_futures.len() >= MAX_INFLIGHT_RAFT_MSGS {
                     wait_write(inflight_futures.pop_front().unwrap())
@@ -507,7 +507,7 @@ macro_rules! impl_write {
             sink: ClientStreamingSink<$resp_ty>,
         ) {
             let import = self.importer.clone();
-            let engine = self.engine.clone();
+            let local_backend = self.local_backend.clone();
             let (rx, buf_driver) =
                 create_stream_with_buffer(stream, self.cfg.stream_channel_window);
             let mut rx = rx.map_err(Error::from);
@@ -525,7 +525,7 @@ macro_rules! impl_write {
                         _ => return Err(Error::InvalidChunk),
                     };
 
-                    let writer = match import.$writer_fn(&engine, meta) {
+                    let writer = match import.$writer_fn(&local_backend, meta) {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
@@ -575,8 +575,12 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => self.importer.enter_normal_mode(self.engine.clone(), mf),
-                SwitchMode::Import => self.importer.enter_import_mode(self.engine.clone(), mf),
+                SwitchMode::Normal => self
+                    .importer
+                    .enter_normal_mode(self.local_backend.clone(), mf),
+                SwitchMode::Import => self
+                    .importer
+                    .enter_import_mode(self.local_backend.clone(), mf),
             }
         };
         match res {
@@ -676,7 +680,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "apply";
         let start = Instant::now();
         let importer = self.importer.clone();
-        let raftkv = self.raftkv.clone();
+        let engine = self.engine.clone();
         let limiter = self.limiter.clone();
         let max_raft_size = self.raft_entry_max_size.0 as usize;
 
@@ -688,7 +692,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
 
             let mut resp = ApplyResponse::default();
 
-            match Self::apply_imp(req, importer, raftkv, limiter, max_raft_size).await {
+            match Self::apply_imp(req, importer, engine, limiter, max_raft_size).await {
                 Ok(Some(r)) => resp.set_range(r),
                 Err(e) => resp.set_error(e),
                 _ => {}
@@ -711,7 +715,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let engine = self.engine.clone();
+        let local_backend = self.local_backend.clone();
         let start = Instant::now();
 
         let handle_task = async move {
@@ -737,7 +741,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 req.get_rewrite_rule(),
                 cipher,
                 limiter,
-                engine,
+                local_backend,
                 DownloadExt::default()
                     .cache_key(req.get_storage_cache_id())
                     .req_type(req.get_request_type()),
@@ -861,7 +865,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "compact";
         let timer = Instant::now_coarse();
-        let engine = self.engine.clone();
+        let local_backend = self.local_backend.clone();
 
         let handle_task = async move {
             let (start, end) = if !req.has_range() {
@@ -878,7 +882,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 Some(req.get_output_level())
             };
 
-            let res = engine.compact_files_in_range(start, end, output_level);
+            let res = local_backend.compact_files_in_range(start, end, output_level);
             match res {
                 Ok(_) => info!(
                     "compact files in range";
@@ -947,7 +951,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             Some(request.take_end_key())
         };
         let key_only = request.get_key_only();
-        let snap_res = Self::async_snapshot(&mut self.raftkv, &context);
+        let snap_res = Self::async_snapshot(&mut self.engine, &context);
         let handle_task = async move {
             let res = snap_res.await;
             let snapshot = match res {
