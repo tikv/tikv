@@ -16,7 +16,7 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::{mem, time::Duration};
+use std::{mem, sync::atomic::Ordering, time::Duration};
 
 use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
@@ -35,13 +35,15 @@ use raftstore::{
         local_metrics::RaftMetrics,
         metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
         msg::ErrorCallback,
-        util, Config, WriteCallback,
+        util, Config, Transport, WriteCallback,
     },
     Error, Result,
 };
 use slog::{info, warn};
 use tikv_util::{
-    box_err, slog_panic,
+    box_err,
+    log::SlogFormat,
+    slog_panic,
     time::{duration_to_sec, monotonic_raw_now, Instant},
 };
 
@@ -57,8 +59,8 @@ mod control;
 mod write;
 
 pub use admin::{
-    temp_split_path, AdminCmdResult, CompactLogContext, RequestSplit, SplitFlowControl, SplitInit,
-    SPLIT_PREFIX,
+    report_split_init_finish, temp_split_path, AdminCmdResult, CompactLogContext, MergeContext,
+    RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
 pub use write::{
@@ -107,7 +109,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn schedule_apply_fsm<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let region_state = self.storage().region_state().clone();
-        let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
+        let mailbox = match store_ctx.router.mailbox(self.region_id()) {
+            Some(m) => m,
+            None => {
+                assert!(
+                    store_ctx.shutdown.load(Ordering::Relaxed),
+                    "failed to load mailbox: {}",
+                    SlogFormat(&self.logger)
+                );
+                return;
+            }
+        };
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
@@ -307,12 +319,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn on_apply_res<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, apply_res: ApplyRes) {
-        if !self.serving() {
-            return;
+    pub fn on_apply_res<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        apply_res: ApplyRes,
+    ) {
+        if !self.serving() || !apply_res.admin_result.is_empty() {
+            // TODO: remove following log once stable.
+            info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         }
-        // TODO: remove following log once stable.
-        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
             // Ignore admin command side effects, otherwise it may split incomplete
@@ -334,6 +349,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
                 AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
+                AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
+                AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
             }
         }
 
@@ -352,6 +369,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         entry_storage.set_applied_term(apply_res.applied_term);
         if !is_leader {
             entry_storage.compact_entry_cache(apply_res.applied_index + 1);
+        }
+        if is_leader {
+            self.retry_pending_prepare_merge(ctx, apply_res.applied_index);
         }
         self.on_data_modified(apply_res.modifications);
         self.handle_read_on_apply(
@@ -378,7 +398,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let last_applying_index = self.compact_log_context().last_applying_index();
         let committed_index = self.entry_storage().commit_index();
-        if last_applying_index < committed_index {
+        if last_applying_index < committed_index || !self.serving() {
             // We need to continue to apply after previous page is finished.
             self.set_has_ready();
         }
@@ -470,7 +490,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
         for (e, ch) in ce.entry_and_proposals {
             if self.tombstone() {
-                apply::notify_req_region_removed(self.region_state().get_region().get_id(), ch);
+                apply::notify_req_region_removed(self.region_id(), ch);
                 continue;
             }
             if !e.get_data().is_empty() {
@@ -516,7 +536,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 Ok(decoder) => {
                     util::compare_region_epoch(
                         decoder.header().get_region_epoch(),
-                        self.region_state().get_region(),
+                        self.region(),
                         false,
                         true,
                         true,
@@ -563,14 +583,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
         };
 
-        util::check_req_region_epoch(&req, self.region_state().get_region(), true)?;
+        util::check_req_region_epoch(&req, self.region(), true)?;
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
-                AdminCmdType::CompactLog => self.apply_compact_log(admin_req, entry.index)?,
+                AdminCmdType::CompactLog => self.apply_compact_log(admin_req, log_index)?,
                 AdminCmdType::Split => self.apply_split(admin_req, log_index)?,
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index)?,
-                AdminCmdType::PrepareMerge => unimplemented!(),
+                AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
                 AdminCmdType::CommitMerge => unimplemented!(),
                 AdminCmdType::RollbackMerge => unimplemented!(),
                 AdminCmdType::TransferLeader => {
@@ -587,10 +607,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::PrepareFlashback => unimplemented!(),
                 AdminCmdType::FinishFlashback => unimplemented!(),
                 AdminCmdType::BatchSwitchWitness => unimplemented!(),
+                AdminCmdType::UpdateGcPeer => self.apply_update_gc_peer(log_index, admin_req),
                 AdminCmdType::InvalidAdmin => {
                     return Err(box_err!("invalid admin command type"));
                 }
-                AdminCmdType::UpdateGcPeer => unimplemented!(),
             };
 
             match admin_result {

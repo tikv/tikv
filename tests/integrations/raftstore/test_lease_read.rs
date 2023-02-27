@@ -37,7 +37,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
     // Use large election timeout to make leadership stable.
-    configure_for_lease_read(cluster, Some(50), Some(10_000));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
     // Override max leader lease to 2 seconds.
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
@@ -132,7 +132,7 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(cluster, Some(50), None);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(50), None);
 
     let node_id = 3u64;
     let store_id = 3u64;
@@ -174,7 +174,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(cluster, Some(500), Some(5));
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(500), Some(5));
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
     cluster.cfg.raft_store.renew_leader_lease_advance_duration = ReadableDuration::secs(0);
 
@@ -297,7 +297,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
 
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(cluster, Some(100), None);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(100), None);
     cluster.run();
 
     let (split_key1, split_key2) = (b"k22", b"k44");
@@ -402,7 +402,7 @@ fn test_node_callback_when_destroyed() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     // Increase the election tick to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, None, Some(50));
+    configure_for_lease_read(&mut cluster.cfg, None, Some(50));
     cluster.run();
     cluster.must_put(b"k1", b"v1");
     let leader = cluster.leader_of_region(1).unwrap();
@@ -457,7 +457,7 @@ fn test_lease_read_callback_destroy() {
     // Only server cluster can fake sending message successfully in raftstore layer.
     let mut cluster = new_server_cluster(0, 3);
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(&mut cluster, Some(50), None);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -480,7 +480,7 @@ fn test_read_index_stale_in_suspect_lease() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
     let max_lease = Duration::from_secs(2);
     // Stop log compaction to transfer leader with filter easier.
     configure_for_request_snapshot(&mut cluster);
@@ -581,7 +581,7 @@ fn test_read_index_stale_in_suspect_lease() {
 #[test]
 fn test_local_read_cache() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), None);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     cluster.pd_client.disable_default_operator();
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -616,7 +616,7 @@ fn test_not_leader_read_lease() {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(50), None);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     let heartbeat_interval = cluster.cfg.raft_store.raft_heartbeat_interval();
 
     cluster.run();
@@ -671,7 +671,7 @@ fn test_not_leader_read_lease() {
 #[test]
 fn test_read_index_after_write() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), Some(10));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10));
     let heartbeat_interval = cluster.cfg.raft_store.raft_heartbeat_interval();
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -737,7 +737,7 @@ fn test_infinite_lease() {
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
     // Use large election timeout to make leadership stable.
-    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
     // Override max leader lease to 2 seconds.
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
@@ -792,7 +792,7 @@ fn test_node_local_read_renew_lease() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(500);
     let (base_tick_ms, election_ticks) = (50, 10);
-    configure_for_lease_read(&mut cluster, Some(50), Some(10));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10));
     cluster.pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 

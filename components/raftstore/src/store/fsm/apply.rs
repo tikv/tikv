@@ -24,7 +24,7 @@ use std::{
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
-    HandlerBuilder, PollHandler, Priority, ResourceMetered,
+    HandlerBuilder, PollHandler, Priority,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -44,14 +44,14 @@ use kvproto::{
     },
     raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
 };
-use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
+use pd_client::{BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
 use protobuf::{wire_format::WireType, CodedInputStream, Message};
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
-use resource_control::ResourceController;
+use resource_control::{ResourceController, ResourceMetered};
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -1695,9 +1695,9 @@ where
             AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                 self.exec_flashback(ctx, request)
             }
+            AdminCmdType::UpdateGcPeer => Err(box_err!("v2 only command and it's safe to skip")),
             AdminCmdType::BatchSwitchWitness => self.exec_batch_switch_witness(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
-            AdminCmdType::UpdateGcPeer => unimplemented!(),
         }?;
         response.set_cmd_type(cmd_type);
 
@@ -3197,16 +3197,20 @@ where
         let resp = AdminResponse::default();
         Ok((
             resp,
-            ApplyResult::Res(ExecResult::ComputeHash {
-                region: self.region.clone(),
-                index: ctx.exec_log_index,
-                context: req.get_compute_hash().get_context().to_vec(),
-                // This snapshot may be held for a long time, which may cause too many
-                // open files in rocksdb.
-                // TODO: figure out another way to do consistency check without snapshot
-                // or short life snapshot.
-                snap: ctx.engine.snapshot(),
-            }),
+            if self.peer.is_witness {
+                ApplyResult::None
+            } else {
+                ApplyResult::Res(ExecResult::ComputeHash {
+                    region: self.region.clone(),
+                    index: ctx.exec_log_index,
+                    context: req.get_compute_hash().get_context().to_vec(),
+                    // This snapshot may be held for a long time, which may cause too many
+                    // open files in rocksdb.
+                    // TODO: figure out another way to do consistency check without snapshot
+                    // or short life snapshot.
+                    snap: ctx.engine.snapshot(),
+                })
+            },
         ))
     }
 
@@ -3215,11 +3219,14 @@ where
         _: &ApplyContext<EK>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        let resp = AdminResponse::default();
+        if self.peer.is_witness {
+            return Ok((resp, ApplyResult::None));
+        }
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let context = verify_req.get_context().to_vec();
         let hash = verify_req.get_hash().to_vec();
-        let resp = AdminResponse::default();
         Ok((
             resp,
             ApplyResult::Res(ExecResult::VerifyHash {
@@ -3934,12 +3941,12 @@ where
 
         self.delegate.term = apply.term;
         if let Some(meta) = apply.bucket_meta.clone() {
-            let buckets = self
-                .delegate
-                .buckets
-                .get_or_insert_with(BucketStat::default);
-            buckets.stats = new_bucket_stats(&meta);
-            buckets.meta = meta;
+            if let Some(old) = &mut self.delegate.buckets {
+                old.set_meta(meta);
+            } else {
+                let new = BucketStat::from_meta(meta);
+                self.delegate.buckets.replace(new);
+            }
         }
 
         let prev_state = (
@@ -4431,6 +4438,7 @@ pub enum ControlMsg {
 }
 
 impl ResourceMetered for ControlMsg {}
+
 pub struct ControlFsm {
     receiver: Receiver<ControlMsg>,
     stopped: bool,

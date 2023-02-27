@@ -66,7 +66,10 @@ pub fn create_tiflash_test_engine(
         cfg.storage.engine,
     );
 
-    let cache = cfg.storage.block_cache.build_shared_cache();
+    let cache = cfg
+        .storage
+        .block_cache
+        .build_shared_cache(cfg.storage.engine);
     let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
 
     let kv_cfs_opt = cfg.rocksdb.build_cf_opts(

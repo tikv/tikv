@@ -149,7 +149,7 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for SizeCheckObserver<C>
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
                     host.cfg.region_max_size().0,
-                    host.cfg.region_split_size.0,
+                    host.cfg.region_split_size().0,
                     host.cfg.batch_split_limit,
                     policy,
                 )));
@@ -161,7 +161,7 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for SizeCheckObserver<C>
         self.router.update_approximate_size(region_id, region_size);
 
         let need_bucket_checker =
-            host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0;
+            host.cfg.enable_region_bucket() && region_size >= 2 * host.cfg.region_bucket_size.0;
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
 
         let need_split_region = region_size >= host.cfg.region_max_size().0;
@@ -186,7 +186,7 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for SizeCheckObserver<C>
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 host.cfg.region_max_size().0,
-                host.cfg.region_split_size.0,
+                host.cfg.region_split_size().0,
                 host.cfg.batch_split_limit,
                 policy,
             )));
@@ -420,7 +420,7 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
             region_max_size: Some(ReadableSize(100)),
-            region_split_size: ReadableSize(60),
+            region_split_size: Some(ReadableSize(60)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
@@ -545,11 +545,11 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
             region_max_size: Some(ReadableSize(50000)),
-            region_split_size: ReadableSize(50000),
+            region_split_size: Some(ReadableSize(50000)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
-            enable_region_bucket: true,
+            enable_region_bucket: Some(true),
             region_bucket_size: ReadableSize(3000),
             region_size_threshold_for_approximate: ReadableSize(50000),
             ..Default::default()
@@ -671,11 +671,11 @@ pub mod tests {
         let (tx, _rx) = mpsc::sync_channel(100);
         let mut cfg = Config {
             region_max_size: Some(ReadableSize(50000)),
-            region_split_size: ReadableSize(50000),
+            region_split_size: Some(ReadableSize(50000)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
-            enable_region_bucket: true,
+            enable_region_bucket: Some(true),
             region_bucket_size: ReadableSize(1), // minimal bucket size
             region_size_threshold_for_approximate: ReadableSize(500000000),
             // follow split region's check policy, not force to use approximate
@@ -736,7 +736,7 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
             region_max_size: Some(ReadableSize(100)),
-            region_split_size: ReadableSize(60),
+            region_split_size: Some(ReadableSize(60)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,

@@ -275,6 +275,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         old_tablet: EK,
         new_tablet_index: u64,
     ) {
+        info!(self.logger,
+            "record tombstone tablet";
+            "prev_tablet_path" => old_tablet.path(),
+            "new_tablet_index" => new_tablet_index
+        );
         let compact_log_context = self.compact_log_context_mut();
         compact_log_context
             .tombstone_tablets_wait_index
@@ -291,7 +296,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     /// Returns if there's any tombstone being removed.
     #[inline]
-    fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
+    pub fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
         let compact_log_context = self.compact_log_context_mut();
         let removed = compact_log_context
             .tombstone_tablets_wait_index
@@ -346,7 +351,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_compact_log<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        res: CompactLogResult,
+        mut res: CompactLogResult,
     ) {
         let first_index = self.entry_storage().first_index();
         if res.compact_index <= first_index {
@@ -358,7 +363,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             return;
         }
-        // TODO: check is_merging
+        if let Some(i) = self.merge_context().and_then(|c| c.max_compact_log_index())
+            && res.compact_index > i
+        {
+            info!(
+                self.logger,
+                "in merging mode, adjust compact index";
+                "old_index" => res.compact_index,
+                "new_index" => i,
+            );
+            res.compact_index = i;
+        }
         // TODO: check entry_cache_warmup_state
         self.entry_storage_mut()
             .compact_entry_cache(res.compact_index);
@@ -383,10 +398,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // All logs < perssited_apply will be deleted, so should check with +1.
         if old_truncated + 1 < self.storage().apply_trace().persisted_apply_index()
-            && let Some(index) = self.compact_log_index() {
+            && let Some(index) = self.compact_log_index()
+        {
             // Raft Engine doesn't care about first index.
-            if let Err(e) =
-            store_ctx
+            if let Err(e) = store_ctx
                 .engine
                 .gc(self.region_id(), 0, index, self.state_changes_mut())
             {
@@ -427,7 +442,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // If it's snapshot, logs are gc already.
             if !task.has_snapshot
                 && old_persisted < self.entry_storage().truncated_index() + 1
-                && let Some(index) = self.compact_log_index() {
+                && let Some(index) = self.compact_log_index()
+            {
                 let batch = task.extra_write.ensure_v2(|| self.entry_storage().raft_engine().log_batch(0));
                 // Raft Engine doesn't care about first index.
                 if let Err(e) =

@@ -30,7 +30,12 @@ pub struct RocksEngine {
 
 impl RocksEngine {
     pub(crate) fn new(db: DB) -> RocksEngine {
-        RocksEngine::from_db(Arc::new(db))
+        // RocksEngine::from_db(Arc::new(db))
+        RocksEngine {
+            rocks: engine_rocks::RocksEngine::new(db),
+            proxy_ext: ProxyEngineExt::default(),
+            ps_ext: None,
+        }
     }
 
     pub fn init(
@@ -60,14 +65,6 @@ impl RocksEngine {
     pub fn from_rocks(rocks: engine_rocks::RocksEngine) -> Self {
         RocksEngine {
             rocks,
-            proxy_ext: ProxyEngineExt::default(),
-            ps_ext: None,
-        }
-    }
-
-    pub fn from_db(db: Arc<DB>) -> Self {
-        RocksEngine {
-            rocks: engine_rocks::RocksEngine::from_db(db),
             proxy_ext: ProxyEngineExt::default(),
             ps_ext: None,
         }

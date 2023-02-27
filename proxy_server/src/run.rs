@@ -110,6 +110,7 @@ use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
+    yatp_pool::CleanupMethod,
     Either,
 };
 use tokio::runtime::Builder;
@@ -413,7 +414,11 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         flow_listener: engine_rocks::FlowListener,
         engine_store_server_helper: isize,
     ) -> (Engines<TiFlashEngine, CER>, Arc<EnginesResourceInfo>) {
-        let block_cache = self.config.storage.block_cache.build_shared_cache();
+        let block_cache = self
+            .config
+            .storage
+            .block_cache
+            .build_shared_cache(self.config.storage.engine);
         let env = self
             .config
             .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
@@ -966,11 +971,13 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 .resource_manager
                 .as_ref()
                 .map(|m| m.derive_controller("unified-read-pool".into(), true));
+
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
+                CleanupMethod::Remote(self.background_worker.remote()),
             ))
         } else {
             None
@@ -1179,8 +1186,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         self.config
             .raft_store
             .validate(
-                self.config.coprocessor.region_split_size,
-                self.config.coprocessor.enable_region_bucket,
+                self.config.coprocessor.region_split_size(),
+                self.config.coprocessor.enable_region_bucket(),
                 self.config.coprocessor.region_bucket_size,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));

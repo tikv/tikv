@@ -160,6 +160,7 @@ pub fn new_request_header(ctx: &Context) -> RaftRequestHeader {
     }
     header.set_sync_log(ctx.get_sync_log());
     header.set_replica_read(ctx.get_replica_read());
+    header.set_resource_group_name(ctx.get_resource_group_name().to_owned());
     header
 }
 
@@ -578,10 +579,12 @@ where
                 .map_err(kv::Error::from);
         }
         async move {
-            // It's impossible to return cancel because the callback will be invoked if it's
-            // destroyed.
             let res = match res {
-                Ok(()) => f.await.unwrap(),
+                Ok(()) => match f.await {
+                    Ok(r) => r,
+                    // Canceled may be returned during shutdown.
+                    Err(e) => Err(kv::Error::from(kv::ErrorInner::Other(box_err!(e)))),
+                },
                 Err(e) => Err(e),
             };
             match res {

@@ -10,7 +10,11 @@ use collections::{HashMap, HashSet};
 use engine_traits::{
     CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
 };
-use kvproto::{metapb, pdpb, raft_serverpb::RegionLocalState};
+use kvproto::{
+    metapb::{self, PeerRole},
+    pdpb,
+    raft_serverpb::{RaftMessage, RegionLocalState},
+};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -28,8 +32,8 @@ use super::storage::Storage;
 use crate::{
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, CompactLogContext, DestroyProgress, ProposalControl, SimpleWriteReqEncoder,
-        SplitFlowControl, TxnContext,
+        AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext, MergeContext,
+        ProposalControl, SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -54,6 +58,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// For raft log compaction.
     compact_log_context: CompactLogContext,
+
+    merge_context: Option<Box<MergeContext>>,
+    last_sent_snapshot_index: u64,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -103,6 +110,12 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     leader_transferee: u64,
 
     long_uncommitted_threshold: u64,
+
+    /// Pending messages to be sent on handle ready. We should avoid sending
+    /// messages immediately otherwise it may break the persistence assumption.
+    pending_messages: Vec<RaftMessage>,
+
+    gc_peer_context: GcPeerContext,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -123,6 +136,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
+        let merge_context = MergeContext::from_region_state(&logger, storage.region_state());
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
@@ -147,6 +161,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
             compact_log_context: CompactLogContext::new(applied_index),
+            merge_context: merge_context.map(|c| Box::new(c)),
+            last_sent_snapshot_index: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
@@ -182,6 +198,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.long_uncommitted_base_threshold.0.as_secs(),
                 1,
             ),
+            pending_messages: vec![],
+            gc_peer_context: GcPeerContext::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -197,6 +215,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         peer.proposal_control.maybe_update_term(term);
 
         Ok(peer)
+    }
+
+    #[inline]
+    pub fn region_buckets(&self) -> &Option<BucketStat> {
+        &self.region_buckets
+    }
+
+    #[inline]
+    pub fn set_region_buckets(&mut self, buckets: Option<BucketStat>) {
+        if let Some(b) = self.region_buckets.take() {
+            self.last_region_buckets = Some(b);
+        }
+        self.region_buckets = buckets;
+    }
+
+    #[inline]
+    pub fn last_region_buckets(&self) -> &Option<BucketStat> {
+        &self.last_region_buckets
     }
 
     #[inline]
@@ -347,6 +383,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn compact_log_context(&self) -> &CompactLogContext {
         &self.compact_log_context
+    }
+
+    #[inline]
+    pub fn merge_context(&self) -> Option<&MergeContext> {
+        self.merge_context.as_deref()
+    }
+
+    #[inline]
+    pub fn merge_context_mut(&mut self) -> &mut MergeContext {
+        self.merge_context.get_or_insert_default()
+    }
+
+    #[inline]
+    pub fn take_merge_context(&mut self) -> Option<Box<MergeContext>> {
+        self.merge_context.take()
     }
 
     #[inline]
@@ -549,12 +600,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         false
     }
 
-    #[inline]
-    // TODO
-    pub fn has_pending_merge_state(&self) -> bool {
-        false
-    }
-
     pub fn serving(&self) -> bool {
         matches!(self.destroy_progress, DestroyProgress::None)
     }
@@ -624,6 +669,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn add_pending_tick(&mut self, tick: PeerTick) {
+        // Msg per batch is 4096/256 by default, the buffer won't grow too large.
         self.pending_ticks.push(tick);
     }
 
@@ -634,13 +680,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn post_split(&mut self) {
-        self.reset_region_buckets();
-    }
-
-    pub fn reset_region_buckets(&mut self) {
-        if self.region_buckets.is_some() {
-            self.last_region_buckets = self.region_buckets.take();
-        }
+        self.set_region_buckets(None);
     }
 
     pub fn maybe_campaign(&mut self) -> bool {
@@ -699,6 +739,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn in_joint_state(&self) -> bool {
+        self.region().get_peers().iter().any(|p| {
+            p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
+        })
+    }
+
+    #[inline]
     pub fn split_trace_mut(&mut self) -> &mut Vec<(u64, HashSet<u64>)> {
         &mut self.split_trace
     }
@@ -754,5 +801,42 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn set_long_uncommitted_threshold(&mut self, dur: Duration) {
         self.long_uncommitted_threshold = cmp::max(dur.as_secs(), 1);
+    }
+
+    #[inline]
+    pub fn add_message(&mut self, msg: RaftMessage) {
+        self.pending_messages.push(msg);
+    }
+
+    #[inline]
+    pub fn has_pending_messages(&mut self) -> bool {
+        !self.pending_messages.is_empty()
+    }
+
+    #[inline]
+    pub fn take_pending_messages(&mut self) -> Vec<RaftMessage> {
+        mem::take(&mut self.pending_messages)
+    }
+
+    #[inline]
+    pub fn gc_peer_context(&self) -> &GcPeerContext {
+        &self.gc_peer_context
+    }
+
+    #[inline]
+    pub fn gc_peer_context_mut(&mut self) -> &mut GcPeerContext {
+        &mut self.gc_peer_context
+    }
+
+    #[inline]
+    pub fn update_last_sent_snapshot_index(&mut self, i: u64) {
+        if i > self.last_sent_snapshot_index {
+            self.last_sent_snapshot_index = i;
+        }
+    }
+
+    #[inline]
+    pub fn last_sent_snapshot_index(&self) -> u64 {
+        self.last_sent_snapshot_index
     }
 }
