@@ -4,13 +4,15 @@ use std::sync::{atomic::AtomicU8, Arc, Mutex};
 
 use collections::HashMap;
 use encryption::DataKeyManager;
-use engine_store_ffi::ffi::interfaces_ffi::{
-    EngineStoreServerHelper, RaftProxyStatus, RaftStoreProxyFFIHelper,
+use engine_store_ffi::ffi::{
+    interfaces_ffi::{EngineStoreServerHelper, RaftProxyStatus, RaftStoreProxyFFIHelper},
+    RaftStoreProxyFFI,
 };
-use engine_traits::Engines;
+use engine_tiflash::DB;
+use engine_traits::{Engines, KvEngine};
 use raftstore::store::RaftRouter;
 use tikv::config::TikvConfig;
-use tikv_util::{debug, sys::SysQuota};
+use tikv_util::{debug, sys::SysQuota, HandyRwLock};
 
 use crate::{
     config::MockConfig, mock_store::gen_engine_store_server_helper, EngineStoreServer,
@@ -209,6 +211,19 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         self.cluster_ext.access_ffi_helpers(f)
     }
 
+    pub fn post_node_start(&mut self, node_id: u64) {
+        // Since we use None to create_ffi_helper_set, we must init again.
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        self.iter_ffi_helpers(Some(vec![node_id]), &mut |_, _, ffi: &mut FFIHelperSet| {
+            ffi.proxy.set_read_index_client(Some(Box::new(
+                engine_store_ffi::ffi::read_index_helper::ReadIndexClient::new(
+                    router.clone(),
+                    SysQuota::cpu_cores_quota() as usize * 2,
+                ),
+            )));
+        });
+    }
+
     // If index is None, use the last in ffi_helper_lst, which is added by
     // create_ffi_helper_set.
     // Used in two places:
@@ -240,6 +255,31 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             // Always at the front of the vector since iterate from 0.
             self.register_ffi_helper_set(Some(0), *node_id);
         }
+    }
+}
+
+// TiFlash specific
+impl<T: Simulator<TiFlashEngine>> Cluster<T> {
+    pub fn run_conf_change_no_start(&mut self) -> u64 {
+        self.create_engines();
+        self.bootstrap_conf_change()
+    }
+
+    pub fn set_expected_safe_ts(&mut self, leader_safe_ts: u64, self_safe_ts: u64) {
+        self.cluster_ext.test_data.expected_leader_safe_ts = leader_safe_ts;
+        self.cluster_ext.test_data.expected_self_safe_ts = self_safe_ts;
+    }
+
+    pub fn get_tiflash_engine(&self, node_id: u64) -> &TiFlashEngine {
+        &self.engines[&node_id].kv
+    }
+
+    pub fn get_engines(&self, node_id: u64) -> &Engines<TiFlashEngine, engine_rocks::RocksEngine> {
+        &self.engines[&node_id]
+    }
+
+    pub fn get_raw_engine(&self, node_id: u64) -> Arc<DB> {
+        Arc::clone(self.engines[&node_id].kv.bad_downcast())
     }
 }
 

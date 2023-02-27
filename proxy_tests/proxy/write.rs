@@ -1,5 +1,3 @@
-use engine_traits::WriteBatchExt;
-
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::proxy::*;
 
@@ -65,6 +63,7 @@ fn test_interaction() {
 #[cfg(feature = "enable-pagestorage")]
 #[test]
 fn test_ps_write() {
+    use engine_traits::WriteBatchExt;
     let (mut cluster, _pd_client) = new_mock_cluster(0, 1);
 
     let _ = cluster.run();

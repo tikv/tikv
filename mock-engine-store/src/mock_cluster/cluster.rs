@@ -10,9 +10,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use encryption::DataKeyManager;
-use engine_store_ffi::ffi::RaftStoreProxyFFI;
 // mock cluster
-use engine_tiflash::DB;
 use engine_traits::{Engines, KvEngine, CF_DEFAULT};
 use file_system::IoRateLimiter;
 use futures::executor::block_on;
@@ -52,7 +50,6 @@ use test_raftstore::{
 use tikv::server::Result as ServerResult;
 use tikv_util::{
     debug, error, safe_panic,
-    sys::SysQuota,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     warn, HandyRwLock,
@@ -60,7 +57,6 @@ use tikv_util::{
 use tokio::sync::oneshot;
 use txn_types::WriteBatchFlags;
 
-pub use super::cluster_ext::{init_global_ffi_helper_set, FFIHelperSet};
 use super::{cluster_ext::*, common::*, config::Config, transport_simulate::Filter, util::*};
 
 // We simulate 3 or 5 nodes, each has a store.
@@ -178,30 +174,7 @@ pub struct Cluster<T: Simulator<TiFlashEngine>> {
 
 impl<T: Simulator<TiFlashEngine>> std::panic::UnwindSafe for Cluster<T> {}
 
-impl<T: Simulator<TiFlashEngine>> Cluster<T> {
-    pub fn run_conf_change_no_start(&mut self) -> u64 {
-        self.create_engines();
-        self.bootstrap_conf_change()
-    }
-
-    pub fn set_expected_safe_ts(&mut self, leader_safe_ts: u64, self_safe_ts: u64) {
-        self.cluster_ext.test_data.expected_leader_safe_ts = leader_safe_ts;
-        self.cluster_ext.test_data.expected_self_safe_ts = self_safe_ts;
-    }
-
-    pub fn get_tiflash_engine(&self, node_id: u64) -> &TiFlashEngine {
-        &self.engines[&node_id].kv
-    }
-
-    pub fn get_engines(&self, node_id: u64) -> &Engines<TiFlashEngine, engine_rocks::RocksEngine> {
-        &self.engines[&node_id]
-    }
-
-    pub fn get_raw_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(self.engines[&node_id].kv.bad_downcast())
-    }
-}
-
+// Copied or modified from test_raftstore
 impl<T: Simulator<TiFlashEngine>> Cluster<T> {
     pub fn new(
         id: u64,
@@ -248,14 +221,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         router: Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     ) {
         let (engines, key_manager, dir) =
-            create_tiflash_test_engine(router.clone(), self.io_rate_limiter.clone(), &self.cfg);
-
-        // Set up FFI.
-        {
-            ClusterExt::create_ffi_helper_set(self, engines, &key_manager, &router);
-        }
-        let ffi_helper_set = self.cluster_ext.ffi_helper_lst.last_mut().unwrap();
-        let engines = ffi_helper_set.engine_store_server.engines.as_mut().unwrap();
+            create_tiflash_test_engine_with_cluster_ctx(self, router.clone());
 
         // replace self.create_engine
         self.dbs.push(engines.clone());
@@ -293,16 +259,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             debug!("recover node"; "node_id" => node_id);
             // Like TiKVServer::init
             self.run_node(node_id)?;
-            // Since we use None to create_ffi_helper_set, we must init again.
-            let router = self.sim.rl().get_router(node_id).unwrap();
-            self.iter_ffi_helpers(Some(vec![node_id]), &mut |_, _, ffi: &mut FFIHelperSet| {
-                ffi.proxy.set_read_index_client(Some(Box::new(
-                    engine_store_ffi::ffi::read_index_helper::ReadIndexClient::new(
-                        router.clone(),
-                        SysQuota::cpu_cores_quota() as usize * 2,
-                    ),
-                )));
-            });
+            self.post_node_start(node_id);
         }
 
         // Try start new nodes.
@@ -342,6 +299,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_manager.clone());
             self.register_ffi_helper_set(None, node_id);
+            self.post_node_start(node_id);
         }
         assert_eq!(self.count, self.engines.len());
         assert_eq!(self.count, self.dbs.len());

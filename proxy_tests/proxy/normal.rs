@@ -129,7 +129,9 @@ mod config {
         address_proxy_config(&mut cluster.cfg.tikv, &ProxyConfig::default());
 
         // Try to start this node, return after persisted some keys.
-        let _ = cluster.start();
+        let _ = cluster.run();
+        // Not use start to avoid "start new node" branch.
+        // let _ = cluster.start();
         let store_id = cluster.engines.keys().last().unwrap();
         let store = pd_client.get_store(*store_id).unwrap();
         println!("store {:?}", store);

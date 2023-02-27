@@ -61,6 +61,6 @@ After refactoring, the Proxy can be divided into several crate/modules:
 4. `engine_tiflash`
    This is the self-defined `KvEngine`.
 5. `raftstore-proxy`
-   As before, this crate serves as the entry point for the proxy. The [definition of ffi interfaces](raftstore-proxy/ffi/src/RaftStoreProxyFFI) is also located here.
+   As before, this crate serves as the entry point for the proxy. The [definition of ffi interfaces](../raftstore-proxy/ffi/src/RaftStoreProxyFFI) is also located here.
 6. `gen-proxy-ffi`
    As before, this crate generates interface code into `engine_store_ffi`.

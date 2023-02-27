@@ -16,7 +16,6 @@ impl Iterable for RocksEngine {
     }
 }
 
-#[cfg(not(feature = "enable-pagestorage"))]
 impl Peekable for RocksEngine {
     type DbVector = RocksDbVector;
 
@@ -34,7 +33,6 @@ impl Peekable for RocksEngine {
     }
 }
 
-#[cfg(not(feature = "enable-pagestorage"))]
 impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         if self.do_write(engine_traits::CF_DEFAULT, key) {

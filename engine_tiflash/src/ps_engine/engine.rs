@@ -20,7 +20,6 @@ pub fn add_prefix(key: &[u8]) -> Vec<u8> {
 impl Iterable for RocksEngine {
     type Iterator = RocksEngineIterator;
 
-    #[cfg(feature = "enable-pagestorage")]
     fn scan<F>(
         &self,
         _cf: &str,
