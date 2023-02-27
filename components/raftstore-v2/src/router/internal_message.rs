@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use pd_client::{BucketMeta, BucketStat};
 use raftstore::store::fsm::ApplyMetrics;
 
 use crate::operation::{AdminCmdResult, CatchUpLogs, CommittedEntries, DataTrace, GenSnapTask};
@@ -11,6 +12,7 @@ pub enum ApplyTask {
     /// Writes that doesn't care consistency.
     UnsafeWrite(Box<[u8]>),
     ManualFlush,
+    RefreshBucketStat(std::sync::Arc<BucketMeta>),
     LogsUpToDate(CatchUpLogs),
 }
 
@@ -21,4 +23,5 @@ pub struct ApplyRes {
     pub admin_result: Box<[AdminCmdResult]>,
     pub modifications: DataTrace,
     pub metrics: ApplyMetrics,
+    pub bucket_stat: Option<BucketStat>,
 }

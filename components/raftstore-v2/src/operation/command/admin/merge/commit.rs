@@ -657,7 +657,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // the reason why follower need to update is that there is a issue that after
         // merge and then transfer leader, the new leader may have stale size and keys.
         self.force_split_check(store_ctx);
-        self.set_region_buckets(None);
+        self.region_buckets_info_mut().set_bucket_stat(None);
 
         if self.is_leader() {
             self.region_heartbeat_pd(store_ctx);
