@@ -375,7 +375,7 @@ mod tests {
         tx.send(FlowInfo::Created(region_id)).unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, region_id, tablet_suffix);
+        test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, region_id);
     }
 
     #[test]

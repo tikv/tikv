@@ -1101,7 +1101,6 @@ pub(super) mod tests {
         stub: &EngineStub,
         tx: &mpsc::SyncSender<FlowInfo>,
         region_id: u64,
-        tablet_suffix: u64,
     ) {
         assert_eq!(flow_controller.consume(0, 2000), Duration::ZERO);
         loop {
@@ -1170,7 +1169,7 @@ pub(super) mod tests {
         let flow_controller =
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
         let flow_controller = FlowController::Singleton(flow_controller);
-        test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, 0, 0);
+        test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, 0);
     }
 
     pub fn test_flow_controller_l0_impl(
