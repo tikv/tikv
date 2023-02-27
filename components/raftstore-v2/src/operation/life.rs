@@ -256,10 +256,21 @@ impl Store {
             }
             if msg.has_extra_msg() {
                 let extra_msg = msg.get_extra_msg();
+                // Only the direct request has `is_tombstone` set to false. We are certain this
+                // message needs to be forwarded.
                 if extra_msg.get_type() == ExtraMessageType::MsgGcPeerRequest
                     && extra_msg.has_check_gc_peer()
                 {
-                    forward_destroy_source_peer(ctx, &msg);
+                    forward_destroy_to_source_peer(ctx, &msg);
+                    return;
+                } else if extra_msg.get_type() == ExtraMessageType::MsgAvailabilityRequest {
+                    let mut resp_msg = RaftMessage::default();
+                    resp_msg.set_region_id(extra_msg.get_from_region_id());
+                    resp_msg.set_from_peer(msg.get_to_peer().clone());
+                    resp_msg.set_to_peer(msg.get_from_peer().clone());
+                    let resp_extra = resp_msg.mut_extra_msg();
+                    resp_extra.set_type(ExtraMessageType::MsgAvailabilityResponse);
+                    let _ = ctx.trans.send(resp_msg);
                     return;
                 }
             }
@@ -356,7 +367,7 @@ fn build_peer_destroyed_report(tombstone_msg: &mut RaftMessage) -> Option<RaftMe
 }
 
 /// Forward the destroy request from target peer to merged source peer.
-fn forward_destroy_source_peer<EK, ER, T>(ctx: &mut StoreContext<EK, ER, T>, msg: &RaftMessage)
+fn forward_destroy_to_source_peer<EK, ER, T>(ctx: &mut StoreContext<EK, ER, T>, msg: &RaftMessage)
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -373,6 +384,8 @@ where
     tombstone_msg.set_region_epoch(check_gc_peer.get_check_region_epoch().clone());
     tombstone_msg.set_is_tombstone(true);
     // No need to set epoch as we don't know what it is.
+    // This message will not be handled by `on_gc_peer_request` due to
+    // `is_tombstone` being true.
     tombstone_msg
         .mut_extra_msg()
         .set_type(ExtraMessageType::MsgGcPeerRequest);
@@ -455,7 +468,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        forward_destroy_source_peer(ctx, msg);
+        forward_destroy_to_source_peer(ctx, msg);
     }
 
     /// A peer confirms it's destroyed.
@@ -546,6 +559,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.on_admin_command(ctx, req, ch);
         }
         self.maybe_schedule_gc_peer_tick();
+    }
+
+    pub fn on_availability_request<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        msg: &RaftMessage,
+    ) {
+        let mut resp_msg = RaftMessage::default();
+        resp_msg.set_region_id(msg.get_extra_msg().get_from_region_id());
+        resp_msg.set_from_peer(msg.get_to_peer().clone());
+        resp_msg.set_to_peer(msg.get_from_peer().clone());
+        let resp_extra = resp_msg.mut_extra_msg();
+        resp_extra.set_type(ExtraMessageType::MsgAvailabilityResponse);
+        resp_extra.set_from_region_id(msg.get_region_id());
+        let report = resp_extra.mut_availability_report();
+        report.set_region_epoch(self.region().get_region_epoch().clone());
+        report.set_trimmed(!self.storage().has_dirty_data());
+        let _ = ctx.trans.send(resp_msg);
     }
 
     /// A peer can be destroyed in three cases:

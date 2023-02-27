@@ -220,6 +220,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         return;
                     }
                 }
+                ExtraMessageType::MsgAvailabilityRequest => {
+                    self.on_availability_request(ctx, &msg);
+                }
+                ExtraMessageType::MsgAvailabilityResponse => {
+                    self.merge_on_availability_response(ctx, &msg);
+                }
                 _ => (),
             }
         }

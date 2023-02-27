@@ -47,7 +47,7 @@
 
 use std::{
     any::Any,
-    cmp::{self, Ordering},
+    cmp,
     fmt::{self, Debug},
     path::PathBuf,
 };
@@ -59,7 +59,7 @@ use futures::channel::oneshot;
 use kvproto::{
     metapb::{self, Region},
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CommitMergeRequest, RaftCmdRequest},
-    raft_serverpb::PeerState,
+    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage},
 };
 use protobuf::Message;
 use raft::{GetEntriesContext, Storage, INVALID_ID, NO_LIMIT};
@@ -82,7 +82,7 @@ use crate::{
     fsm::ApplyResReporter,
     operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
-    router::{ApplyTask, PeerMsg, PeerTick},
+    router::{ApplyTask, PeerMsg, PeerTick, StoreMsg},
 };
 
 #[derive(Debug)]
@@ -124,7 +124,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         self.add_pending_tick(PeerTick::CheckMerge);
-        if let Err(_e) = self.schedule_commit_merge_proposal(store_ctx) {
+        if let Err(e) = self.schedule_commit_merge_proposal(store_ctx) {
+            info!(
+                self.logger,
+                "failed to schedule commit merge";
+                "err" => ?e,
+            );
             // TODO: self.handle_commit_merge_failure(store_ctx, e);
         }
     }
@@ -139,7 +144,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         if !self.validate_merge_peer(store_ctx, expect_region)? {
             // Wait till next round.
-            return Ok(());
+            // TODO: return Ok after the merge check is stablized.
+            return Err(box_err!(
+                "fails to validate merge peer: {:?}",
+                expect_region
+            ));
         }
         let target_id = expect_region.get_id();
         let sibling_region = expect_region;
@@ -201,12 +210,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let exist_region = {
             let store_meta = store_ctx.store_meta.lock().unwrap();
             store_meta
-                .readers
+                .regions
                 .get(&target_region_id)
                 .map(|(r, _)| r.clone())
         };
         if let Some(r) = exist_region {
-            let exist_epoch = r.region.get_region_epoch();
+            let exist_epoch = r.get_region_epoch();
             let expect_epoch = target_region.get_region_epoch();
             // exist_epoch > expect_epoch
             if util::is_epoch_stale(expect_epoch, exist_epoch) {
@@ -229,121 +238,47 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return Ok(true);
         }
 
-        // All of the target peers must exist before merging which is guaranteed by PD.
-        // Now the target peer is not in region map.
-        match self.is_merge_target_region_stale(store_ctx, target_region) {
-            Err(e) => {
-                error!(
+        let mut msg = Box::<RaftMessage>::default();
+        msg.set_region_id(target_region.get_id());
+        msg.set_from_peer(self.peer().clone());
+        let local_target_peer = find_peer(target_region, store_ctx.store_id)
+            .cloned()
+            .unwrap();
+        msg.set_to_peer(local_target_peer);
+        msg.set_region_epoch(target_region.get_region_epoch().clone());
+        let extra_msg = msg.mut_extra_msg();
+        extra_msg.set_type(ExtraMessageType::MsgAvailabilityRequest);
+        extra_msg.set_from_region_id(self.region_id());
+        store_ctx
+            .router
+            .force_send_control(StoreMsg::RaftMessage(msg))
+            .unwrap_or_else(|e| {
+                slog_panic!(
                     self.logger,
-                    "failed to load region state, ignore";
-                    "err" => %e,
-                    "target_region_id" => target_region_id,
-                );
-                Ok(false)
-            }
-            Ok(true) => Err(box_err!("region {} is destroyed", target_region_id)),
-            Ok(false) => {
-                let msg = "something is wrong, maybe PD do not ensure all target peers exist before merging";
-                if store_ctx.cfg.dev_assert {
-                    slog_panic!(self.logger, msg);
-                } else {
-                    error!(self.logger, "{}", msg);
-                }
-                Ok(false)
-            }
-        }
+                    "fails to send availability request msg to store";
+                    "error" => ?e,
+                )
+            });
+        Ok(false)
     }
 
-    /// Check if merge target region is staler than the local one in kv engine.
-    /// It should be called when target region is not in region map in memory.
-    /// If everything is ok, the answer should always be true because PD should
-    /// ensure all target peers exist. So if not, error log will be printed
-    /// and return false.
-    fn is_merge_target_region_stale<T>(
-        &self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        target_region: &metapb::Region,
-    ) -> Result<bool> {
-        let target_region_id = target_region.get_id();
-        let target_peer_id = find_peer(target_region, store_ctx.store_id)
-            .unwrap()
-            .get_id();
-
-        // TODO: not use u64::MAX?
-        if let Some(target_state) = store_ctx
-            .engine
-            .get_region_state(target_region_id, u64::MAX)?
+    pub fn merge_on_availability_response<T>(
+        &mut self,
+        _store_ctx: &mut StoreContext<EK, ER, T>,
+        msg: &RaftMessage,
+    ) {
+        let extra = msg.get_extra_msg();
+        if let Some(state) = self.applied_merge_state()
+            && state.get_target().get_id() == extra.get_from_region_id()
         {
-            let state_epoch = target_state.get_region().get_region_epoch();
-            if util::is_epoch_stale(target_region.get_region_epoch(), state_epoch) {
-                return Ok(true);
-            }
-            // The local target region epoch is staler than target region's.
-            // In the case where the peer is destroyed by receiving gc msg rather than
-            // applying conf change, the epoch may staler but it's legal, so check peer id
-            // to assure that.
-            if let Some(local_target_peer_id) =
-                find_peer(target_state.get_region(), store_ctx.store_id).map(|r| r.get_id())
+            let target_epoch = state.get_target().get_region_epoch();
+            if !extra.has_availability_report()
+                || util::is_epoch_stale(target_epoch, extra.get_availability_report().get_region_epoch())
             {
-                match local_target_peer_id.cmp(&target_peer_id) {
-                    Ordering::Equal => {
-                        if target_state.get_state() == PeerState::Tombstone {
-                            // The local target peer has already been destroyed.
-                            return Ok(true);
-                        }
-                        error!(
-                            self.logger,
-                            "the local target peer state is not tombstone in kv engine";
-                            "target_peer_id" => target_peer_id,
-                            "target_peer_state" => ?target_state.get_state(),
-                            "target_region" => ?target_region,
-                        );
-                    }
-                    Ordering::Greater => {
-                        if state_epoch.get_version() == 0 && state_epoch.get_conf_ver() == 0 {
-                            // There is a new peer and it's destroyed without being initialised.
-                            return Ok(true);
-                        }
-                        // The local target peer id is greater than the one in target region, but
-                        // its epoch is staler than target_region's. That is contradictory.
-                        slog_panic!(
-                            self.logger,
-                            "local target peer id is greater but its epoch is staler";
-                            "local_target_region" => ?target_state.get_region(),
-                            "target_region" => ?target_region,
-                            "local_target_peer_id" => local_target_peer_id,
-                            "target_peer_id" => target_peer_id,
-                        );
-                    }
-                    Ordering::Less => {
-                        error!(
-                            self.logger,
-                            "the local target peer id in kv engine is less than the one in target region";
-                            "local_target_peer_id" => local_target_peer_id,
-                            "target_peer_id" => target_peer_id,
-                            "target_region" => ?target_region,
-                        );
-                    }
-                }
-            } else {
-                // Can't get local target peer id probably because this target peer is removed
-                // by applying conf change
-                error!(
-                    self.logger,
-                    "the local target peer does not exist in target region state";
-                    "target_region" => ?target_region,
-                    "local_target" => ?target_state.get_region(),
-                );
+                // TODO: Rollback.
             }
-        } else {
-            error!(
-                self.logger,
-                "failed to load target peer's RegionLocalState from kv engine";
-                "target_peer_id" => target_peer_id,
-                "target_region" => ?target_region,
-            );
+            // Else: gather trim status.
         }
-        Ok(false)
     }
 }
 
@@ -443,7 +378,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         ctx.flush_state = Some(self.flush_state().clone());
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
         tablet.merge(&[&source_tablet, self.tablet()]).unwrap();
-        // This is only to force compaction. Remove this once trim check is finished.
+        // This is only to consume in-memory tombstones, so that the two tablets don't
+        // overlap with each other. Remove this once trim check is finished.
         tablet.flush_cfs(&[], true).unwrap();
         self.set_tablet(tablet.clone());
 
