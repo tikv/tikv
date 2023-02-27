@@ -16,7 +16,11 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::{mem, sync::atomic::Ordering, time::Duration};
+use std::{
+    mem,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
@@ -63,6 +67,7 @@ pub use admin::{
     RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
+use pd_client::{BucketMeta, BucketStat};
 pub use write::{
     SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
 };
@@ -122,6 +127,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
+        let buckets = self.region_buckets_info().bucket_stat().clone();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
             &store_ctx.cfg,
             self.peer().clone(),
@@ -133,6 +139,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.storage().apply_trace().log_recovery(),
             self.entry_storage().applied_term(),
             logger,
+            buckets,
         );
 
         store_ctx
@@ -353,7 +360,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
             }
         }
-
+        self.region_buckets_info_mut()
+            .add_bucket_flow(&apply_res.bucket_stat);
         self.update_split_flow_control(&apply_res.metrics);
         self.update_stat(&apply_res.metrics);
 
@@ -481,6 +489,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             warn!(self.logger, "failed to flush: {:?}", e);
         }
         self.maybe_reschedule(written_bytes).await
+    }
+
+    pub fn on_refresh_buckets(&mut self, meta: Arc<BucketMeta>) {
+        let mut new = BucketStat::from_meta(meta);
+        if let Some(origin) = self.buckets.as_ref() {
+            new.merge(origin);
+        }
+        self.buckets.replace(new);
     }
 
     #[inline]
@@ -727,8 +743,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.admin_result = self.take_admin_result().into_boxed_slice();
         apply_res.modifications = *self.modifications_mut();
         apply_res.metrics = mem::take(&mut self.metrics);
+        apply_res.bucket_stat = self.buckets.clone();
         let written_bytes = apply_res.metrics.written_bytes;
         self.res_reporter().report(apply_res);
+        if let Some(buckets) = &mut self.buckets {
+            buckets.clear_stats();
+        }
 
         // Report result first and then invoking callbacks. This may delays callback a
         // little bit, but can make sure all following messages must see the side
