@@ -1207,7 +1207,7 @@ fn test_double_run_node() {
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
-        let dir = Path::new(engines.kv.path()).join("import-sst");
+        let dir = Path::new(MiscExt::path(&engines.kv)).join("import-sst");
         Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
