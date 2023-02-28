@@ -16,7 +16,10 @@ use grpcio::{
     ClientStreamingSink, DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, Server as GrpcServer, ServerBuilder, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use kvproto::pdpb::*;
+use kvproto::{
+    meta_storagepb_grpc::{create_meta_storage, MetaStorage},
+    pdpb::*,
+};
 use pd_client::Error as PdError;
 use security::*;
 
@@ -70,14 +73,17 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn start(&mut self, mgr: &SecurityManager, eps: Vec<(String, u16)>) {
-        let service = create_pd(self.mocker.clone());
+        let pd = create_pd(self.mocker.clone());
+        let meta_store = create_meta_storage(self.mocker.clone());
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
                 .name_prefix(thd_name!("mock-server"))
                 .build(),
         );
-        let mut sb = ServerBuilder::new(env).register_service(service);
+        let mut sb = ServerBuilder::new(env)
+            .register_service(pd)
+            .register_service(meta_store);
         for (host, port) in eps {
             sb = mgr.bind(sb, &host, port);
         }
@@ -184,6 +190,41 @@ impl<C: PdMocker> Clone for PdMock<C> {
             tso_logical: self.tso_logical.clone(),
             etcd_client: self.etcd_client.clone(),
         }
+    }
+}
+
+impl<C: PdMocker + Send + Sync + 'static> MetaStorage for PdMock<C> {
+    fn watch(
+        &mut self,
+        ctx: grpcio::RpcContext,
+        req: super::meta_storagepb::WatchRequest,
+        sink: grpcio::ServerStreamingSink<super::meta_storagepb::WatchResponse>,
+    ) {
+        let start_watch = move || {
+            let c = self.case?;
+            let w = c.meta_store_watch(req, sink)?;
+            Some(w)
+        };
+        // If we cannot handle this, the RPC would be cut down immediately.
+        start_watch()
+    }
+
+    fn get(
+        &mut self,
+        ctx: grpcio::RpcContext,
+        req: super::meta_storagepb::GetRequest,
+        sink: grpcio::UnarySink<super::meta_storagepb::GetResponse>,
+    ) {
+        hijack_unary(self, ctx, sink, PdMocker::meta_store_get)
+    }
+
+    fn put(
+        &mut self,
+        ctx: grpcio::RpcContext,
+        req: super::meta_storagepb::PutRequest,
+        sink: grpcio::UnarySink<super::meta_storagepb::PutResponse>,
+    ) {
+        hijack_unary(self, ctx, sink, PdMocker::meta_store_put)
     }
 }
 
