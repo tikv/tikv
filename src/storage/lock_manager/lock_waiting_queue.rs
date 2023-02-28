@@ -750,13 +750,8 @@ mod tests {
             let start_ts = start_ts.into();
             let dummy_request_cb = StorageCallback::PessimisticLock(Box::new(|_| ()));
             let token = lock_mgr.allocate_token();
-            let dummy_ctx = LockWaitContext::new(
-                Key::from_raw(key),
-                self.clone(),
-                token,
-                dummy_request_cb,
-                false,
-            );
+            let dummy_ctx =
+                LockWaitContext::new(Key::from_raw(key), token, dummy_request_cb, false);
 
             let parameters = PessimisticLockParameters {
                 pb_ctx: Default::default(),
@@ -789,7 +784,7 @@ mod tests {
                 }))),
             });
 
-            let cancel_callback = dummy_ctx.get_callback_for_cancellation(lock_mgr);
+            let cancel_callback = dummy_ctx.get_callback_for_cancellation(lock_mgr, self.clone());
             let cancel = move || {
                 cancel_callback(StorageError::from(TxnError::from(MvccError::from(
                     MvccErrorInner::KeyIsLocked(lock_info_pb),
