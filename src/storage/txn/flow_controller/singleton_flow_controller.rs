@@ -505,6 +505,7 @@ pub(super) struct FlowChecker<E: FlowControlFactorStore + Send + 'static> {
     wait_for_destroy_range_finish: bool,
 
     region_id: u64,
+    rc: AtomicU32,
 }
 
 impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
@@ -545,6 +546,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             last_record_time: Instant::now_coarse(),
             last_speed: 0.0,
             wait_for_destroy_range_finish: false,
+            rc: AtomicU32::new(1),
         }
     }
 
@@ -1004,6 +1006,14 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             throttle as i64
         });
         self.limiter.set_speed_limit(throttle)
+    }
+
+    pub fn inc(&self) -> u32 {
+        self.rc.fetch_add(1, Ordering::SeqCst)
+    }
+
+    pub fn dec(&self) -> u32 {
+        self.rc.fetch_sub(1, Ordering::SeqCst)
     }
 }
 
