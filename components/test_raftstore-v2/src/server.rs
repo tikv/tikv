@@ -14,7 +14,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{KvEngine, TabletRegistry};
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
@@ -323,7 +323,7 @@ impl ServerCluster {
 
         // Create import service.
         let importer = {
-            let dir = Path::new(raft_engine.path()).join("../import-sst");
+            let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
             Arc::new(
                 SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
             )
