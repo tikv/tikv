@@ -975,6 +975,9 @@ where
             RegionCheckpointOperation::PrepareMinTsForResolve => {
                 let min_ts = self.pool.block_on(self.prepare_min_ts());
                 let start_time = Instant::now();
+                // We need to reschedule the `Resolve` task to queue, because the subscription
+                // is asynchronous -- there may be transactions committed before
+                // the min_ts we prepared but haven't been observed yet.
                 try_send!(
                     self.scheduler,
                     Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolve {
