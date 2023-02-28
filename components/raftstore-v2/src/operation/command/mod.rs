@@ -43,7 +43,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::{info, warn};
+use slog::{error, info, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
@@ -138,8 +138,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.flush_state().clone(),
             self.storage().apply_trace().log_recovery(),
             self.entry_storage().applied_term(),
-            logger,
             buckets,
+            store_ctx.sst_importer.clone(),
+            logger,
         );
 
         store_ctx
@@ -478,6 +479,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         dr.notify_only,
                     );
                 }
+                SimpleWrite::Ingest(_) => {
+                    error!(
+                        self.logger,
+                        "IngestSST is not supposed to be called on local engine"
+                    );
+                }
             }
         }
         self.apply_flow_control_mut().need_flush = true;
@@ -574,6 +581,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                     dr.end_key,
                                     dr.notify_only,
                                 )?;
+                            }
+                            SimpleWrite::Ingest(ssts) => {
+                                self.apply_ingest(ssts)?;
                             }
                         }
                     }

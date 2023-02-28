@@ -43,6 +43,7 @@ use futures::{compat::Future01CompatExt, future::BoxFuture, prelude::*};
 use into_other::IntoOther;
 use kvproto::{
     errorpb::Error as ErrorHeader,
+    import_sstpb::SstMeta,
     kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange},
     raft_cmdpb,
 };
@@ -80,6 +81,7 @@ pub enum Modify {
     PessimisticLock(Key, PessimisticLock),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
+    Ingest(Box<SstMeta>),
 }
 
 impl Modify {
@@ -88,7 +90,7 @@ impl Modify {
             Modify::Delete(cf, _) => cf,
             Modify::Put(cf, ..) => cf,
             Modify::PessimisticLock(..) => &CF_LOCK,
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) | Modify::Ingest(_) => unreachable!(),
         };
         let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
 
@@ -96,7 +98,7 @@ impl Modify {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) | Modify::Ingest(_) => unreachable!(),
         }
     }
 
@@ -105,7 +107,7 @@ impl Modify {
             Modify::Delete(_, ref k) => k,
             Modify::Put(_, ref k, _) => k,
             Modify::PessimisticLock(ref k, _) => k,
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) | Modify::Ingest(_) => unreachable!(),
         }
     }
 }
@@ -151,6 +153,10 @@ impl From<Modify> for raft_cmdpb::Request {
                 req.set_cmd_type(raft_cmdpb::CmdType::DeleteRange);
                 req.set_delete_range(delete_range);
             }
+            Modify::Ingest(sst) => {
+                req.set_cmd_type(raft_cmdpb::CmdType::IngestSst);
+                req.mut_ingest_sst().set_sst(*sst);
+            }
         };
         req
     }
@@ -191,6 +197,10 @@ impl From<raft_cmdpb::Request> for Modify {
                     delete_range.get_notify_only(),
                 )
             }
+            raft_cmdpb::CmdType::IngestSst => {
+                let sst = req.mut_ingest_sst().take_sst();
+                Modify::Ingest(Box::new(sst))
+            }
             _ => {
                 unimplemented!()
             }
@@ -220,6 +230,7 @@ pub struct WriteData {
     pub extra: TxnExtra,
     pub deadline: Option<Deadline>,
     pub disk_full_opt: DiskFullOpt,
+    pub avoid_batch: bool,
 }
 
 impl WriteData {
@@ -229,6 +240,7 @@ impl WriteData {
             extra,
             deadline: None,
             disk_full_opt: DiskFullOpt::NotAllowedOnFull,
+            avoid_batch: false,
         }
     }
 
@@ -251,9 +263,18 @@ impl WriteData {
     pub fn set_disk_full_opt(&mut self, level: DiskFullOpt) {
         self.disk_full_opt = level
     }
+
+    /// Underlying engine may batch up several requests to increase throughput.
+    ///
+    /// If external correctness depends on isolation of requests, you may need
+    /// to set this flag to true.
+    pub fn set_avoid_batch(&mut self, avoid_batch: bool) {
+        self.avoid_batch = avoid_batch
+    }
 }
 
 /// Events that can subscribed from the `WriteSubscriber`.
+#[derive(Debug)]
 pub enum WriteEvent {
     Proposed,
     Committed,
@@ -745,6 +766,9 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
                 } else {
                     Ok(())
                 }
+            }
+            Modify::Ingest(_) => {
+                unimplemented!("IngestSST is not implemented for local engine yet.")
             }
         };
         // TODO: turn the error into an engine error.
