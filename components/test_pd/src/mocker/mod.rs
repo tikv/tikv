@@ -39,10 +39,11 @@ pub trait PdMocker {
 
     fn meta_store_watch(
         &self,
-        _req: mbp::PutRequest,
+        _req: mpb::WatchRequest,
         _sink: grpcio::ServerStreamingSink<mpb::WatchResponse>,
-    ) -> Option<()> {
-        None
+        _ctx: &grpcio::RpcContext<'_>,
+    ) -> bool {
+        false
     }
 
     fn load_global_config(

@@ -45,7 +45,7 @@ impl Get {
         self
     }
 
-    fn limit(mut self, limit: i64) -> Self {
+    pub fn limit(mut self, limit: i64) -> Self {
         self.inner.set_limit(limit);
         self
     }
@@ -114,8 +114,16 @@ impl From<Watch> for pb::WatchRequest {
     }
 }
 
-pub trait MetaStorageClient {
-    type WatchStream<T>: Stream<Item = grpcio::Result<T>>;
+pub trait MetaStorageClient: Send + Sync + 'static {
+    // Note: some of our clients needs to maintain some state, which means we may
+    // need to move part of the structure.
+    // Though we can write some unsafe code and prove the move won't make wrong
+    // things, for keeping things simple, we added the `Unpin` constraint here.
+    // Given before the stream generator get stable, there shouldn't be too many
+    // stream implementation that must be pinned...
+    // Also note this `Unpin` cannot be added in the client side because higher kind
+    // types aren't stable...
+    type WatchStream<T>: Stream<Item = grpcio::Result<T>> + Unpin + Send;
 
     fn get(&self, req: Get) -> PdFuture<pb::GetResponse>;
     fn put(&self, req: Put) -> PdFuture<pb::PutResponse>;

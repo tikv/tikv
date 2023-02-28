@@ -45,6 +45,7 @@ use super::{
 pub const CQ_COUNT: usize = 1;
 pub const CLIENT_PREFIX: &str = "pd";
 
+#[derive(Clone)]
 pub struct RpcClient {
     cluster_id: u64,
     pd_client: Arc<Client>,

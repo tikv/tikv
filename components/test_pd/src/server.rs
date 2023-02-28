@@ -197,34 +197,33 @@ impl<C: PdMocker + Send + Sync + 'static> MetaStorage for PdMock<C> {
     fn watch(
         &mut self,
         ctx: grpcio::RpcContext,
-        req: super::meta_storagepb::WatchRequest,
-        sink: grpcio::ServerStreamingSink<super::meta_storagepb::WatchResponse>,
+        req: kvproto::meta_storagepb::WatchRequest,
+        sink: grpcio::ServerStreamingSink<kvproto::meta_storagepb::WatchResponse>,
     ) {
-        let start_watch = move || {
-            let c = self.case?;
-            let w = c.meta_store_watch(req, sink)?;
-            Some(w)
-        };
-        // If we cannot handle this, the RPC would be cut down immediately.
-        start_watch()
+        match &self.case {
+            Some(x) => {
+                x.meta_store_watch(req, sink, &ctx);
+            }
+            None => grpcio::unimplemented_call!(ctx, sink),
+        }
     }
 
     fn get(
         &mut self,
         ctx: grpcio::RpcContext,
-        req: super::meta_storagepb::GetRequest,
-        sink: grpcio::UnarySink<super::meta_storagepb::GetResponse>,
+        req: kvproto::meta_storagepb::GetRequest,
+        sink: grpcio::UnarySink<kvproto::meta_storagepb::GetResponse>,
     ) {
-        hijack_unary(self, ctx, sink, PdMocker::meta_store_get)
+        hijack_unary(self, ctx, sink, |m| m.meta_store_get(req.clone()))
     }
 
     fn put(
         &mut self,
         ctx: grpcio::RpcContext,
-        req: super::meta_storagepb::PutRequest,
-        sink: grpcio::UnarySink<super::meta_storagepb::PutResponse>,
+        req: kvproto::meta_storagepb::PutRequest,
+        sink: grpcio::UnarySink<kvproto::meta_storagepb::PutResponse>,
     ) {
-        hijack_unary(self, ctx, sink, PdMocker::meta_store_put)
+        hijack_unary(self, ctx, sink, |m| m.meta_store_put(req.clone()))
     }
 }
 
