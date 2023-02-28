@@ -384,7 +384,7 @@ impl<T: Simulator> Cluster<T> {
                 id,
                 self.cfg.clone(),
                 store_meta.clone(),
-                self.key_managers_map[&id].clone(),
+                key_mgr.clone(),
                 raft_engine.clone(),
                 tablet_registry.clone(),
                 &self.resource_manager,

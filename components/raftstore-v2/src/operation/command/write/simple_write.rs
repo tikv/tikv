@@ -467,6 +467,8 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches::assert_matches;
+
     use kvproto::raft_cmdpb::{CmdType, Request};
     use slog::o;
 
@@ -487,7 +489,9 @@ mod tests {
         let mut encoder = SimpleWriteEncoder::with_capacity(512);
         encoder.delete_range(CF_LOCK, b"key", b"key", true);
         encoder.delete_range("cf", b"key", b"key", false);
-        req_encoder.amend(&header, &encoder.encode());
+        let bin = encoder.encode();
+        assert!(!req_encoder.amend(&header, &bin));
+        let req_encoder2 = SimpleWriteReqEncoder::new(header.clone(), bin, 0, false);
 
         let (bytes, _) = req_encoder.encode();
         let logger = slog_global::borrow_global().new(o!());
@@ -503,7 +507,10 @@ mod tests {
         let SimpleWrite::Delete(delete) = write else { panic!("should be delete") };
         assert_eq!(delete.cf, CF_WRITE);
         assert_eq!(delete.key, &delete_key);
+        assert_matches!(decoder.next(), None);
 
+        let (bytes, _) = req_encoder2.encode();
+        decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
         let write = decoder.next().unwrap();
         let SimpleWrite::DeleteRange(dr) = write else { panic!("should be delete range") };
         assert_eq!(dr.cf, CF_LOCK);
