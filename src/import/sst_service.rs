@@ -73,7 +73,7 @@ async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> sto
 #[derive(Clone)]
 pub struct ImportSstService<E: Engine> {
     cfg: Config,
-    local_backend: E::Local,
+    tablet_registry: E::Local,
     engine: E,
     threads: Arc<Runtime>,
     // For now, PiTR cannot be executed in the tokio runtime because it is synchronous and may
@@ -238,7 +238,7 @@ impl<E: Engine> ImportSstService<E> {
         cfg: Config,
         raft_entry_max_size: ReadableSize,
         engine: E,
-        local_backend: E::Local,
+        tablet_registry: E::Local,
         importer: Arc<SstImporter>,
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
@@ -266,12 +266,12 @@ impl<E: Engine> ImportSstService<E> {
             .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        importer.start_switch_mode_check(threads.handle(), local_backend.clone());
+        importer.start_switch_mode_check(threads.handle(), tablet_registry.clone());
         threads.spawn(Self::tick(importer.clone()));
 
         ImportSstService {
             cfg,
-            local_backend,
+            tablet_registry,
             threads: Arc::new(threads),
             block_threads: Arc::new(block_threads),
             engine,
@@ -326,11 +326,11 @@ impl<E: Engine> ImportSstService<E> {
     fn check_write_stall(&self) -> Option<errorpb::Error> {
         if self.importer.get_mode() == SwitchMode::Normal
             && self
-                .local_backend
+                .tablet_registry
                 .ingest_maybe_slowdown_writes(CF_WRITE)
                 .expect("cf")
         {
-            match self.local_backend.get_sst_key_ranges(CF_WRITE, 0) {
+            match self.tablet_registry.get_sst_key_ranges(CF_WRITE, 0) {
                 Ok(l0_sst_ranges) => {
                     warn!(
                         "sst ingest is too slow";
@@ -507,7 +507,7 @@ macro_rules! impl_write {
             sink: ClientStreamingSink<$resp_ty>,
         ) {
             let import = self.importer.clone();
-            let local_backend = self.local_backend.clone();
+            let tablet_registry = self.tablet_registry.clone();
             let (rx, buf_driver) =
                 create_stream_with_buffer(stream, self.cfg.stream_channel_window);
             let mut rx = rx.map_err(Error::from);
@@ -525,7 +525,7 @@ macro_rules! impl_write {
                         _ => return Err(Error::InvalidChunk),
                     };
 
-                    let writer = match import.$writer_fn(&local_backend, meta) {
+                    let writer = match import.$writer_fn(&tablet_registry, meta) {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
@@ -577,10 +577,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             match req.get_mode() {
                 SwitchMode::Normal => self
                     .importer
-                    .enter_normal_mode(self.local_backend.clone(), mf),
+                    .enter_normal_mode(self.tablet_registry.clone(), mf),
                 SwitchMode::Import => self
                     .importer
-                    .enter_import_mode(self.local_backend.clone(), mf),
+                    .enter_import_mode(self.tablet_registry.clone(), mf),
             }
         };
         match res {
@@ -715,7 +715,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let local_backend = self.local_backend.clone();
+        let tablet_registry = self.tablet_registry.clone();
         let start = Instant::now();
 
         let handle_task = async move {
@@ -741,7 +741,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 req.get_rewrite_rule(),
                 cipher,
                 limiter,
-                local_backend,
+                tablet_registry,
                 DownloadExt::default()
                     .cache_key(req.get_storage_cache_id())
                     .req_type(req.get_request_type()),
@@ -865,7 +865,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "compact";
         let timer = Instant::now_coarse();
-        let local_backend = self.local_backend.clone();
+        let tablet_registry = self.tablet_registry.clone();
 
         let handle_task = async move {
             let (start, end) = if !req.has_range() {
@@ -882,7 +882,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 Some(req.get_output_level())
             };
 
-            let res = local_backend.compact_files_in_range(start, end, output_level);
+            let res = tablet_registry.compact_files_in_range(start, end, output_level);
             match res {
                 Ok(_) => info!(
                     "compact files in range";
