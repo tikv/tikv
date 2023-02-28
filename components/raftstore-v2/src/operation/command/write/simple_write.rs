@@ -73,7 +73,8 @@ impl SimpleWriteReqEncoder {
 
     /// Encode the simple write into the buffer.
     ///
-    /// Return false if the buffer limit is reached or the write can be amended.
+    /// Return false if the buffer limit is reached or the binary type not
+    /// match.
     #[inline]
     pub fn amend(&mut self, header: &RaftRequestHeader, bin: &SimpleWriteBinary) -> bool {
         if *self.header != *header {
@@ -573,6 +574,13 @@ mod tests {
         header2.set_term(4);
         // Only simple write command with same header can be batched.
         assert!(!req_encoder.amend(&header2, &bin));
+
+        let mut bin2 = bin.clone();
+        bin2.freeze();
+        // Frozen bin can't be merged with other bin.
+        assert!(!req_encoder.amend(&header, &bin2));
+        let mut req_encoder2 = SimpleWriteReqEncoder::new(header.clone(), bin2.clone(), 512, false);
+        assert!(!req_encoder2.amend(&header, &bin));
 
         // Batch should not excceed max size limit.
         let large_value = vec![0; 512];
