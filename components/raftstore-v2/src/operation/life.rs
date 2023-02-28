@@ -194,6 +194,40 @@ impl Store {
         }
     }
 
+    #[inline]
+    pub fn on_ask_commit_merge<EK, ER, T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        req: RaftCmdRequest,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+        T: Transport,
+    {
+        let region_id = req.get_header().get_region_id();
+        let mut raft_msg = Box::<RaftMessage>::default();
+        raft_msg.set_region_id(region_id);
+        raft_msg.set_region_epoch(req.get_header().get_region_epoch().clone());
+        raft_msg.set_to_peer(req.get_header().get_peer().clone());
+
+        // It will create the peer if it does not exist
+        self.on_raft_message(ctx, raft_msg);
+
+        if let Err(SendError(PeerMsg::AskCommitMerge(req))) = ctx
+            .router
+            .force_send(region_id, PeerMsg::AskCommitMerge(req))
+        {
+            let commit_merge = req.get_admin_request().get_commit_merge();
+            let source_id = commit_merge.get_source().get_id();
+            let _ = ctx.router.force_send(
+                source_id,
+                PeerMsg::RejectCommitMerge {
+                    index: commit_merge.get_commit(),
+                },
+            );
+        }
+    }
+
     /// When a message's recipient doesn't exist, it will be redirected to
     /// store. Store is responsible for checking if it's neccessary to create
     /// a peer to handle the message.
@@ -262,15 +296,6 @@ impl Store {
                     && extra_msg.has_check_gc_peer()
                 {
                     forward_destroy_to_source_peer(ctx, &msg);
-                    return;
-                } else if extra_msg.get_type() == ExtraMessageType::MsgAvailabilityRequest {
-                    let mut resp_msg = RaftMessage::default();
-                    resp_msg.set_region_id(extra_msg.get_from_region_id());
-                    resp_msg.set_from_peer(msg.get_to_peer().clone());
-                    resp_msg.set_to_peer(msg.get_from_peer().clone());
-                    let resp_extra = resp_msg.mut_extra_msg();
-                    resp_extra.set_type(ExtraMessageType::MsgAvailabilityResponse);
-                    let _ = ctx.trans.send(resp_msg);
                     return;
                 }
             }
@@ -559,24 +584,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.on_admin_command(ctx, req, ch);
         }
         self.maybe_schedule_gc_peer_tick();
-    }
-
-    pub fn on_availability_request<T: Transport>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        msg: &RaftMessage,
-    ) {
-        let mut resp_msg = RaftMessage::default();
-        resp_msg.set_region_id(msg.get_extra_msg().get_from_region_id());
-        resp_msg.set_from_peer(msg.get_to_peer().clone());
-        resp_msg.set_to_peer(msg.get_from_peer().clone());
-        let resp_extra = resp_msg.mut_extra_msg();
-        resp_extra.set_type(ExtraMessageType::MsgAvailabilityResponse);
-        resp_extra.set_from_region_id(msg.get_region_id());
-        let report = resp_extra.mut_availability_report();
-        report.set_region_epoch(self.region().get_region_epoch().clone());
-        report.set_trimmed(!self.storage().has_dirty_data());
-        let _ = ctx.trans.send(resp_msg);
     }
 
     /// A peer can be destroyed in three cases:

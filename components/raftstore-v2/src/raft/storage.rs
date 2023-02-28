@@ -368,7 +368,7 @@ mod tests {
 
     impl ApplyResReporter for TestRouter {
         fn report(&self, _res: ApplyRes) {}
-        fn report_catch_up_logs(
+        fn redirect_catch_up_logs(
             &self,
             _target_region_id: u64,
             _merge: CommitMergeRequest,

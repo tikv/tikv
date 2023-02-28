@@ -327,7 +327,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::TabletTrimmed { tablet_index } => {
                     self.fsm.peer_mut().on_tablet_trimmed(tablet_index)
                 }
-                PeerMsg::CatchUpLogs(c) => self.fsm.peer_mut().on_catch_up_logs(self.store_ctx, c),
+                PeerMsg::AskCommitMerge(req) => {
+                    self.fsm.peer_mut().on_ask_commit_merge(self.store_ctx, req)
+                }
+                PeerMsg::RejectCommitMerge { index } => {
+                    self.fsm.peer_mut().on_reject_commit_merge(index)
+                }
+                PeerMsg::RedirectCatchUpLogs(c) => self
+                    .fsm
+                    .peer_mut()
+                    .on_redirect_catch_up_logs(self.store_ctx, c),
+                PeerMsg::CatchUpLogs(c) => self.fsm.peer_mut().on_catch_up_logs(c),
                 PeerMsg::MergeResult {
                     target_region_id,
                     target,

@@ -206,6 +206,13 @@ pub enum PeerMsg {
     TabletTrimmed {
         tablet_index: u64,
     },
+    AskCommitMerge(RaftCmdRequest),
+    RejectCommitMerge {
+        index: u64,
+    },
+    // From target [`Apply`] to target [`Peer`].
+    RedirectCatchUpLogs(CatchUpLogs),
+    // From target [`Peer`] to source [`Peer`].
     CatchUpLogs(CatchUpLogs),
     // From target to source.
     MergeResult {
@@ -282,6 +289,7 @@ pub enum StoreMsg {
     StoreUnreachable {
         to_store_id: u64,
     },
+    AskCommitMerge(RaftCmdRequest),
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush {

@@ -31,7 +31,7 @@ use crate::{
 pub trait ApplyResReporter {
     fn report(&self, apply_res: ApplyRes);
 
-    fn report_catch_up_logs(
+    fn redirect_catch_up_logs(
         &self,
         target_region_id: u64,
         merge: CommitMergeRequest,
@@ -45,13 +45,13 @@ impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for M
         let _ = self.force_send(PeerMsg::ApplyRes(apply_res));
     }
 
-    fn report_catch_up_logs(
+    fn redirect_catch_up_logs(
         &self,
         target_region_id: u64,
         merge: CommitMergeRequest,
         tx: oneshot::Sender<()>,
     ) {
-        let msg = PeerMsg::CatchUpLogs(CatchUpLogs {
+        let msg = PeerMsg::RedirectCatchUpLogs(CatchUpLogs {
             target_region_id,
             merge,
             tx,
