@@ -243,7 +243,8 @@ where
                         "elapsed" => elapsed,
                         "key" => ?snap_key,
                         "for_balance" => for_balance,
-                        "total_size" => total_size
+                        "total_size" => total_size,
+                        "total_keys" => total_keys,
                     );
                     res = Some(Box::new((snapshot, to_peer)))
                 }
