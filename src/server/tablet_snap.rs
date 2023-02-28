@@ -147,6 +147,9 @@ async fn send_snap_files(
                 off += readed;
             }
             limiter.consume(off);
+            SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+                .send
+                .inc_by(off as u64);
             total_sent += off as u64;
             let mut chunk = SnapshotChunk::default();
             chunk.set_data(buffer);
@@ -163,6 +166,7 @@ async fn send_snap_files(
         }
     }
     info!("sent all snap file finish"; "snap_key" => %key);
+
     sender.close().await?;
     Ok(total_sent)
 }
@@ -262,12 +266,12 @@ async fn recv_snap_files(
             };
             f.write_all(&chunk[..])?;
             limit.consume(chunk.len());
+            SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+                .recv
+                .inc_by(chunk.len() as u64);
             size += chunk.len();
         }
         debug!("received snap file"; "file" => %p.display(), "size" => size);
-        SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
-            .recv
-            .inc_by(size as u64);
         f.sync_data()?;
     }
     info!("received all tablet snapshot file"; "snap_key" => %context.key);
