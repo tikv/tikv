@@ -17,8 +17,47 @@ use engine_traits::{CfNamesExt, FlowControlFactorsExt, TabletRegistry};
 use rand::Rng;
 use tikv_util::{sys::thread::StdThreadBuildWrapper, time::Limiter};
 
-use super::singleton_flow_controller::{FlowChecker, Msg, RATIO_SCALE_FACTOR, TICK_DURATION};
+use super::singleton_flow_controller::{
+    FlowChecker, FlowControlFactorStore, Msg, RATIO_SCALE_FACTOR, TICK_DURATION,
+};
 use crate::storage::config::FlowControlConfig;
+
+pub struct TabletFlowFactorStore<EK> {
+    registry: TabletRegistry<EK>,
+}
+
+impl<EK: Clone> TabletFlowFactorStore<EK> {
+    pub fn new(registry: TabletRegistry<EK>) -> Self {
+        Self { registry }
+    }
+
+    fn query(&self, region_id: u64, f: impl Fn(&EK) -> engine_traits::Result<Option<u64>>) -> u64 {
+        self.registry
+            .get(region_id)
+            .and_then(|mut c| c.latest().and_then(|t| f(t).ok().flatten()))
+            .unwrap_or(0)
+    }
+}
+
+impl<EK: CfNamesExt + FlowControlFactorsExt + Clone> FlowControlFactorStore
+    for TabletFlowFactorStore<EK>
+{
+    fn cf_names(&self, _region_id: u64) -> Vec<String> {
+        engine_traits::DATA_CFS
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+    fn num_files_at_level(&self, region_id: u64, cf: &str, level: usize) -> u64 {
+        self.query(region_id, |t| t.get_cf_num_files_at_level(cf, level))
+    }
+    fn num_immutable_mem_table(&self, region_id: u64, cf: &str) -> u64 {
+        self.query(region_id, |t| t.get_cf_num_immutable_mem_table(cf))
+    }
+    fn pending_compaction_bytes(&self, region_id: u64, cf: &str) -> u64 {
+        self.query(region_id, |t| t.get_cf_pending_compaction_bytes(cf))
+    }
+}
 
 type Limiters = Arc<RwLock<HashMap<u64, (Arc<Limiter>, Arc<AtomicU32>)>>>;
 pub struct TabletFlowController {
@@ -59,8 +98,7 @@ impl TabletFlowController {
             Msg::Disable
         })
         .unwrap();
-        let flow_checkers: Arc<RwLock<HashMap<u64, FlowChecker<E>>>> =
-            Arc::new(RwLock::new(HashMap::default()));
+        let flow_checkers = Arc::new(RwLock::new(HashMap::default()));
         let limiters: Limiters = Arc::new(RwLock::new(HashMap::default()));
         Self {
             enabled: Arc::new(AtomicBool::new(config.enable)),
@@ -90,7 +128,7 @@ impl FlowInfoDispatcher {
         rx: Receiver<Msg>,
         flow_info_receiver: Receiver<FlowInfo>,
         registry: TabletRegistry<E>,
-        flow_checkers: Arc<RwLock<HashMap<u64, FlowChecker<E>>>>,
+        flow_checkers: Arc<RwLock<HashMap<u64, FlowChecker<TabletFlowFactorStore<E>>>>>,
         limiters: Limiters,
         config: FlowControlConfig,
     ) -> JoinHandle<()> {
@@ -139,14 +177,10 @@ impl FlowInfoDispatcher {
                         }
                         Ok(FlowInfo::Created(region_id, suffix)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
-                            let checker = match checkers.entry(region_id) {
+                            match checkers.entry(region_id) {
                                 HashMapEntry::Occupied(e) => e.into_mut(),
                                 HashMapEntry::Vacant(e) => {
-                                    let engine = if let Some(mut c) = registry.get(region_id) && let Some(t) = c.latest() {
-                                        t.clone()
-                                    } else {
-                                        continue;
-                                    };
+                                    let engine = TabletFlowFactorStore::new(registry.clone());
                                     let mut v = limiters.as_ref().write().unwrap();
                                     let discard_ratio = Arc::new(AtomicU32::new(0));
                                     let limiter = v.entry(region_id).or_insert((
@@ -157,26 +191,16 @@ impl FlowInfoDispatcher {
                                         ),
                                         discard_ratio,
                                     ));
-                                    e.insert(FlowChecker::new_with_tablet_suffix(
+                                    e.insert(FlowChecker::new_with_region_id(
+                                        region_id,
+                                        suffix,
                                         &config,
                                         engine,
                                         limiter.1.clone(),
                                         limiter.0.clone(),
-                                        suffix,
                                     ))
-                                },
-                            };
-                            // check if the checker's engine is exactly (region_id, suffix)
-                            // if checker.suffix < suffix, it means its tablet is old and needs the
-                            // refresh
-                            if checker.tablet_suffix() < suffix {
-                                let cached = registry.get(region_id);
-                                // None means the region is destroyed.
-                                if let Some(mut c) = cached && let Some(engine) = c.latest() {
-                                    checker.set_engine(engine.clone());
-                                    checker.set_tablet_suffix(suffix);
                                 }
-                            }
+                            };
                         }
                         Ok(FlowInfo::Destroyed(region_id, suffix)) => {
                             let mut remove_limiter = false;

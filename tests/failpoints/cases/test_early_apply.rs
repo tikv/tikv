@@ -97,7 +97,7 @@ fn test_early_apply_yield_followed_with_many_entries() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
 
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");

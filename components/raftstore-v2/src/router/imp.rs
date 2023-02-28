@@ -72,12 +72,26 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
 
     fn refresh_region_buckets(
         &self,
-        _region_id: u64,
-        _region_epoch: kvproto::metapb::RegionEpoch,
-        _buckets: Vec<raftstore::store::Bucket>,
-        _bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
+        region_id: u64,
+        region_epoch: kvproto::metapb::RegionEpoch,
+        buckets: Vec<raftstore::store::Bucket>,
+        bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
     ) {
-        // TODO
+        let res = self.send(
+            region_id,
+            PeerMsg::RefreshRegionBuckets {
+                region_epoch,
+                buckets,
+                bucket_ranges,
+            },
+        );
+        if let Err(e) = res {
+            warn!(
+                self.logger(),
+                "failed to refresh region buckets";
+                "err" => %e,
+            );
+        }
     }
 
     fn update_compute_hash_result(
@@ -155,5 +169,17 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
     ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
     {
         self.local_reader.snapshot(req)
+    }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn new_with_store_meta(
+        router: StoreRouter<EK, ER>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    ) -> Self {
+        let logger = router.logger().clone();
+        RaftRouter {
+            router: router.clone(),
+            local_reader: LocalReader::new(store_meta, router, logger),
+        }
     }
 }
