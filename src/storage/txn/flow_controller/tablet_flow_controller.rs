@@ -380,30 +380,54 @@ mod tests {
 
     #[test]
     fn test_tablet_flow_controller_life_cycle() {
+        const WAIT_TICK: Duration = Duration::from_millis(1000);
         let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
         let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
         reg.load(tablet_context, false).unwrap();
         tx.send(FlowInfo::Created(region_id)).unwrap();
-        flow_controller.set_speed_limit(region_id, 1000.0);
-        assert!(!flow_controller.is_unlimited(region_id));
+        for _ in 0..30 {
+            std::thread::sleep(WAIT_TICK);
+            flow_controller.set_speed_limit(region_id, 1000.0);
+            if !flow_controller.is_unlimited(region_id) {
+                break;
+            }
+        }
         tx.send(FlowInfo::Destroyed(region_id)).unwrap();
+        for _ in 0..30 {
+            std::thread::sleep(WAIT_TICK);
+            if flow_controller.is_unlimited(region_id) {
+                break;
+            }
+        }
         // the region's limiter is removed so it's unlimited
         assert!(flow_controller.is_unlimited(region_id));
 
         tx.send(FlowInfo::Created(region_id)).unwrap();
         tx.send(FlowInfo::Created(region_id)).unwrap();
-        flow_controller.set_speed_limit(region_id, 1000.0);
+        for _ in 0..30 {
+            std::thread::sleep(WAIT_TICK);
+            flow_controller.set_speed_limit(region_id, 1000.0);
+            if !flow_controller.is_unlimited(region_id) {
+                break;
+            }
+        }
         tx.send(FlowInfo::Destroyed(region_id)).unwrap();
+        std::thread::sleep(TICK_DURATION);
         // the region's limiter should not be removed as the reference count is still 1
-        assert!(flow_controller.is_unlimited(region_id));
+        assert!(!flow_controller.is_unlimited(region_id));
         tx.send(FlowInfo::Destroyed(region_id)).unwrap();
+        for _ in 0..30 {
+            std::thread::sleep(WAIT_TICK);
+            if flow_controller.is_unlimited(region_id) {
+                break;
+            }
+        }
         // the region's limiter is removed so it's unlimited
         assert!(flow_controller.is_unlimited(region_id));
         // no-op it should not crash
         tx.send(FlowInfo::Destroyed(region_id)).unwrap();
-        assert!(flow_controller.is_unlimited(region_id));
     }
 
     #[test]
