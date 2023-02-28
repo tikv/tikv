@@ -41,7 +41,7 @@ use kvproto::{
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
 use parking_lot::RwLockWriteGuard;
-use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
+use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
 use raft::{
     self,
@@ -2273,12 +2273,7 @@ where
                 let applied_index = res.apply_state.applied_index;
                 let buckets = self.fsm.peer.region_buckets.as_mut();
                 if let (Some(delta), Some(buckets)) = (res.bucket_stat, buckets) {
-                    merge_bucket_stats(
-                        &buckets.meta.keys,
-                        &mut buckets.stats,
-                        &delta.meta.keys,
-                        &delta.stats,
-                    );
+                    buckets.merge(&delta);
                 }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
@@ -5632,7 +5627,7 @@ where
     }
 
     fn register_split_region_check_tick(&mut self) {
-        self.schedule_tick(PeerTick::SplitRegionCheck)
+        self.schedule_tick(PeerTick::SplitRegionCheck);
     }
 
     #[inline]
@@ -5946,9 +5941,7 @@ where
             };
             meta.keys.insert(0, region.get_start_key().to_vec());
             meta.keys.push(region.get_end_key().to_vec());
-
-            let stats = new_bucket_stats(&meta);
-            region_buckets = BucketStat::new(Arc::new(meta), stats);
+            region_buckets = BucketStat::from_meta(Arc::new(meta));
         }
 
         let buckets_count = region_buckets.meta.keys.len() - 1;
@@ -5989,7 +5982,7 @@ where
 
     // generate bucket range list to run split-check (to further split buckets)
     fn gen_bucket_range_for_update(&self) -> Option<Vec<BucketRange>> {
-        if !self.ctx.coprocessor_host.cfg.enable_region_bucket {
+        if !self.ctx.coprocessor_host.cfg.enable_region_bucket() {
             return None;
         }
         let region_buckets = self.fsm.peer.region_buckets.as_ref()?;
@@ -6341,6 +6334,7 @@ where
                 "err" => ?e,
             );
         }
+        // todo: it will delete in next pr.
         region_buckets.stats = new_bucket_stats(&region_buckets.meta);
 
         self.register_report_region_buckets_tick();

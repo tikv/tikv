@@ -257,10 +257,50 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_concurrent_snap() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_concurrent_snap(&mut cluster);
+    let mut cluster = new_cluster(0, 3);
+    // Test that the handling of snapshot is correct when there are multiple
+    // snapshots which have overlapped region ranges arrive at the same
+    // raftstore.
+    cluster.cfg.rocksdb.titan.enabled = true;
+    // Disable raft log gc in this test case.
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    // Force peer 2 to be followers all the way.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 2)
+            .msg_type(MessageType::MsgRequestVote)
+            .direction(Direction::Send),
+    ));
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
+    cluster.must_put(b"k3", b"v3");
+    // Pile up snapshots of overlapped region ranges and deliver them all at once.
+    let (tx, rx) = mpsc::channel();
+    cluster.add_recv_filter_on_node(3, Box::new(CollectSnapshotFilter::new(tx)));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    let region = cluster.get_region(b"k1");
+    // Ensure the snapshot of range ("", "") is sent and piled in filter.
+    if let Err(e) = rx.recv_timeout(Duration::from_secs(1)) {
+        panic!("the snapshot is not sent before split, e: {:?}", e);
+    }
+    // Split the region range and then there should be another snapshot for the
+    // split ranges.
+    cluster.must_split(&region, b"k2");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    // Ensure the regions work after split.
+    cluster.must_put(b"k11", b"v11");
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
 #[test]
@@ -436,6 +476,8 @@ impl Filter for SnapshotAppendFilter {
     }
 }
 
+// todo(SpadeA): to be removed when receive filter is supported on ServerCluster
+// V2
 fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     configure_for_snapshot(&mut cluster.cfg);
 
@@ -462,10 +504,30 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine4, b"k2", b"v2");
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_snapshot_with_append() {
-    let mut cluster = new_node_cluster(0, 4);
-    test_snapshot_with_append(&mut cluster);
+    let mut cluster = new_cluster(0, 4);
+    configure_for_snapshot(&mut cluster.cfg);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+    cluster.run();
+
+    // In case of removing leader, let's transfer leader to some node first.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    pd_client.must_remove_peer(1, new_peer(4, 4));
+
+    let (tx, rx) = mpsc::channel();
+    cluster.add_recv_filter_on_node(4, Box::new(SnapshotAppendFilter::new(tx)));
+    pd_client.add_peer(1, new_peer(4, 5));
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    let engine4 = cluster.get_engine(4);
+    must_get_equal(&engine4, b"k1", b"v1");
+    must_get_equal(&engine4, b"k2", b"v2");
 }
 
 #[test]

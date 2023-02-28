@@ -79,6 +79,7 @@ pub enum Task {
         initial_status: u64,
         txn_ext: Arc<TxnExt>,
     },
+    ReportBuckets(BucketStat),
     ReportMinResolvedTs {
         store_id: u64,
         min_resolved_ts: u64,
@@ -138,6 +139,7 @@ impl Display for Task {
                 "update the max timestamp for region {} in the concurrency manager",
                 region_id
             ),
+            Task::ReportBuckets(ref buckets) => write!(f, "report buckets: {:?}", buckets),
             Task::ReportMinResolvedTs {
                 store_id,
                 min_resolved_ts,
@@ -282,6 +284,7 @@ where
                 initial_status,
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
+            Task::ReportBuckets(buckets) => self.handle_report_region_buckets(buckets),
             Task::ReportMinResolvedTs {
                 store_id,
                 min_resolved_ts,
@@ -450,6 +453,14 @@ mod requests {
         req.set_cmd_type(AdminCmdType::TransferLeader);
         req.mut_transfer_leader().set_peer(peer);
         req.mut_transfer_leader().set_peers(peers.into());
+        req
+    }
+
+    pub fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
+        let mut req = AdminRequest::default();
+        req.set_cmd_type(AdminCmdType::PrepareMerge);
+        req.mut_prepare_merge()
+            .set_target(merge.get_target().to_owned());
         req
     }
 }

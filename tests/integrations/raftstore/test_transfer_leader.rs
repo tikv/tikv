@@ -176,6 +176,7 @@ fn test_server_pd_transfer_leader_multi_target() {
 }
 
 #[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_server_transfer_leader_during_snapshot() {
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);

@@ -15,12 +15,8 @@ use kvproto::{
 use raftstore::store::{AsyncReadNotifier, FetchedLogs, GenSnapRes, RegionSnapshot};
 use slog::warn;
 
-use super::{CmdResChannel, PeerMsg};
-use crate::{
-    batch::StoreRouter,
-    operation::{LocalReader, RequestSplit},
-    StoreMeta,
-};
+use super::PeerMsg;
+use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
     fn notify_logs_fetched(&self, region_id: u64, fetched_logs: FetchedLogs) {
@@ -48,18 +44,8 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
         split_keys: Vec<Vec<u8>>,
         source: Cow<'static, str>,
     ) {
-        let (ch, _) = CmdResChannel::pair();
-        let res = self.send(
-            region_id,
-            PeerMsg::RequestSplit {
-                request: RequestSplit {
-                    epoch: region_epoch,
-                    split_keys,
-                    source,
-                },
-                ch,
-            },
-        );
+        let (msg, _) = PeerMsg::request_split(region_epoch, split_keys, source.to_string());
+        let res = self.send(region_id, msg);
         if let Err(e) = res {
             warn!(
                 self.logger(),
@@ -72,12 +58,26 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
 
     fn refresh_region_buckets(
         &self,
-        _region_id: u64,
-        _region_epoch: kvproto::metapb::RegionEpoch,
-        _buckets: Vec<raftstore::store::Bucket>,
-        _bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
+        region_id: u64,
+        region_epoch: kvproto::metapb::RegionEpoch,
+        buckets: Vec<raftstore::store::Bucket>,
+        bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
     ) {
-        // TODO
+        let res = self.send(
+            region_id,
+            PeerMsg::RefreshRegionBuckets {
+                region_epoch,
+                buckets,
+                bucket_ranges,
+            },
+        );
+        if let Err(e) = res {
+            warn!(
+                self.logger(),
+                "failed to refresh region buckets";
+                "err" => %e,
+            );
+        }
     }
 
     fn update_compute_hash_result(

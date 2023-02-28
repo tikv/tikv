@@ -11,10 +11,10 @@ use engine_traits::{
     CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
 };
 use kvproto::{
-    metapb, pdpb,
+    metapb::{self, PeerRole},
+    pdpb,
     raft_serverpb::{RaftMessage, RegionLocalState},
 };
-use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
@@ -31,8 +31,8 @@ use super::storage::Storage;
 use crate::{
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext, ProposalControl,
-        SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
+        AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress, GcPeerContext,
+        MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -58,6 +58,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// For raft log compaction.
     compact_log_context: CompactLogContext,
 
+    merge_context: Option<Box<MergeContext>>,
+    last_sent_snapshot_index: u64,
+
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
     raw_write_encoder: Option<SimpleWriteReqEncoder>,
@@ -79,9 +82,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
 
-    /// region buckets.
-    region_buckets: Option<BucketStat>,
-    last_region_buckets: Option<BucketStat>,
+    region_buckets_info: BucketStatsInfo,
 
     /// Transaction extensions related to this peer.
     txn_context: TxnContext,
@@ -132,6 +133,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
+        let merge_context = MergeContext::from_region_state(&logger, storage.region_state());
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
@@ -156,6 +158,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
             compact_log_context: CompactLogContext::new(applied_index),
+            merge_context: merge_context.map(|c| Box::new(c)),
+            last_sent_snapshot_index: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
@@ -177,8 +181,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
             ),
-            region_buckets: None,
-            last_region_buckets: None,
+            region_buckets_info: BucketStatsInfo::default(),
             txn_context: TxnContext::default(),
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
@@ -208,6 +211,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         peer.proposal_control.maybe_update_term(term);
 
         Ok(peer)
+    }
+
+    pub fn region_buckets_info_mut(&mut self) -> &mut BucketStatsInfo {
+        &mut self.region_buckets_info
+    }
+
+    pub fn region_buckets_info(&self) -> &BucketStatsInfo {
+        &self.region_buckets_info
     }
 
     #[inline]
@@ -358,6 +369,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn compact_log_context(&self) -> &CompactLogContext {
         &self.compact_log_context
+    }
+
+    #[inline]
+    pub fn merge_context(&self) -> Option<&MergeContext> {
+        self.merge_context.as_deref()
+    }
+
+    #[inline]
+    pub fn merge_context_mut(&mut self) -> &mut MergeContext {
+        self.merge_context.get_or_insert_default()
+    }
+
+    #[inline]
+    pub fn take_merge_context(&mut self) -> Option<Box<MergeContext>> {
+        self.merge_context.take()
     }
 
     #[inline]
@@ -560,12 +586,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         false
     }
 
-    #[inline]
-    // TODO
-    pub fn has_pending_merge_state(&self) -> bool {
-        false
-    }
-
     pub fn serving(&self) -> bool {
         matches!(self.destroy_progress, DestroyProgress::None)
     }
@@ -646,13 +666,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn post_split(&mut self) {
-        self.reset_region_buckets();
-    }
-
-    pub fn reset_region_buckets(&mut self) {
-        if self.region_buckets.is_some() {
-            self.last_region_buckets = self.region_buckets.take();
-        }
+        self.region_buckets_info_mut().set_bucket_stat(None);
     }
 
     pub fn maybe_campaign(&mut self) -> bool {
@@ -688,7 +702,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.txn_context.extra_op().clone(),
             self.txn_context.ext().clone(),
             self.read_progress().clone(),
-            self.region_buckets.as_ref().map(|b| b.meta.clone()),
+            self.region_buckets_info()
+                .bucket_stat()
+                .as_ref()
+                .map(|b| b.meta.clone()),
         )
     }
 
@@ -708,6 +725,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let term = self.term();
         self.proposal_control
             .advance_apply(apply_index, term, region);
+    }
+
+    #[inline]
+    pub fn in_joint_state(&self) -> bool {
+        self.region().get_peers().iter().any(|p| {
+            p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
+        })
     }
 
     #[inline]
@@ -791,5 +815,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn gc_peer_context_mut(&mut self) -> &mut GcPeerContext {
         &mut self.gc_peer_context
+    }
+
+    #[inline]
+    pub fn update_last_sent_snapshot_index(&mut self, i: u64) {
+        if i > self.last_sent_snapshot_index {
+            self.last_sent_snapshot_index = i;
+        }
+    }
+
+    #[inline]
+    pub fn last_sent_snapshot_index(&self) -> u64 {
+        self.last_sent_snapshot_index
     }
 }

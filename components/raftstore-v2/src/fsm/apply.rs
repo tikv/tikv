@@ -10,6 +10,7 @@ use crossbeam::channel::TryRecvError;
 use engine_traits::{FlushState, KvEngine, TabletRegistry};
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
+use pd_client::BucketStat;
 use raftstore::store::{Config, ReadTask};
 use slog::Logger;
 use tikv_util::{
@@ -68,6 +69,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
         logger: Logger,
+        buckets: Option<BucketStat>,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
         let apply = Apply::new(
@@ -81,6 +83,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             log_recovery,
             applied_term,
             logger,
+            buckets,
         );
         (
             ApplyScheduler { sender: tx },
@@ -120,6 +123,9 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
                     ApplyTask::UnsafeWrite(raw_write) => self.apply.apply_unsafe_write(raw_write),
                     ApplyTask::ManualFlush => self.apply.on_manual_flush().await,
+                    ApplyTask::RefreshBucketStat(bucket_meta) => {
+                        self.apply.on_refresh_buckets(bucket_meta)
+                    }
                 }
 
                 self.apply.maybe_flush().await;

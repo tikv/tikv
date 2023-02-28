@@ -634,7 +634,7 @@ impl Default for DefaultCfConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
 
         DefaultCfConfig {
-            block_size: ReadableSize::kb(16),
+            block_size: ReadableSize::kb(32),
             block_cache_size: memory_limit_for_cf(false, CF_DEFAULT, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
@@ -759,7 +759,7 @@ impl Default for WriteCfConfig {
         };
 
         WriteCfConfig {
-            block_size: ReadableSize::kb(16),
+            block_size: ReadableSize::kb(32),
             block_cache_size: memory_limit_for_cf(false, CF_WRITE, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
@@ -2745,7 +2745,7 @@ impl Default for ResolvedTsConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            advance_ts_interval: ReadableDuration::secs(1),
+            advance_ts_interval: ReadableDuration::secs(20),
             scan_lock_pool_size: 2,
         }
     }
@@ -3241,7 +3241,7 @@ impl TikvConfig {
         self.coprocessor.validate()?;
         self.raft_store.validate(
             self.coprocessor.region_split_size(),
-            self.coprocessor.enable_region_bucket,
+            self.coprocessor.enable_region_bucket(),
             self.coprocessor.region_bucket_size,
         )?;
         self.security
@@ -4177,7 +4177,7 @@ mod tests {
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::{
-        config::{LARGE_REGION_SPLIT_SIZE_MB, RAFTSTORE_V2_SPLIT_SIZE_MB, SPLIT_SIZE_MB},
+        config::{RAFTSTORE_V2_SPLIT_SIZE, SPLIT_SIZE},
         region_info_accessor::MockRegionInfoProvider,
     };
     use slog::Level;
@@ -4731,7 +4731,7 @@ mod tests {
         // Default value
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
-            ReadableDuration::secs(1)
+            ReadableDuration::secs(20)
         );
 
         // Update `advance-ts-interval` to 100ms
@@ -5596,27 +5596,17 @@ mod tests {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.optimize_for(false);
         default_cfg.coprocessor.validate().unwrap();
-        assert_eq!(
-            default_cfg.coprocessor.region_split_size(),
-            ReadableSize::mb(SPLIT_SIZE_MB)
-        );
-
-        let mut default_cfg = TikvConfig::default();
-        default_cfg.coprocessor.enable_region_bucket = true;
-        default_cfg.coprocessor.optimize_for(false);
-        default_cfg.coprocessor.validate().unwrap();
-        assert_eq!(
-            default_cfg.coprocessor.region_split_size(),
-            ReadableSize::mb(LARGE_REGION_SPLIT_SIZE_MB)
-        );
+        assert_eq!(default_cfg.coprocessor.region_split_size(), SPLIT_SIZE);
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.optimize_for(true);
         default_cfg.coprocessor.validate().unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
-            ReadableSize::mb(RAFTSTORE_V2_SPLIT_SIZE_MB)
+            RAFTSTORE_V2_SPLIT_SIZE
         );
+        assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
@@ -5626,6 +5616,7 @@ mod tests {
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
@@ -5635,6 +5626,7 @@ mod tests {
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(default_cfg.coprocessor.enable_region_bucket());
     }
 
     #[test]
