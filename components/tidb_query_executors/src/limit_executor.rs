@@ -249,7 +249,7 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 4]);
         assert_eq!(r.physical_columns.rows_len(), 5);
-        assert!(r.is_drained.unwrap().is_remain());
+        assert!(r.is_drained.unwrap().is_drain());
     }
 
     #[test]

@@ -935,13 +935,13 @@ mod tests {
                         physical_columns: LazyBatchColumnVec::empty(),
                         logical_rows: Vec::new(),
                         warnings: EvalWarnings::default(),
-                        is_drained: Ok(BatchExecIsDrain::Drain),
+                        is_drained: Ok(BatchExecIsDrain::Remain),
                     },
                     BatchExecuteResult {
                         physical_columns: LazyBatchColumnVec::empty(),
                         logical_rows: Vec::new(),
                         warnings: EvalWarnings::default(),
-                        is_drained: Ok(BatchExecIsDrain::Remain),
+                        is_drained: Ok(BatchExecIsDrain::Drain),
                     },
                 ],
             );

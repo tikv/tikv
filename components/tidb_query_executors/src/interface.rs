@@ -211,7 +211,7 @@ impl Default for BatchExecIsDrain {
 impl BatchExecIsDrain {
     #[inline]
     pub fn is_remain(&self) -> bool {
-        matches!(self, BatchExecIsDrain::Remain)
+        *self == BatchExecIsDrain::Remain
     }
 
     #[inline]
