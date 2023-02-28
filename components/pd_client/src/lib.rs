@@ -31,10 +31,7 @@ pub use self::{
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
-    util::{
-        check_resp_header, merge_bucket_stats, new_bucket_stats, PdConnector,
-        REQUEST_RECONNECT_INTERVAL,
-    },
+    util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
 };
 
 pub type Key = Vec<u8>;
@@ -233,39 +230,6 @@ pub const INVALID_ID: u64 = 0;
 // TODO: Implementation of config registration for each module
 pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
 
-#[derive(Default, Debug, Clone)]
-pub struct GlobalConfigSelector {
-    basic_path: String,
-    items: Vec<String>,
-}
-
-impl GlobalConfigSelector {
-    /// Query a prefix of some key.
-    pub fn of_prefix(p: String) -> Self {
-        Self {
-            basic_path: p,
-            items: vec![],
-        }
-    }
-
-    /// Query the key exactly equals to the prefix.
-    pub fn exactly(mut self) -> Self {
-        self.items = vec![String::new()];
-        self
-    }
-}
-
-impl From<GlobalConfigSelector> for pdpb::LoadGlobalConfigRequest {
-    fn from(value: GlobalConfigSelector) -> Self {
-        let mut r = Self::default();
-        r.set_config_path(value.basic_path);
-        if !value.items.is_empty() {
-            r.set_names(value.items.into());
-        }
-        r
-    }
-}
-
 /// PdClient communicates with Placement Driver (PD).
 /// Because now one PD only supports one cluster, so it is no need to pass
 /// cluster id in trait interface every time, so passing the cluster id when
@@ -275,7 +239,7 @@ pub trait PdClient: Send + Sync {
     /// Load a list of GlobalConfig
     fn load_global_config(
         &self,
-        _s: GlobalConfigSelector,
+        _config_path: String,
     ) -> PdFuture<(Vec<pdpb::GlobalConfigItem>, i64)> {
         unimplemented!();
     }

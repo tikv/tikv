@@ -38,7 +38,6 @@ use super::{
     BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
     UnixSecs, REQUEST_TIMEOUT,
 };
-use crate::GlobalConfigSelector;
 
 pub const CQ_COUNT: usize = 1;
 pub const CLIENT_PREFIX: &str = "pd";
@@ -350,13 +349,14 @@ impl PdClient for RpcClient {
 
     fn load_global_config(
         &self,
-        s: GlobalConfigSelector,
+        config_path: String,
     ) -> PdFuture<(Vec<pdpb::GlobalConfigItem>, i64)> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .load_global_config
             .start_coarse_timer();
 
-        let req = s.into();
+        let mut req = pdpb::LoadGlobalConfigRequest::new();
+        req.set_config_path(config_path);
         let executor = |client: &Client, req| match client
             .inner
             .rl()

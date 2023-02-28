@@ -9,7 +9,7 @@ use std::{
 
 use grpcio::EnvBuilder;
 use kvproto::{metapb::*, pdpb::GlobalConfigItem};
-use pd_client::{GlobalConfigSelector, PdClient, RegionInfo, RegionStat, RpcClient};
+use pd_client::{PdClient, RegionInfo, RegionStat, RpcClient};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::{config::ReadableDuration, worker::Builder};
@@ -74,7 +74,7 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(get_store_stats_async(0))),
         request!(client => get_operator(0)),
         request!(client => block_on(get_tso())),
-        request!(client => load_global_config(Default::default())),
+        request!(client => load_global_config(String::default())),
     ];
 
     for (name, func) in test_funcs {
@@ -128,10 +128,8 @@ fn test_load_global_config() {
         panic!("error occur {:?}", err);
     }
 
-    let (res, revision) = futures::executor::block_on(
-        client.load_global_config(GlobalConfigSelector::of_prefix("global".to_string())),
-    )
-    .unwrap();
+    let (res, revision) =
+        futures::executor::block_on(client.load_global_config(String::from("global"))).unwrap();
     assert!(
         res.iter()
             .zip(check_items)

@@ -4,9 +4,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
-use pd_client::{
-    Error as PdError, GlobalConfigSelector, PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH,
-};
+use pd_client::{Error as PdError, PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH};
 use tikv_util::{error, timer::GLOBAL_TIMER_HANDLE};
 
 use crate::ResourceGroupManager;
@@ -110,9 +108,7 @@ impl ResourceManagerService {
         loop {
             match self
                 .pd_client
-                .load_global_config(GlobalConfigSelector::of_prefix(
-                    RESOURCE_CONTROL_CONFIG_PATH.to_string(),
-                ))
+                .load_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string())
                 .await
             {
                 Ok((items, revision)) => {
