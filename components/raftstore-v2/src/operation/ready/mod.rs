@@ -340,6 +340,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let msg_type = msg.get_message().get_msg_type();
         let to_peer_id = msg.get_to_peer().get_id();
         let to_store_id = msg.get_to_peer().get_store_id();
+        if msg_type == MessageType::MsgSnapshot {
+            let index = msg.get_message().get_snapshot().get_metadata().get_index();
+            self.update_last_sent_snapshot_index(index);
+        }
 
         trace!(
             self.logger,
@@ -775,6 +779,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // current term to apply the read. So broadcast eagerly to avoid unexpected
                     // latency.
                     self.raft_group_mut().skip_bcast_commit(false);
+                    self.update_last_sent_snapshot_index(
+                        self.raft_group().raft.raft_log.last_index(),
+                    );
 
                     self.txn_context().on_became_leader(
                         ctx,
@@ -798,6 +805,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.storage_mut().cancel_generating_snap(None);
                     self.txn_context()
                         .on_became_follower(self.term(), self.region());
+                    self.update_merge_progress_on_became_follower();
                 }
                 _ => {}
             }

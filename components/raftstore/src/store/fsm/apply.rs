@@ -44,7 +44,7 @@ use kvproto::{
     },
     raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
 };
-use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
+use pd_client::{BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
 use protobuf::{wire_format::WireType, CodedInputStream, Message};
 use raft::eraftpb::{
@@ -3941,12 +3941,12 @@ where
 
         self.delegate.term = apply.term;
         if let Some(meta) = apply.bucket_meta.clone() {
-            let buckets = self
-                .delegate
-                .buckets
-                .get_or_insert_with(BucketStat::default);
-            buckets.stats = new_bucket_stats(&meta);
-            buckets.meta = meta;
+            if let Some(old) = &mut self.delegate.buckets {
+                old.set_meta(meta);
+            } else {
+                let new = BucketStat::from_meta(meta);
+                self.delegate.buckets.replace(new);
+            }
         }
 
         let prev_state = (
