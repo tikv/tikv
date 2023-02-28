@@ -175,7 +175,11 @@ impl FlowInfoDispatcher {
                         Ok(FlowInfo::Created(region_id)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             match checkers.entry(region_id) {
-                                HashMapEntry::Occupied(e) => e.into_mut(),
+                                HashMapEntry::Occupied(e) => {
+                                    let val = e.into_mut();
+                                    val.inc();
+                                    val
+                                }
                                 HashMapEntry::Vacant(e) => {
                                     let engine = TabletFlowFactorStore::new(registry.clone());
                                     let mut v = limiters.as_ref().write().unwrap();
@@ -201,7 +205,13 @@ impl FlowInfoDispatcher {
                         Ok(FlowInfo::Destroyed(region_id)) => {
                             {
                                 let mut checkers = flow_checkers.as_ref().write().unwrap();
-                                checkers.remove(&region_id);
+                                if let Some(checker) = checkers.get(&region_id) {
+                                    // if the previous value is 1, then the updated reference count
+                                    // will be 0
+                                    if checker.dec() == 1 {
+                                        checkers.remove(&region_id);
+                                    }
+                                }
                             }
                             limiters.as_ref().write().unwrap().remove(&region_id);
                         }
