@@ -235,7 +235,14 @@ where
                     SNAP_COUNTER.generate.success.inc();
                     SNAP_HISTOGRAM.generate.observe(elapsed);
                     SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
-                    info!("snapshot generated"; "region_id" => region_id, "elapsed" => elapsed, "key" => ?snap_key, "for_balance" => for_balance);
+                    info!(
+                        "snapshot generated";
+                        "region_id" => region_id,
+                        "elapsed" => elapsed,
+                        "key" => ?snap_key,
+                        "for_balance" => for_balance,
+                        "total_size" => total_size
+                    );
                     res = Some(Box::new((snapshot, to_peer)))
                 }
 

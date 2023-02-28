@@ -380,7 +380,7 @@ impl<R: RaftExtension> Runnable for TabletRunner<R> {
             Task::Recv { stream, sink } => {
                 let task_num = self.recving_count.load(Ordering::SeqCst);
                 STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
-                    .with_label_values(&["sending"])
+                    .with_label_values(&["receiving"])
                     .set(task_num as i64);
                 if task_num >= self.cfg.concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
