@@ -45,6 +45,7 @@ fn test_region_meta_endpoint() {
         Arc::new(SecurityConfig::default()),
         router,
         std::env::temp_dir(),
+        None,
     )
     .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());

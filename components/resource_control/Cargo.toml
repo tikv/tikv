@@ -15,7 +15,7 @@ crossbeam-skiplist = "0.1"
 dashmap = "5.1"
 fail = "0.5"
 futures = { version = "0.3" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 lazy_static = "1.0"
 online_config = { workspace = true }
 pd_client = { workspace = true }
@@ -23,8 +23,8 @@ pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 serde = { version = "1.0", features = ["derive"] }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog = { workspace = true }
+slog-global = { workspace = true }
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 tikv_util = { workspace = true }
