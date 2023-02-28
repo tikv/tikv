@@ -202,12 +202,6 @@ pub enum BatchExecIsDrain {
     PagingDrain,
 }
 
-impl Default for BatchExecIsDrain {
-    fn default() -> Self {
-        BatchExecIsDrain::Drain
-    }
-}
-
 impl BatchExecIsDrain {
     #[inline]
     pub fn is_remain(&self) -> bool {
