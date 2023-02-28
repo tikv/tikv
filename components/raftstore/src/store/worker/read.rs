@@ -967,8 +967,11 @@ where
                         }
 
                         let region = Arc::clone(&delegate.region);
-                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
-
+                        let mut response =
+                            delegate.execute(&req, &region, None, Some(local_read_ctx));
+                        if let Some(snap) = response.snapshot.as_mut() {
+                            snap.bucket_meta = delegate.bucket_meta.clone();
+                        }
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
                         response
@@ -992,8 +995,11 @@ where
 
                         let region = Arc::clone(&delegate.region);
                         // Getting the snapshot
-                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
-
+                        let mut response =
+                            delegate.execute(&req, &region, None, Some(local_read_ctx));
+                        if let Some(snap) = response.snapshot.as_mut() {
+                            snap.bucket_meta = delegate.bucket_meta.clone();
+                        }
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot
                         if let Err(resp) = delegate.check_stale_read_safe(read_ts) {

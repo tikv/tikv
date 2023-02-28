@@ -66,8 +66,7 @@ impl ReportBucket {
         }
     }
 
-    fn report(&mut self, report_ts: UnixSecs) -> BucketStat {
-        self.last_report_ts = report_ts;
+    fn report(&mut self) -> BucketStat {
         match self.last_report_stat.replace(self.current_stat.clone()) {
             Some(last) => {
                 let mut delta = BucketStat::from_meta(self.current_stat.meta.clone());
@@ -312,8 +311,12 @@ where
                             );
                         }
                     } else if resp.has_merge() {
-                        // TODO
-                        info!(logger, "pd asks for merge but ignored");
+                        PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
+
+                        let merge = resp.take_merge();
+                        info!(logger, "try to merge"; "region_id" => region_id, "merge" => ?merge);
+                        let req = new_merge_request(merge);
+                        send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
                     } else {
                         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                     }
@@ -346,7 +349,8 @@ where
         };
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - last_report_ts.into_inner();
-        let delta = report_buckets.report(now);
+        report_buckets.last_report_ts = now;
+        let delta = report_buckets.report();
         let resp = self
             .pd_client
             .report_region_buckets(&delta, Duration::from_secs(interval_second));

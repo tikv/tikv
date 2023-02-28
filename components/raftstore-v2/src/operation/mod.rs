@@ -9,9 +9,9 @@ mod ready;
 mod txn_ext;
 
 pub use command::{
-    AdminCmdResult, ApplyFlowControl, CommittedEntries, CompactLogContext, ProposalControl,
-    RequestHalfSplit, RequestSplit, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
-    SimpleWriteReqEncoder, SplitFlowControl, SPLIT_PREFIX,
+    AdminCmdResult, ApplyFlowControl, CommittedEntries, CompactLogContext, MergeContext,
+    ProposalControl, RequestHalfSplit, RequestSplit, SimpleWriteBinary, SimpleWriteEncoder,
+    SimpleWriteReqDecoder, SimpleWriteReqEncoder, SplitFlowControl, SPLIT_PREFIX,
 };
 pub use life::{DestroyProgress, GcPeerContext};
 pub use ready::{
@@ -19,6 +19,7 @@ pub use ready::{
 };
 
 pub(crate) use self::{
+    bucket::BucketStatsInfo,
     command::SplitInit,
     query::{LocalReader, ReadDelegatePair, SharedReadTablet},
     txn_ext::TxnContext,
