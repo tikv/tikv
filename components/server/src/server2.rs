@@ -31,7 +31,7 @@ use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
-    flush_engine_statistics,
+    flush_engine_statistics, from_rocks_compression_type,
     raw::{Cache, Env},
     FlowInfo, RocksEngine, RocksStatistics,
 };
@@ -73,6 +73,7 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
+    import::SstImporter,
     read_pool::{
         build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
     },
@@ -108,6 +109,7 @@ use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
+    yatp_pool::CleanupMethod,
     Either,
 };
 use tokio::runtime::Builder;
@@ -242,6 +244,7 @@ struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
 struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
+    _importer: Arc<SstImporter>,
     rsmeter_pubsub_service: resource_metering::PubSubService,
 }
 
@@ -664,6 +667,7 @@ where
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
+                CleanupMethod::Remote(self.background_worker.remote()),
             ))
         } else {
             None
@@ -826,7 +830,7 @@ where
             .raft_store
             .validate(
                 self.config.coprocessor.region_split_size(),
-                self.config.coprocessor.enable_region_bucket,
+                self.config.coprocessor.enable_region_bucket(),
                 self.config.coprocessor.region_bucket_size,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
@@ -868,6 +872,30 @@ where
                 server.get_grpc_mem_quota().clone(),
             )),
         );
+
+        let import_path = self.store_path.join("import");
+        let mut importer = SstImporter::new(
+            &self.config.import,
+            import_path,
+            self.encryption_key_manager.clone(),
+            self.config.storage.api_version(),
+        )
+        .unwrap();
+        for (cf_name, compression_type) in &[
+            (
+                CF_DEFAULT,
+                self.config.rocksdb.defaultcf.bottommost_level_compression,
+            ),
+            (
+                CF_WRITE,
+                self.config.rocksdb.writecf.bottommost_level_compression,
+            ),
+        ] {
+            importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
+        }
+        let importer = Arc::new(importer);
+
+        // V2 starts split-check worker within raftstore.
 
         let split_config_manager =
             SplitConfigManager::new(Arc::new(VersionTrack::new(self.config.split.clone())));
@@ -917,6 +945,7 @@ where
                 pd_worker,
                 raft_store,
                 &state,
+                importer.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -940,6 +969,7 @@ where
         self.servers = Some(Servers {
             lock_mgr,
             server,
+            _importer: importer,
             rsmeter_pubsub_service,
         });
 
@@ -948,6 +978,23 @@ where
 
     fn register_services(&mut self) {
         let servers = self.servers.as_mut().unwrap();
+        let _engines = self.engines.as_ref().unwrap();
+
+        // Import SST service.
+        // let import_service = ImportSstService::new(
+        // self.config.import.clone(),
+        // self.config.raft_store.raft_entry_max_size,
+        // engines.engine.clone(),
+        // self.tablet_registry.as_ref().unwrap().clone(),
+        // servers.importer.clone(),
+        // );
+        // if servers
+        // .server
+        // .register_service(create_import_sst(import_service))
+        // .is_some()
+        // {
+        // fatal!("failed to register import service");
+        // }
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
