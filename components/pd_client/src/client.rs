@@ -20,7 +20,9 @@ use futures::{
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
-    meta_storagepb::{GetRequest, GetResponse},
+    meta_storagepb::{
+        GetRequest, GetResponse, PutRequest, PutResponse, WatchRequest, WatchResponse,
+    },
     metapb,
     pdpb::{self, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
@@ -36,8 +38,8 @@ use yatp::{task::future::TaskCell, ThreadPool};
 use super::{
     metrics::*,
     util::{call_option_inner, check_resp_header, sync_request, Client, PdConnector},
-    BucketStat, Config, Error, FeatureGate, MetaStorageClient, PdClient, PdFuture, RegionInfo,
-    RegionStat, Result, UnixSecs, REQUEST_TIMEOUT,
+    BucketStat, Config, Error, FeatureGate, Get, MetaStorageClient, PdClient, PdFuture, Put,
+    RegionInfo, RegionStat, Result, UnixSecs, Watch, REQUEST_TIMEOUT,
 };
 
 pub const CQ_COUNT: usize = 1;
@@ -1120,7 +1122,7 @@ impl PdClient for RpcClient {
 }
 
 impl MetaStorageClient for RpcClient {
-    fn get(&self, req: GetRequest) -> PdFuture<Result<GetResponse>> {
+    fn get(&self, req: Get) -> PdFuture<GetResponse> {
         let timer = Instant::now();
         let executor = move |client: &Client, req: GetRequest| {
             let handler = {
@@ -1137,27 +1139,72 @@ impl MetaStorageClient for RpcClient {
                 PD_REQUEST_HISTOGRAM_VEC
                     .meta_storage_get
                     .observe(timer.saturating_elapsed_secs());
-                Ok(())
+                Ok(resp)
             }) as _
         };
 
         self.pd_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req.into(), executor, LEADER_CHANGE_RETRY)
             .execute()
     }
 
-    fn put(
-        &self,
-        req: kvproto::meta_storagepb::PutRequest,
-    ) -> PdFuture<Result<kvproto::meta_storagepb::PutResponse>> {
-        todo!()
+    fn put(&self, req: Put) -> PdFuture<kvproto::meta_storagepb::PutResponse> {
+        let timer = Instant::now();
+        let executor = move |client: &Client, req: PutRequest| {
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .meta_storage
+                    .put_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "metastorage::put", e)
+                    })
+            };
+            Box::pin(async move {
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .meta_storage_put
+                    .observe(timer.saturating_elapsed_secs());
+                Ok(resp)
+            }) as _
+        };
+
+        self.pd_client
+            .request(req.into(), executor, LEADER_CHANGE_RETRY)
+            .execute()
     }
 
     fn watch(
         &self,
-        req: kvproto::meta_storagepb::WatchRequest,
-    ) -> PdFuture<Result<Self::WatchStream<kvproto::meta_storagepb::WatchResponse>>> {
-        todo!()
+        req: Watch,
+    ) -> PdFuture<Self::WatchStream<kvproto::meta_storagepb::WatchResponse>> {
+        let timer = Instant::now();
+        let executor = move |client: &Client, req: WatchRequest| {
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .meta_storage
+                    .watch_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "metastorage::watch", e)
+                    })
+            };
+            Box::pin(async move {
+                let resp = handler;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .meta_storage_watch
+                    .observe(timer.saturating_elapsed_secs());
+                Ok(resp)
+            }) as _
+        };
+
+        // NOTE: the request is purely synchronous, however `sync_request` cannot be
+        // reused directly because it only provides the stub of pdpb.
+        // `Watch` should be a low-frequency operation hence I think there are little
+        // overhead of using the asynchronous version.
+        self.pd_client
+            .request(req.into(), executor, LEADER_CHANGE_RETRY)
+            .execute()
     }
 
     type WatchStream<T> = grpcio::ClientSStreamReceiver<T>;

@@ -243,8 +243,8 @@ impl Client {
         inner.buckets_sender = Either::Left(Some(buckets_tx));
         inner.buckets_resp = Some(buckets_resp);
 
-        inner.client_stub = client_stub;
         inner.meta_storage = MetaStorageStub::new(client_stub.client.channel().clone());
+        inner.client_stub = client_stub;
         inner.members = members;
         inner.tso = tso;
         if let Some(ref on_reconnect) = inner.on_reconnect {

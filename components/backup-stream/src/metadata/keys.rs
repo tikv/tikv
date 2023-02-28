@@ -186,16 +186,7 @@ impl MetaKey {
     /// return the key that keeps the range [self, self.next_prefix()) contains
     /// all keys with the prefix `self`.
     pub fn next_prefix(&self) -> Self {
-        let mut next_prefix = self.clone();
-        for i in (0..next_prefix.0.len()).rev() {
-            if next_prefix.0[i] == u8::MAX {
-                next_prefix.0.pop();
-            } else {
-                next_prefix.0[i] += 1;
-                break;
-            }
-        }
-        next_prefix
+        Self(tikv_util::codec::next_prefix_of(self.0.clone()))
     }
 }
 
