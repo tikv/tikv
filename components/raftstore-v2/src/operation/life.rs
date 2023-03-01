@@ -632,6 +632,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // new peer. Ignore error as it's just a best effort.
             let _ = ctx.router.send_raft_message(msg);
         }
+        self.pending_reads_mut().clear_all(Some(region_id));
         self.clear_apply_scheduler();
     }
 }
