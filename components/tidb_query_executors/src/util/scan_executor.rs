@@ -188,10 +188,17 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> BatchExecutor for ScanExecuto
         // *successfully* retrieving these rows. After that, if we only consumes
         // some of the rows (TopN / Limit), we should ignore this error.
 
-        match &is_drained {
+        let is_drained = match is_drained {
             // Note: `self.is_ended` is only used for assertion purpose.
-            Err(_) | Ok(true) => self.is_ended = true,
-            Ok(false) => {}
+            Err(e) => {
+                self.is_ended = true;
+                Err(e)
+            }
+            Ok(true) => {
+                self.is_ended = true;
+                Ok(BatchExecIsDrain::Drain)
+            }
+            Ok(false) => Ok(BatchExecIsDrain::Remain),
         };
 
         BatchExecuteResult {

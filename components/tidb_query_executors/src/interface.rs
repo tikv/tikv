@@ -174,17 +174,45 @@ pub struct BatchExecuteResult {
     /// Whether or not there is no more data.
     ///
     /// This structure is a `Result`. When it is:
-    /// - `Ok(false)`: The normal case, means that there could be more data. The
-    ///   caller should continue calling `next_batch()` although for each call
-    ///   the returned data may be empty.
-    /// - `Ok(true)`:  Means that the executor is drained and no more data will
-    ///   be returned in future. However there could be some (last) data in the
-    ///   `data` field this time. The caller should NOT call `next_batch()` any
-    ///   more.
+    /// - `Ok(batch_exec_is_drain)`: See the comment of `BatchExecIsDrain`.
     /// - `Err(_)`: Means that there is an error when trying to retrieve more
     ///   data. In this case, the error is returned and the executor is also
     ///   drained. Similar to `Ok(true)`, there could be some remaining data in
     ///   the `data` field which is valid data and should be processed. The
     ///   caller should NOT call `next_batch()` any more.
-    pub is_drained: Result<bool>,
+    pub is_drained: Result<BatchExecIsDrain>,
+}
+
+/// The result of batch execution.
+/// - `Drain`: The executor is completely drained and no more data will be
+///   returned in the given range.However there could be some (last) data in
+///   `data` field this time. The caller should NOT call `next_batch()` any
+///   more.
+/// - `PagingDrain`: The executor output enough rows of the paging request,
+///   there may be following data in the next paging request, the paging request
+///   should be returned with scanned range in this case. Only used in paging
+///   mode, Also check the last data in `data` field.
+/// - `Remain`: The normal case, means that there could be more data. The caller
+///   should continue calling `next_batch()` although for each call the returned
+///   data may be empty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BatchExecIsDrain {
+    Remain,
+    Drain,
+    PagingDrain,
+}
+
+impl BatchExecIsDrain {
+    #[inline]
+    pub fn is_remain(&self) -> bool {
+        *self == BatchExecIsDrain::Remain
+    }
+
+    /// the batch execution need to stop when the result status is Drain or
+    /// PagingDrain, but only when we meet Drain, the resultset is really
+    /// drained.
+    #[inline]
+    pub fn stop(&self) -> bool {
+        !self.is_remain()
+    }
 }
