@@ -4201,6 +4201,7 @@ mod tests {
     };
     use slog::Level;
     use tempfile::Builder;
+    use test_util::assert_eq_debug;
     use tikv_kv::RocksEngine as RocksDBEngine;
     use tikv_util::{
         config::VersionTrack,
@@ -5020,25 +5021,25 @@ mod tests {
             Module::Quota,
             Box::new(QuotaLimitConfigManager::new(Arc::clone(&quota_limiter))),
         );
-        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
 
         // u64::MAX ns casts to 213503d.
         cfg_controller
             .update_config("quota.max-delay-duration", "213504d")
             .unwrap_err();
-        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
 
         cfg_controller
             .update_config("quota.foreground-cpu-time", "2000")
             .unwrap();
         cfg.quota.foreground_cpu_time = 2000;
-        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
 
         cfg_controller
             .update_config("quota.foreground-write-bandwidth", "256MB")
             .unwrap();
         cfg.quota.foreground_write_bandwidth = ReadableSize::mb(256);
-        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
 
         let mut sample = quota_limiter.new_sample(true);
         sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
@@ -5059,13 +5060,13 @@ mod tests {
             .update_config("quota.background-cpu-time", "2000")
             .unwrap();
         cfg.quota.background_cpu_time = 2000;
-        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
 
         cfg_controller
             .update_config("quota.background-write-bandwidth", "256MB")
             .unwrap();
         cfg.quota.background_write_bandwidth = ReadableSize::mb(256);
-        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
 
         let mut sample = quota_limiter.new_sample(false);
         sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
@@ -5076,7 +5077,7 @@ mod tests {
             .update_config("quota.background-read-bandwidth", "512MB")
             .unwrap();
         cfg.quota.background_read_bandwidth = ReadableSize::mb(512);
-        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
         let mut sample = quota_limiter.new_sample(false);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
@@ -5086,7 +5087,7 @@ mod tests {
             .update_config("quota.max-delay-duration", "50ms")
             .unwrap();
         cfg.quota.max_delay_duration = ReadableDuration::millis(50);
-        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
         let mut sample = quota_limiter.new_sample(true);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, true));
@@ -5102,7 +5103,7 @@ mod tests {
             .update_config("quota.enable-auto-tune", "true")
             .unwrap();
         cfg.quota.enable_auto_tune = true;
-        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
     }
 
     #[test]
@@ -5122,7 +5123,7 @@ mod tests {
         );
 
         let check_cfg = |cfg: &TikvConfig| {
-            assert_eq!(&cfg_controller.get_current(), cfg);
+            assert_eq_debug(&cfg_controller.get_current(), cfg);
             assert_eq!(&*version_tracker.value(), &cfg.server);
         };
 
@@ -5136,7 +5137,7 @@ mod tests {
             .update_config("server.raft-msg-max-batch-size", "32")
             .unwrap();
         cfg.server.raft_msg_max_batch_size = 32;
-        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
         check_cfg(&cfg);
     }
 
@@ -5152,7 +5153,7 @@ mod tests {
         for _ in 0..10 {
             cfg.compatible_adjust();
             cfg.validate().unwrap();
-            assert_eq!(c, cfg);
+            assert_eq_debug(&c, &cfg);
         }
     }
 
@@ -5571,6 +5572,10 @@ mod tests {
             Some(default_cfg.coprocessor.region_split_size() * 3 / 4 / ReadableSize::kb(1));
         default_cfg.raft_store.region_split_check_diff =
             Some(default_cfg.coprocessor.region_split_size() / 16);
+        default_cfg.rocksdb.writecf.target_file_size_multiplier = 1;
+        default_cfg.rocksdb.defaultcf.target_file_size_multiplier = 1;
+        default_cfg.rocksdb.lockcf.target_file_size_multiplier = 1;
+        default_cfg.raftdb.defaultcf.target_file_size_multiplier = 1;
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
@@ -5607,7 +5612,7 @@ mod tests {
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
 
-        assert_eq!(cfg, default_cfg);
+        assert_eq_debug(&cfg, &default_cfg);
     }
 
     #[test]
