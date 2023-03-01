@@ -614,6 +614,10 @@ macro_rules! build_cf_opt {
             } else {
                 warn!("compaction guard is disabled due to region info provider not available")
             }
+        } else {
+            // If compaction guard is disabled, we need to set multiplier to reduce file
+            // count.
+            cf_opts.set_target_file_size_multiplier(2);
         }
         if let Some(r) = $compaction_limiter {
             cf_opts.set_compaction_thread_limiter(r);
