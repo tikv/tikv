@@ -4,7 +4,7 @@ use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::raft_serverpb::RaftApplyState;
+use kvproto::{metapb, raft_serverpb::RaftApplyState};
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, store::find_peer};
@@ -472,4 +472,94 @@ fn test_non_witness_replica_read() {
         .read(None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(resp.get_header().has_error(), false);
+}
+
+fn must_get_error_is_witness<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region: &metapb::Region,
+    cmd: kvproto::raft_cmdpb::Request,
+) {
+    let req = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![cmd],
+        true,
+    );
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(
+        resp.get_header().get_error().get_is_witness(),
+        &kvproto::errorpb::IsWitness {
+            region_id: region.get_id(),
+            ..Default::default()
+        },
+        "{:?}",
+        resp
+    );
+}
+
+// Test the case that once a Raft election elects a voter as the leader, and
+// then this voter applies the switch witness cmd, it becomes a witness and can
+// correctly transfer the leader identity.
+#[test]
+fn test_witness_leader_transfer_out() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k0", b"v0");
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+
+    fail::cfg("ignore request snapshot", "pause").unwrap();
+
+    // prevent this peer from applying the switch witness command until it's elected
+    // as the Raft leader
+    let peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
+    // nonwitness -> witness
+    cluster
+        .pd_client
+        .switch_witnesses(region.get_id(), vec![peer_on_store2.get_id()], vec![true]);
+    // make sure the left peers have applied switch witness cmd
+    std::thread::sleep(Duration::from_millis(500));
+
+    // the other follower is isolated
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    for i in 1..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
+    }
+    // the leader is down
+    cluster.stop_node(1);
+
+    fail::remove("ignore request snapshot");
+    // make sure the leader has became to the witness
+    std::thread::sleep(Duration::from_millis(500));
+
+    // witness would help to replicate the logs
+    cluster.clear_send_filters();
+
+    // forbid writes
+    let put = new_put_cmd(b"k3", b"v3");
+    must_get_error_is_witness(&mut cluster, &region, put);
+    // forbid reads
+    let get = new_get_cmd(b"k1");
+    must_get_error_is_witness(&mut cluster, &region, get);
+    // forbid read index
+    let read_index = new_read_index_cmd();
+    must_get_error_is_witness(&mut cluster, &region, read_index);
+
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store3);
+    cluster.must_put(b"k1", b"v1");
+    assert_eq!(
+        cluster.leader_of_region(region.get_id()).unwrap().store_id,
+        nodes[2],
+    );
+    assert_eq!(cluster.must_get(b"k9"), Some(b"v9".to_vec()));
 }
