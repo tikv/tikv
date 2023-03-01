@@ -16,11 +16,12 @@ use futures::{
     executor::block_on,
     future::{self, BoxFuture, FutureExt, TryFutureExt},
     sink::SinkExt,
-    stream::StreamExt,
+    stream::{ErrInto, StreamExt},
+    TryStreamExt,
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
-    meta_storagepb::{GetRequest, GetResponse, PutRequest, WatchRequest},
+    meta_storagepb::{GetRequest, GetResponse, PutRequest, WatchRequest, WatchResponse},
     metapb,
     pdpb::{self, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
@@ -1173,10 +1174,7 @@ impl MetaStorageClient for RpcClient {
             .execute()
     }
 
-    fn watch(
-        &self,
-        req: Watch,
-    ) -> PdFuture<Self::WatchStream<kvproto::meta_storagepb::WatchResponse>> {
+    fn watch(&self, req: Watch) -> PdFuture<Self::WatchStream> {
         let timer = Instant::now();
         let executor = move |client: &Client, req: WatchRequest| {
             let handler = {
@@ -1190,7 +1188,7 @@ impl MetaStorageClient for RpcClient {
                 PD_REQUEST_HISTOGRAM_VEC
                     .meta_storage_watch
                     .observe(timer.saturating_elapsed_secs());
-                Ok(resp)
+                Ok(resp.err_into())
             }) as _
         };
 
@@ -1203,5 +1201,5 @@ impl MetaStorageClient for RpcClient {
             .execute()
     }
 
-    type WatchStream<T> = grpcio::ClientSStreamReceiver<T>;
+    type WatchStream = ErrInto<grpcio::ClientSStreamReceiver<WatchResponse>, crate::Error>;
 }

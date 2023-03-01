@@ -30,20 +30,13 @@ fn convert_kv(mut kv: mpb::KeyValue) -> KeyValue {
     KeyValue(MetaKey(k), v)
 }
 
+#[derive(Clone)]
 pub struct PdStore<M> {
-    client: Arc<M>,
-}
-
-impl<M> Clone for PdStore<M> {
-    fn clone(&self) -> Self {
-        Self {
-            client: Arc::clone(&self.client),
-        }
-    }
+    client: M,
 }
 
 impl<M> PdStore<M> {
-    pub fn new(s: Arc<M>) -> Self {
+    pub fn new(s: M) -> Self {
         Self { client: s }
     }
 }
@@ -78,7 +71,7 @@ impl<S> PdWatchStream<S> {
     }
 }
 
-impl<S: Stream<Item = grpcio::Result<mpb::WatchResponse>> + Unpin> Stream for PdWatchStream<S> {
+impl<S: Stream<Item = pd_client::Result<mpb::WatchResponse>> + Unpin> Stream for PdWatchStream<S> {
     type Item = Result<KvEvent>;
 
     fn poll_next(
@@ -105,7 +98,7 @@ impl<S: Stream<Item = grpcio::Result<mpb::WatchResponse>> + Unpin> Stream for Pd
             let resp = ready!(inner.poll_next_unpin(cx));
             match resp {
                 None => return None.into(),
-                Some(Err(err)) => return Some(Err(Error::Grpc(err))).into(),
+                Some(Err(err)) => return Some(Err(Error::Pd(err))).into(),
                 Some(Ok(mut x)) => {
                     if x.get_header().has_error() {
                         return Some(Err(Error::Other(box_err!(
@@ -146,7 +139,7 @@ impl Snapshot for RevOnly {
 pub struct RevOnly(i64);
 
 #[async_trait]
-impl<PD: MetaStorageClient> MetaStore for PdStore<PD> {
+impl<PD: MetaStorageClient + Clone> MetaStore for PdStore<PD> {
     type Snap = RevOnly;
 
     async fn snapshot(&self) -> Result<Self::Snap> {
@@ -225,7 +218,7 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use futures::{Future, StreamExt};
-    use pd_client::RpcClient;
+    use pd_client::{AutoHeader, RpcClient};
     use test_pd::{mocker::MetaStorage, util::*, Server as PdServer};
     use tikv_util::config::ReadableDuration;
 
@@ -240,7 +233,10 @@ mod tests {
         let eps = server.bind_addrs();
         let client =
             new_client_with_update_interval(eps, None, ReadableDuration(Duration::from_secs(99)));
-        (server, PdStore::new(Arc::new(client)))
+        (
+            server,
+            PdStore::new(AutoHeader::new(Arc::new(client), Source::LogBackup, 42)),
+        )
     }
 
     fn w<T>(f: impl Future<Output = T>) -> T {
