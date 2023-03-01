@@ -47,6 +47,19 @@ use crate::{
 };
 
 const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
+/// The extra bytes required by the wire encoding.
+/// Generally, a field (and a embedded message) would introduce 2 extra
+/// bytes. In detail, they are:
+/// - 2 bytes for the request type (Tag+Value).
+/// - 2 bytes for every string or bytes field (Tag+Length), they are:
+/// .  + the key field
+/// .  + the value field
+/// .  + the CF field (None for CF_DEFAULT)
+/// - 2 bytes for the embedded message field `PutRequest` (Tag+Length).
+/// In fact, the length field is encoded by varint, which may grow when the
+/// content length is greater than 128, however when the length is greater than
+/// 128, the extra 1~4 bytes can be ignored.
+const WIRE_EXTRA_BYTES: usize = 10;
 
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
@@ -162,19 +175,24 @@ impl RequestCollector {
                     .map(|(_, old_ts)| *old_ts < ts.into_inner())
                     .unwrap_or(true)
                 {
-                    self.unpacked_size += m.size();
+                    // When computing the raft entry size, we need to consider the extra bytes in
+                    // the wire encoding. We make a raft command entry when we unpacked size grows
+                    // to 7/8 of the max raft entry size, when the amplification by the extra bytes
+                    // is greater than 8/7 (i.e. the average size of entry is less 70B), we may meet
+                    // the "raft entry is too large" error.
+                    self.unpacked_size += m.size() + WIRE_EXTRA_BYTES;
                     if let Some((v, _)) = self
                         .write_reqs
                         .insert(encoded_key.to_owned(), (m, ts.into_inner()))
                     {
-                        self.unpacked_size -= v.size();
+                        self.unpacked_size -= v.size() + WIRE_EXTRA_BYTES;
                     }
                 }
             }
             CF_DEFAULT => {
-                self.unpacked_size += m.size();
+                self.unpacked_size += m.size() + WIRE_EXTRA_BYTES;
                 if let Some(v) = self.default_reqs.insert(k.as_encoded().clone(), m) {
-                    self.unpacked_size -= v.size();
+                    self.unpacked_size -= v.size() + WIRE_EXTRA_BYTES;
                 }
             }
             _ => unreachable!(),
