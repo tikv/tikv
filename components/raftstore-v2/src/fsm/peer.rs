@@ -34,6 +34,12 @@ pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
     is_stopped: bool,
 }
 
+impl<EK: KvEngine, ER: RaftEngine> Drop for PeerFsm<EK, ER> {
+    fn drop(&mut self) {
+        self.peer.pending_reads_mut().clear_all(None);
+    }
+}
+
 impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     pub fn new(
         cfg: &Config,

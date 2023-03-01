@@ -609,6 +609,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         lb.put_region_state(region_id, applied_index, &region_state)
             .unwrap();
         self.record_tombstone_tablet_for_destroy(ctx, write_task);
+        self.pending_reads_mut().clear_all(Some(region_id));
         self.destroy_progress_mut().start();
     }
 
