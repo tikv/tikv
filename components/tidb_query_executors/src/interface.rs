@@ -209,7 +209,8 @@ impl BatchExecIsDrain {
     }
 
     /// the batch execution need to stop when the result status is Drain or
-    /// PagingDrain, but only when we meet Drain, the resultset is really drained.
+    /// PagingDrain, but only when we meet Drain, the resultset is really
+    /// drained.
     #[inline]
     pub fn stop(&self) -> bool {
         !self.is_remain()
