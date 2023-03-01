@@ -20,9 +20,7 @@ use futures::{
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
-    meta_storagepb::{
-        GetRequest, GetResponse, PutRequest, PutResponse, WatchRequest, WatchResponse,
-    },
+    meta_storagepb::{GetRequest, GetResponse, PutRequest, WatchRequest},
     metapb,
     pdpb::{self, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
@@ -1183,12 +1181,9 @@ impl MetaStorageClient for RpcClient {
         let executor = move |client: &Client, req: WatchRequest| {
             let handler = {
                 let inner = client.inner.rl();
-                inner
-                    .meta_storage
-                    .watch_opt(&req, call_option_inner(&inner))
-                    .unwrap_or_else(|e| {
-                        panic!("fail to request PD {} err {:?}", "metastorage::watch", e)
-                    })
+                inner.meta_storage.watch(&req).unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "metastorage::watch", e)
+                })
             };
             Box::pin(async move {
                 let resp = handler;

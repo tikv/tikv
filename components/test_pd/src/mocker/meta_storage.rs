@@ -8,7 +8,8 @@ use kvproto::meta_storagepb as mpb;
 use super::etcd::{Etcd, KeyValue, Keys, KvEventType, MetaKey};
 use crate::PdMocker;
 
-struct MetaStorage {
+#[derive(Default)]
+pub struct MetaStorage {
     store: Arc<Mutex<Etcd>>,
 }
 
@@ -45,7 +46,7 @@ impl PdMocker for MetaStorage {
 
     fn meta_store_put(&self, mut req: mpb::PutRequest) -> Option<super::Result<mpb::PutResponse>> {
         let mut store = self.store.lock().unwrap();
-        store.set(KeyValue(MetaKey(req.take_key()), req.take_value()));
+        block_on(store.set(KeyValue(MetaKey(req.take_key()), req.take_value()))).unwrap();
         Some(Ok(Default::default()))
     }
 
@@ -76,7 +77,7 @@ impl PdMocker for MetaStorage {
                 });
                 let mut resp = mpb::WatchResponse::default();
                 resp.set_events(vec![event].into());
-                sink.send((resp, Default::default())).await;
+                sink.send((resp, Default::default())).await.unwrap();
             }
         });
         true

@@ -7,26 +7,20 @@ use std::{
         Arc,
     },
     task::ready,
-    time::Duration,
 };
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use grpcio::ClientSStreamReceiver;
-use kvproto::{
-    meta_storagepb as mpb,
-    pdpb::{self, WatchGlobalConfigResponse},
-};
+use kvproto::meta_storagepb as mpb;
 use pd_client::{Get, MetaStorageClient, Put, Watch};
-use tikv_util::{box_err, info, warn};
+use tikv_util::{box_err, info};
 
 use super::{
     GetResponse, Keys, KvChangeSubscription, KvEvent, KvEventType, MetaStore, Snapshot,
-    TransactionOp, WithRevision,
+    WithRevision,
 };
 use crate::{
-    annotate,
-    errors::{ContextualResultExt, Error, Result},
+    errors::{Error, Result},
     metadata::keys::{KeyValue, MetaKey, PREFIX},
 };
 
@@ -158,13 +152,13 @@ impl<PD: MetaStorageClient> MetaStore for PdStore<PD> {
     async fn snapshot(&self) -> Result<Self::Snap> {
         // hacking here: when we are doing point querying, the server won't return
         // revision. So we are going to query a non-exist prefix here.
-        let random_key = format!("/{}", rand::random::<u64>());
         let rev = self
             .client
             .get(Get::of(PREFIX.as_bytes().to_vec()).prefixed().limit(0))
             .await?
             .get_header()
             .get_revision();
+        info!("pd meta client getting snapshot."; "rev" => %rev);
         Ok(RevOnly(rev))
     }
 
@@ -173,6 +167,7 @@ impl<PD: MetaStorageClient> MetaStore for PdStore<PD> {
         keys: super::Keys,
         start_rev: i64,
     ) -> Result<super::KvChangeSubscription> {
+        info!("pd meta client creating watch stream."; "keys" => ?keys, "rev" => %start_rev);
         match keys {
             Keys::Prefix(k) => {
                 use futures::stream::StreamExt;
@@ -190,7 +185,7 @@ impl<PD: MetaStorageClient> MetaStore for PdStore<PD> {
         }
     }
 
-    async fn txn(&self, txn: super::Transaction) -> Result<()> {
+    async fn txn(&self, _txn: super::Transaction) -> Result<()> {
         Err(unimplemented("PdStore::txn"))
     }
 
@@ -199,6 +194,7 @@ impl<PD: MetaStorageClient> MetaStore for PdStore<PD> {
     }
 
     async fn set(&self, mut kv: KeyValue) -> Result<()> {
+        info!("pd meta client setting."; "pair" => ?kv);
         self.client
             .put(Put::of(kv.take_key(), kv.take_value()))
             .await?;
@@ -206,7 +202,7 @@ impl<PD: MetaStorageClient> MetaStore for PdStore<PD> {
     }
 
     async fn get_latest(&self, keys: Keys) -> Result<WithRevision<Vec<KeyValue>>> {
-        let spec = match keys {
+        let spec = match keys.clone() {
             Keys::Prefix(p) => Get::of(p).prefixed(),
             Keys::Key(k) => Get::of(k),
             Keys::Range(s, e) => Get::of(s).range_to(e),
@@ -219,6 +215,7 @@ impl<PD: MetaStorageClient> MetaStore for PdStore<PD> {
             .map(convert_kv)
             .collect::<Vec<_>>();
         let revision = resp.get_header().get_revision();
+        info!("pd meta client getting."; "range" => ?keys, "rev" => %revision, "result" => ?inner);
         Ok(WithRevision { inner, revision })
     }
 }
@@ -229,17 +226,17 @@ mod tests {
 
     use futures::{Future, StreamExt};
     use pd_client::RpcClient;
-    use test_pd::{mocker::Service, util::*, Server as PdServer};
+    use test_pd::{mocker::MetaStorage, util::*, Server as PdServer};
     use tikv_util::config::ReadableDuration;
 
     use super::PdStore;
     use crate::metadata::{
         keys::{KeyValue, MetaKey},
-        store::{Keys, KvEventType, MetaStore},
+        store::{Keys, MetaStore},
     };
 
-    fn new_test_server_and_client() -> (PdServer<Service>, PdStore<RpcClient>) {
-        let server = PdServer::with_case(1);
+    fn new_test_server_and_client() -> (PdServer<MetaStorage>, PdStore<RpcClient>) {
+        let server = PdServer::with_case(1, Arc::<MetaStorage>::default());
         let eps = server.bind_addrs();
         let client =
             new_client_with_update_interval(eps, None, ReadableDuration(Duration::from_secs(99)));
@@ -267,11 +264,7 @@ mod tests {
         let k = w(c.get_latest(Keys::Key(MetaKey::task_of("a")))).unwrap();
         assert_eq!(
             k.inner.as_slice(),
-            [KeyValue(
-                MetaKey::task_of("a"),
-                b"the signpost of flowers".to_vec()
-            )]
-            .as_slice()
+            [kv("a", "the signpost of flowers")].as_slice()
         );
         let k = w(c.get_latest(Keys::Key(MetaKey::task_of("d")))).unwrap();
         assert_eq!(k.inner.as_slice(), [].as_slice());

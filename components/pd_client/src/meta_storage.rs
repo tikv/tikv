@@ -3,12 +3,11 @@
 //! `meta_storage` is the API set for storing generic KV pairs.
 //! It is a trimmed version of the KV service of etcd, along with some metrics.
 
-use futures::{stream::BoxStream, FutureExt, Stream};
-use grpcio::RpcStatusCode;
+use futures::Stream;
 use kvproto::meta_storagepb as pb;
 use tikv_util::codec;
 
-use crate::{Error, PdFuture, Result, RpcClient};
+use crate::PdFuture;
 
 #[repr(transparent)]
 #[derive(Clone, Debug)]

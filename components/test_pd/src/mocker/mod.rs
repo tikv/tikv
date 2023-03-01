@@ -19,6 +19,7 @@ pub use self::{
     bootstrap::AlreadyBootstrapped,
     incompatible::Incompatible,
     leader_change::LeaderChange,
+    meta_storage::MetaStorage,
     retry::{NotRetry, Retry},
     service::Service,
     split::Split,

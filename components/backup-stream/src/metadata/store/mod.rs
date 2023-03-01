@@ -127,7 +127,7 @@ impl<T> WithRevision<T> {
 /// The key set for getting.
 /// I guess there should be a `&[u8]` in meta key,
 /// but the etcd client requires Into<Vec<u8>> :(
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Keys {
     Prefix(MetaKey),
     Range(MetaKey, MetaKey),
