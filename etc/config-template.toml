@@ -741,7 +741,7 @@
 ## and level0. `target-file-size-base` is used to control the size of a single SST file of level1 to
 ## level6. Each level will have `target-file-size-base * (target-file-size-multiplier ^ (level - 1))`.
 # target-file-size-base = "8MB"
-# In partitioned-raft-kv, the default value of target-file-size-multiplier is 2 for write and default cf.
+## In partitioned-raft-kv, the default value of target-file-size-multiplier is 2 for write and default cf.
 # target-file-size-multiplier = 1
 
 ## Max bytes for `compaction.max_compaction_bytes`.
