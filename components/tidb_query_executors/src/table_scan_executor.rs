@@ -723,10 +723,7 @@ mod tests {
             let expect_rows = *expect_rows;
             let expect_drained = start_row + expect_rows > total_rows;
             let result = block_on(executor.next_batch(expect_rows));
-            assert_eq!(
-                result.is_drained.as_ref().unwrap().stop(),
-                expect_drained
-            );
+            assert_eq!(result.is_drained.as_ref().unwrap().stop(), expect_drained);
             if expect_drained {
                 // all remaining rows are fetched
                 helper.expect_table_values(
