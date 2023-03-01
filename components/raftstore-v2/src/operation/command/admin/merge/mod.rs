@@ -15,15 +15,13 @@ use raftstore::Result;
 use slog::{info, warn, Logger};
 use tikv_util::box_err;
 
-use crate::{raft::Peer, router::PeerMsg};
+use crate::raft::Peer;
 
 #[derive(Default)]
 pub struct MergeContext {
     prepare_status: Option<PrepareStatus>,
     /// Current source region is catching up logs for merge.
     catch_up_logs: Option<CatchUpLogs>,
-    /// Used at target region.
-    pending_merge_result: Option<(u64, PeerMsg)>,
 }
 
 impl MergeContext {

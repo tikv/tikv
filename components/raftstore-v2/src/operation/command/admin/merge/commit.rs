@@ -63,7 +63,6 @@ use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
         fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, util, ProposalContext, Transport,
-        WriteTask,
     },
     Result,
 };
@@ -655,28 +654,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 target: self.peer().clone(),
             },
         );
-    }
-
-    #[inline]
-    pub fn maybe_process_pending_merge_result<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        task: &mut WriteTask<EK, ER>,
-    ) {
-        if let Some((id, msg)) = self.merge_context_mut().pending_merge_result.take() {
-            let logger = self.logger.clone();
-            let mailbox = store_ctx.router.mailbox(id).unwrap();
-            task.persisted_cbs.push(Box::new(move || {
-                if let Err(e) = mailbox.force_send(msg) {
-                    slog_panic!(
-                        logger,
-                        "failed to send merge result(FromTargetLog)";
-                        "to_source" => id,
-                        "err" => ?e,
-                    );
-                }
-            }));
-        }
+        self.take_merge_context();
     }
 
     // Match v1::on_merge_result. Called on source peer.
@@ -695,6 +673,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "target" => ?target,
             );
         }
+        self.take_merge_context();
         if self.is_handling_snapshot() {
             slog_panic!(
                 self.logger,
