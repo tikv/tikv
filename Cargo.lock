@@ -4204,8 +4204,9 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#33530112c3a4acaf8c50ca9d0470284109926296"
+source = "git+https://github.com/hicqu/raft-engine.git?branch=open-option#dd29fd84bb061aade6b27a353cdfcd47978a2c36"
 dependencies = [
+ "bitflags",
  "byteorder",
  "crc32fast",
  "crossbeam",
@@ -4227,6 +4228,38 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "rayon",
+ "scopeguard",
+ "serde",
+ "serde_repr",
+ "strum 0.24.1",
+ "thiserror",
+]
+
+[[package]]
+name = "raft-engine"
+version = "0.3.0"
+source = "git+https://github.com/tikv/raft-engine.git#404e3fefaeeb4da6b7650268d500cfd3fbd29cae"
+dependencies = [
+ "byteorder",
+ "crc32fast",
+ "crossbeam",
+ "fail",
+ "fs2",
+ "hashbrown 0.12.0",
+ "hex 0.4.2",
+ "if_chain",
+ "lazy_static",
+ "libc 0.2.139",
+ "log",
+ "lz4-sys",
+ "nix 0.26.2",
+ "num-derive",
+ "num-traits",
+ "parking_lot 0.12.1",
+ "prometheus",
+ "prometheus-static-metric",
+ "protobuf",
+ "rayon",
  "rhai",
  "scopeguard",
  "serde",
@@ -4238,11 +4271,11 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#33530112c3a4acaf8c50ca9d0470284109926296"
+source = "git+https://github.com/tikv/raft-engine.git#404e3fefaeeb4da6b7650268d500cfd3fbd29cae"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
- "raft-engine",
+ "raft-engine 0.3.0 (git+https://github.com/tikv/raft-engine.git)",
 ]
 
 [[package]]
@@ -4269,7 +4302,7 @@ dependencies = [
  "online_config",
  "protobuf",
  "raft",
- "raft-engine",
+ "raft-engine 0.3.0 (git+https://github.com/hicqu/raft-engine.git?branch=open-option)",
  "serde",
  "serde_derive",
  "slog",
@@ -6460,6 +6493,26 @@ dependencies = [
  "walkdir",
  "yatp",
  "zipf",
+]
+
+[[package]]
+name = "tikv-agent"
+version = "0.0.1"
+dependencies = [
+ "cc",
+ "clap 2.33.0",
+ "encryption",
+ "encryption_export",
+ "engine_traits",
+ "keys",
+ "kvproto",
+ "raft-engine 0.3.0 (git+https://github.com/hicqu/raft-engine.git?branch=open-option)",
+ "serde_json",
+ "server",
+ "tikv",
+ "tikv_util",
+ "time",
+ "toml",
 ]
 
 [[package]]
