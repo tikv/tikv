@@ -831,7 +831,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn get_index_term(&self, idx: u64) -> u64 {
+    pub fn index_term(&self, idx: u64) -> u64 {
         match self.raft_group.raft.raft_log.term(idx) {
             Ok(t) => t,
             Err(e) => slog_panic!(self.logger, "failed to load term"; "index" => idx, "err" => ?e),

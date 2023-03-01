@@ -214,11 +214,6 @@ pub enum PeerMsg {
     RedirectCatchUpLogs(CatchUpLogs),
     // From target [`Peer`] to source [`Peer`].
     CatchUpLogs(CatchUpLogs),
-    // From target to source.
-    MergeResult {
-        target_region_id: u64,
-        target: metapb::Peer,
-    },
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),

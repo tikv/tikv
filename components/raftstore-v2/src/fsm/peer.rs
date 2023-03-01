@@ -192,7 +192,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         self.schedule_tick(PeerTick::SplitRegionCheck);
         self.schedule_tick(PeerTick::PdHeartbeat);
         self.schedule_tick(PeerTick::CompactLog);
-        self.schedule_tick(PeerTick::CheckMerge);
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
         }
@@ -338,13 +337,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .peer_mut()
                     .on_redirect_catch_up_logs(self.store_ctx, c),
                 PeerMsg::CatchUpLogs(c) => self.fsm.peer_mut().on_catch_up_logs(c),
-                PeerMsg::MergeResult {
-                    target_region_id,
-                    target,
-                } => self
-                    .fsm
-                    .peer_mut()
-                    .on_merge_result(target_region_id, target),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }

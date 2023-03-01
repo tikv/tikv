@@ -20,15 +20,15 @@
 //!                   (5) CommitMergeResult
 //!        +-----------------------------------------+
 //!        |                                         |
-//! +------+-------+     (1) CommitMerge      +------v------+  (6) MergeResult
-//! | target apply <--------------------------+ target peer +----------+
-//! +---^--+-------+                          +-----^v------+          |
-//!     |  +------------------------------------(redirect)             |
-//!     |                                            |                 |
-//!     +----------------------------------------+   | (2) CatchUpLogs |
-//!     (4) signal                               |   |                 |
-//! +--------------+  (3) PrepareMergeResult  +--+---v------+          |
-//! | source apply +--------------------------> source peer <----------+
+//! +------+-------+     (1) CommitMerge      +------v------+
+//! | target apply <--------------------------+ target peer +
+//! +---^--+-------+                          +-----^v------+
+//!     |  +------------------------------------(redirect)
+//!     |                                            |
+//!     +----------------------------------------+   | (2) CatchUpLogs
+//!     (4) signal                               |   |
+//! +--------------+  (3) PrepareMergeResult  +--+---v------+
+//! | source apply +--------------------------> source peer +
 //! +--------------+                          +-------------+
 //! ```
 //!
@@ -39,11 +39,6 @@
 //! `PrepareMerge` command, it will send its tablet to the target region (step
 //! 4). Here we use a temporary channel instead of directly sending message
 //! between apply FSMs like in v1.
-//!
-//! ## On Apply Result (`Peer::on_apply_res_commit_merge`)
-//!
-//! Update the target peer states and send a `MergeResult` message to source
-//! peer to destroy it.
 
 use std::{any::Any, cmp, path::PathBuf};
 
@@ -119,9 +114,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) -> Result<()> {
         let state = self.applied_merge_state().unwrap();
         let target = state.get_target();
-
-        self.validate_merge_peer(store_ctx, target)?;
         let target_id = target.get_id();
+
+        let exist_region = {
+            let store_meta = store_ctx.store_meta.lock().unwrap();
+            store_meta.regions.get(&target_id).map(|(r, _)| r.clone())
+        };
+        if let Some(r) = exist_region {
+            let exist_epoch = r.get_region_epoch();
+            let expect_epoch = target.get_region_epoch();
+            // exist_epoch > expect_epoch
+            if util::is_epoch_stale(expect_epoch, exist_epoch) {
+                return Err(box_err!("target region changed {:?} -> {:?}", target, r));
+            }
+        }
 
         let (min_index, _) = self.calculate_min_progress()?;
         let low = cmp::max(min_index + 1, state.get_min_index());
@@ -164,6 +170,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // quorum stores of target region. Otherwise we need to enable proposal
         // forwarding.
         let msg = PeerMsg::AskCommitMerge(request);
+        // If target peer is destroyed, life.rs is responsible for telling us to
+        // rollback.
         match store_ctx.router.force_send(target_id, msg) {
             Ok(_) => (),
             Err(SendError(PeerMsg::AskCommitMerge(msg))) => {
@@ -183,37 +191,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(())
     }
 
-    // Match v1::validate_merge_peer.
-    fn validate_merge_peer<T>(
-        &self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        target_region: &metapb::Region,
-    ) -> Result<()> {
-        let target_region_id = target_region.get_id();
-        let exist_region = {
-            let store_meta = store_ctx.store_meta.lock().unwrap();
-            store_meta
-                .regions
-                .get(&target_region_id)
-                .map(|(r, _)| r.clone())
-        };
-        if let Some(r) = exist_region {
-            let exist_epoch = r.get_region_epoch();
-            let expect_epoch = target_region.get_region_epoch();
-            // exist_epoch > expect_epoch
-            if util::is_epoch_stale(expect_epoch, exist_epoch) {
-                return Err(box_err!(
-                    "target region changed {:?} -> {:?}",
-                    target_region,
-                    r
-                ));
-            }
-        }
-        // Let it send the request. If target peer is destroyed, life.rs is responsible
-        // for telling us to rollback.
-        Ok(())
-    }
-
     pub fn on_reject_commit_merge(&mut self, index: u64) {
         warn!(self.logger, "target peer rejected commit merge"; "index" => index);
     }
@@ -225,19 +202,61 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) {
+        match self.validate_commit_merge(&req) {
+            Some(true) => {
+                let (ch, _) = CmdResChannel::pair();
+                self.on_admin_command(store_ctx, req, ch);
+            }
+            Some(false) => {
+                let commit_merge = req.get_admin_request().get_commit_merge();
+                let source_id = commit_merge.get_source().get_id();
+                let _ = store_ctx.router.force_send(
+                    source_id,
+                    PeerMsg::RejectCommitMerge {
+                        index: commit_merge.get_commit(),
+                    },
+                );
+            }
+            _ => (),
+        }
+    }
+
+    fn validate_commit_merge(&self, req: &RaftCmdRequest) -> Option<bool> {
         let expected_epoch = req.get_header().get_region_epoch();
-        if expected_epoch == self.region().get_region_epoch() {
-            let (ch, _) = CmdResChannel::pair();
-            self.on_admin_command(store_ctx, req, ch);
-        } else if util::is_epoch_stale(expected_epoch, self.region().get_region_epoch()) {
-            let commit_merge = req.get_admin_request().get_commit_merge();
-            let source_id = commit_merge.get_source().get_id();
-            let _ = store_ctx.router.force_send(
-                source_id,
-                PeerMsg::RejectCommitMerge {
-                    index: commit_merge.get_commit(),
-                },
+        let source_region = req.get_admin_request().get_commit_merge().get_source();
+        let region = self.region();
+        if util::is_epoch_stale(expected_epoch, region.get_region_epoch()) {
+            info!(
+                self.logger,
+                "reject commit merge because of stale";
+                "current_epoch" => ?region.get_region_epoch(),
+                "expected_epoch" => ?expected_epoch,
             );
+            Some(false)
+        } else if self.storage().has_dirty_data() {
+            info!(self.logger, "reject commit merge because of dirty data");
+            Some(false)
+        // Match v1::check_merge_proposal.
+        } else if !util::is_sibling_regions(source_region, region) {
+            info!(
+                self.logger,
+                "reject commit merge because regions are not sibling";
+                "source" => ?source_region,
+                "target" => ?region,
+            );
+            Some(false)
+        } else if !region_on_same_stores(source_region, region) {
+            info!(
+                self.logger,
+                "reject commit merge because peers not matched";
+                "source" => ?source_region,
+                "target" => ?region,
+            );
+            Some(false)
+        } else if expected_epoch == region.get_region_epoch() {
+            Some(true)
+        } else {
+            None
         }
     }
 
@@ -246,29 +265,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) -> Result<u64> {
-        if self.storage().has_dirty_data() {
-            return Err(box_err!(
-                "{:?} target peer has dirty data, try again later",
-                self.logger.list()
-            ));
-        }
-        // Match v1::check_merge_proposal.
-        let source_region = req.get_admin_request().get_commit_merge().get_source();
-        let region = self.region();
-        if !util::is_sibling_regions(source_region, region) {
-            return Err(box_err!(
-                "{:?} and {:?} should be sibling",
-                source_region,
-                region
-            ));
-        }
-        if !region_on_same_stores(source_region, region) {
-            return Err(box_err!(
-                "peers not matched: {:?} {:?}",
-                source_region,
-                region
-            ));
-        }
         let mut proposal_ctx = ProposalContext::empty();
         proposal_ctx.insert(ProposalContext::COMMIT_MERGE);
         let data = req.write_to_bytes().unwrap();
@@ -475,7 +471,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             entries = &entries[(self.raft_group().raft.raft_log.committed - log_idx) as usize..];
             log_idx = self.raft_group().raft.raft_log.committed;
         }
-        let log_term = self.get_index_term(log_idx);
+        let log_term = self.index_term(log_idx);
 
         let last_log = entries.last().unwrap();
         if last_log.term > self.term() {
@@ -503,10 +499,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     // Called on source peer.
-    pub fn update_merge_progress_on_apply_res_prepare_merge<T: Transport>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-    ) {
+    pub fn post_prepare_merge<T: Transport>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         assert!(self.applied_merge_state().is_some());
         if let Some(c) = &self.merge_context().unwrap().catch_up_logs
             && self.catch_up_logs_ready(c)
@@ -517,7 +510,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.logger,
                     "failed to respond to merge target, are we shutting down?"
                 );
+                // TODO: rollback.
             }
+            self.take_merge_context();
+            self.mark_for_destroy(None);
             return;
         }
         self.on_check_merge(store_ctx);
@@ -611,14 +607,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .apply_trace_mut()
             .on_admin_flush(res.index);
         self.set_has_extra_write();
-        // destroy source.
-        let _ = store_ctx.router.send(
-            res.source.get_id(),
-            PeerMsg::MergeResult {
-                target_region_id: self.region_id(),
-                target: self.peer().clone(),
-            },
-        );
         self.take_merge_context();
     }
 

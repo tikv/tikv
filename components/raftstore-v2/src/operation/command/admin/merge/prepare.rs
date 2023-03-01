@@ -522,6 +522,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .enter_prepare_merge(res.state.get_commit());
         self.merge_context_mut().prepare_status = Some(PrepareStatus::Applied(res.state));
 
-        self.update_merge_progress_on_apply_res_prepare_merge(store_ctx);
+        self.post_prepare_merge(store_ctx);
     }
 }
