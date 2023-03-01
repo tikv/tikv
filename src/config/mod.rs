@@ -321,6 +321,7 @@ macro_rules! cf_config {
             pub min_write_buffer_number_to_merge: i32,
             pub max_bytes_for_level_base: ReadableSize,
             pub target_file_size_base: ReadableSize,
+            pub target_file_size_multiplier: i32,
             pub level0_file_num_compaction_trigger: i32,
             pub level0_slowdown_writes_trigger: Option<i32>,
             pub level0_stop_writes_trigger: Option<i32>,
@@ -572,6 +573,9 @@ macro_rules! build_cf_opt {
         cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
         cf_opts.set_max_bytes_for_level_base($opt.max_bytes_for_level_base.0);
         cf_opts.set_target_file_size_base($opt.target_file_size_base.0);
+        if $opt.target_file_size_multiplier != 0 {
+            cf_opts.set_target_file_size_multiplier($opt.target_file_size_multiplier);
+        }
         cf_opts.set_level_zero_file_num_compaction_trigger($opt.level0_file_num_compaction_trigger);
         cf_opts.set_level_zero_slowdown_writes_trigger(
             $opt.level0_slowdown_writes_trigger.unwrap_or_default(),
@@ -614,10 +618,6 @@ macro_rules! build_cf_opt {
             } else {
                 warn!("compaction guard is disabled due to region info provider not available")
             }
-        } else {
-            // If compaction guard is disabled, we need to set multiplier to reduce file
-            // count.
-            cf_opts.set_target_file_size_multiplier(2);
         }
         if let Some(r) = $compaction_limiter {
             cf_opts.set_compaction_thread_limiter(r);
@@ -663,6 +663,7 @@ impl Default for DefaultCfConfig {
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
+            target_file_size_multiplier: 0,
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
@@ -788,6 +789,7 @@ impl Default for WriteCfConfig {
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
+            target_file_size_multiplier: 0,
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
@@ -894,6 +896,7 @@ impl Default for LockCfConfig {
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
             target_file_size_base: ReadableSize::mb(8),
+            target_file_size_multiplier: 0,
             level0_file_num_compaction_trigger: 1,
             level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
@@ -977,6 +980,7 @@ impl Default for RaftCfConfig {
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
             target_file_size_base: ReadableSize::mb(8),
+            target_file_size_multiplier: 0,
             level0_file_num_compaction_trigger: 1,
             level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
@@ -1237,6 +1241,16 @@ impl DbConfig {
                 self.write_buffer_limit.get_or_insert(ReadableSize(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                 ));
+                if self.writecf.enable_compaction_guard != Some(true)
+                    && self.writecf.target_file_size_multiplier == 0
+                {
+                    self.writecf.target_file_size_multiplier = 2;
+                }
+                if self.defaultcf.enable_compaction_guard != Some(true)
+                    && self.defaultcf.target_file_size_multiplier == 0
+                {
+                    self.defaultcf.target_file_size_multiplier = 2;
+                }
                 self.defaultcf.disable_write_stall = true;
                 self.writecf.disable_write_stall = true;
                 self.lockcf.disable_write_stall = true;
@@ -1479,6 +1493,7 @@ impl Default for RaftDefaultCfConfig {
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
+            target_file_size_multiplier: 0,
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
