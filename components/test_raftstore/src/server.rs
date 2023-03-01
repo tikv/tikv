@@ -404,7 +404,7 @@ impl ServerCluster {
         ));
         let extension = engine.raft_extension();
         let store = Storage::<_, _, F>::from_engine(
-            engine,
+            engine.clone(),
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
@@ -440,7 +440,7 @@ impl ServerCluster {
         let import_service = ImportSstService::new(
             cfg.import.clone(),
             cfg.raft_store.raft_entry_max_size,
-            sim_router.clone(),
+            engine,
             engines.kv.clone(),
             Arc::clone(&importer),
         );
