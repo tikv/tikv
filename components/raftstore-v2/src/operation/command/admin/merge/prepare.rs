@@ -29,7 +29,7 @@
 
 use std::mem;
 
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};
+use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};
 use kvproto::{
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, CmdType, PrepareMergeRequest, PutRequest,
@@ -46,8 +46,9 @@ use raftstore::{
     Error, Result,
 };
 use slog::{debug, info};
-use tikv_util::{box_err, log::SlogFormat, store::region_on_same_stores};
+use tikv_util::{box_err, log::SlogFormat, slog_panic, store::region_on_same_stores};
 
+use super::merge_source_path;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
@@ -457,6 +458,26 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .set_merge_state(merging_state.clone());
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.success.inc();
+
+        let _ = self.flush();
+        let tablet = self.tablet().clone();
+        let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
+            slog_panic!(
+                self.logger,
+                "fails to create checkpoint object";
+                "error" => ?e
+            )
+        });
+        let reg = self.tablet_registry();
+        let path = merge_source_path(reg, self.region_id(), log_index);
+        checkpointer.create_at(&path, None, 0).unwrap_or_else(|e| {
+            slog_panic!(
+                self.logger,
+                "fails to create checkpoint";
+                "path" => %path.display(),
+                "error" => ?e
+            )
+        });
 
         Ok((
             AdminResponse::default(),

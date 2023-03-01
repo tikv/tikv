@@ -147,7 +147,6 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     ApplyTask::RefreshBucketStat(bucket_meta) => {
                         self.apply.on_refresh_buckets(bucket_meta)
                     }
-                    ApplyTask::LogsUpToDate(r) => self.apply.on_logs_up_to_date(r),
                 }
 
                 self.apply.maybe_flush().await;

@@ -3,8 +3,10 @@
 pub mod commit;
 pub mod prepare;
 
+use std::path::PathBuf;
+
 use commit::CatchUpLogs;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{
     raft_cmdpb::RaftCmdRequest,
     raft_serverpb::{MergeState, PeerState, RegionLocalState},
@@ -16,6 +18,14 @@ use slog::{info, warn, Logger};
 use tikv_util::box_err;
 
 use crate::raft::Peer;
+
+const MERGE_SOURCE_PREFIX: &str = "merge-source";
+
+// Index is the commit index of `CommitMergeRequest`.
+fn merge_source_path<EK>(registry: &TabletRegistry<EK>, region_id: u64, index: u64) -> PathBuf {
+    let tablet_name = registry.tablet_name(MERGE_SOURCE_PREFIX, region_id, index);
+    registry.tablet_root().join(tablet_name)
+}
 
 #[derive(Default)]
 pub struct MergeContext {

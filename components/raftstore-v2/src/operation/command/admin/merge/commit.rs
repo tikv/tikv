@@ -17,19 +17,19 @@
 //! ## Apply (`Apply::apply_commit_merge`)
 //!
 //! ```text
-//!                 (5) CommitMergeResult
-//!        +------------------------------------+
-//!        |                                    |
-//! +------+-------+   (1) CommitMerge   +------v------+  (6) MergeResult
-//! | target apply <---------------------+ target peer +----------+
-//! +---^--+-------+                     +-----^v------+          |
-//!     |  +-------------------------------(redirect)             |
-//!     |                                       |                 |
-//!     | (4) signal                            | (2) CatchUpLogs |
-//!     |                                       |                 |
-//! +---+----------+  (3) LogsUpToDate   +------v------+          |
-//! | source apply <---------------------+ source peer <----------+
-//! +--------------+                     +-------------+
+//!                   (5) CommitMergeResult
+//!        +-----------------------------------------+
+//!        |                                         |
+//! +------+-------+     (1) CommitMerge      +------v------+  (6) MergeResult
+//! | target apply <--------------------------+ target peer +----------+
+//! +---^--+-------+                          +-----^v------+          |
+//!     |  +------------------------------------(redirect)             |
+//!     |                                            |                 |
+//!     +----------------------------------------+   | (2) CatchUpLogs |
+//!     (4) signal                               |   |                 |
+//! +--------------+  (3) PrepareMergeResult  +--+---v------+          |
+//! | source apply +--------------------------> source peer <----------+
+//! +--------------+                          +-------------+
 //! ```
 //!
 //! At first, target region will not apply the `CommitMerge` command. Instead
@@ -48,9 +48,7 @@
 use std::{any::Any, cmp, path::PathBuf};
 
 use crossbeam::channel::SendError;
-use engine_traits::{
-    Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
-};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext};
 use futures::channel::oneshot;
 use kvproto::{
     metapb::{self, Region},
@@ -72,12 +70,13 @@ use tikv_util::{
     store::{find_peer, region_on_same_stores},
 };
 
+use super::merge_source_path;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
     operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
-    router::{ApplyTask, CmdResChannel, PeerMsg, PeerTick, StoreMsg},
+    router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
 };
 
 #[derive(Debug)]
@@ -94,14 +93,6 @@ pub struct CatchUpLogs {
     pub target_region_id: u64,
     pub merge: CommitMergeRequest,
     pub tx: oneshot::Sender<()>,
-}
-
-const MERGE_SOURCE_PREFIX: &str = "merge-source";
-
-// Index is the commit index of `CommitMergeRequest`.
-fn merge_source_path<EK>(registry: &TabletRegistry<EK>, region_id: u64, index: u64) -> PathBuf {
-    let tablet_name = registry.tablet_name(MERGE_SOURCE_PREFIX, region_id, index);
-    registry.tablet_root().join(tablet_name)
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -371,24 +362,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    // Called on source peer.
-    pub fn update_merge_progress_on_apply_res_prepare_merge<T: Transport>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-    ) {
-        assert!(self.applied_merge_state().is_some());
-        if let Some(c) = &self.merge_context().unwrap().catch_up_logs
-            && self.catch_up_logs_ready(c)
-        {
-            let c = self.merge_context_mut().catch_up_logs.take().unwrap();
-            self.apply_scheduler()
-                .unwrap()
-                .send(ApplyTask::LogsUpToDate(c));
-            return;
-        }
-        self.on_check_merge(store_ctx);
-    }
-
     #[inline]
     pub fn on_redirect_catch_up_logs<T>(
         &mut self,
@@ -440,9 +413,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.merge_context_mut().catch_up_logs = Some(catch_up_logs);
         } else {
             catch_up_logs.merge.clear_entries();
-            self.apply_scheduler()
-                .unwrap()
-                .send(ApplyTask::LogsUpToDate(catch_up_logs));
+            if catch_up_logs.tx.send(()).is_err() {
+                error!(
+                    self.logger,
+                    "failed to respond to merge target, are we shutting down?"
+                );
+            }
         }
     }
 
@@ -525,37 +501,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .maybe_append(log_idx, log_term, merge.get_commit(), entries)
             .map(|(_, last_index)| last_index)
     }
-}
 
-impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
-    // Match v1::logs_up_to_date_for_merge. Called on source peer.
-    pub fn on_logs_up_to_date(&mut self, catch_up_logs: CatchUpLogs) {
-        info!(self.logger, "source logs are all applied now");
-        let _ = self.flush();
-        let tablet = self.tablet().clone();
-        let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
-            slog_panic!(
-                self.logger,
-                "fails to create checkpoint object";
-                "error" => ?e
-            )
-        });
-        let reg = self.tablet_registry();
-        let path = merge_source_path(reg, self.region_id(), catch_up_logs.merge.get_commit());
-        checkpointer.create_at(&path, None, 0).unwrap_or_else(|e| {
-            slog_panic!(
-                self.logger,
-                "fails to create checkpoint";
-                "path" => %path.display(),
-                "error" => ?e
-            )
-        });
-        if catch_up_logs.tx.send(()).is_err() {
-            error!(
-                self.logger,
-                "failed to respond to merge target, are we shutting down?"
-            );
+    // Called on source peer.
+    pub fn update_merge_progress_on_apply_res_prepare_merge<T: Transport>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+    ) {
+        assert!(self.applied_merge_state().is_some());
+        if let Some(c) = &self.merge_context().unwrap().catch_up_logs
+            && self.catch_up_logs_ready(c)
+        {
+            let c = self.merge_context_mut().catch_up_logs.take().unwrap();
+            if c.tx.send(()).is_err() {
+                error!(
+                    self.logger,
+                    "failed to respond to merge target, are we shutting down?"
+                );
+            }
+            return;
         }
+        self.on_check_merge(store_ctx);
     }
 }
 
