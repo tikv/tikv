@@ -117,6 +117,19 @@ struct RequestCollector {
 }
 
 impl RequestCollector {
+    fn record_message_of_size(&mut self, size: usize) {
+        // When computing the raft entry size, we need to consider the extra bytes in
+        // the wire encoding. We make a raft command entry when we unpacked size grows
+        // to 7/8 of the max raft entry size, when the amplification by the extra bytes
+        // is greater than 8/7 (i.e. the average size of entry is less 70B), we may meet
+        // the "raft entry is too large" error.
+        self.unpacked_size += size + WIRE_EXTRA_BYTES;
+    }
+
+    fn release_message_of_size(&mut self, size: usize) {
+        self.unpacked_size -= size + WIRE_EXTRA_BYTES;
+    }
+
     fn new(max_raft_req_size: usize) -> Self {
         Self {
             max_raft_req_size,
@@ -175,24 +188,19 @@ impl RequestCollector {
                     .map(|(_, old_ts)| *old_ts < ts.into_inner())
                     .unwrap_or(true)
                 {
-                    // When computing the raft entry size, we need to consider the extra bytes in
-                    // the wire encoding. We make a raft command entry when we unpacked size grows
-                    // to 7/8 of the max raft entry size, when the amplification by the extra bytes
-                    // is greater than 8/7 (i.e. the average size of entry is less 70B), we may meet
-                    // the "raft entry is too large" error.
-                    self.unpacked_size += m.size() + WIRE_EXTRA_BYTES;
+                    self.record_message_of_size(m.size());
                     if let Some((v, _)) = self
                         .write_reqs
                         .insert(encoded_key.to_owned(), (m, ts.into_inner()))
                     {
-                        self.unpacked_size -= v.size() + WIRE_EXTRA_BYTES;
+                        self.release_message_of_size(v.size())
                     }
                 }
             }
             CF_DEFAULT => {
-                self.unpacked_size += m.size() + WIRE_EXTRA_BYTES;
+                self.record_message_of_size(m.size());
                 if let Some(v) = self.default_reqs.insert(k.as_encoded().clone(), m) {
-                    self.unpacked_size -= v.size() + WIRE_EXTRA_BYTES;
+                    self.release_message_of_size(v.size());
                 }
             }
             _ => unreachable!(),
@@ -211,7 +219,7 @@ impl RequestCollector {
             self.write_reqs.drain().map(|(_, (m, _))| m).collect()
         };
         for r in &res {
-            self.unpacked_size -= r.size();
+            self.release_message_of_size(r.size());
         }
         res
     }
