@@ -282,7 +282,7 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
                 self.heap.add_row(row)?;
             }
         }
-        if src_is_drained.is_drain() {
+        if src_is_drained.stop() {
             self.heap.take_all_append_to(&mut result);
         }
 
@@ -429,7 +429,7 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -491,7 +491,7 @@ mod tests {
             r.physical_columns[1].decoded().to_real_vec(),
             &[Real::new(6.0).ok(), Real::new(5.0).ok(),]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -562,7 +562,7 @@ mod tests {
             r.physical_columns[1].decoded().to_int_vec(),
             &[Some(1), None, None, Some(2), Some(1), None]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     fn make_expr_case() -> MockExecutor {
@@ -657,7 +657,7 @@ mod tests {
             r.physical_columns[2].decoded().to_int_vec(),
             &[Some(1), Some(2), Some(4), Some(6), Some(8)]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// partition by col0 + col1, order by col2
@@ -689,7 +689,7 @@ mod tests {
             r.physical_columns[2].decoded().to_int_vec(),
             &[Some(2), Some(4), Some(7), Some(9)]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Currently, When the data is not ordered by partition key, e.g. 1 1 2 1,
@@ -745,7 +745,7 @@ mod tests {
             r.physical_columns[1].decoded().to_real_vec(),
             &[None, Real::new(7.0).ok(), Real::new(4.0).ok()]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     fn make_integrated_data() -> MockExecutor {
@@ -881,7 +881,7 @@ mod tests {
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5, 6, 7]);
         assert_eq!(r.physical_columns.rows_len(), 8);
         assert_eq!(r.physical_columns.columns_len(), 4);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
 
         assert_eq!(
             r.physical_columns[2].decoded().to_int_vec(),
@@ -1056,7 +1056,7 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
         assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(3)]);
     }
 
@@ -1102,7 +1102,7 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
         assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(3)]);
     }
 
@@ -1148,7 +1148,7 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -1194,7 +1194,7 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// The following tests are copied from `batch_top_n_executor.rs`.
@@ -1226,7 +1226,7 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -1269,7 +1269,7 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Builds an executor that will return these data:
@@ -1419,7 +1419,7 @@ mod tests {
                 Real::new(4.0).ok()
             ]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -1490,7 +1490,7 @@ mod tests {
                 Real::new(4.0).ok()
             ]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -1572,7 +1572,7 @@ mod tests {
                 Real::new(4.0).ok()
             ]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Builds an executor that will return these data:
@@ -1749,7 +1749,7 @@ mod tests {
                 Some(b"aa".to_vec()),
             ]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -1831,7 +1831,7 @@ mod tests {
                 Some(b"aa".to_vec()),
             ]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Builds an executor that will return these data:
@@ -1967,7 +1967,7 @@ mod tests {
                 r.physical_columns[col_index].decoded().to_int_vec(),
                 expected
             );
-            assert!(r.is_drained.unwrap().is_drain());
+            assert!(r.is_drained.unwrap().stop());
         };
 
         test_top5(
@@ -2082,7 +2082,7 @@ mod tests {
                 r.physical_columns[col_index].decoded().to_int_vec(),
                 expected
             );
-            assert!(r.is_drained.unwrap().is_drain());
+            assert!(r.is_drained.unwrap().stop());
         };
 
         test_top5_paging6(
@@ -2191,7 +2191,7 @@ mod tests {
                 );
                 let r1_is_drained = r1.is_drained.unwrap();
                 assert_eq!(r1_is_drained, r2.is_drained.unwrap());
-                if r1_is_drained.is_drain() {
+                if r1_is_drained.stop() {
                     break;
                 }
             }

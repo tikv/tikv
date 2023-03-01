@@ -217,7 +217,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         src_is_drained: BatchExecIsDrain,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        assert!(src_is_drained.is_drain());
+        assert!(src_is_drained.stop());
         if self.has_input_rows {
             iteratee(entities, &self.states)?;
         }
@@ -502,7 +502,7 @@ mod tests {
             r.physical_columns[11].decoded().to_real_vec(),
             &[Real::new(12.0).ok()]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -586,7 +586,7 @@ mod tests {
             r.physical_columns[9].decoded().to_real_vec(),
             &[Real::new(8.5).ok()]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -676,6 +676,6 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 }

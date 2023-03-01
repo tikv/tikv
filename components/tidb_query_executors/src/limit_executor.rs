@@ -105,7 +105,7 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 3);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -164,7 +164,7 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[1, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -201,7 +201,7 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
-        assert!(r.is_drained.unwrap().is_drain()); // No errors
+        assert!(r.is_drained.unwrap().stop()); // No errors
     }
 
     #[test]
@@ -249,7 +249,7 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 4]);
         assert_eq!(r.physical_columns.rows_len(), 5);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -262,7 +262,7 @@ mod tests {
         let r = block_on(exec.next_batch(100));
         assert_eq!(r.logical_rows, &[0, 1, 2, 3, 4]);
         let r = block_on(exec.next_batch(2));
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
 
         let schema = vec![FieldTypeTp::LongLong.into()];
         let rows = (0..1024).collect();
@@ -273,6 +273,6 @@ mod tests {
             assert!(r.is_drained.unwrap().is_remain());
         }
         let r = block_on(exec.next_batch(1));
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 }

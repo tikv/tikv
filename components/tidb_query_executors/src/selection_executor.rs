@@ -284,7 +284,7 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Builds an executor that will return these logical data:
@@ -372,7 +372,7 @@ mod tests {
 
             let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[1]);
-            assert!(r.is_drained.unwrap().is_drain());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 
@@ -398,7 +398,7 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// This function returns 1 when the value is even, 0 otherwise.
@@ -492,7 +492,7 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -517,7 +517,7 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Tests the scenario that there are multiple predicates. Only the row that
@@ -555,7 +555,7 @@ mod tests {
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(r.is_drained.unwrap().is_drain());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 
@@ -590,7 +590,7 @@ mod tests {
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(r.is_drained.unwrap().is_drain());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 

@@ -364,7 +364,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         src_is_drained: BatchExecIsDrain,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        assert!(src_is_drained.is_drain());
+        assert!(src_is_drained.stop());
 
         let aggr_fns_len = entities.each_aggr_fn.len();
         let mut group_by_column = LazyBatchColumn::decoded_with_capacity_and_tp(
@@ -955,7 +955,7 @@ mod tests {
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(r.is_drained.unwrap().is_drain());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 

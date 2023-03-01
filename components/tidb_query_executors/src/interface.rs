@@ -209,7 +209,7 @@ impl BatchExecIsDrain {
     }
 
     #[inline]
-    pub fn is_drain(&self) -> bool {
+    pub fn stop(&self) -> bool {
         !self.is_remain()
     }
 }

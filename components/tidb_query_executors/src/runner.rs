@@ -506,7 +506,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 record_all += record_len;
             }
 
-            if drained.is_drain() || self.paging_size.map_or(false, |p| record_all >= p as usize) {
+            if drained.stop() || self.paging_size.map_or(false, |p| record_all >= p as usize) {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
                 let range = if drained == BatchExecIsDrain::Drain {
@@ -583,7 +583,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 .mut_rows_data()
                 .extend_from_slice(current_chunk.get_rows_data());
             record_len += len;
-            is_drained = drained.is_drain();
+            is_drained = drained.stop();
         }
 
         if !is_drained || record_len > 0 {

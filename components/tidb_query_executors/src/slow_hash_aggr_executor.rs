@@ -438,7 +438,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         src_is_drained: BatchExecIsDrain,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        assert!(src_is_drained.is_drain());
+        assert!(src_is_drained.stop());
 
         let number_of_groups = self.groups.len();
         let mut group_by_columns: Vec<_> = self

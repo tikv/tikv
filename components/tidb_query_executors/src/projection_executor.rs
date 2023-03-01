@@ -230,7 +230,7 @@ mod tests {
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Builds an executor that will return these logical data:
@@ -313,7 +313,7 @@ mod tests {
             r.physical_columns[0].decoded().to_int_vec(),
             vec![Some(1), Some(1)]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -358,7 +358,7 @@ mod tests {
             r.physical_columns[1].decoded().to_real_vec(),
             vec![None, None]
         );
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// This function returns 1 when the value is even, 0 otherwise.
@@ -462,7 +462,7 @@ mod tests {
         assert_eq!(r.logical_rows, &[0]);
         assert_eq!(r.physical_columns[0].decoded().to_int_vec(), vec![None]);
         assert_eq!(r.physical_columns[1].decoded().to_int_vec(), vec![Some(1)]);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]

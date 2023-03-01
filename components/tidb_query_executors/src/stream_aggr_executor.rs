@@ -352,7 +352,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         src_is_drained: BatchExecIsDrain,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        let number_of_groups = if src_is_drained.is_drain() {
+        let number_of_groups = if src_is_drained.stop() {
             AggregationExecutorImpl::<Src>::groups_len(self)
         } else {
             // don't include the partial group
@@ -554,7 +554,7 @@ mod tests {
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 5);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
         // COUNT
         assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(5)]);
         // AVG_COUNT
@@ -623,7 +623,7 @@ mod tests {
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 2);
-        assert!(r.is_drained.unwrap().is_drain());
+        assert!(r.is_drained.unwrap().stop());
         // col_0
         assert_eq!(
             r.physical_columns[0].decoded().to_bytes_vec(),

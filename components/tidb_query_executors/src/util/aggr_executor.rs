@@ -242,7 +242,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         }
 
         // aggregate result is always available when source is drained
-        let result = if src_is_drained.is_drain() || self.imp.is_partial_results_ready() {
+        let result = if src_is_drained.stop() || self.imp.is_partial_results_ready() {
             Some(self.aggregate_partial_results(src_is_drained)?)
         } else {
             None
@@ -329,7 +329,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
                 }
             }
             Ok((data, src_is_drained)) => {
-                self.is_ended = src_is_drained.is_drain();
+                self.is_ended = src_is_drained.stop();
                 let logical_columns = data.unwrap_or_else(LazyBatchColumnVec::empty);
                 let logical_rows = (0..logical_columns.rows_len()).collect();
                 BatchExecuteResult {
@@ -656,7 +656,7 @@ pub mod tests {
                 for nth_call in 0..call_num {
                     let r = block_on(exec.next_batch(1));
                     if nth_call == call_num - 1 {
-                        assert!(r.is_drained.unwrap().is_drain());
+                        assert!(r.is_drained.unwrap().stop());
                     } else {
                         assert!(r.is_drained.unwrap().is_remain());
                     }
@@ -686,7 +686,7 @@ pub mod tests {
             for nth_call in 0..call_num {
                 let r = block_on(exec.next_batch(1));
                 if nth_call == call_num - 1 {
-                    assert!(r.is_drained.unwrap().is_drain());
+                    assert!(r.is_drained.unwrap().stop());
                 } else {
                     assert!(r.is_drained.unwrap().is_remain());
                 }
