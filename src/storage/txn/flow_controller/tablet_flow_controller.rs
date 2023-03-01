@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_tablet_flow_controller_life_cycle() {
-        const WAIT_TICK: Duration = Duration::from_millis(1000);
+        const WAIT_TICK: Duration = Duration::from_millis(100);
         let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
