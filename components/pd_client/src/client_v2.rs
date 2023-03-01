@@ -267,9 +267,9 @@ impl CachedRawClient {
                 .await
                 .is_ok()
             {
-        if current_version < latest_version.load(Ordering::Acquire) {
-            return true;
-        }
+                if current_version < latest_version.load(Ordering::Acquire) {
+                    return true;
+                }
             } else {
                 return false;
             }
