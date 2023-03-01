@@ -4,12 +4,11 @@
 //!
 //! ## Propose
 //!
-//! The proposal is initiated by the source region. Each source peer
-//! periodically checks for the freshness of local target region peer
-//! (`Peer::on_check_merge`). The source peer will send a `CommitMerge` command
-//! to the target peer once target is up-to-date. (For simplicity, we send this
-//! message regardless of whether the target peer is leader.) The command will
-//! also carry some source region logs that may not be committed by some peers.
+//! The proposal is initiated by the source region. After `PrepareMerge` is
+//! applied, the source peer will send a `AskCommitMerge` message to the target
+//! peer. (For simplicity, we send this message regardless of whether the target
+//! peer is leader.) The message will also carry some source region logs that
+//! may not be committed by some peers.
 //!
 //! The source region cannot serve any writes until the merge is committed or
 //! rollback-ed. This is guaranteed by `MergeContext::prepare_status`.
