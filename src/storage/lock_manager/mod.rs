@@ -33,7 +33,9 @@ pub use self::{
 use self::{
     deadlock::{Detector, RoleChangeNotifier},
     lock_wait_context::PessimisticLockKeyCallback,
-    lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
+    lock_waiting_queue::{
+        DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues, UpdateLockWaitResult,
+    },
     // DiagnosticContext, KeyLockWaitInfo, LockWaitToken, UpdateWaitForEvent, WaitTimeout,
     waiter_manager::{Callback, Waiter, WaiterManager},
 };
@@ -347,6 +349,10 @@ impl LockManagerTrait for LockManager {
             wake_up_delay_duration_ms,
         )
     }
+
+    fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
+        self.lock_wait_queues.update_lock_wait(lock_info)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -505,6 +511,8 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
         conflicting_commit_ts: TimeStamp,
         wake_up_delay_duration_ms: u64,
     ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)>;
+
+    fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult;
 }
 
 // For test
@@ -593,6 +601,10 @@ impl LockManagerTrait for MockLockManager {
             conflicting_commit_ts,
             wake_up_delay_duration_ms,
         )
+    }
+
+    fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
+        self.lock_wait_queues.update_lock_wait(lock_info)
     }
 }
 
@@ -766,6 +778,10 @@ pub mod proxy_test {
                 conflicting_commit_ts,
                 wake_up_delay_duration_ms,
             )
+        }
+
+        fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
+            self.lock_wait_queues.update_lock_wait(lock_info)
         }
     }
 }

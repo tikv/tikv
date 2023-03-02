@@ -603,7 +603,10 @@ impl LockWaitQueues {
         result
     }
 
-    pub fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
+    pub(super) fn update_lock_wait(
+        &self,
+        lock_info: Vec<kvrpcpb::LockInfo>,
+    ) -> UpdateLockWaitResult {
         let mut update_wait_for_events = vec![];
         for lock_info in lock_info {
             let key = Key::from_raw(lock_info.get_key());
