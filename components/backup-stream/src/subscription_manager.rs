@@ -21,6 +21,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::fsm::ChangeObserver,
 };
+use resolved_ts::LeadershipResolver;
 use tikv::storage::Statistics;
 use tikv_util::{box_err, debug, info, time::Instant, warn, worker::Scheduler};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -165,7 +166,7 @@ impl ScanCmd {
         } = self;
         let begin = Instant::now_coarse();
         let stat = initial_scan.do_initial_scan(region, *last_checkpoint, handle.clone())?;
-        info!("initial scanning of leader transforming finished!"; "takes" => ?begin.saturating_elapsed(), "region" => %region.get_id(), "from_ts" => %last_checkpoint);
+        info!("initial scanning finished!"; "takes" => ?begin.saturating_elapsed(), "from_ts" => %last_checkpoint, utils::slog_region(region));
         utils::record_cf_stat("lock", &stat.lock);
         utils::record_cf_stat("write", &stat.write);
         utils::record_cf_stat("default", &stat.data);
@@ -351,6 +352,7 @@ where
         meta_cli: MetadataClient<S>,
         pd_client: Arc<PDC>,
         scan_pool_size: usize,
+        leader_checker: LeadershipResolver,
     ) -> (Self, future![()])
     where
         E: KvEngine,
@@ -370,7 +372,7 @@ where
             scan_pool_handle: Arc::new(scan_pool_handle),
             scans: CallbackWaitGroup::new(),
         };
-        let fut = op.clone().region_operator_loop(rx);
+        let fut = op.clone().region_operator_loop(rx, leader_checker);
         (op, fut)
     }
 
@@ -390,7 +392,11 @@ where
     }
 
     /// the handler loop.
-    async fn region_operator_loop(self, mut message_box: Receiver<ObserveOp>) {
+    async fn region_operator_loop(
+        self,
+        mut message_box: Receiver<ObserveOp>,
+        mut leader_checker: LeadershipResolver,
+    ) {
         while let Some(op) = message_box.recv().await {
             info!("backup stream: on_modify_observe"; "op" => ?op);
             match op {
@@ -414,7 +420,7 @@ where
                             true,
                             false,
                         )
-                        .map_err(|err| warn!("check epoch and stop failed."; "err" => %err))
+                        .map_err(|err| warn!("check epoch and stop failed."; utils::slog_region(region), "err" => %err))
                         .is_ok()
                     });
                 }
@@ -454,14 +460,20 @@ where
                         warn!("waiting for initial scanning done timed out, forcing progress!"; 
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
-                    let cps = self.subs.resolve_with(min_ts);
-                    let min_region = cps.iter().min_by_key(|(_, rts)| rts);
+                    let regions = leader_checker
+                        .resolve(self.subs.current_regions(), min_ts)
+                        .await;
+                    let cps = self.subs.resolve_with(min_ts, regions);
+                    let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts
                     // safely.
-                    let rts = min_region.map(|(_, rts)| *rts).unwrap_or(min_ts);
-                    info!("getting checkpoint"; "defined_by_region" => ?min_region.map(|r| r.0.get_id()), "checkpoint" => %rts);
+                    let rts = min_region.map(|rs| rs.checkpoint).unwrap_or(min_ts);
+                    info!("getting checkpoint"; "defined_by_region" => ?min_region);
                     self.subs.warn_if_gap_too_huge(rts);
-                    callback(ResolvedRegions::new(rts, cps));
+                    callback(ResolvedRegions::new(
+                        rts,
+                        cps.into_iter().map(|r| (r.region, r.checkpoint)).collect(),
+                    ));
                 }
             }
         }
@@ -583,7 +595,7 @@ where
             exists = true;
             let should_remove = old.handle().id == handle.id;
             if !should_remove {
-                warn!("stale retry command"; "region" => ?region, "handle" => ?handle, "old_handle" => ?old.handle());
+                warn!("stale retry command"; utils::slog_region(&region), "handle" => ?handle, "old_handle" => ?old.handle());
             }
             should_remove
         });
