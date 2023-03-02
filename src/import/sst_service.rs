@@ -1093,6 +1093,8 @@ mod test {
     use std::collections::HashMap;
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
+    use kvproto::raft_cmdpb::Request;
+    use protobuf::Message;
     use tikv_kv::Modify;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
@@ -1275,5 +1277,25 @@ mod test {
         });
         assert_eq!(reqs, reqs_result);
         assert!(request_collector.is_empty());
+    }
+
+    #[test]
+    fn test_collector_size() {
+        let mut request_collector = RequestCollector::new(1024);
+
+        for i in 0..100u64 {
+            request_collector.accept(CF_DEFAULT, default_req(&i.to_ne_bytes(), b"egg", i));
+        }
+
+        let pws = request_collector.pending_writes;
+        for w in pws {
+            let req_size = w
+                .modifies
+                .into_iter()
+                .map(Request::from)
+                .map(|x| x.compute_size())
+                .sum::<u32>();
+            assert!(req_size < 1024, "{}", req_size);
+        }
     }
 }
