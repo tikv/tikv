@@ -312,7 +312,7 @@ impl<EK: KvEngine> Runner<EK> {
     fn cleanup_ssts(&self, ssts: Box<[SstMeta]>) {
         for sst in Vec::from(ssts) {
             if let Err(e) = self.sst_importer.delete(&sst) {
-                info!(self.logger, "failed to cleanup sst"; "err" => ?e);
+                warn!(self.logger, "failed to cleanup sst"; "err" => ?e, "sst" => ?sst);
             }
         }
     }
