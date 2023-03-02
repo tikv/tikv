@@ -8,7 +8,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
 use pd_client::PdClient;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore_v2::{
-    router::{PeerMsg, PeerTick},
+    router::{PeerMsg, PeerTick, StoreMsg, StoreTick},
     SimpleWriteEncoder,
 };
 use tikv_util::{config::ReadableSize, store::new_peer};
@@ -54,18 +54,35 @@ fn test_region_heartbeat() {
 
 #[test]
 fn test_store_heartbeat() {
+    let region_id = 2;
     let cluster = Cluster::with_node_count(1, None);
     let store_id = cluster.node(0).id();
-    for _ in 0..5 {
-        let stats = block_on(cluster.node(0).pd_client().get_store_stats_async(store_id)).unwrap();
-        if stats.get_start_time() > 0 {
-            assert_ne!(stats.get_capacity(), 0);
-            assert_ne!(stats.get_used_size(), 0);
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    let router = &cluster.routers[0];
+    // load data to split bucket.
+    let header = Box::new(router.new_request_for(region_id).take_header());
+    let mut put = SimpleWriteEncoder::with_capacity(64);
+    put.put(CF_DEFAULT, b"key", b"value");
+    let data = put.encode();
+    let write_bytes = data.data_size();
+    let (msg, sub) = PeerMsg::simple_write(header, data);
+    router.send(region_id, msg).unwrap();
+    let _resp = block_on(sub.result()).unwrap();
+
+    // report store heartbeat to pd.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    router
+        .store_router()
+        .send_control(StoreMsg::Tick(StoreTick::PdStoreHeartbeat))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let stats = block_on(cluster.node(0).pd_client().get_store_stats_async(store_id)).unwrap();
+    if stats.get_start_time() > 0 {
+        assert_ne!(stats.get_capacity(), 0);
+        assert_ne!(stats.get_used_size(), 0);
+        assert_eq!(stats.get_keys_written(), 1);
+        assert!(stats.get_bytes_written() > write_bytes.try_into().unwrap());
     }
-    panic!("failed to get store stats");
 }
 
 #[test]
