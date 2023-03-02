@@ -30,9 +30,7 @@ impl SimpleWriteBinary {
     pub fn freeze(&mut self) {
         self.write_type = WriteType::Unspecified;
     }
-}
 
-impl SimpleWriteBinary {
     #[inline]
     pub fn data_size(&self) -> usize {
         self.buf.len()
