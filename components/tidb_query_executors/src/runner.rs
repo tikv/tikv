@@ -26,7 +26,7 @@ use tipb::{
 };
 
 use super::{
-    interface::{BatchExecutor, ExecuteStats},
+    interface::{BatchExecIsDrain, BatchExecutor, ExecuteStats},
     *,
 };
 
@@ -476,13 +476,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 record_all += record_len;
             }
 
-            if drained || self.paging_size.map_or(false, |p| record_all >= p as usize) {
+            if drained.stop() || self.paging_size.map_or(false, |p| record_all >= p as usize) {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
-
-                let range = self
-                    .paging_size
-                    .map(|_| self.out_most_executor.take_scanned_range());
+                let range = if drained == BatchExecIsDrain::Drain {
+                    None
+                } else {
+                    // It's not allowed to stop paging when BatchExecIsDrain::PagingDrain.
+                    self.paging_size
+                        .map(|_| self.out_most_executor.take_scanned_range())
+                };
 
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
@@ -550,7 +553,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 .mut_rows_data()
                 .extend_from_slice(current_chunk.get_rows_data());
             record_len += len;
-            is_drained = drained;
+            is_drained = drained.stop();
         }
 
         if !is_drained || record_len > 0 {
@@ -584,7 +587,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         chunk: &mut Chunk,
         warnings: &mut EvalWarnings,
         ctx: &mut EvalContext,
-    ) -> Result<(bool, usize)> {
+    ) -> Result<(BatchExecIsDrain, usize)> {
         let mut record_len = 0;
 
         self.deadline.check()?;
