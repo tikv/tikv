@@ -3628,11 +3628,7 @@ pub struct KvGetStatistics {
 mod tests {
     use std::{
         iter::Iterator,
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            mpsc::{channel, Sender},
-            Arc,
-        },
+        sync::{atomic::Ordering, mpsc::channel, Arc},
         thread,
         time::Duration,
     };
@@ -3643,18 +3639,15 @@ mod tests {
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::{
-        kvrpcpb::{Assertion, AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*},
-        metapb::RegionEpoch,
+    use kvproto::kvrpcpb::{
+        Assertion, AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*,
     };
-    use parking_lot::Mutex;
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
     use txn_types::{Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::{
         config::EngineType,
-        lock_manager::lock_waiting_queue::LockWaitQueues,
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
         txn::{
@@ -3672,8 +3665,8 @@ mod tests {
                 Error as KvError, ErrorInner as EngineErrorInner, ExpectedWrite, MockEngineBuilder,
             },
             lock_manager::{
-                CancellationCallback, DiagnosticContext, KeyLockWaitInfo, LockDigest,
-                LockWaitToken, UpdateWaitForEvent, WaitTimeout,
+                proxy_test::{Msg, ProxyLockMgr},
+                LockDigest, WaitTimeout,
             },
             mvcc::LockType,
             txn::{
@@ -8857,98 +8850,6 @@ mod tests {
             for &in_memory_lock in &[false, true] {
                 test_pessimistic_lock_resumable_impl(pipelined_pessimistic_lock, in_memory_lock);
             }
-        }
-    }
-
-    #[allow(clippy::large_enum_variant)]
-    pub enum Msg {
-        WaitFor {
-            token: LockWaitToken,
-            region_id: u64,
-            region_epoch: RegionEpoch,
-            term: u64,
-            start_ts: TimeStamp,
-            wait_info: KeyLockWaitInfo,
-            is_first_lock: bool,
-            timeout: Option<WaitTimeout>,
-            cancel_callback: CancellationCallback,
-            diag_ctx: DiagnosticContext,
-        },
-        RemoveLockWait {
-            token: LockWaitToken,
-        },
-    }
-
-    // `ProxyLockMgr` sends all msgs it received to `Sender`.
-    // It's used to check whether we send right messages to lock manager.
-    #[derive(Clone)]
-    pub struct ProxyLockMgr {
-        tx: Arc<Mutex<Sender<Msg>>>,
-        has_waiter: Arc<AtomicBool>,
-        lock_wait_queues: LockWaitQueues,
-    }
-
-    impl ProxyLockMgr {
-        pub fn new(tx: Sender<Msg>) -> Self {
-            Self {
-                tx: Arc::new(Mutex::new(tx)),
-                has_waiter: Arc::new(AtomicBool::new(false)),
-                lock_wait_queues: LockWaitQueues::new(),
-            }
-        }
-    }
-
-    impl LockManagerTrait for ProxyLockMgr {
-        fn allocate_token(&self) -> LockWaitToken {
-            LockWaitToken(Some(1))
-        }
-
-        fn wait_for(
-            &self,
-            token: LockWaitToken,
-            region_id: u64,
-            region_epoch: RegionEpoch,
-            term: u64,
-            start_ts: TimeStamp,
-            wait_info: KeyLockWaitInfo,
-            is_first_lock: bool,
-            timeout: Option<WaitTimeout>,
-            cancel_callback: CancellationCallback,
-            diag_ctx: DiagnosticContext,
-        ) {
-            self.tx
-                .lock()
-                .send(Msg::WaitFor {
-                    token,
-                    region_id,
-                    region_epoch,
-                    term,
-                    start_ts,
-                    wait_info,
-                    is_first_lock,
-                    timeout,
-                    cancel_callback,
-                    diag_ctx,
-                })
-                .unwrap();
-        }
-
-        fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
-
-        fn remove_lock_wait(&self, token: LockWaitToken) {
-            self.tx.lock().send(Msg::RemoveLockWait { token }).unwrap();
-        }
-
-        fn has_waiter(&self) -> bool {
-            self.has_waiter.load(Ordering::Relaxed)
-        }
-
-        fn dump_wait_for_entries(&self, _cb: waiter_manager::Callback) {
-            unimplemented!()
-        }
-
-        fn lock_wait_queues(&self) -> LockWaitQueues {
-            self.lock_wait_queues.clone()
         }
     }
 

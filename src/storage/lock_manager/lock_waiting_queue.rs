@@ -245,7 +245,7 @@ impl LockWaitQueues {
     /// Enqueues a lock wait entry. The key is indicated by the `key` field of
     /// the `lock_wait_entry`. The caller also needs to provide the
     /// information of the current-holding lock.
-    pub fn push_lock_wait(
+    pub(super) fn push_lock_wait(
         &self,
         mut lock_wait_entry: Box<LockWaitEntry>,
         current_lock: kvrpcpb::LockInfo,

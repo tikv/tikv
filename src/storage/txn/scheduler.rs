@@ -882,7 +882,6 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         // possible cancellation.
         self.inner
             .lock_mgr
-            .lock_wait_queues()
             .push_lock_wait(lock_wait_entry, lock_info_pb.clone());
 
         let wait_info = lock_manager::KeyLockWaitInfo {
@@ -1709,10 +1708,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         // TODO: the request may be canceled from lock manager at this time. If so, it
         // should not be added to the queue.
         for (entry, lock_info_pb) in lock_wait_entries {
-            self.inner
-                .lock_mgr
-                .lock_wait_queues()
-                .push_lock_wait(entry, lock_info_pb);
+            self.inner.lock_mgr.push_lock_wait(entry, lock_info_pb);
         }
     }
 
@@ -1723,7 +1719,6 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             // additionally checks if the lock wait entry is already canceled.
             self.inner
                 .lock_mgr
-                .lock_wait_queues()
                 .push_lock_wait(entry, Default::default());
         }
     }

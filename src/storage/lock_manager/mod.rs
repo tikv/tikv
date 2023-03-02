@@ -12,7 +12,10 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use engine_traits::KvEngine;
-use kvproto::{kvrpcpb::LockInfo, metapb::RegionEpoch};
+use kvproto::{
+    kvrpcpb::{self, LockInfo},
+    metapb::RegionEpoch,
+};
 use parking_lot::Mutex;
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
@@ -316,6 +319,11 @@ impl LockManagerTrait for LockManager {
     fn lock_wait_queues(&self) -> LockWaitQueues {
         self.lock_wait_queues.clone()
     }
+
+    fn push_lock_wait(&self, lock_wait_entry: Box<LockWaitEntry>, current_lock: kvrpcpb::LockInfo) {
+        self.lock_wait_queues
+            .push_lock_wait(lock_wait_entry, current_lock)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -457,6 +465,8 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
 
     // TODO: it's temporary during refactoring. Remove it
     fn lock_wait_queues(&self) -> LockWaitQueues;
+
+    fn push_lock_wait(&self, lock_wait_entry: Box<LockWaitEntry>, current_lock: kvrpcpb::LockInfo);
 }
 
 // For test
@@ -518,6 +528,11 @@ impl LockManagerTrait for MockLockManager {
     fn lock_wait_queues(&self) -> LockWaitQueues {
         self.lock_wait_queues.clone()
     }
+
+    fn push_lock_wait(&self, lock_wait_entry: Box<LockWaitEntry>, current_lock: kvrpcpb::LockInfo) {
+        self.lock_wait_queues
+            .push_lock_wait(lock_wait_entry, current_lock)
+    }
 }
 
 impl MockLockManager {
@@ -561,6 +576,114 @@ pub(super) fn make_lock_waiting_after_resuming(
         legacy_wake_up_index: None,
         key_cb: Some(cb.into()),
     })
+}
+
+#[cfg(test)]
+pub mod proxy_test {
+    use std::sync::mpsc::Sender;
+
+    use super::*;
+
+    #[allow(clippy::large_enum_variant)]
+    pub enum Msg {
+        WaitFor {
+            token: LockWaitToken,
+            region_id: u64,
+            region_epoch: RegionEpoch,
+            term: u64,
+            start_ts: TimeStamp,
+            wait_info: KeyLockWaitInfo,
+            is_first_lock: bool,
+            timeout: Option<WaitTimeout>,
+            cancel_callback: CancellationCallback,
+            diag_ctx: DiagnosticContext,
+        },
+        RemoveLockWait {
+            token: LockWaitToken,
+        },
+    }
+
+    // `ProxyLockMgr` sends all msgs it received to `Sender`.
+    // It's used to check whether we send right messages to lock manager.
+    #[derive(Clone)]
+    pub struct ProxyLockMgr {
+        tx: Arc<Mutex<Sender<Msg>>>,
+        has_waiter: Arc<AtomicBool>,
+        lock_wait_queues: LockWaitQueues,
+    }
+
+    impl ProxyLockMgr {
+        pub fn new(tx: Sender<Msg>) -> Self {
+            Self {
+                tx: Arc::new(Mutex::new(tx)),
+                has_waiter: Arc::new(AtomicBool::new(false)),
+                lock_wait_queues: LockWaitQueues::new(),
+            }
+        }
+    }
+
+    impl LockManagerTrait for ProxyLockMgr {
+        fn allocate_token(&self) -> LockWaitToken {
+            LockWaitToken(Some(1))
+        }
+
+        fn wait_for(
+            &self,
+            token: LockWaitToken,
+            region_id: u64,
+            region_epoch: RegionEpoch,
+            term: u64,
+            start_ts: TimeStamp,
+            wait_info: KeyLockWaitInfo,
+            is_first_lock: bool,
+            timeout: Option<WaitTimeout>,
+            cancel_callback: CancellationCallback,
+            diag_ctx: DiagnosticContext,
+        ) {
+            self.tx
+                .lock()
+                .send(Msg::WaitFor {
+                    token,
+                    region_id,
+                    region_epoch,
+                    term,
+                    start_ts,
+                    wait_info,
+                    is_first_lock,
+                    timeout,
+                    cancel_callback,
+                    diag_ctx,
+                })
+                .unwrap();
+        }
+
+        fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
+
+        fn remove_lock_wait(&self, token: LockWaitToken) {
+            self.tx.lock().send(Msg::RemoveLockWait { token }).unwrap();
+        }
+
+        fn has_waiter(&self) -> bool {
+            self.has_waiter.load(Ordering::Relaxed)
+        }
+
+        fn dump_wait_for_entries(&self, _cb: waiter_manager::Callback) {
+            unimplemented!()
+        }
+
+        fn lock_wait_queues(&self) -> LockWaitQueues {
+            self.lock_wait_queues.clone()
+        }
+
+        fn push_lock_wait(
+            &self,
+            lock_wait_entry: Box<LockWaitEntry>,
+            current_lock: kvrpcpb::LockInfo,
+        ) {
+            self.lock_wait_queues
+                .push_lock_wait(lock_wait_entry, current_lock)
+        }
+    }
 }
 
 #[cfg(test)]
