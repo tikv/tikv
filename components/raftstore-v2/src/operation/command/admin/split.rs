@@ -830,7 +830,10 @@ mod test {
     };
 
     use super::*;
-    use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes};
+    use crate::{
+        fsm::ApplyResReporter, operation::test_util::create_tmp_importer, raft::Apply,
+        router::ApplyRes,
+    };
 
     struct MockReporter {
         sender: Sender<ApplyRes>,
@@ -961,6 +964,7 @@ mod test {
 
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
+        let (_tmp_dir, importer) = create_tmp_importer();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -976,8 +980,9 @@ mod test {
             Arc::new(FlushState::new(5)),
             None,
             5,
-            logger.clone(),
             None,
+            importer,
+            logger.clone(),
         );
 
         let mut splits = BatchSplitRequest::default();
