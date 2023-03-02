@@ -48,6 +48,19 @@ use super::make_rpc_error;
 use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_GAUGE};
 
 const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
+/// The extra bytes required by the wire encoding.
+/// Generally, a field (and a embedded message) would introduce 2 extra
+/// bytes. In detail, they are:
+/// - 2 bytes for the request type (Tag+Value).
+/// - 2 bytes for every string or bytes field (Tag+Length), they are:
+/// .  + the key field
+/// .  + the value field
+/// .  + the CF field (None for CF_DEFAULT)
+/// - 2 bytes for the embedded message field `PutRequest` (Tag+Length).
+/// In fact, the length field is encoded by varint, which may grow when the
+/// content length is greater than 128, however when the length is greater than
+/// 128, the extra 1~4 bytes can be ignored.
+const WIRE_EXTRA_BYTES: usize = 10;
 
 /// ImportSstService provides tikv-server with the ability to ingest SST files.
 ///
@@ -96,7 +109,25 @@ struct RequestCollector {
 }
 
 impl RequestCollector {
+<<<<<<< HEAD
     fn new(context: Context, max_raft_req_size: usize) -> Self {
+=======
+    fn record_size_of_message(&mut self, size: usize) {
+        // We make a raft command entry when we unpacked size grows to 7/8 of the max
+        // raft entry size.
+        //
+        // Which means, if we don't add the extra bytes, when the amplification by the
+        // extra bytes is greater than 8/7 (i.e. the average size of entry is
+        // less than 70B), we may encounter the "raft entry is too large" error.
+        self.unpacked_size += size + WIRE_EXTRA_BYTES;
+    }
+
+    fn release_message_of_size(&mut self, size: usize) {
+        self.unpacked_size -= size + WIRE_EXTRA_BYTES;
+    }
+
+    fn new(max_raft_req_size: usize) -> Self {
+>>>>>>> 4f2430d726 (sst_importer: add wire extra bytes into the packed size (#14312))
         Self {
             context,
             max_raft_req_size,
@@ -159,19 +190,33 @@ impl RequestCollector {
                     .map(|(_, old_ts)| *old_ts < ts.into_inner())
                     .unwrap_or(true)
                 {
+<<<<<<< HEAD
                     self.unpacked_size += req.compute_size() as usize;
+=======
+                    self.record_size_of_message(m.size());
+>>>>>>> 4f2430d726 (sst_importer: add wire extra bytes into the packed size (#14312))
                     if let Some((v, _)) = self
                         .write_reqs
                         .insert(encoded_key.to_owned(), (req, ts.into_inner()))
                     {
+<<<<<<< HEAD
                         self.unpacked_size -= v.get_cached_size() as usize;
+=======
+                        self.release_message_of_size(v.size())
+>>>>>>> 4f2430d726 (sst_importer: add wire extra bytes into the packed size (#14312))
                     }
                 }
             }
             CF_DEFAULT => {
+<<<<<<< HEAD
                 self.unpacked_size += req.compute_size() as usize;
                 if let Some(v) = self.default_reqs.insert(k.to_owned(), req) {
                     self.unpacked_size -= v.get_cached_size() as usize;
+=======
+                self.record_size_of_message(m.size());
+                if let Some(v) = self.default_reqs.insert(k.as_encoded().clone(), m) {
+                    self.release_message_of_size(v.size());
+>>>>>>> 4f2430d726 (sst_importer: add wire extra bytes into the packed size (#14312))
                 }
             }
             _ => unreachable!(),
@@ -190,7 +235,11 @@ impl RequestCollector {
             self.write_reqs.drain().map(|(_, (req, _))| req).collect()
         };
         for r in &res {
+<<<<<<< HEAD
             self.unpacked_size -= r.get_cached_size() as usize;
+=======
+            self.release_message_of_size(r.size());
+>>>>>>> 4f2430d726 (sst_importer: add wire extra bytes into the packed size (#14312))
         }
         res
     }
@@ -1127,7 +1176,13 @@ mod test {
     use std::collections::HashMap;
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
+<<<<<<< HEAD
     use kvproto::{kvrpcpb::Context, raft_cmdpb::*};
+=======
+    use kvproto::raft_cmdpb::Request;
+    use protobuf::Message;
+    use tikv_kv::Modify;
+>>>>>>> 4f2430d726 (sst_importer: add wire extra bytes into the packed size (#14312))
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use crate::import::sst_service::{key_from_request, RequestCollector};
@@ -1339,5 +1394,25 @@ mod test {
         });
         assert_eq!(reqs, reqs_result);
         assert!(request_collector.is_empty());
+    }
+
+    #[test]
+    fn test_collector_size() {
+        let mut request_collector = RequestCollector::new(1024);
+
+        for i in 0..100u64 {
+            request_collector.accept(CF_DEFAULT, default_req(&i.to_ne_bytes(), b"egg", i));
+        }
+
+        let pws = request_collector.pending_writes;
+        for w in pws {
+            let req_size = w
+                .modifies
+                .into_iter()
+                .map(Request::from)
+                .map(|x| x.compute_size())
+                .sum::<u32>();
+            assert!(req_size < 1024, "{}", req_size);
+        }
     }
 }
