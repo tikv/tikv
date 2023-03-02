@@ -381,7 +381,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                     res
                 };
                 let _guard = sample.observe_cpu();
-                is_drained = result.is_drained?;
+                is_drained = result.is_drained?.stop();
 
                 let columns_slice = result.physical_columns.as_slice();
 
@@ -878,7 +878,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut common_handle_fms = FmSketch::new(self.max_fm_sketch_size);
         while !is_drained {
             let result = self.data.next_batch(BATCH_MAX_SIZE).await;
-            is_drained = result.is_drained?;
+            is_drained = result.is_drained?.stop();
 
             let mut columns_slice = result.physical_columns.as_slice();
             let mut columns_info = &self.columns_info[..];

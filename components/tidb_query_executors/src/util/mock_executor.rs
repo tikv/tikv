@@ -95,7 +95,11 @@ impl BatchExecutor for MockScanExecutor {
             self.pos += 1;
             cur_row_idx += 1;
         }
-        let is_drained = self.pos >= self.rows.len();
+        let is_drained = if self.pos >= self.rows.len() {
+            BatchExecIsDrain::Drain
+        } else {
+            BatchExecIsDrain::Remain
+        };
         BatchExecuteResult {
             physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(res_col.into())]),
             logical_rows: res_logical_rows,
