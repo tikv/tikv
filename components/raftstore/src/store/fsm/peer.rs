@@ -5574,10 +5574,13 @@ where
         fail_point!("ignore request snapshot", |_| {
             self.schedule_tick(PeerTick::RequestSnapshot);
         });
-        if !self.fsm.peer.wait_data || self.fsm.peer.is_leader() {
+        if !self.fsm.peer.wait_data {
             return;
         }
-        if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
+        if self.fsm.peer.is_leader()
+            || self.fsm.peer.is_handling_snapshot()
+            || self.fsm.peer.has_pending_snapshot()
+        {
             self.schedule_tick(PeerTick::RequestSnapshot);
             return;
         }
@@ -6467,8 +6470,12 @@ where
             let (peer_id, is_witness) = (s.get_peer_id(), s.get_is_witness());
             if self.fsm.peer_id() == peer_id {
                 if is_witness {
-                    let _ = self.fsm.peer.get_store().clear_data();
                     self.fsm.peer.raft_group.set_priority(-1);
+                    if !self.fsm.peer.is_leader() {
+                        let _ = self.fsm.peer.get_store().clear_data();
+                    } else {
+                        self.fsm.peer.delay_clean_data = true;
+                    }
                 } else {
                     self.fsm
                         .peer
