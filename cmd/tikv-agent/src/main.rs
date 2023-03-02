@@ -3,6 +3,8 @@
 #![feature(proc_macro_hygiene)]
 
 use std::{
+    fs::{copy, create_dir, metadata, read_dir, remove_dir_all, remove_file, set_permissions},
+    os::unix::fs::symlink,
     path::{Path, PathBuf},
     process,
     sync::Arc,
@@ -248,7 +250,7 @@ fn main() {
     let agent_dir = matches.value_of("agent-dir").unwrap();
 
     if !matches.is_present("skip-build-agent-dir") {
-        if let Err(e) = std::fs::remove_dir_all(agent_dir) {
+        if let Err(e) = remove_dir_all(agent_dir) {
             if e.kind() != std::io::ErrorKind::NotFound {
                 eprintln!("remove {} fail: {:?}", agent_dir, e);
                 process::exit(-1);
@@ -257,7 +259,7 @@ fn main() {
             }
         }
 
-        if let Err(e) = std::fs::create_dir(agent_dir) {
+        if let Err(e) = create_dir(agent_dir) {
             eprintln!("create {} fail: {:?}", agent_dir, e);
             process::exit(-1);
         }
@@ -337,16 +339,20 @@ fn main() {
     config.raft_store.raft_entry_cache_life_time = ReadableDuration::secs(1);
     config.storage.block_cache.capacity = Some(ReadableSize::gb(1));
 
+    // For snapshot apply.
+    config.raft_store.snap_apply_copy_read_only = true;
+
     match config.storage.engine {
         EngineType::RaftKv => server::server::run_tikv(config),
         EngineType::RaftKv2 => server::server2::run_tikv(config),
     }
 }
 
-fn check_import_empty(config: &TikvConfig) -> std::io::Result<bool> {
+fn check_import_empty(config: &TikvConfig) -> Result<bool, String> {
     let dir = PathBuf::from(&config.storage.data_dir).join("import");
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
+    let readdir = read_dir(&dir).map_err(|e| format!("read_dir({}): {}", dir.display(), e))?;
+    for entry in readdir {
+        let entry = entry.map_err(|e| format!("dir_entry: {}", e))?;
         let fname = entry.file_name().to_str().unwrap().to_owned();
         if fname == ".clone" || fname == ".temp" {
             continue;
@@ -356,11 +362,11 @@ fn check_import_empty(config: &TikvConfig) -> std::io::Result<bool> {
     Ok(true)
 }
 
-fn symlink_kv_engine_files(config: &TikvConfig, agent_dir: &str) -> std::io::Result<()> {
+fn symlink_kv_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
     let mut tmp_config = TikvConfig::default();
     tmp_config.storage.data_dir = agent_dir.to_owned();
     let kvdb = tmp_config.infer_kv_engine_path(None).unwrap();
-    std::fs::create_dir(&kvdb)?;
+    create_dir(&kvdb).map_err(|e| format!("create_dir({}): {}", kvdb, e))?;
 
     let source_kvdb = config.infer_kv_engine_path(None).unwrap();
     symlink_stuffs(&source_kvdb, &kvdb, &["LOCK"])?;
@@ -372,12 +378,12 @@ fn symlink_kv_engine_files(config: &TikvConfig, agent_dir: &str) -> std::io::Res
     Ok(())
 }
 
-fn symlink_raft_engine_files(config: &TikvConfig, agent_dir: &str) -> std::io::Result<()> {
+fn symlink_raft_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
     if config.raft_engine.enable {
         let mut tmp_config = TikvConfig::default();
         tmp_config.storage.data_dir = agent_dir.to_owned();
         let raftdb = tmp_config.infer_raft_engine_path(None).unwrap();
-        std::fs::create_dir(&raftdb)?;
+        create_dir(&raftdb).map_err(|e| format!("create_dir({}): {}", raftdb, e))?;
 
         let source_raftdb = config.infer_raft_engine_path(None).unwrap();
         symlink_stuffs(&source_raftdb, &raftdb, &["LOCK"])?;
@@ -385,7 +391,7 @@ fn symlink_raft_engine_files(config: &TikvConfig, agent_dir: &str) -> std::io::R
         let mut tmp_config = TikvConfig::default();
         tmp_config.storage.data_dir = agent_dir.to_owned();
         let raftdb = tmp_config.infer_raft_db_path(None).unwrap();
-        std::fs::create_dir(&raftdb)?;
+        create_dir(&raftdb).map_err(|e| format!("create_dir({}): {}", raftdb, e))?;
 
         let source_raftdb = config.infer_raft_db_path(None).unwrap();
         symlink_stuffs(&source_raftdb, &raftdb, &["LOCK"])?;
@@ -398,14 +404,17 @@ fn symlink_raft_engine_files(config: &TikvConfig, agent_dir: &str) -> std::io::R
     Ok(())
 }
 
-fn symlink_stuffs(source_dir: &str, target_dir: &str, ignored: &[&str]) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(&source_dir)? {
-        let entry = entry?;
+fn symlink_stuffs(source_dir: &str, target_dir: &str, ignored: &[&str]) -> Result<(), String> {
+    let readdir = read_dir(source_dir).map_err(|e| format!("read_dir({}): {}", source_dir, e))?;
+    for entry in readdir {
+        let entry = entry.map_err(|e| format!("dir_entry: {}", e))?;
         let fname = entry.file_name().to_str().unwrap().to_owned();
         if !ignored.contains(&fname.as_ref()) {
-            let source = entry.path().canonicalize()?;
+            let source = entry.path().canonicalize().unwrap();
             let target = PathBuf::from(target_dir).join(fname);
-            std::os::unix::fs::symlink(&source, &target)?;
+            symlink(&source, &target).map_err(|e| {
+                format!("symlink({}, {}): {}", source.display(), target.display(), e)
+            })?;
             println!(
                 "symlinking from {} to {}",
                 source.display(),
@@ -416,7 +425,7 @@ fn symlink_stuffs(source_dir: &str, target_dir: &str, ignored: &[&str]) -> std::
     Ok(())
 }
 
-fn replace_kv_engine_symlinks(config: &TikvConfig, agent_dir: &str) -> std::io::Result<()> {
+fn replace_kv_engine_symlinks(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
     let mut tmp_config = TikvConfig::default();
     tmp_config.storage.data_dir = agent_dir.to_owned();
     let kvdb = tmp_config.infer_kv_engine_path(None).unwrap();
@@ -430,7 +439,7 @@ fn replace_kv_engine_symlinks(config: &TikvConfig, agent_dir: &str) -> std::io::
     }
 }
 
-fn replace_raft_engine_symlinks(config: &TikvConfig, agent_dir: &str) -> std::io::Result<()> {
+fn replace_raft_engine_symlinks(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
     if config.raft_engine.enable {
         let selector = raft_engine_files_should_copy;
 
@@ -459,13 +468,14 @@ fn replace_symlink_with_copy<F>(
     source_dir: &str,
     target_dir: &str,
     selector: F,
-) -> std::io::Result<()>
+) -> Result<(), String>
 where
     F: Fn(&mut dyn Iterator<Item = String>) -> Vec<String>,
 {
     let mut names = Vec::new();
-    for entry in std::fs::read_dir(target_dir)? {
-        let entry = entry?;
+    let readdir = read_dir(target_dir).map_err(|e| format!("read_dir({}): {}", target_dir, e))?;
+    for entry in readdir {
+        let entry = entry.map_err(|e| format!("dir_entry: {}", e))?;
         let fname = entry.file_name().to_str().unwrap().to_owned();
         names.push(fname);
     }
@@ -475,11 +485,15 @@ where
     for name in (selector)(&mut names.into_iter()) {
         let src = src_prefix.join(&name);
         let dst = kvdb_preifx.join(&name);
-        std::fs::remove_file(&dst)?;
-        std::fs::copy(&src, &dst)?;
-        let mut pmt = std::fs::metadata(&dst)?.permissions();
+        remove_file(&dst).map_err(|e| format!("remove_file({}): {}", dst.display(), e))?;
+        copy(&src, &dst)
+            .map_err(|e| format!("copy({}, {}): {}", src.display(), dst.display(), e))?;
+        let mut pmt = metadata(&dst)
+            .map_err(|e| format!("metadata({}): {}", dst.display(), e))?
+            .permissions();
         pmt.set_readonly(false);
-        std::fs::set_permissions(&dst, pmt)?;
+        set_permissions(&dst, pmt)
+            .map_err(|e| format!("set_permissions({}): {}", dst.display(), e))?;
         println!(
             "copy instead of symlink from {} to {}",
             src.display(),
