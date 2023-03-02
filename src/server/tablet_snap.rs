@@ -317,7 +317,7 @@ async fn accept_missing(
             None => {
                 File::open(path)?.sync_data()?;
                 return Ok(received_bytes);
-            },
+            }
             Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
             res => return Err(protocol_error("chunk", res)),
         };
