@@ -637,14 +637,14 @@ impl LockWaitQueues {
     /// Gets the count of entries currently waiting in queues.
     ///
     /// Mind that the contents of the queues may be changed concurrently.
-    pub fn entry_count(&self) -> usize {
+    pub(super) fn entry_count(&self) -> usize {
         self.inner.entries_count.load(Ordering::SeqCst)
     }
 
     /// Checks whether there's nothing at all waiting in queue.
     ///
     /// Mind that the contents of the queues may be changed concurrently.
-    pub fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.entry_count() == 0
     }
 

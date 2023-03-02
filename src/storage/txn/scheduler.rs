@@ -913,7 +913,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         // that other threads/commands adds new lock-wait entries to the keys
         // concurrently. Therefore it's safe to skip waking up when we found the
         // lock waiting queues are empty.
-        if self.inner.lock_mgr.lock_wait_queues().is_empty() {
+        if self.inner.lock_mgr.queues_are_empty() {
             return smallvec![];
         }
 
@@ -963,7 +963,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         group_name: &str,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
     ) {
-        if new_acquired_locks.is_empty() || self.inner.lock_mgr.lock_wait_queues().is_empty() {
+        if new_acquired_locks.is_empty() || self.inner.lock_mgr.queues_are_empty() {
             return;
         }
 

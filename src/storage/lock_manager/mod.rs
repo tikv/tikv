@@ -353,6 +353,10 @@ impl LockManagerTrait for LockManager {
     fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
         self.lock_wait_queues.update_lock_wait(lock_info)
     }
+
+    fn queues_are_empty(&self) -> bool {
+        self.lock_wait_queues.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -513,6 +517,8 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
     ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)>;
 
     fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult;
+
+    fn queues_are_empty(&self) -> bool;
 }
 
 // For test
@@ -605,6 +611,10 @@ impl LockManagerTrait for MockLockManager {
 
     fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
         self.lock_wait_queues.update_lock_wait(lock_info)
+    }
+
+    fn queues_are_empty(&self) -> bool {
+        self.lock_wait_queues.is_empty()
     }
 }
 
@@ -782,6 +792,10 @@ pub mod proxy_test {
 
         fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
             self.lock_wait_queues.update_lock_wait(lock_info)
+        }
+
+        fn queues_are_empty(&self) -> bool {
+            self.lock_wait_queues.is_empty()
         }
     }
 }
