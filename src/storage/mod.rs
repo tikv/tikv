@@ -3654,6 +3654,7 @@ mod tests {
 
     use super::{
         config::EngineType,
+        lock_manager::lock_waiting_queue::LockWaitQueues,
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
         txn::{
@@ -8884,6 +8885,7 @@ mod tests {
     pub struct ProxyLockMgr {
         tx: Arc<Mutex<Sender<Msg>>>,
         has_waiter: Arc<AtomicBool>,
+        lock_wait_queues: LockWaitQueues,
     }
 
     impl ProxyLockMgr {
@@ -8891,6 +8893,7 @@ mod tests {
             Self {
                 tx: Arc::new(Mutex::new(tx)),
                 has_waiter: Arc::new(AtomicBool::new(false)),
+                lock_wait_queues: LockWaitQueues::new(),
             }
         }
     }
@@ -8942,6 +8945,10 @@ mod tests {
 
         fn dump_wait_for_entries(&self, _cb: waiter_manager::Callback) {
             unimplemented!()
+        }
+
+        fn lock_wait_queues(&self) -> LockWaitQueues {
+            self.lock_wait_queues.clone()
         }
     }
 

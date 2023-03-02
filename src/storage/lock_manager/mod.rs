@@ -29,9 +29,12 @@ pub use self::{
 };
 use self::{
     deadlock::{Detector, RoleChangeNotifier},
-    waiter_manager::{Callback, Waiter, WaiterManager}, lock_wait_context::PessimisticLockKeyCallback, lock_waiting_queue::LockWaitEntry,
+    lock_wait_context::PessimisticLockKeyCallback,
+    lock_waiting_queue::{LockWaitEntry, LockWaitQueues},
     // DiagnosticContext, KeyLockWaitInfo, LockWaitToken, UpdateWaitForEvent, WaitTimeout,
+    waiter_manager::{Callback, Waiter, WaiterManager},
 };
+use super::txn::commands::WriteResultLockInfo;
 use crate::{
     server::{resolve::StoreAddrResolver, Error, Result},
     storage::{
@@ -40,8 +43,6 @@ use crate::{
         DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
     },
 };
-
-use super::txn::commands::WriteResultLockInfo;
 
 mod client;
 mod config;
@@ -71,6 +72,8 @@ pub struct LockManager {
     in_memory: Arc<AtomicBool>,
 
     wake_up_delay_duration_ms: Arc<AtomicU64>,
+
+    pub(super) lock_wait_queues: LockWaitQueues,
 }
 
 impl Clone for LockManager {
@@ -85,6 +88,7 @@ impl Clone for LockManager {
             pipelined: self.pipelined.clone(),
             in_memory: self.in_memory.clone(),
             wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
+            lock_wait_queues: self.lock_wait_queues.clone(),
         }
     }
 }
@@ -106,6 +110,7 @@ impl LockManager {
             wake_up_delay_duration_ms: Arc::new(AtomicU64::new(
                 cfg.wake_up_delay_duration.as_millis(),
             )),
+            lock_wait_queues: LockWaitQueues::new(),
         }
     }
 
@@ -307,6 +312,10 @@ impl LockManagerTrait for LockManager {
     fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
         self.waiter_mgr_scheduler.dump_wait_table(cb);
     }
+
+    fn lock_wait_queues(&self) -> LockWaitQueues {
+        self.lock_wait_queues.clone()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -445,6 +454,9 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
     }
 
     fn dump_wait_for_entries(&self, cb: waiter_manager::Callback);
+
+    // TODO: it's temporary during refactoring. Remove it
+    fn lock_wait_queues(&self) -> LockWaitQueues;
 }
 
 // For test
@@ -452,6 +464,7 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
 pub struct MockLockManager {
     allocated_token: Arc<AtomicU64>,
     waiters: Arc<Mutex<HashMap<LockWaitToken, (KeyLockWaitInfo, CancellationCallback)>>>,
+    lock_wait_queues: LockWaitQueues,
 }
 
 impl MockLockManager {
@@ -459,6 +472,7 @@ impl MockLockManager {
         Self {
             allocated_token: Arc::new(AtomicU64::new(1)),
             waiters: Arc::new(Mutex::new(HashMap::default())),
+            lock_wait_queues: LockWaitQueues::new(),
         }
     }
 }
@@ -500,6 +514,10 @@ impl LockManagerTrait for MockLockManager {
     fn dump_wait_for_entries(&self, cb: Callback) {
         cb(vec![])
     }
+
+    fn lock_wait_queues(&self) -> LockWaitQueues {
+        self.lock_wait_queues.clone()
+    }
 }
 
 impl MockLockManager {
@@ -527,7 +545,7 @@ impl MockLockManager {
     }
 }
 
-pub(crate) fn make_lock_waiting_after_resuming(
+pub(super) fn make_lock_waiting_after_resuming(
     lock_info: WriteResultLockInfo,
     cb: PessimisticLockKeyCallback,
 ) -> Box<LockWaitEntry> {

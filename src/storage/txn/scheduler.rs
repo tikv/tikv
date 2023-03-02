@@ -66,7 +66,7 @@ use crate::storage::{
     lock_manager::{
         self,
         lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
-        lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
+        lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry},
         waiter_manager, DiagnosticContext, LockManagerTrait, LockWaitToken,
     },
     metrics::*,
@@ -274,8 +274,6 @@ struct TxnSchedulerInner<L: LockManagerTrait> {
 
     resource_tag_factory: ResourceTagFactory,
 
-    lock_wait_queues: LockWaitQueues,
-
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
 }
@@ -435,8 +433,6 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             task_slots.push(Mutex::new(Default::default()).into());
         }
 
-        let lock_wait_queues = LockWaitQueues::new();
-
         let inner = Arc::new(TxnSchedulerInner {
             task_slots,
             id_alloc: AtomicU64::new(0).into(),
@@ -460,7 +456,6 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             flow_controller,
             causal_ts_provider,
             resource_tag_factory,
-            lock_wait_queues,
             quota_limiter,
             feature_gate,
         });
@@ -886,7 +881,8 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         // skipped. So pushing the entry to the queue must be done before any
         // possible cancellation.
         self.inner
-            .lock_wait_queues
+            .lock_mgr
+            .lock_wait_queues()
             .push_lock_wait(lock_wait_entry, lock_info_pb.clone());
 
         let wait_info = lock_manager::KeyLockWaitInfo {
@@ -905,7 +901,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             wait_timeout,
             lock_req_ctx.get_callback_for_cancellation(
                 self.inner.lock_mgr.clone(),
-                self.inner.lock_wait_queues.clone(),
+                self.inner.lock_mgr.lock_wait_queues(),
             ),
             diag_ctx,
         );
@@ -921,7 +917,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         // that other threads/commands adds new lock-wait entries to the keys
         // concurrently. Therefore it's safe to skip waking up when we found the
         // lock waiting queues are empty.
-        if self.inner.lock_wait_queues.is_empty() {
+        if self.inner.lock_mgr.lock_wait_queues().is_empty() {
             return smallvec![];
         }
 
@@ -935,7 +931,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
 
         released_locks.into_iter().for_each(|released_lock| {
             let (lock_wait_entry, delay_wake_up_future) =
-                match self.inner.lock_wait_queues.pop_for_waking_up(
+                match self.inner.lock_mgr.lock_wait_queues().pop_for_waking_up(
                     &released_lock.key,
                     released_lock.start_ts,
                     released_lock.commit_ts,
@@ -971,7 +967,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         group_name: &str,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
     ) {
-        if new_acquired_locks.is_empty() || self.inner.lock_wait_queues.is_empty() {
+        if new_acquired_locks.is_empty() || self.inner.lock_mgr.lock_wait_queues().is_empty() {
             return;
         }
 
@@ -980,11 +976,12 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         if new_acquired_locks.len() < 30 {
             let res = self
                 .inner
-                .lock_wait_queues
+                .lock_mgr
+                .lock_wait_queues()
                 .update_lock_wait(new_acquired_locks);
             self.inner.lock_mgr.update_wait_for(res.into())
         } else {
-            let lock_wait_queues = self.inner.lock_wait_queues.clone();
+            let lock_wait_queues = self.inner.lock_mgr.lock_wait_queues();
             let lock_mgr = self.inner.lock_mgr.clone();
             self.get_sched_pool()
                 .spawn(group_name, CommandPri::High, async move {
@@ -1647,7 +1644,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             key_cb: Some(
                 ctx.get_callback_for_blocked_key(
                     self.inner.lock_mgr.clone(),
-                    self.inner.lock_wait_queues.clone(),
+                    self.inner.lock_mgr.lock_wait_queues(),
                 )
                 .into(),
             ),
@@ -1713,7 +1710,8 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         // should not be added to the queue.
         for (entry, lock_info_pb) in lock_wait_entries {
             self.inner
-                .lock_wait_queues
+                .lock_mgr
+                .lock_wait_queues()
                 .push_lock_wait(entry, lock_info_pb);
         }
     }
@@ -1724,7 +1722,8 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             // `put_back_lock_wait`, which doesn't require updating lock info and
             // additionally checks if the lock wait entry is already canceled.
             self.inner
-                .lock_wait_queues
+                .lock_mgr
+                .lock_wait_queues()
                 .push_lock_wait(entry, Default::default());
         }
     }
