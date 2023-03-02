@@ -1724,7 +1724,7 @@ dependencies = [
 [[package]]
 name = "etcd-client"
 version = "0.10.2"
-source = "git+https://github.com/pingcap/etcd-client?rev=14a6f8731f1890d5fd2f6e16a9f0d0a306b0599e#14a6f8731f1890d5fd2f6e16a9f0d0a306b0599e"
+source = "git+https://github.com/pingcap/etcd-client?rev=41d393c32a7a7c728550cee1d9a138dafe6f3e27#41d393c32a7a7c728550cee1d9a138dafe6f3e27"
 dependencies = [
  "http",
  "hyper",
@@ -3590,9 +3590,9 @@ checksum = "77af24da69f9d9341038eba93a073b1fdaaa1b788221b00a69bce9e762cb32de"
 
 [[package]]
 name = "openssl-src"
-version = "111.20.0+1.1.1o"
+version = "111.25.0+1.1.1t"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92892c4f87d56e376e469ace79f1128fdaded07646ddf73aa0be4706ff712dec"
+checksum = "3173cd3626c43e3854b1b727422a276e568d9ec5fe8cec197822cf52cfb743d6"
 dependencies = [
  "cc",
 ]
@@ -6229,7 +6229,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.5.0"
+version = "6.5.1"
 dependencies = [
  "anyhow",
  "api_version",

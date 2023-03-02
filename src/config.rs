@@ -1229,7 +1229,7 @@ impl DbConfig {
         // prevent mistakenly inputting too large values, the max limit is made
         // according to the cpu quota * 10. Notice 10 is only an estimate, not an
         // empirical value.
-        let limit = SysQuota::cpu_cores_quota() as i32 * 10;
+        let limit = (SysQuota::cpu_cores_quota() * 10.0) as i32;
         if self.max_background_jobs <= 0 || self.max_background_jobs > limit {
             return Err(format!(
                 "max_background_jobs should be greater than 0 and less than or equal to {:?}",
@@ -2648,7 +2648,7 @@ impl Default for ResolvedTsConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            advance_ts_interval: ReadableDuration::secs(1),
+            advance_ts_interval: ReadableDuration::secs(20),
             scan_lock_pool_size: 2,
         }
     }
@@ -4604,7 +4604,7 @@ mod tests {
         // Default value
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
-            ReadableDuration::secs(1)
+            ReadableDuration::secs(20)
         );
 
         // Update `advance-ts-interval` to 100ms
