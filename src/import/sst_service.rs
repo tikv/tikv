@@ -117,12 +117,13 @@ struct RequestCollector {
 }
 
 impl RequestCollector {
-    fn record_message_of_size(&mut self, size: usize) {
-        // When computing the raft entry size, we need to consider the extra bytes in
-        // the wire encoding. We make a raft command entry when we unpacked size grows
-        // to 7/8 of the max raft entry size, when the amplification by the extra bytes
-        // is greater than 8/7 (i.e. the average size of entry is less 70B), we may meet
-        // the "raft entry is too large" error.
+    fn record_size_of_message(&mut self, size: usize) {
+        // We make a raft command entry when we unpacked size grows to 7/8 of the max
+        // raft entry size.
+        //
+        // Which means, if we don't add the extra bytes, when the amplification by the
+        // extra bytes is greater than 8/7 (i.e. the average size of entry is
+        // less than 70B), we may encounter the "raft entry is too large" error.
         self.unpacked_size += size + WIRE_EXTRA_BYTES;
     }
 
@@ -188,7 +189,7 @@ impl RequestCollector {
                     .map(|(_, old_ts)| *old_ts < ts.into_inner())
                     .unwrap_or(true)
                 {
-                    self.record_message_of_size(m.size());
+                    self.record_size_of_message(m.size());
                     if let Some((v, _)) = self
                         .write_reqs
                         .insert(encoded_key.to_owned(), (m, ts.into_inner()))
@@ -198,7 +199,7 @@ impl RequestCollector {
                 }
             }
             CF_DEFAULT => {
-                self.record_message_of_size(m.size());
+                self.record_size_of_message(m.size());
                 if let Some(v) = self.default_reqs.insert(k.as_encoded().clone(), m) {
                     self.release_message_of_size(v.size());
                 }
