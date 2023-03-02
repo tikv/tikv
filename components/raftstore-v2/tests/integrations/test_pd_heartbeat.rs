@@ -13,7 +13,7 @@ use raftstore_v2::{
 };
 use tikv_util::{config::ReadableSize, store::new_peer};
 
-use crate::cluster::Cluster;
+use crate::cluster::{v2_default_config, Cluster};
 
 #[test]
 fn test_region_heartbeat() {
@@ -91,7 +91,9 @@ fn test_report_buckets() {
     let mut cop_cfg = CopConfig::default();
     cop_cfg.enable_region_bucket = Some(true);
     cop_cfg.region_bucket_size = ReadableSize::kb(1);
-    let cluster = Cluster::with_cop_cfg(cop_cfg);
+    let mut config = v2_default_config();
+    config.region_split_check_diff = Some(ReadableSize::kb(1));
+    let cluster = Cluster::with_cop_cfg(Some(config), cop_cfg);
     let store_id = cluster.node(0).id();
     let router = &cluster.routers[0];
 
@@ -109,20 +111,13 @@ fn test_report_buckets() {
     router.wait_applied_to_current_term(region_id, Duration::from_secs(3));
 
     // load data to split bucket.
-    let header = Box::new(router.new_request_for(region_id).take_header());
     let mut suffix = String::from("");
     for _ in 0..200 {
         suffix.push_str("fake ");
     }
-    for i in 0..10 {
-        let mut put = SimpleWriteEncoder::with_capacity(64);
-        let mut key = format!("key-{}", i);
-        key.push_str(&suffix);
-        put.put(CF_DEFAULT, key.as_bytes(), b"value");
-        let (msg, sub) = PeerMsg::simple_write(header.clone(), put.clone().encode());
-        router.send(region_id, msg).unwrap();
-        let _resp = block_on(sub.result()).unwrap();
-    }
+
+    let repeat: u64 = 10;
+    let bytes = write_keys(&cluster, region_id, &suffix, repeat.try_into().unwrap());
     // To find the split keys, it should flush memtable manually.
     let mut cached = cluster.node(0).tablet_registry().get(region_id).unwrap();
     cached.latest().unwrap().flush_cf(CF_DEFAULT, true).unwrap();
@@ -143,11 +138,34 @@ fn test_report_buckets() {
     if let Some(buckets) = resp {
         assert!(buckets.get_keys().len() > 2);
         assert_eq!(buckets.get_region_id(), region_id);
+        let write_bytes = buckets.get_stats().get_write_bytes();
+        let write_keys = buckets.get_stats().get_write_keys();
+        for i in 0..buckets.keys.len() - 1 {
+            assert!(write_bytes[i] >= bytes);
+            assert!(write_keys[i] >= repeat);
+        }
         for i in 0..buckets.keys.len() - 1 {
             buckets_tmp.push(raftstore::store::Bucket::default());
             let bucket_range =
                 raftstore::store::BucketRange(buckets.keys[i].clone(), buckets.keys[i + 1].clone());
             bucket_ranges.push(bucket_range);
+        }
+    }
+
+    // report buckets to pd again, the write bytes and keys should be zero.
+    router
+        .send(region_id, PeerMsg::Tick(PeerTick::ReportBuckets))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let resp = block_on(cluster.node(0).pd_client().get_buckets_by_id(region_id)).unwrap();
+    if let Some(buckets) = resp {
+        assert_eq!(buckets.get_region_id(), region_id);
+        let write_bytes = buckets.get_stats().get_write_bytes();
+        let write_keys = buckets.get_stats().get_write_keys();
+        for i in 0..buckets.keys.len() - 1 {
+            assert!(write_bytes[i] == 0);
+            assert!(write_keys[i] == 0);
         }
     }
 
@@ -164,5 +182,36 @@ fn test_report_buckets() {
             router.send(region_id, msg).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+    // report buckets to pd again, the write bytes and keys should be zero.
+    router
+        .send(region_id, PeerMsg::Tick(PeerTick::ReportBuckets))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let resp = block_on(cluster.node(0).pd_client().get_buckets_by_id(region_id)).unwrap();
+    if let Some(buckets) = resp {
+        assert_eq!(buckets.get_region_id(), region_id);
+        let write_bytes = buckets.get_stats().get_write_bytes();
+        let write_keys = buckets.get_stats().get_write_keys();
+        assert_eq!(write_bytes.len(), 1);
+        assert_eq!(write_keys.len(), 1);
+    }
+
+    fn write_keys(cluster: &Cluster, region_id: u64, suffix: &str, repeat: usize) -> u64 {
+        let router = &cluster.routers[0];
+        let header = Box::new(router.new_request_for(region_id).take_header());
+        for i in 0..repeat {
+            let mut put = SimpleWriteEncoder::with_capacity(64);
+            let mut key = format!("key-{}", i);
+            key.push_str(suffix);
+            put.put(CF_DEFAULT, key.as_bytes(), b"value");
+            let (msg, sub) = PeerMsg::simple_write(header.clone(), put.clone().encode());
+            router.send(region_id, msg).unwrap();
+            let _resp = block_on(sub.result()).unwrap();
+        }
+        ((suffix.as_bytes().len() + 10) * repeat)
+            .try_into()
+            .unwrap()
     }
 }

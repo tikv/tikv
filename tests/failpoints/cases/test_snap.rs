@@ -15,6 +15,7 @@ use engine_traits::RaftEngineReadOnly;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 #[test]
@@ -384,9 +385,10 @@ fn test_shutdown_when_snap_gc() {
 }
 
 // Test if a peer handle the old snapshot properly.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_receive_old_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     configure_for_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
 
@@ -420,7 +422,7 @@ fn test_receive_old_snapshot() {
             .msg_type(MessageType::MsgSnapshot)
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
-    cluster.sim.wl().add_recv_filter(2, recv_filter);
+    cluster.add_recv_filter_on_node(2, recv_filter);
     cluster.clear_send_filters();
 
     for _ in 0..20 {
@@ -440,17 +442,18 @@ fn test_receive_old_snapshot() {
         std::mem::take(guard.as_mut())
     };
 
-    cluster.sim.wl().clear_recv_filters(2);
+    cluster.clear_recv_filter_on_node(2);
 
     for i in 20..40 {
         cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
     }
     must_get_equal(&cluster.get_engine(2), b"k39", b"v1");
 
-    let router = cluster.sim.wl().get_router(2).unwrap();
+    let router = cluster.get_router(2).unwrap();
     // Send the old snapshot
     for raft_msg in msgs {
-        router.send_raft_message(raft_msg).unwrap();
+        #[allow(clippy::useless_conversion)]
+        router.send_raft_message(raft_msg.into()).unwrap();
     }
 
     cluster.must_put(b"k40", b"v1");

@@ -4384,6 +4384,7 @@ dependencies = [
  "slog",
  "slog-global",
  "smallvec",
+ "sst_importer",
  "tempfile",
  "test_pd",
  "test_util",

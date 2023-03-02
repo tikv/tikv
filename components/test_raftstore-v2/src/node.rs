@@ -1,21 +1,23 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    path::Path,
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{RaftEngineReadOnly, TabletRegistry};
+use engine_traits::{RaftEngine, RaftEngineReadOnly, TabletRegistry};
 use kvproto::{
     kvrpcpb::ApiVersion,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
-use raft::prelude::MessageType;
+use raft::{prelude::MessageType, SnapshotStatus};
 use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
@@ -36,6 +38,7 @@ use test_pd_client::TestPdClient;
 use test_raftstore::{Config, Filter};
 use tikv::{
     config::{ConfigController, Module},
+    import::SstImporter,
     server::{
         raftkv::ReplicaReadLockChecker, tablet_snap::copy_tablet_snapshot, NodeV2,
         Result as ServerResult,
@@ -73,6 +76,8 @@ impl Transport for ChannelTransport {
     fn send(&mut self, msg: RaftMessage) -> raftstore::Result<()> {
         let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
+        let to_peer_id = msg.get_to_peer().get_id();
+        let region_id = msg.get_region_id();
         let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
         if is_snapshot {
@@ -102,7 +107,13 @@ impl Transport for ChannelTransport {
         match core.routers.get(&to_store) {
             Some(h) => {
                 h.send_raft_msg(msg)?;
-                // report snapshot status if needed
+                if is_snapshot {
+                    let _ = core.routers[&from_store].report_snapshot_status(
+                        region_id,
+                        to_peer_id,
+                        SnapshotStatus::Finish,
+                    );
+                }
                 Ok(())
             }
             _ => Err(box_err!("missing sender for store {}", to_store)),
@@ -179,6 +190,7 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
         _resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -257,6 +269,12 @@ impl Simulator for NodeCluster {
             // todo: Is None sufficient for test?
             None,
         );
+        let importer = {
+            let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
+            Arc::new(
+                SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
+            )
+        };
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
@@ -275,6 +293,7 @@ impl Simulator for NodeCluster {
             pd_worker,
             Arc::new(VersionTrack::new(raft_store)),
             &state,
+            importer,
         )?;
         assert!(
             raft_engine
