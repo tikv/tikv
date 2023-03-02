@@ -821,10 +821,9 @@ mod test {
     use engine_traits::{
         FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
     };
-    use futures::channel::oneshot;
     use kvproto::{
         metapb::RegionEpoch,
-        raft_cmdpb::{BatchSplitRequest, CommitMergeRequest, SplitRequest},
+        raft_cmdpb::{BatchSplitRequest, SplitRequest},
         raft_serverpb::{PeerState, RegionLocalState},
     };
     use raftstore::store::{cmd_resp::new_error, Config};
@@ -836,7 +835,7 @@ mod test {
     };
 
     use super::*;
-    use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes};
+    use crate::{fsm::ApplyResReporter, operation::CatchUpLogs, raft::Apply, router::ApplyRes};
 
     struct MockReporter {
         sender: Sender<ApplyRes>,
@@ -854,13 +853,7 @@ mod test {
             let _ = self.sender.send(apply_res);
         }
 
-        fn redirect_catch_up_logs(
-            &self,
-            _target_region_id: u64,
-            _merge: CommitMergeRequest,
-            _tx: oneshot::Sender<()>,
-        ) {
-        }
+        fn redirect_catch_up_logs(&self, _c: CatchUpLogs) {}
     }
 
     fn new_split_req(key: &[u8], id: u64, children: Vec<u64>) -> SplitRequest {

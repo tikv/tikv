@@ -5,7 +5,7 @@
 //! ## Propose
 //!
 //! The proposal is initiated by the source region. After `PrepareMerge` is
-//! applied, the source peer will send a `AskCommitMerge` message to the target
+//! applied, the source peer will send an `AskCommitMerge` message to the target
 //! peer. (For simplicity, we send this message regardless of whether the target
 //! peer is leader.) The message will also carry some source region logs that
 //! may not be committed by some peers.
@@ -35,7 +35,7 @@
 //! the apply progress will be paused and it redirects the log entries from
 //! source region, as a `CatchUpLogs` message, to the local source region peer
 //! (step 2). When the source region peer has applied all logs up to the prior
-//! `PrepareMerge` command, it will send its tablet to the target region (step
+//! `PrepareMerge` command, it will send a checkpoint to the target peer (step
 //! 4). Here we use a temporary channel instead of directly sending message
 //! between apply FSMs like in v1.
 
@@ -60,7 +60,7 @@ use raftstore::{
 };
 use slog::{debug, error, info, warn};
 use tikv_util::{
-    box_err, slog_panic,
+    slog_panic,
     store::{find_peer, region_on_same_stores},
 };
 
@@ -84,9 +84,9 @@ pub struct CommitMergeResult {
 
 #[derive(Debug)]
 pub struct CatchUpLogs {
-    pub target_region_id: u64,
-    pub merge: CommitMergeRequest,
-    pub tx: oneshot::Sender<()>,
+    target_region_id: u64,
+    merge: CommitMergeRequest,
+    tx: oneshot::Sender<()>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -96,39 +96,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         self.add_pending_tick(PeerTick::CheckMerge);
-        if let Err(e) = self.schedule_commit_merge_proposal(store_ctx) {
-            info!(
-                self.logger,
-                "failed to schedule commit merge";
-                "err" => ?e,
-            );
-            // TODO: self.handle_commit_merge_failure(store_ctx, e);
-        }
+        self.schedule_commit_merge_proposal(store_ctx);
     }
 
     // Match v1::schedule_merge.
-    fn schedule_commit_merge_proposal<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-    ) -> Result<()> {
+    fn schedule_commit_merge_proposal<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let state = self.applied_merge_state().unwrap();
         let target = state.get_target();
         let target_id = target.get_id();
 
-        let exist_region = {
-            let store_meta = store_ctx.store_meta.lock().unwrap();
-            store_meta.regions.get(&target_id).map(|(r, _)| r.clone())
-        };
-        if let Some(r) = exist_region {
-            let exist_epoch = r.get_region_epoch();
-            let expect_epoch = target.get_region_epoch();
-            // exist_epoch > expect_epoch
-            if util::is_epoch_stale(expect_epoch, exist_epoch) {
-                return Err(box_err!("target region changed {:?} -> {:?}", target, r));
-            }
-        }
-
-        let (min_index, _) = self.calculate_min_progress()?;
+        let (min_index, _) = self.calculate_min_progress().unwrap();
         let low = cmp::max(min_index + 1, state.get_min_index());
         // TODO: move this into raft module.
         // > over >= to include the PrepareMerge proposal.
@@ -187,7 +164,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             _ => unreachable!(),
         }
-        Ok(())
     }
 
     pub fn on_reject_commit_merge(&mut self, index: u64) {
@@ -252,6 +228,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "target" => ?region,
             );
             Some(false)
+        } else if self
+            .storage()
+            .region_state()
+            .get_merged_records()
+            .iter()
+            .any(|p| {
+                p.get_source_region_id() == source_region.get_id()
+                    && p.get_source_epoch() == source_region.get_region_epoch()
+            })
+        {
+            info!(
+                self.logger,
+                "ignore commit merge because peer is already in merged_records";
+                "source" => ?source_region,
+            );
+            None
         } else if expected_epoch == region.get_region_epoch() {
             Some(true)
         } else {
@@ -289,8 +281,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let source_path = merge_source_path(reg, source_region.get_id(), merge.get_commit());
         if !source_path.exists() {
             let (tx, rx) = oneshot::channel();
-            self.res_reporter()
-                .redirect_catch_up_logs(self.region_id(), merge.clone(), tx);
+            self.res_reporter().redirect_catch_up_logs(CatchUpLogs {
+                target_region_id: self.region_id(),
+                merge: merge.clone(),
+                tx,
+            });
             rx.await.unwrap_or_else(|_| {
                 // TODO: handle this gracefully.
                 slog_panic!(self.logger, "source peer is missing");
@@ -323,8 +318,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // TODO: check both are trimmed.
 
         let path = reg.tablet_path(self.region_id(), index);
-        // The last merge is incomplete.
-        if path.exists() {
+        // Check if the last merge is incomplete.
+        // At this point, admin.flushed is smaller than merge index. If `log_recovery`
+        // is None, it means no data cf is flushed after admin.flushed.
+        if path.exists()
+            && self
+                .log_recovery()
+                .as_ref()
+                .map_or(true, |trace| trace.iter().all(|i| *i < index))
+        {
             std::fs::remove_dir_all(&path).unwrap();
         }
         let mut ctx = TabletContext::new(&region, Some(index));
@@ -461,7 +463,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "commit_index" => self.raft_group().raft.raft_log.committed,
         );
         if log_idx < self.raft_group().raft.raft_log.committed {
-            // There are maybe some logs not included in CommitMergeRequest's entries, like
+            // There may be some logs not included in CommitMergeRequest's entries, like
             // CompactLog, so the commit index may exceed the last index of the entires from
             // CommitMergeRequest. If that, no need to append
             if self.raft_group().raft.raft_log.committed - log_idx >= entries.len() as u64 {
@@ -539,10 +541,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 source_region.get_end_key() == res.region.get_end_key()
                     || source_region.get_start_key() == res.region.get_start_key()
             );
-            if let Some((d, _)) = meta.readers.get_mut(&res.source.get_id()) {
-                d.mark_pending_remove();
-            }
-
             meta.set_region(&res.region, true, &self.logger);
             let (reader, read_tablet) = meta.readers.get_mut(&res.region.get_id()).unwrap();
             self.set_region(
@@ -576,7 +574,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
         // a region merge.
-        // TODO(tabokie): v1 doesn't reset locks status?
         self.txn_context()
             .on_became_leader(store_ctx, self.term(), self.region(), &self.logger);
 
@@ -606,7 +603,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .apply_trace_mut()
             .on_admin_flush(res.index);
         self.set_has_extra_write();
-        self.take_merge_context();
     }
 
     // Match v1::on_merge_result. Called on source peer.

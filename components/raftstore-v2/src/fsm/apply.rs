@@ -8,8 +8,8 @@ use std::{
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{FlushState, KvEngine, TabletRegistry};
-use futures::{channel::oneshot, compat::Future01CompatExt, FutureExt, StreamExt};
-use kvproto::{metapb, raft_cmdpb::CommitMergeRequest, raft_serverpb::RegionLocalState};
+use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
+use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raftstore::store::{Config, ReadTask};
 use slog::Logger;
@@ -31,12 +31,7 @@ use crate::{
 pub trait ApplyResReporter {
     fn report(&self, apply_res: ApplyRes);
 
-    fn redirect_catch_up_logs(
-        &self,
-        target_region_id: u64,
-        merge: CommitMergeRequest,
-        tx: oneshot::Sender<()>,
-    );
+    fn redirect_catch_up_logs(&self, c: CatchUpLogs);
 }
 
 impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for Mailbox<F, S> {
@@ -45,17 +40,8 @@ impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for M
         let _ = self.force_send(PeerMsg::ApplyRes(apply_res));
     }
 
-    fn redirect_catch_up_logs(
-        &self,
-        target_region_id: u64,
-        merge: CommitMergeRequest,
-        tx: oneshot::Sender<()>,
-    ) {
-        let msg = PeerMsg::RedirectCatchUpLogs(CatchUpLogs {
-            target_region_id,
-            merge,
-            tx,
-        });
+    fn redirect_catch_up_logs(&self, c: CatchUpLogs) {
+        let msg = PeerMsg::RedirectCatchUpLogs(c);
         let _ = self.force_send(msg);
     }
 }

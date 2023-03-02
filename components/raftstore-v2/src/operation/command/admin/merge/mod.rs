@@ -27,10 +27,10 @@ fn merge_source_path<EK>(registry: &TabletRegistry<EK>, region_id: u64, index: u
     registry.tablet_root().join(tablet_name)
 }
 
+/// This context is only used at source region.
 #[derive(Default)]
 pub struct MergeContext {
     prepare_status: Option<PrepareStatus>,
-    /// Current source region is catching up logs for merge.
     catch_up_logs: Option<CatchUpLogs>,
 }
 
