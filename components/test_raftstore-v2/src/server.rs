@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    path::Path,
     sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
@@ -10,9 +11,10 @@ use api_version::{dispatch_api_version, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{KvEngine, TabletRegistry};
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
@@ -46,6 +48,7 @@ use test_pd_client::TestPdClient;
 use test_raftstore::{filter_send, AddressMap, Config, Filter};
 use tikv::{
     coprocessor, coprocessor_v2,
+    import::SstImporter,
     read_pool::ReadPool,
     server::{
         gc_worker::GcWorker, load_statistics::ThreadLoadPool, lock_manager::LockManager,
@@ -312,6 +315,7 @@ impl ServerCluster {
         node_id: u64,
         mut cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -462,7 +466,20 @@ impl ServerCluster {
 
         ReplicaReadLockChecker::new(concurrency_manager.clone()).register(&mut coprocessor_host);
 
-        // todo: Import Sst Service
+        // Create import service.
+        let importer = {
+            let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
+            Arc::new(
+                SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
+            )
+        };
+        // let import_service = ImportSstService::new(
+        // cfg.import.clone(),
+        // cfg.raft_store.raft_entry_max_size,
+        // raft_kv_2.clone(),
+        // tablet_registry.clone(),
+        // Arc::clone(&importer),
+        // );
 
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service();
@@ -527,6 +544,7 @@ impl ServerCluster {
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));
             svr.register_service(create_deadlock(deadlock_service.clone()));
+            // svr.register_service(create_import_sst(import_service.clone()));
             if let Some(svcs) = self.pending_services.get(&node_id) {
                 for fact in svcs {
                     svr.register_service(fact());
@@ -573,6 +591,7 @@ impl ServerCluster {
             pd_worker,
             Arc::new(VersionTrack::new(raft_store)),
             &state,
+            importer,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -691,6 +710,7 @@ impl Simulator for ServerCluster {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -701,6 +721,7 @@ impl Simulator for ServerCluster {
                 node_id,
                 cfg,
                 store_meta,
+                key_manager,
                 raft_engine,
                 tablet_registry,
                 resource_manager

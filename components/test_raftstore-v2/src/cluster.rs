@@ -79,6 +79,7 @@ pub trait Simulator {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
+        key_mgr: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -399,6 +400,7 @@ impl<T: Simulator> Cluster<T> {
                 id,
                 self.cfg.clone(),
                 store_meta.clone(),
+                key_mgr.clone(),
                 raft_engine.clone(),
                 tablet_registry.clone(),
                 &self.resource_manager,
@@ -440,10 +442,12 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
 
         debug!("calling run node"; "node_id" => node_id);
+        let key_mgr = self.key_managers_map.get(&node_id).unwrap().clone();
         self.sim.wl().run_node(
             node_id,
             cfg,
             store_meta,
+            key_mgr,
             raft_engine,
             tablet_registry,
             &self.resource_manager,

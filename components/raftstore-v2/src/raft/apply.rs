@@ -12,6 +12,7 @@ use raftstore::store::{
     Config, ReadTask,
 };
 use slog::Logger;
+use sst_importer::SstImporter;
 use tikv_util::{log::SlogFormat, worker::Scheduler};
 
 use crate::{
@@ -57,6 +58,7 @@ pub struct Apply<EK: KvEngine, R> {
 
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
+    sst_importer: Arc<SstImporter>,
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
     pub(crate) buckets: Option<BucketStat>,
@@ -74,8 +76,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
-        logger: Logger,
         buckets: Option<BucketStat>,
+        sst_importer: Arc<SstImporter>,
+        logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
             .get(region_state.get_region().get_id())
@@ -105,8 +108,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             flush_state,
             log_recovery,
             metrics: ApplyMetrics::default(),
-            logger,
             buckets,
+            sst_importer,
+            logger,
         }
     }
 
@@ -259,5 +263,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
     pub fn apply_flow_control(&self) -> &ApplyFlowControl {
         &self.flow_control
+    }
+
+    #[inline]
+    pub fn sst_importer(&self) -> &SstImporter {
+        &self.sst_importer
     }
 }

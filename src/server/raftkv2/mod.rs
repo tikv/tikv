@@ -70,6 +70,8 @@ impl Stream for Transform {
 
 fn modifies_to_simple_write(modifies: Vec<Modify>) -> SimpleWriteBinary {
     let mut encoder = SimpleWriteEncoder::with_capacity(128);
+    let modifies_len = modifies.len();
+    let mut ssts = vec![];
     for m in modifies {
         match m {
             Modify::Put(cf, k, v) => encoder.put(cf, k.as_encoded(), &v),
@@ -83,7 +85,16 @@ fn modifies_to_simple_write(modifies: Vec<Modify>) -> SimpleWriteBinary {
                 end_key.as_encoded(),
                 notify_only,
             ),
+            Modify::Ingest(sst) => {
+                if ssts.capacity() == 0 {
+                    ssts.reserve(modifies_len);
+                }
+                ssts.push(*sst);
+            }
         }
+    }
+    if !ssts.is_empty() {
+        encoder.ingest(ssts);
     }
     encoder.encode()
 }
@@ -229,7 +240,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         header.set_flags(flags);
 
         self.schedule_txn_extra(batch.extra);
-        let data = modifies_to_simple_write(batch.modifies);
+        let mut data = modifies_to_simple_write(batch.modifies);
+        if batch.avoid_batch {
+            data.freeze();
+        }
         let mut builder = CmdResChannelBuilder::default();
         if WriteEvent::subscribed_proposed(subscribed) {
             builder.subscribe_proposed();
