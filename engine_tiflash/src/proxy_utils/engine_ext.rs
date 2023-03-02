@@ -1,9 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-
-#[cfg(feature = "enable-pagestorage")]
-use proxy_ffi::interfaces_ffi::{PageAndCppStrWithView, RawCppPtr, RawVoidPtr};
 use proxy_ffi::{
-    gen_engine_store_server_helper, interfaces_ffi, interfaces_ffi::EngineStoreServerHelper,
+    gen_engine_store_server_helper, interfaces_ffi,
+    interfaces_ffi::{EngineStoreServerHelper, PageAndCppStrWithView, RawCppPtr, RawVoidPtr},
 };
 
 use crate::RocksEngine;
@@ -22,7 +20,6 @@ pub struct PageStorageExt {
     pub engine_store_server_helper: isize,
 }
 
-#[cfg(feature = "enable-pagestorage")]
 impl PageStorageExt {
     fn helper(&self) -> &'static EngineStoreServerHelper {
         gen_engine_store_server_helper(self.engine_store_server_helper)
@@ -32,7 +29,7 @@ impl PageStorageExt {
         // TODO There are too many dummy write batch created in non-uni-ps impl.
         // Need to work out a solution for this.
         // See engine_tiflash/src/write_batch.rs.
-        self.helper().create_write_batch().into()
+        self.helper().create_write_batch()
     }
 
     pub fn destroy_write_batch(&self, wb_wrapper: &RawCppPtr) {
@@ -78,6 +75,7 @@ impl PageStorageExt {
         };
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn scan_page(
         &self,
         start_page_id: &[u8],

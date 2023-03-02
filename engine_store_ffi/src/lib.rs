@@ -13,6 +13,6 @@ pub mod observer;
 
 // TODO We may integrate engine_tiflash if possible.
 pub use engine_tiflash::EngineStoreConfig;
-pub type TiFlashEngine = engine_tiflash::RocksEngine;
+pub type TiFlashEngine = engine_tiflash::MixedModeEngine;
 
 pub(crate) use proxy_ffi::fatal;

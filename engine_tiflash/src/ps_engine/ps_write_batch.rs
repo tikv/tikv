@@ -37,6 +37,7 @@ impl WriteBatchExt for RocksEngine {
     }
 }
 
+/// Used when impl WriteBatchExt.
 /// `RocksWriteBatchVec` is for method `MultiBatchWrite` of RocksDB, which
 /// splits a large WriteBatch into many smaller ones and then any thread could
 /// help to deal with these small WriteBatch when it is calling

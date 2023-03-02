@@ -159,7 +159,11 @@ impl ClusterExt {
             Some(proxy_config_set),
         );
 
+        ffi_helper_set.proxy.set_kv_engine(
+            engine_store_ffi::ffi::RaftStoreProxyEngine::from_tiflash_engine(engines.kv.clone()),
+        );
         assert_ne!(engines.kv.proxy_ext.engine_store_server_helper, 0);
+        assert!(engines.kv.element_engine.is_some());
         cluster.cluster_ext.ffi_helper_lst.push(ffi_helper_set);
     }
 }

@@ -77,7 +77,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         store_id: u64,
-        engine: engine_tiflash::RocksEngine,
+        engine: engine_tiflash::MixedModeEngine,
         raft_engine: ER,
         sst_importer: Arc<SstImporter>,
         trans: T,
