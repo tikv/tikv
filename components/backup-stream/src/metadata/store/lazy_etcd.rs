@@ -7,7 +7,10 @@ use std::{
 
 use etcd_client::{ConnectOptions, Error as EtcdError, OpenSslClientConfig};
 use futures::Future;
-use openssl::x509::verify::X509VerifyFlags;
+use openssl::{
+    pkey::PKey,
+    x509::{verify::X509VerifyFlags, X509},
+};
 use security::SecurityManager;
 use tikv_util::{
     info,
@@ -16,7 +19,10 @@ use tikv_util::{
 };
 use tokio::sync::Mutex as AsyncMutex;
 
-use super::{etcd::EtcdSnapshot, EtcdStore, MetaStore};
+use super::{
+    etcd::{EtcdSnapshot, TopologyUpdater},
+    EtcdStore, MetaStore,
+};
 use crate::errors::{ContextualResultExt, Result};
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
@@ -29,6 +35,16 @@ pub struct ConnectionConfig {
     pub tls: Arc<SecurityManager>,
     pub keep_alive_interval: Duration,
     pub keep_alive_timeout: Duration,
+}
+
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            tls: Default::default(),
+            keep_alive_interval: Duration::from_secs(10),
+            keep_alive_timeout: Duration::from_secs(3),
+        }
+    }
 }
 
 impl std::fmt::Debug for ConnectionConfig {
@@ -59,7 +75,20 @@ impl ConnectionConfig {
                     // We haven't make it configurable because it is enabled in gRPC by default too.
                     // TODO: Perhaps implement grpc-io based etcd client, fully remove the difference between gRPC TLS and our custom TLS?
                     .manually(|c| c.cert_store_mut().set_flags(X509VerifyFlags::PARTIAL_CHAIN))
-                    .client_cert_pem_and_key(&tls.client_cert, &tls.client_key.0),
+                    .manually(|c| {
+                        let mut client_certs= X509::stack_from_pem(&tls.client_cert)?;
+                        let client_key = PKey::private_key_from_pem(&tls.client_key.0)?;
+                        if !client_certs.is_empty() {
+                            c.set_certificate(&client_certs[0])?;
+                        }
+                        if client_certs.len() > 1 {
+                            for i in client_certs.drain(1..) {
+                                c.add_extra_chain_cert(i)?;
+                            }
+                        }
+                        c.set_private_key(&client_key)?;
+                        Ok(())
+                    }),
             )
         }
         opts = opts
@@ -73,12 +102,15 @@ impl ConnectionConfig {
 
 impl LazyEtcdClient {
     pub fn new(endpoints: &[String], conf: ConnectionConfig) -> Self {
-        Self(Arc::new(AsyncMutex::new(LazyEtcdClientInner {
-            conf,
-            endpoints: endpoints.iter().map(ToString::to_string).collect(),
-            last_modified: None,
-            cli: None,
-        })))
+        let mut inner = LazyEtcdClientInner::new(endpoints, conf);
+        inner.normalize_urls();
+        Self(Arc::new(AsyncMutex::new(inner)))
+    }
+
+    // For testing -- check whether the endpoints are properly normalized.
+    #[cfg(test)]
+    pub(super) fn endpoints(&self) -> Vec<String> {
+        self.0.blocking_lock().endpoints.clone()
     }
 
     async fn get_cli(&self) -> Result<EtcdStore> {
@@ -94,6 +126,17 @@ pub struct LazyEtcdClientInner {
 
     last_modified: Option<SystemTime>,
     cli: Option<EtcdStore>,
+}
+
+impl LazyEtcdClientInner {
+    fn new(endpoints: &[String], conf: ConnectionConfig) -> Self {
+        LazyEtcdClientInner {
+            conf,
+            endpoints: endpoints.iter().map(ToString::to_string).collect(),
+            last_modified: None,
+            cli: None,
+        }
+    }
 }
 
 fn etcd_error_is_retryable(etcd_err: &EtcdError) -> bool {
@@ -148,6 +191,21 @@ where
 }
 
 impl LazyEtcdClientInner {
+    fn normalize_urls(&mut self) {
+        let enabled_tls = self.conf.tls.client_suite().is_ok();
+        for endpoint in self.endpoints.iter_mut() {
+            // Don't touch them when the schemes already provided.
+            // Given etcd is based on gRPC (which relies on HTTP/2),
+            // there shouldn't be other schemes available (Hopefully...)
+            if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+                continue;
+            }
+            let expected_scheme = if enabled_tls { "https" } else { "http" };
+            *endpoint = format!("{}://{}", expected_scheme, endpoint)
+        }
+        info!("log backup normalized etcd endpoints"; "endpoints" => ?self.endpoints);
+    }
+
     async fn connect(&mut self) -> Result<&EtcdStore> {
         let store = retry(|| {
             // For now, the interface of the `etcd_client` doesn't us to control
@@ -162,7 +220,10 @@ impl LazyEtcdClientInner {
         .await
         .context("during connecting to the etcd")?;
         let store = EtcdStore::from(store);
+        let mut updater = TopologyUpdater::new(Arc::downgrade(store.inner()));
         self.cli = Some(store);
+        updater.init(self.endpoints.iter().cloned());
+        tokio::task::spawn(updater.main_loop());
         Ok(self.cli.as_ref().unwrap())
     }
 
@@ -201,5 +262,55 @@ impl MetaStore for LazyEtcdClient {
 
     async fn txn_cond(&self, txn: super::CondTransaction) -> Result<()> {
         self.get_cli().await?.txn_cond(txn).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs::File, io::Write, path::PathBuf, sync::Arc};
+
+    use security::{SecurityConfig, SecurityManager};
+    use tempfile::TempDir;
+
+    use super::LazyEtcdClient;
+    use crate::{errors::Result, metadata::ConnectionConfig};
+
+    #[test]
+    fn test_normalize_url() -> Result<()> {
+        let endpoints = ["http://pd-1".to_owned(), "pd-2".to_owned()];
+        let le = LazyEtcdClient::new(&endpoints, Default::default());
+        assert_eq!(le.endpoints(), &["http://pd-1", "http://pd-2"]);
+
+        let tempdir = TempDir::new()?;
+        let write_all = |path: &PathBuf, content| {
+            let mut f = File::create(path)?;
+            f.write_all(content)?;
+            Result::Ok(())
+        };
+        let ca = tempdir.path().join("ca");
+        let cert = tempdir.path().join("cert");
+        let key = tempdir.path().join("key");
+        write_all(&ca, b"CA :3")?;
+        write_all(&cert, b"Cert :D")?;
+        write_all(&key, b"Key X)")?;
+
+        let cfg = SecurityConfig {
+            ca_path: ca.to_string_lossy().into_owned(),
+            cert_path: cert.to_string_lossy().into_owned(),
+            key_path: key.to_string_lossy().into_owned(),
+
+            ..Default::default()
+        };
+        let sm = SecurityManager::new(&cfg).unwrap();
+        let endpoints = ["https://pd-1".to_owned(), "pd-2".to_owned()];
+        let le = LazyEtcdClient::new(
+            &endpoints,
+            ConnectionConfig {
+                tls: Arc::new(sm),
+                ..Default::default()
+            },
+        );
+        assert_eq!(le.endpoints(), &["https://pd-1", "https://pd-2"]);
+        Result::Ok(())
     }
 }
