@@ -29,7 +29,7 @@ pub use self::{
 };
 use self::{
     deadlock::{Detector, RoleChangeNotifier},
-    waiter_manager::{Callback, Waiter, WaiterManager},
+    waiter_manager::{Callback, Waiter, WaiterManager}, lock_wait_context::PessimisticLockKeyCallback, lock_waiting_queue::LockWaitEntry,
     // DiagnosticContext, KeyLockWaitInfo, LockWaitToken, UpdateWaitForEvent, WaitTimeout,
 };
 use crate::{
@@ -40,6 +40,8 @@ use crate::{
         DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
     },
 };
+
+use super::txn::commands::WriteResultLockInfo;
 
 mod client;
 mod config;
@@ -523,6 +525,24 @@ impl MockLockManager {
             .map(|(&token, _)| token)
             .collect()
     }
+}
+
+pub(crate) fn make_lock_waiting_after_resuming(
+    lock_info: WriteResultLockInfo,
+    cb: PessimisticLockKeyCallback,
+) -> Box<LockWaitEntry> {
+    Box::new(LockWaitEntry {
+        key: lock_info.key,
+        lock_hash: lock_info.lock_digest.hash,
+        parameters: lock_info.parameters,
+        should_not_exist: lock_info.should_not_exist,
+        lock_wait_token: lock_info.lock_wait_token,
+        // This must be called after an execution fo AcquirePessimisticLockResumed, in which
+        // case there must be a valid req_state.
+        req_states: lock_info.req_states.unwrap(),
+        legacy_wake_up_index: None,
+        key_cb: Some(cb.into()),
+    })
 }
 
 #[cfg(test)]

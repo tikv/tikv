@@ -1656,25 +1656,6 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         (ctx, lock_wait_entry, lock_info.lock_info_pb)
     }
 
-    fn make_lock_waiting_after_resuming(
-        &self,
-        lock_info: WriteResultLockInfo,
-        cb: PessimisticLockKeyCallback,
-    ) -> Box<LockWaitEntry> {
-        Box::new(LockWaitEntry {
-            key: lock_info.key,
-            lock_hash: lock_info.lock_digest.hash,
-            parameters: lock_info.parameters,
-            should_not_exist: lock_info.should_not_exist,
-            lock_wait_token: lock_info.lock_wait_token,
-            // This must be called after an execution fo AcquirePessimisticLockResumed, in which
-            // case there must be a valid req_state.
-            req_states: lock_info.req_states.unwrap(),
-            legacy_wake_up_index: None,
-            key_cb: Some(cb.into()),
-        })
-    }
-
     fn on_wait_for_lock_after_resuming(
         &self,
         cid: u64,
@@ -1713,7 +1694,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             if let PessimisticLockKeyResult::Waiting = &result {
                 let lock_info = lock_info_it.next().unwrap();
                 let lock_info_pb = lock_info.lock_info_pb.clone();
-                let entry = self.make_lock_waiting_after_resuming(lock_info, cb);
+                let entry = lock_manager::make_lock_waiting_after_resuming(lock_info, cb);
                 lock_wait_entries.push((entry, lock_info_pb));
             } else {
                 results.push(result);
