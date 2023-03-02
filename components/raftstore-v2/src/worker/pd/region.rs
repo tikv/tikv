@@ -311,12 +311,8 @@ where
                             );
                         }
                     } else if resp.has_merge() {
-                        PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
-
-                        let merge = resp.take_merge();
-                        info!(logger, "try to merge"; "region_id" => region_id, "merge" => ?merge);
-                        let req = new_merge_request(merge);
-                        send_admin_request(&logger, &router, region_id, epoch, peer, req, None);
+                        // TODO: add merge when it end-to-end works.
+                        info!(logger, "pd asks for merge but ignored"); 
                     } else {
                         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                     }
