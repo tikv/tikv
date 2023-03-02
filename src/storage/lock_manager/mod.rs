@@ -33,7 +33,7 @@ pub use self::{
 use self::{
     deadlock::{Detector, RoleChangeNotifier},
     lock_wait_context::PessimisticLockKeyCallback,
-    lock_waiting_queue::{LockWaitEntry, LockWaitQueues},
+    lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
     // DiagnosticContext, KeyLockWaitInfo, LockWaitToken, UpdateWaitForEvent, WaitTimeout,
     waiter_manager::{Callback, Waiter, WaiterManager},
 };
@@ -332,6 +332,21 @@ impl LockManagerTrait for LockManager {
     ) -> Option<Box<LockWaitEntry>> {
         self.lock_wait_queues.remove_by_token(key, lock_wait_token)
     }
+
+    fn pop_for_waking_up(
+        &self,
+        key: &Key,
+        conflicting_start_ts: TimeStamp,
+        conflicting_commit_ts: TimeStamp,
+        wake_up_delay_duration_ms: u64,
+    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
+        self.lock_wait_queues.pop_for_waking_up(
+            key,
+            conflicting_start_ts,
+            conflicting_commit_ts,
+            wake_up_delay_duration_ms,
+        )
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -482,6 +497,14 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
         key: &Key,
         lock_wait_token: LockWaitToken,
     ) -> Option<Box<LockWaitEntry>>;
+
+    fn pop_for_waking_up(
+        &self,
+        key: &Key,
+        conflicting_start_ts: TimeStamp,
+        conflicting_commit_ts: TimeStamp,
+        wake_up_delay_duration_ms: u64,
+    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)>;
 }
 
 // For test
@@ -555,6 +578,21 @@ impl LockManagerTrait for MockLockManager {
         lock_wait_token: LockWaitToken,
     ) -> Option<Box<LockWaitEntry>> {
         self.lock_wait_queues.remove_by_token(key, lock_wait_token)
+    }
+
+    fn pop_for_waking_up(
+        &self,
+        key: &Key,
+        conflicting_start_ts: TimeStamp,
+        conflicting_commit_ts: TimeStamp,
+        wake_up_delay_duration_ms: u64,
+    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
+        self.lock_wait_queues.pop_for_waking_up(
+            key,
+            conflicting_start_ts,
+            conflicting_commit_ts,
+            wake_up_delay_duration_ms,
+        )
     }
 }
 
@@ -713,6 +751,21 @@ pub mod proxy_test {
             lock_wait_token: LockWaitToken,
         ) -> Option<Box<LockWaitEntry>> {
             self.lock_wait_queues.remove_by_token(key, lock_wait_token)
+        }
+
+        fn pop_for_waking_up(
+            &self,
+            key: &Key,
+            conflicting_start_ts: TimeStamp,
+            conflicting_commit_ts: TimeStamp,
+            wake_up_delay_duration_ms: u64,
+        ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
+            self.lock_wait_queues.pop_for_waking_up(
+                key,
+                conflicting_start_ts,
+                conflicting_commit_ts,
+                wake_up_delay_duration_ms,
+            )
         }
     }
 }

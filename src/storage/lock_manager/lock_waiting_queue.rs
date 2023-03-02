@@ -328,7 +328,7 @@ impl LockWaitQueues {
     /// will return a `LockWaitEntry` if a resumable entry is popped out
     /// from the queue while executing, and in this case the caller will be
     /// responsible to wake it up.
-    pub fn pop_for_waking_up(
+    pub(super) fn pop_for_waking_up(
         &self,
         key: &Key,
         conflicting_start_ts: TimeStamp,

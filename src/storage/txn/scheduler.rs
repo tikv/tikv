@@ -927,7 +927,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
 
         released_locks.into_iter().for_each(|released_lock| {
             let (lock_wait_entry, delay_wake_up_future) =
-                match self.inner.lock_mgr.lock_wait_queues().pop_for_waking_up(
+                match self.inner.lock_mgr.pop_for_waking_up(
                     &released_lock.key,
                     released_lock.start_ts,
                     released_lock.commit_ts,
