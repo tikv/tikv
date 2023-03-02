@@ -281,7 +281,7 @@ impl ScanPoolHandle {
 }
 
 /// The default channel size.
-const MESSAGE_BUFFER_SIZE: usize = 4096;
+const MESSAGE_BUFFER_SIZE: usize = 32768;
 
 /// The operator for region subscription.
 /// It make a queue for operations over the `SubscriptionTracer`, generally,
