@@ -576,7 +576,7 @@ impl LockWaitQueues {
     /// queue. No extra operation will be performed on the removed entry.
     /// The caller is responsible for finishing or cancelling the request to
     /// let it return the response to the client.
-    pub fn remove_by_token(
+    pub(super) fn remove_by_token(
         &self,
         key: &Key,
         lock_wait_token: LockWaitToken,
@@ -741,7 +741,6 @@ mod tests {
         }
 
         fn make_mock_lock_wait_entry(
-            &self,
             key: &[u8],
             start_ts: impl Into<TimeStamp>,
             lock_info_pb: kvrpcpb::LockInfo,
@@ -784,7 +783,7 @@ mod tests {
                 }))),
             });
 
-            let cancel_callback = dummy_ctx.get_callback_for_cancellation(lock_mgr, self.clone());
+            let cancel_callback = dummy_ctx.get_callback_for_cancellation(lock_mgr);
             let cancel = move || {
                 cancel_callback(StorageError::from(TxnError::from(MvccError::from(
                     MvccErrorInner::KeyIsLocked(lock_info_pb),
@@ -810,7 +809,7 @@ mod tests {
             lock_mgr: &impl LockManagerTrait,
         ) -> TestLockWaitEntryHandle {
             let lock_info_pb = self.make_lock_info_pb(key, encountered_lock_ts);
-            let (mut entry, handle) = self.make_mock_lock_wait_entry(
+            let (mut entry, handle) = Self::make_mock_lock_wait_entry(
                 key,
                 start_ts,
                 lock_info_pb.clone(),

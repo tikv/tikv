@@ -898,10 +898,7 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             wait_info,
             is_first_lock,
             wait_timeout,
-            lock_req_ctx.get_callback_for_cancellation(
-                self.inner.lock_mgr.clone(),
-                self.inner.lock_mgr.lock_wait_queues(),
-            ),
+            lock_req_ctx.get_callback_for_cancellation(self.inner.lock_mgr.clone()),
             diag_ctx,
         );
     }
@@ -1641,11 +1638,8 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             req_states: ctx.get_shared_states().clone(),
             legacy_wake_up_index: None,
             key_cb: Some(
-                ctx.get_callback_for_blocked_key(
-                    self.inner.lock_mgr.clone(),
-                    self.inner.lock_mgr.lock_wait_queues(),
-                )
-                .into(),
+                ctx.get_callback_for_blocked_key(self.inner.lock_mgr.clone())
+                    .into(),
             ),
         });
 

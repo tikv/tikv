@@ -25,9 +25,7 @@ use txn_types::Key;
 
 use super::LockManagerTrait;
 use crate::storage::{
-    errors::SharedError,
-    lock_manager::{lock_waiting_queue::LockWaitQueues, LockWaitToken},
-    types::PessimisticLockKeyResult,
+    errors::SharedError, lock_manager::LockWaitToken, types::PessimisticLockKeyResult,
     Error as StorageError, PessimisticLockResults, ProcessResult, StorageCallback,
 };
 
@@ -225,7 +223,6 @@ impl LockWaitContext {
     pub fn get_callback_for_blocked_key(
         &self,
         lock_mgr: impl LockManagerTrait,
-        lock_wait_queues: LockWaitQueues,
     ) -> PessimisticLockKeyCallback {
         let ctx = self.clone();
         Box::new(move |res, is_canceled_before_enqueueing| {
@@ -234,7 +231,7 @@ impl LockWaitContext {
             } else {
                 FinishRequestKind::Executed
             };
-            ctx.finish_request(res, kind, lock_mgr, &lock_wait_queues);
+            ctx.finish_request(res, kind, lock_mgr);
         })
     }
 
@@ -249,16 +246,10 @@ impl LockWaitContext {
     pub fn get_callback_for_cancellation(
         &self,
         lock_mgr: impl LockManagerTrait,
-        lock_wait_queues: LockWaitQueues,
     ) -> CancellationCallback {
         let ctx = self.clone();
         Box::new(move |e| {
-            ctx.finish_request(
-                Err(e.into()),
-                FinishRequestKind::Canceled,
-                lock_mgr,
-                &lock_wait_queues,
-            );
+            ctx.finish_request(Err(e.into()), FinishRequestKind::Canceled, lock_mgr);
         })
     }
 
@@ -267,7 +258,6 @@ impl LockWaitContext {
         result: Result<PessimisticLockKeyResult, SharedError>,
         finish_kind: FinishRequestKind,
         lock_mgr: impl LockManagerTrait,
-        lock_wait_queues: &LockWaitQueues,
     ) {
         match finish_kind {
             FinishRequestKind::Executed => {
@@ -278,7 +268,7 @@ impl LockWaitContext {
                     .is_canceled
                     .store(true, Ordering::Release);
 
-                let entry = lock_wait_queues
+                let entry = lock_mgr
                     .remove_by_token(&self.shared_states.key, self.shared_states.lock_wait_token);
                 if entry.is_none() {
                     // It's absent in the queue infers that it's already popped out from the queue
@@ -387,14 +377,13 @@ mod tests {
 
         // TODO: Use `ProxyLockMgr` to check the correctness of the `remove_lock_wait`
         // invocation.
-        let lock_wait_queues = LockWaitQueues::new();
         let lock_mgr = MockLockManager::new();
 
         let (_, ctx, rx) = create_test_lock_wait_ctx(&key, &lock_mgr);
         // Nothing happens currently.
         (ctx.get_callback_for_first_write_batch()).execute(ProcessResult::Res);
         rx.recv_timeout(Duration::from_millis(20)).unwrap_err();
-        (ctx.get_callback_for_blocked_key(lock_mgr.clone(), lock_wait_queues.clone()))(
+        (ctx.get_callback_for_blocked_key(lock_mgr.clone()))(
             Err(SharedError::from(write_conflict())),
             false,
         );
@@ -408,14 +397,12 @@ mod tests {
         // The tx should be dropped.
         rx.recv().unwrap_err();
         // Nothing happens if the callback is double-called.
-        (ctx.get_callback_for_cancellation(lock_mgr.clone(), lock_wait_queues.clone()))(
-            StorageError::from(key_is_locked()),
-        );
+        (ctx.get_callback_for_cancellation(lock_mgr.clone()))(StorageError::from(key_is_locked()));
 
         let (token, ctx, rx) = create_test_lock_wait_ctx(&key, &lock_mgr);
         // Add a corresponding entry to the lock waiting queue to test actively removing
         // the entry from the queue.
-        lock_wait_queues.push_lock_wait(
+        lock_mgr.push_lock_wait(
             Box::new(LockWaitEntry {
                 key: key.clone(),
                 lock_hash: key.gen_hash(),
@@ -432,11 +419,9 @@ mod tests {
             }),
             kvproto::kvrpcpb::LockInfo::default(),
         );
-        lock_wait_queues.must_have_next_entry(b"k", 1);
-        (ctx.get_callback_for_cancellation(lock_mgr, lock_wait_queues.clone()))(
-            StorageError::from(key_is_locked()),
-        );
-        lock_wait_queues.must_not_contain_key(b"k");
+        lock_mgr.lock_wait_queues().must_have_next_entry(b"k", 1);
+        (ctx.get_callback_for_cancellation(lock_mgr.clone()))(StorageError::from(key_is_locked()));
+        lock_mgr.lock_wait_queues().must_not_contain_key(b"k");
         let res = rx.recv().unwrap().unwrap_err();
         assert!(matches!(
             &res,

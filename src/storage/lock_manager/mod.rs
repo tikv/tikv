@@ -324,6 +324,14 @@ impl LockManagerTrait for LockManager {
         self.lock_wait_queues
             .push_lock_wait(lock_wait_entry, current_lock)
     }
+
+    fn remove_by_token(
+        &self,
+        key: &Key,
+        lock_wait_token: LockWaitToken,
+    ) -> Option<Box<LockWaitEntry>> {
+        self.lock_wait_queues.remove_by_token(key, lock_wait_token)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -466,7 +474,14 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
     // TODO: it's temporary during refactoring. Remove it
     fn lock_wait_queues(&self) -> LockWaitQueues;
 
+    // following functions delegate to LockWaitQueues
     fn push_lock_wait(&self, lock_wait_entry: Box<LockWaitEntry>, current_lock: kvrpcpb::LockInfo);
+
+    fn remove_by_token(
+        &self,
+        key: &Key,
+        lock_wait_token: LockWaitToken,
+    ) -> Option<Box<LockWaitEntry>>;
 }
 
 // For test
@@ -532,6 +547,14 @@ impl LockManagerTrait for MockLockManager {
     fn push_lock_wait(&self, lock_wait_entry: Box<LockWaitEntry>, current_lock: kvrpcpb::LockInfo) {
         self.lock_wait_queues
             .push_lock_wait(lock_wait_entry, current_lock)
+    }
+
+    fn remove_by_token(
+        &self,
+        key: &Key,
+        lock_wait_token: LockWaitToken,
+    ) -> Option<Box<LockWaitEntry>> {
+        self.lock_wait_queues.remove_by_token(key, lock_wait_token)
     }
 }
 
@@ -682,6 +705,14 @@ pub mod proxy_test {
         ) {
             self.lock_wait_queues
                 .push_lock_wait(lock_wait_entry, current_lock)
+        }
+
+        fn remove_by_token(
+            &self,
+            key: &Key,
+            lock_wait_token: LockWaitToken,
+        ) -> Option<Box<LockWaitEntry>> {
+            self.lock_wait_queues.remove_by_token(key, lock_wait_token)
         }
     }
 }
