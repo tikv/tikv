@@ -28,10 +28,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use protobuf::Message;
-use raftstore::store::{
-    metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC,
-    snap::{TabletSnapKey, TabletSnapManager},
-};
+use raftstore::store::snap::{TabletSnapKey, TabletSnapManager};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
@@ -384,9 +381,6 @@ impl<R: RaftExtension> Runnable for TabletRunner<R> {
         match task {
             Task::Recv { stream, sink } => {
                 let task_num = self.recving_count.load(Ordering::SeqCst);
-                STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
-                    .with_label_values(&["receiving"])
-                    .set(task_num as i64);
                 if task_num >= self.cfg.concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
                     let status = RpcStatus::with_message(
@@ -418,9 +412,6 @@ impl<R: RaftExtension> Runnable for TabletRunner<R> {
             Task::Send { addr, msg, cb } => {
                 let region_id = msg.get_region_id();
                 let sending_count = self.sending_count.load(Ordering::SeqCst);
-                STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
-                    .with_label_values(&["sending"])
-                    .set(sending_count as i64);
                 if sending_count >= self.cfg.concurrent_send_snap_limit {
                     warn!(
                         "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
