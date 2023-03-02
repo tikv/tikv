@@ -5,7 +5,7 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
         actions::check_txn_status::*,
@@ -63,7 +63,7 @@ impl CommandExt for CheckTxnStatus {
     gen_lock!(primary_key);
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for CheckTxnStatus {
     /// checks whether a transaction has expired its primary lock's TTL,
     /// rollback the transaction if expired, or update the transaction's
     /// min_commit_ts according to the metadata in the primary lock.

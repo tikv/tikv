@@ -27,12 +27,13 @@ use slog::Level;
 use tikv::{
     config::*,
     import::Config as ImportConfig,
-    server::{
-        config::GrpcCompressionType, gc_worker::GcConfig,
-        lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
-    },
-    storage::config::{
-        BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
+    server::{config::GrpcCompressionType, gc_worker::GcConfig, Config as ServerConfig},
+    storage::{
+        config::{
+            BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig,
+            IoRateLimitConfig,
+        },
+        lock_manager::Config as PessimisticTxnConfig,
     },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};

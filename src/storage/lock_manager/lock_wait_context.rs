@@ -23,9 +23,10 @@ use std::{
 use parking_lot::Mutex;
 use txn_types::Key;
 
+use super::LockManagerTrait;
 use crate::storage::{
     errors::SharedError,
-    lock_manager::{lock_waiting_queue::LockWaitQueues, LockManager, LockWaitToken},
+    lock_manager::{lock_waiting_queue::LockWaitQueues, LockWaitToken},
     types::PessimisticLockKeyResult,
     Error as StorageError, PessimisticLockResults, ProcessResult, StorageCallback,
 };
@@ -114,7 +115,7 @@ pub struct LockWaitContextSharedState {
     /// on the mutex.
     external_error_tx: Mutex<Option<mpsc::Sender<StorageError>>>,
 
-    /// The sender for passing errors in some cancellation cases. See comments
+    /// The receiver for passing errors in some cancellation cases. See comments
     /// in [`is_canceled`](LockWaitContextSharedState::is_canceled) for details.
     /// It's only possible to be used when scheduler tries to push to
     /// `LockWaitQueues`, so there's no contention on the mutex.
@@ -182,23 +183,20 @@ enum FinishRequestKind {
 }
 
 #[derive(Clone)]
-pub struct LockWaitContext<L: LockManager> {
+pub struct LockWaitContext {
     shared_states: Arc<LockWaitContextSharedState>,
-    lock_wait_queues: LockWaitQueues<L>,
     allow_lock_with_conflict: bool,
 }
 
-impl<L: LockManager> LockWaitContext<L> {
+impl LockWaitContext {
     pub fn new(
         key: Key,
-        lock_wait_queues: LockWaitQueues<L>,
         lock_wait_token: LockWaitToken,
         cb: StorageCallback,
         allow_lock_with_conflict: bool,
     ) -> Self {
         Self {
             shared_states: Arc::new(LockWaitContextSharedState::new(lock_wait_token, key, cb)),
-            lock_wait_queues,
             allow_lock_with_conflict,
         }
     }
@@ -224,7 +222,11 @@ impl<L: LockManager> LockWaitContext<L> {
 
     /// Get the callback that should be called when the request is woken up on a
     /// key.
-    pub fn get_callback_for_blocked_key(&self) -> PessimisticLockKeyCallback {
+    pub fn get_callback_for_blocked_key(
+        &self,
+        lock_mgr: impl LockManagerTrait,
+        lock_wait_queues: LockWaitQueues,
+    ) -> PessimisticLockKeyCallback {
         let ctx = self.clone();
         Box::new(move |res, is_canceled_before_enqueueing| {
             let kind = if is_canceled_before_enqueueing {
@@ -232,7 +234,7 @@ impl<L: LockManager> LockWaitContext<L> {
             } else {
                 FinishRequestKind::Executed
             };
-            ctx.finish_request(res, kind);
+            ctx.finish_request(res, kind, lock_mgr, &lock_wait_queues);
         })
     }
 
@@ -244,10 +246,19 @@ impl<L: LockManager> LockWaitContext<L> {
     /// This function is assumed to be called when the lock-waiting request is
     /// queueing but canceled outside, so it includes an operation to actively
     /// remove the entry from the lock waiting queue.
-    pub fn get_callback_for_cancellation(&self) -> CancellationCallback {
+    pub fn get_callback_for_cancellation(
+        &self,
+        lock_mgr: impl LockManagerTrait,
+        lock_wait_queues: LockWaitQueues,
+    ) -> CancellationCallback {
         let ctx = self.clone();
         Box::new(move |e| {
-            ctx.finish_request(Err(e.into()), FinishRequestKind::Canceled);
+            ctx.finish_request(
+                Err(e.into()),
+                FinishRequestKind::Canceled,
+                lock_mgr,
+                &lock_wait_queues,
+            );
         })
     }
 
@@ -255,20 +266,19 @@ impl<L: LockManager> LockWaitContext<L> {
         &self,
         result: Result<PessimisticLockKeyResult, SharedError>,
         finish_kind: FinishRequestKind,
+        lock_mgr: impl LockManagerTrait,
+        lock_wait_queues: &LockWaitQueues,
     ) {
         match finish_kind {
             FinishRequestKind::Executed => {
-                self.lock_wait_queues
-                    .get_lock_mgr()
-                    .remove_lock_wait(self.shared_states.lock_wait_token);
+                lock_mgr.remove_lock_wait(self.shared_states.lock_wait_token);
             }
             FinishRequestKind::Canceled => {
                 self.shared_states
                     .is_canceled
                     .store(true, Ordering::Release);
 
-                let entry = self
-                    .lock_wait_queues
+                let entry = lock_wait_queues
                     .remove_by_token(&self.shared_states.key, self.shared_states.lock_wait_token);
                 if entry.is_none() {
                     // It's absent in the queue infers that it's already popped out from the queue
@@ -323,7 +333,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::{lock_waiting_queue::LockWaitEntry, MockLockManager},
+        lock_manager::{lock_waiting_queue::LockWaitEntry, LockManagerTrait, MockLockManager},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error as TxnError, ErrorInner as TxnErrorInner},
         types::PessimisticLockParameters,
@@ -341,15 +351,15 @@ mod tests {
 
     fn create_test_lock_wait_ctx(
         key: &Key,
-        lock_wait_queues: &LockWaitQueues<impl LockManager>,
+        lock_mgr: &impl LockManagerTrait,
     ) -> (
         LockWaitToken,
-        LockWaitContext<impl LockManager>,
+        LockWaitContext,
         Receiver<StorageResult<StorageResult<PessimisticLockResults>>>,
     ) {
         let (cb, rx) = create_storage_cb();
-        let token = lock_wait_queues.get_lock_mgr().allocate_token();
-        let ctx = LockWaitContext::new(key.clone(), lock_wait_queues.clone(), token, cb, false);
+        let token = lock_mgr.allocate_token();
+        let ctx = LockWaitContext::new(key.clone(), token, cb, false);
         (token, ctx, rx)
     }
 
@@ -377,13 +387,17 @@ mod tests {
 
         // TODO: Use `ProxyLockMgr` to check the correctness of the `remove_lock_wait`
         // invocation.
-        let lock_wait_queues = LockWaitQueues::new(MockLockManager::new());
+        let lock_wait_queues = LockWaitQueues::new();
+        let lock_mgr = MockLockManager::new();
 
-        let (_, ctx, rx) = create_test_lock_wait_ctx(&key, &lock_wait_queues);
+        let (_, ctx, rx) = create_test_lock_wait_ctx(&key, &lock_mgr);
         // Nothing happens currently.
         (ctx.get_callback_for_first_write_batch()).execute(ProcessResult::Res);
         rx.recv_timeout(Duration::from_millis(20)).unwrap_err();
-        (ctx.get_callback_for_blocked_key())(Err(SharedError::from(write_conflict())), false);
+        (ctx.get_callback_for_blocked_key(lock_mgr.clone(), lock_wait_queues.clone()))(
+            Err(SharedError::from(write_conflict())),
+            false,
+        );
         let res = rx.recv().unwrap().unwrap_err();
         assert!(matches!(
             &res,
@@ -394,9 +408,11 @@ mod tests {
         // The tx should be dropped.
         rx.recv().unwrap_err();
         // Nothing happens if the callback is double-called.
-        (ctx.get_callback_for_cancellation())(StorageError::from(key_is_locked()));
+        (ctx.get_callback_for_cancellation(lock_mgr.clone(), lock_wait_queues.clone()))(
+            StorageError::from(key_is_locked()),
+        );
 
-        let (token, ctx, rx) = create_test_lock_wait_ctx(&key, &lock_wait_queues);
+        let (token, ctx, rx) = create_test_lock_wait_ctx(&key, &lock_mgr);
         // Add a corresponding entry to the lock waiting queue to test actively removing
         // the entry from the queue.
         lock_wait_queues.push_lock_wait(
@@ -417,7 +433,9 @@ mod tests {
             kvproto::kvrpcpb::LockInfo::default(),
         );
         lock_wait_queues.must_have_next_entry(b"k", 1);
-        (ctx.get_callback_for_cancellation())(StorageError::from(key_is_locked()));
+        (ctx.get_callback_for_cancellation(lock_mgr, lock_wait_queues.clone()))(
+            StorageError::from(key_is_locked()),
+        );
         lock_wait_queues.must_not_contain_key(b"k");
         let res = rx.recv().unwrap().unwrap_err();
         assert!(matches!(

@@ -5,7 +5,7 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
         cleanup,
@@ -41,7 +41,7 @@ impl CommandExt for Rollback {
     gen_lock!(keys: multiple);
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for Rollback {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(

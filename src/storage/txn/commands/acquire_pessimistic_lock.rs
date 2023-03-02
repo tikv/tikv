@@ -7,7 +7,7 @@ use txn_types::{insert_old_value_if_resolved, Key, OldValues, TimeStamp, TxnExtr
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::{LockManager, WaitTimeout},
+    lock_manager::{LockManagerTrait, WaitTimeout},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
         acquire_pessimistic_lock,
@@ -70,7 +70,7 @@ impl CommandExt for AcquirePessimisticLock {
     gen_lock!(keys: multiple(|x| &x.0));
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for AcquirePessimisticLock {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         if self.allow_lock_with_conflict && self.keys.len() > 1 {
             // Currently multiple keys with `allow_lock_with_conflict` set is not supported.

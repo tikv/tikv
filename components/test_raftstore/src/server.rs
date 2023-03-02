@@ -55,7 +55,6 @@ use tikv::{
     server::{
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
-        lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
         service::DebugService,
@@ -65,6 +64,7 @@ use tikv::{
     storage::{
         self,
         kv::{FakeExtension, SnapContext},
+        lock_manager::LockManager,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },

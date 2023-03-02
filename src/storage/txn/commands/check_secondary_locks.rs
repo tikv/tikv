@@ -5,7 +5,7 @@ use txn_types::{Key, Lock, WriteType};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     mvcc::{LockType, MvccTxn, SnapshotReader, TimeStamp, TxnCommitRecord},
     txn::{
         actions::check_txn_status::{collapse_prev_rollback, make_rollback},
@@ -54,7 +54,7 @@ enum SecondaryLockStatus {
     RolledBack,
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for CheckSecondaryLocks {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         // It is not allowed for commit to overwrite a protected rollback. So we update
         // max_ts to prevent this case from happening.

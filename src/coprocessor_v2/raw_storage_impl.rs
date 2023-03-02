@@ -13,7 +13,7 @@ use crate::storage::{
     self,
     errors::extract_kv_pairs,
     kv::{Error as KvError, ErrorInner as KvErrorInner},
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     Engine, Storage,
 };
 
@@ -23,12 +23,12 @@ use crate::storage::{
 /// plugins. The `RawStorageImpl` should be constructed for every invocation of
 /// a [`CoprocessorPlugin`] as it wraps a [`Context`] that is unique for every
 /// request.
-pub struct RawStorageImpl<'a, E: Engine, L: LockManager, F: KvFormat> {
+pub struct RawStorageImpl<'a, E: Engine, L: LockManagerTrait, F: KvFormat> {
     context: Context,
     storage: &'a Storage<E, L, F>,
 }
 
-impl<'a, E: Engine, L: LockManager, F: KvFormat> RawStorageImpl<'a, E, L, F> {
+impl<'a, E: Engine, L: LockManagerTrait, F: KvFormat> RawStorageImpl<'a, E, L, F> {
     /// Constructs a new `RawStorageImpl` that wraps a given [`Context`] and
     /// [`Storage`].
     pub fn new(context: Context, storage: &'a Storage<E, L, F>) -> Self {
@@ -37,7 +37,7 @@ impl<'a, E: Engine, L: LockManager, F: KvFormat> RawStorageImpl<'a, E, L, F> {
 }
 
 #[async_trait(?Send)]
-impl<E: Engine, L: LockManager, F: KvFormat> RawStorage for RawStorageImpl<'_, E, L, F> {
+impl<E: Engine, L: LockManagerTrait, F: KvFormat> RawStorage for RawStorageImpl<'_, E, L, F> {
     async fn get(&self, key: Key) -> PluginResult<Option<Value>> {
         let ctx = self.context.clone();
 

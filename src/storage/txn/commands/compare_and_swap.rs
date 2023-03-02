@@ -10,7 +10,7 @@ use txn_types::{Key, Value};
 
 use crate::storage::{
     kv::{Modify, WriteData},
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     raw,
     txn::{
         commands::{
@@ -50,7 +50,7 @@ impl CommandExt for RawCompareAndSwap {
     }
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for RawCompareAndSwap {
     fn process_write(self, snapshot: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
         let (cf, mut key, value, previous_value, ctx, raw_ext) = (
             self.cf,

@@ -22,7 +22,7 @@ use txn_types::{
 use super::ReaderWithStats;
 use crate::storage::{
     kv::WriteData,
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     mvcc::{
         has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
         Result as MvccResult, SnapshotReader, TxnCommitRecord,
@@ -245,7 +245,7 @@ impl CommandExt for Prewrite {
     gen_lock!(mutations: multiple(|x| x.key()));
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for Prewrite {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         self.into_prewriter().process_write(snapshot, context)
     }
@@ -410,7 +410,7 @@ impl CommandExt for PrewritePessimistic {
     gen_lock!(mutations: multiple(|(x, _)| x.key()));
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for PrewritePessimistic {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         self.into_prewriter().process_write(snapshot, context)
     }
@@ -440,7 +440,7 @@ impl<K: PrewriteKind> Prewriter<K> {
     fn process_write(
         mut self,
         snapshot: impl Snapshot,
-        mut context: WriteContext<'_, impl LockManager>,
+        mut context: WriteContext<'_, impl LockManagerTrait>,
     ) -> Result<WriteResult> {
         self.kind
             .can_skip_constraint_check(&mut self.mutations, &snapshot, &mut context)?;
@@ -737,7 +737,7 @@ trait PrewriteKind {
         &mut self,
         _mutations: &mut [Self::Mutation],
         _snapshot: &impl Snapshot,
-        _context: &mut WriteContext<'_, impl LockManager>,
+        _context: &mut WriteContext<'_, impl LockManagerTrait>,
     ) -> Result<()> {
         Ok(())
     }
@@ -760,7 +760,7 @@ impl PrewriteKind for Optimistic {
         &mut self,
         mutations: &mut [Self::Mutation],
         snapshot: &impl Snapshot,
-        context: &mut WriteContext<'_, impl LockManager>,
+        context: &mut WriteContext<'_, impl LockManagerTrait>,
     ) -> Result<()> {
         if mutations.len() > FORWARD_MIN_MUTATIONS_NUM {
             mutations.sort_by(|a, b| a.key().cmp(b.key()));

@@ -8,7 +8,7 @@ use kvproto::kvrpcpb;
 use semver::VersionReq;
 
 use super::{config::Config, plugin_registry::PluginRegistry, raw_storage_impl::RawStorageImpl};
-use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
+use crate::storage::{self, lock_manager::LockManagerTrait, Engine, Storage};
 
 #[allow(clippy::large_enum_variant)]
 enum CoprocessorError {
@@ -53,7 +53,7 @@ impl Endpoint {
     /// on it's `copr_name` field. A plugin with a matching name must be loaded
     /// by TiKV, otherwise an error is returned.
     #[inline]
-    pub fn handle_request<E: Engine, L: LockManager, F: KvFormat>(
+    pub fn handle_request<E: Engine, L: LockManagerTrait, F: KvFormat>(
         &self,
         storage: &Storage<E, L, F>,
         req: kvrpcpb::RawCoprocessorRequest,
@@ -72,7 +72,7 @@ impl Endpoint {
     }
 
     #[inline]
-    fn handle_request_impl<E: Engine, L: LockManager, F: KvFormat>(
+    fn handle_request_impl<E: Engine, L: LockManagerTrait, F: KvFormat>(
         &self,
         storage: &Storage<E, L, F>,
         mut req: kvrpcpb::RawCoprocessorRequest,

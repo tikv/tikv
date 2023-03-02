@@ -80,7 +80,6 @@ use tikv::{
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
         gc_worker::{AutoGcConfig, GcWorker},
-        lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
         service::DiagnosticsService,
@@ -91,6 +90,7 @@ use tikv::{
     storage::{
         self,
         config_manager::StorageConfigManger,
+        lock_manager::LockManager,
         mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{FlowController, TabletFlowController},
         Engine, Storage,

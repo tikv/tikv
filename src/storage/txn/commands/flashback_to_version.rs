@@ -8,7 +8,7 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     mvcc::{MvccReader, MvccTxn},
     txn::{
         actions::flashback_to_version::{
@@ -69,7 +69,7 @@ impl CommandExt for FlashbackToVersion {
     }
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for FlashbackToVersion {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut reader =
             MvccReader::new_with_ctx(snapshot.clone(), Some(ScanMode::Forward), &self.ctx);

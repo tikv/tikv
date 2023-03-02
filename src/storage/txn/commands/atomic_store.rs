@@ -5,7 +5,7 @@ use engine_traits::CfName;
 
 use crate::storage::{
     kv::{Modify, WriteData},
-    lock_manager::LockManager,
+    lock_manager::LockManagerTrait,
     txn::{
         commands::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
@@ -38,7 +38,7 @@ impl CommandExt for RawAtomicStore {
     }
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
+impl<S: Snapshot, L: LockManagerTrait> WriteCommand<S, L> for RawAtomicStore {
     fn process_write(self, _: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         let (mut mutations, ctx, raw_ext) = (self.mutations, self.ctx, wctx.raw_ext);

@@ -53,7 +53,7 @@ use crate::{
             extract_region_error, extract_region_error_from_error, map_kv_pairs,
         },
         kv::Engine,
-        lock_manager::LockManager,
+        lock_manager::LockManagerTrait,
         SecondaryLocksStatus, Storage, TxnStatus,
     },
 };
@@ -62,7 +62,7 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
-pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
+pub struct Service<E: Engine, L: LockManagerTrait, F: KvFormat> {
     store_id: u64,
     /// Used to handle requests related to GC.
     // TODO: make it Some after GC is supported for v2.
@@ -88,13 +88,13 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     reject_messages_on_memory_ratio: f64,
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
+impl<E: Engine, L: LockManagerTrait, F: KvFormat> Drop for Service<E, L, F> {
     fn drop(&mut self) {
         self.check_leader_scheduler.stop();
     }
 }
 
-impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E, L, F> {
+impl<E: Engine + Clone, L: LockManagerTrait + Clone, F: KvFormat> Clone for Service<E, L, F> {
     fn clone(&self) -> Self {
         Service {
             store_id: self.store_id,
@@ -112,7 +112,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
     }
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
+impl<E: Engine, L: LockManagerTrait, F: KvFormat> Service<E, L, F> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         store_id: u64,
@@ -217,7 +217,7 @@ macro_rules! set_total_time {
     };
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
+impl<E: Engine, L: LockManagerTrait, F: KvFormat> Tikv for Service<E, L, F> {
     handle_request!(kv_get, future_get, GetRequest, GetResponse, has_time_detail);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(
@@ -1023,7 +1023,7 @@ fn response_batch_commands_request<F, T>(
     poll_future_notify(task);
 }
 
-fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
+fn handle_batch_commands_request<E: Engine, L: LockManagerTrait, F: KvFormat>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L, F>,
     copr: &Endpoint<E>,
@@ -1225,7 +1225,7 @@ async fn future_handle_empty(
     Ok(res)
 }
 
-fn future_get<E: Engine, L: LockManager, F: KvFormat>(
+fn future_get<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
@@ -1274,7 +1274,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
+fn future_scan<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
@@ -1322,7 +1322,7 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
+fn future_batch_get<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
@@ -1373,7 +1373,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
+fn future_scan_lock<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: ScanLockRequest,
 ) -> impl Future<Output = ServerResult<ScanLockResponse>> {
@@ -1416,7 +1416,7 @@ async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
     ))))
 }
 
-fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
+fn future_delete_range<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: DeleteRangeRequest,
 ) -> impl Future<Output = ServerResult<DeleteRangeResponse>> {
@@ -1449,7 +1449,7 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
 // the actual flashback operation.
 // NOTICE: the caller needs to make sure the version we want to flashback won't
 // be between any transactions that have not been fully committed.
-fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
+fn future_prepare_flashback_to_version<E: Engine, L: LockManagerTrait, F: KvFormat>(
     // Keep this param to hint the type of E for the compiler.
     storage: &Storage<E, L, F>,
     req: PrepareFlashbackToVersionRequest,
@@ -1482,7 +1482,7 @@ fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
 // Flashback the region to a specific point with the given `version`, please
 // make sure the region is "locked" by `PrepareFlashbackToVersion` first,
 // otherwise this request will fail.
-fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
+fn future_flashback_to_version<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     req: FlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
@@ -1510,7 +1510,7 @@ fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_get<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_get<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawGetRequest,
 ) -> impl Future<Output = ServerResult<RawGetResponse>> {
@@ -1532,7 +1532,7 @@ fn future_raw_get<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_batch_get<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchGetRequest,
 ) -> impl Future<Output = ServerResult<RawBatchGetResponse>> {
@@ -1551,7 +1551,7 @@ fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_put<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_put<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawPutRequest,
 ) -> impl Future<Output = ServerResult<RawPutResponse>> {
@@ -1591,7 +1591,7 @@ fn future_raw_put<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_batch_put<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchPutRequest,
 ) -> impl Future<Output = ServerResult<RawBatchPutResponse>> {
@@ -1640,7 +1640,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_delete<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawDeleteRequest,
 ) -> impl Future<Output = ServerResult<RawDeleteResponse>> {
@@ -1667,7 +1667,7 @@ fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_batch_delete<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_batch_delete<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchDeleteRequest,
 ) -> impl Future<Output = ServerResult<RawBatchDeleteResponse>> {
@@ -1696,7 +1696,7 @@ fn future_raw_batch_delete<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_scan<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawScanRequest,
 ) -> impl Future<Output = ServerResult<RawScanResponse>> {
@@ -1727,7 +1727,7 @@ fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_batch_scan<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchScanRequest,
 ) -> impl Future<Output = ServerResult<RawBatchScanResponse>> {
@@ -1752,7 +1752,7 @@ fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_delete_range<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_delete_range<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Output = ServerResult<RawDeleteRangeResponse>> {
@@ -1780,7 +1780,7 @@ fn future_raw_delete_range<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_get_key_ttl<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_get_key_ttl<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawGetKeyTtlRequest,
 ) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> {
@@ -1802,7 +1802,7 @@ fn future_raw_get_key_ttl<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_compare_and_swap<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawCasRequest,
 ) -> impl Future<Output = ServerResult<RawCasResponse>> {
@@ -1846,7 +1846,7 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_checksum<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_checksum<E: Engine, L: LockManagerTrait, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawChecksumRequest,
 ) -> impl Future<Output = ServerResult<RawChecksumResponse>> {
@@ -1883,7 +1883,7 @@ fn future_copr<E: Engine>(
     async move { Ok(ret.await) }
 }
 
-fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
+fn future_raw_coprocessor<E: Engine, L: LockManagerTrait, F: KvFormat>(
     copr_v2: &coprocessor_v2::Endpoint,
     storage: &Storage<E, L, F>,
     req: RawCoprocessorRequest,
@@ -1894,7 +1894,7 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
 
 macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) {$($prelude: stmt)*}; ($v: ident, $resp: ident, $tracker: ident) { $else_branch: expr }) => {
-        fn $fn_name<E: Engine, L: LockManager, F: KvFormat>(
+        fn $fn_name<E: Engine, L: LockManagerTrait, F: KvFormat>(
             storage: &Storage<E, L, F>,
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {

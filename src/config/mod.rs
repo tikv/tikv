@@ -78,11 +78,13 @@ use crate::{
     import::Config as ImportConfig,
     server::{
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
-        lock_manager::Config as PessimisticTxnConfig,
         ttl::TtlCompactionFilterFactory,
         Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
-    storage::config::{Config as StorageConfig, EngineType, DEFAULT_DATA_DIR},
+    storage::{
+        config::{Config as StorageConfig, EngineType, DEFAULT_DATA_DIR},
+        lock_manager::Config as PessimisticTxnConfig,
+    },
 };
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";

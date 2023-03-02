@@ -10,10 +10,10 @@ use test_pd_client::TestPdClient;
 use tikv::{
     config::*,
     server::{
-        lock_manager::*,
         resolve::{Callback, StoreAddrResolver},
         Error, Result,
     },
+    storage::lock_manager::*,
 };
 use tikv_util::config::ReadableDuration;
 

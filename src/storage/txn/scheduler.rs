@@ -55,39 +55,36 @@ use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
 use txn_types::TimeStamp;
 
-use crate::{
-    server::lock_manager::waiter_manager,
-    storage::{
-        config::Config,
-        errors::SharedError,
-        get_causal_ts, get_priority_tag, get_raw_key_guard,
-        kv::{
-            self, with_tls_engine, Engine, FlowStatsReporter, Result as EngineResult, SnapContext,
-            Statistics,
-        },
-        lock_manager::{
-            self,
-            lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
-            lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
-            DiagnosticContext, LockManager, LockWaitToken,
-        },
-        metrics::*,
-        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
-        txn::{
-            commands,
-            commands::{
-                Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
-                WriteResultLockInfo,
-            },
-            flow_controller::FlowController,
-            latch::{Latches, Lock},
-            sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
-            Error, ErrorInner, ProcessResult,
-        },
-        types::StorageCallback,
-        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
-        PessimisticLockKeyResult, PessimisticLockResults,
+use crate::storage::{
+    config::Config,
+    errors::SharedError,
+    get_causal_ts, get_priority_tag, get_raw_key_guard,
+    kv::{
+        self, with_tls_engine, Engine, FlowStatsReporter, Result as EngineResult, SnapContext,
+        Statistics,
     },
+    lock_manager::{
+        self,
+        lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
+        lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
+        waiter_manager, DiagnosticContext, LockManagerTrait, LockWaitToken,
+    },
+    metrics::*,
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
+    txn::{
+        commands,
+        commands::{
+            Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
+            WriteResultLockInfo,
+        },
+        flow_controller::FlowController,
+        latch::{Latches, Lock},
+        sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+        Error, ErrorInner, ProcessResult,
+    },
+    types::StorageCallback,
+    DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
+    PessimisticLockKeyResult, PessimisticLockResults,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -238,7 +235,7 @@ impl SchedulerTaskCallback {
     }
 }
 
-struct TxnSchedulerInner<L: LockManager> {
+struct TxnSchedulerInner<L: LockManagerTrait> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_slots: Vec<CachePadded<Mutex<HashMap<u64, TaskContext>>>>,
 
@@ -277,7 +274,7 @@ struct TxnSchedulerInner<L: LockManager> {
 
     resource_tag_factory: ResourceTagFactory,
 
-    lock_wait_queues: LockWaitQueues<L>,
+    lock_wait_queues: LockWaitQueues,
 
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
@@ -288,7 +285,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl<L: LockManager> TxnSchedulerInner<L> {
+impl<L: LockManagerTrait> TxnSchedulerInner<L> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -407,16 +404,16 @@ impl<L: LockManager> TxnSchedulerInner<L> {
 
 /// TxnScheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
-pub struct TxnScheduler<E: Engine, L: LockManager> {
+pub struct TxnScheduler<E: Engine, L: LockManagerTrait> {
     inner: Arc<TxnSchedulerInner<L>>,
     // The engine can be fetched from the thread local storage of scheduler threads.
     // So, we don't store the engine here.
     _engine: PhantomData<E>,
 }
 
-unsafe impl<E: Engine, L: LockManager> Send for TxnScheduler<E, L> {}
+unsafe impl<E: Engine, L: LockManagerTrait> Send for TxnScheduler<E, L> {}
 
-impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
+impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
     /// Creates a scheduler.
     pub(in crate::storage) fn new<R: FlowStatsReporter>(
         engine: E,
@@ -438,7 +435,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             task_slots.push(Mutex::new(Default::default()).into());
         }
 
-        let lock_wait_queues = LockWaitQueues::new(lock_mgr.clone());
+        let lock_wait_queues = LockWaitQueues::new();
 
         let inner = Arc::new(TxnSchedulerInner {
             task_slots,
@@ -906,7 +903,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             wait_info,
             is_first_lock,
             wait_timeout,
-            lock_req_ctx.get_callback_for_cancellation(),
+            lock_req_ctx.get_callback_for_cancellation(
+                self.inner.lock_mgr.clone(),
+                self.inner.lock_wait_queues.clone(),
+            ),
             diag_ctx,
         );
     }
@@ -978,14 +978,18 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // If there are not too many new locks, do not spawn the task to the high
         // priority pool since it may consume more CPU.
         if new_acquired_locks.len() < 30 {
-            self.inner
+            let res = self
+                .inner
                 .lock_wait_queues
                 .update_lock_wait(new_acquired_locks);
+            self.inner.lock_mgr.update_wait_for(res.into())
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
+            let lock_mgr = self.inner.lock_mgr.clone();
             self.get_sched_pool()
                 .spawn(group_name, CommandPri::High, async move {
-                    lock_wait_queues.update_lock_wait(new_acquired_locks);
+                    let res = lock_wait_queues.update_lock_wait(new_acquired_locks);
+                    lock_mgr.update_wait_for(res.into())
                 })
                 .unwrap();
         }
@@ -1615,14 +1619,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         cid: u64,
         lock_wait_token: LockWaitToken,
         lock_info: WriteResultLockInfo,
-    ) -> (LockWaitContext<L>, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
+    ) -> (LockWaitContext, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
         let cb = task_ctx.cb.take().unwrap();
 
         let ctx = LockWaitContext::new(
             lock_info.key.clone(),
-            self.inner.lock_wait_queues.clone(),
             lock_wait_token,
             cb.unwrap_normal_request_callback(),
             lock_info.parameters.allow_lock_with_conflict,
@@ -1641,7 +1644,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             lock_wait_token,
             req_states: ctx.get_shared_states().clone(),
             legacy_wake_up_index: None,
-            key_cb: Some(ctx.get_callback_for_blocked_key().into()),
+            key_cb: Some(
+                ctx.get_callback_for_blocked_key(
+                    self.inner.lock_mgr.clone(),
+                    self.inner.lock_wait_queues.clone(),
+                )
+                .into(),
+            ),
         });
 
         (ctx, lock_wait_entry, lock_info.lock_info_pb)
