@@ -6,11 +6,13 @@ use engine_traits::{
     FlushState, KvEngine, PerfContextKind, TabletRegistry, WriteBatch, DATA_CFS_LEN,
 };
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
+use pd_client::BucketStat;
 use raftstore::store::{
     fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
     Config, ReadTask,
 };
 use slog::Logger;
+use sst_importer::SstImporter;
 use tikv_util::{log::SlogFormat, worker::Scheduler};
 
 use crate::{
@@ -56,8 +58,10 @@ pub struct Apply<EK: KvEngine, R> {
 
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
+    sst_importer: Arc<SstImporter>,
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
+    pub(crate) buckets: Option<BucketStat>,
 }
 
 impl<EK: KvEngine, R> Apply<EK, R> {
@@ -72,6 +76,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
+        buckets: Option<BucketStat>,
+        sst_importer: Arc<SstImporter>,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -102,6 +108,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             flush_state,
             log_recovery,
             metrics: ApplyMetrics::default(),
+            buckets,
+            sst_importer,
             logger,
         }
     }
@@ -255,5 +263,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
     pub fn apply_flow_control(&self) -> &ApplyFlowControl {
         &self.flow_control
+    }
+
+    #[inline]
+    pub fn sst_importer(&self) -> &SstImporter {
+        &self.sst_importer
     }
 }

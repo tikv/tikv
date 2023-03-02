@@ -19,7 +19,25 @@ pub use ready::{
 };
 
 pub(crate) use self::{
+    bucket::BucketStatsInfo,
     command::SplitInit,
     query::{LocalReader, ReadDelegatePair, SharedReadTablet},
     txn_ext::TxnContext,
 };
+
+#[cfg(test)]
+pub mod test_util {
+    use std::sync::Arc;
+
+    use kvproto::kvrpcpb::ApiVersion;
+    use sst_importer::SstImporter;
+    use tempfile::TempDir;
+
+    pub fn create_tmp_importer() -> (TempDir, Arc<SstImporter>) {
+        let dir = TempDir::new().unwrap();
+        let importer = Arc::new(
+            SstImporter::new(&Default::default(), dir.path(), None, ApiVersion::V1).unwrap(),
+        );
+        (dir, importer)
+    }
+}

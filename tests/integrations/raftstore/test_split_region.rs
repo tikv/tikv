@@ -545,6 +545,8 @@ fn test_server_split_with_stale_peer() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_split_region_diff_check() {
     let count = 1;
     let mut cluster = new_cluster(0, count);
@@ -596,10 +598,11 @@ fn test_split_region_diff_check() {
 // set max region size/split size 2000 and put data till 1000
 // set max region size/split size < 1000 and reboot
 // verify the region is splitted.
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_node_split_region_after_reboot_with_config_change() {
     let count = 1;
-    let mut cluster = new_server_cluster(0, count);
+    let mut cluster = new_cluster(0, count);
     let region_max_size = 2000;
     let region_split_size = 2000;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);

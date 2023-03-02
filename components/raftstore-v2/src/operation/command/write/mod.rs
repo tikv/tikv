@@ -1,20 +1,23 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{data_cf_offset, KvEngine, Mutable, RaftEngine, CF_DEFAULT};
-use kvproto::raft_cmdpb::RaftRequestHeader;
+use kvproto::{import_sstpb::SstMeta, raft_cmdpb::RaftRequestHeader};
 use raftstore::{
     store::{
-        cmd_resp,
+        check_sst_for_ingestion, cmd_resp,
         fsm::{apply, MAX_PROPOSAL_SIZE_RATIO},
+        metrics::PEER_WRITE_CMD_COUNTER,
         msg::ErrorCallback,
         util::{self, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER},
     },
     Error, Result,
 };
+use slog::error;
 use tikv_util::slog_panic;
 
 use crate::{
     batch::StoreContext,
+    fsm::ApplyResReporter,
     raft::{Apply, Peer},
     router::{ApplyTask, CmdResChannel},
 };
@@ -132,14 +135,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, R> Apply<EK, R> {
+impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub fn apply_put(&mut self, cf: &str, index: u64, key: &[u8], value: &[u8]) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.put.inc();
         let off = data_cf_offset(cf);
         if self.should_skip(off, index) {
             return Ok(());
         }
         util::check_key_in_region(key, self.region())?;
+        if let Some(s) = self.buckets.as_mut() {
+            s.write_key(key, value.len() as u64);
+        }
         // Technically it's OK to remove prefix for raftstore v2. But rocksdb doesn't
         // support specifying infinite upper bound in various APIs.
         keys::data_key_with_buffer(key, &mut self.key_buffer);
@@ -178,11 +185,15 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
     #[inline]
     pub fn apply_delete(&mut self, cf: &str, index: u64, key: &[u8]) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.delete.inc();
         let off = data_cf_offset(cf);
         if self.should_skip(off, index) {
             return Ok(());
         }
         util::check_key_in_region(key, self.region())?;
+        if let Some(s) = self.buckets.as_mut() {
+            s.write_key(key, 0);
+        }
         keys::data_key_with_buffer(key, &mut self.key_buffer);
         self.ensure_write_buffer();
         let res = if cf.is_empty() || cf == CF_DEFAULT {
@@ -220,6 +231,37 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         _notify_only: bool,
     ) -> Result<()> {
         // TODO: reuse the same delete as split/merge.
+        Ok(())
+    }
+
+    #[inline]
+    pub fn apply_ingest(&mut self, ssts: Vec<SstMeta>) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
+        let mut infos = Vec::with_capacity(ssts.len());
+        for sst in &ssts {
+            if let Err(e) = check_sst_for_ingestion(sst, self.region()) {
+                error!(
+                    self.logger,
+                    "ingest fail";
+                    "sst" => ?sst,
+                    "region" => ?self.region(),
+                    "error" => ?e
+                );
+                let _ = self.sst_importer().delete(sst);
+                return Err(e);
+            }
+            match self.sst_importer().validate(sst) {
+                Ok(meta_info) => infos.push(meta_info),
+                Err(e) => {
+                    slog_panic!(self.logger, "corrupted sst"; "sst" => ?sst, "error" => ?e);
+                }
+            }
+        }
+        // Unlike v1, we can't batch ssts accross regions.
+        self.flush();
+        if let Err(e) = self.sst_importer().ingest(&infos, self.tablet()) {
+            slog_panic!(self.logger, "ingest fail"; "ssts" => ?ssts, "error" => ?e);
+        }
         Ok(())
     }
 }

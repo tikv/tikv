@@ -739,8 +739,10 @@
 ## Target file size for compaction.
 ## The SST file size of level-0 is influenced by the compaction algorithm of `write-buffer-size`
 ## and level0. `target-file-size-base` is used to control the size of a single SST file of level1 to
-## level6.
+## level6. Each level will have `target-file-size-base * (target-file-size-multiplier ^ (level - 1))`.
 # target-file-size-base = "8MB"
+## In partitioned-raft-kv, the default value of target-file-size-multiplier is 2 for write and default cf.
+# target-file-size-multiplier = 1
 
 ## Max bytes for `compaction.max_compaction_bytes`.
 ## If it's necessary to enlarge value of this entry, it's better to also enlarge `reserve-space`
@@ -925,6 +927,7 @@
 ## Recommend to set it the same as `rocksdb.defaultcf.max-bytes-for-level-base`.
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "8MB"
+# target-file-size-multiplier = 1
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
@@ -953,6 +956,7 @@
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "128MB"
 # target-file-size-base = "8MB"
+# target-file-size-multiplier = 1
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 20
@@ -1014,6 +1018,7 @@
 ## Recommend to set it the same as `rocksdb.defaultcf.max-bytes-for-level-base`.
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "8MB"
+# target-file-size-multiplier = 1
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
