@@ -461,10 +461,14 @@ where
                 snapshot
                     .merge_from_bytes(msg.get_message().get_snapshot().get_data())
                     .unwrap();
-                // Witness's snapshot must be empty, no need to send snapshot files
+                // Witness's snapshot must be empty, no need to send snapshot files, report
+                // immediately
                 if !snapshot.get_meta().get_for_witness() {
                     self.send_snapshot_sock(msg);
                     continue;
+                } else {
+                    let rep = self.new_snapshot_reporter(&msg);
+                    rep.report(SnapshotStatus::Finish);
                 }
             }
             self.buffer.push(msg);

@@ -2862,7 +2862,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#ecf99f4e4506fa681d77e829b02a4cbe031559e6"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#8782652daf1067b7e38ff2a7efe512a885dacc2c"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2881,7 +2881,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#ecf99f4e4506fa681d77e829b02a4cbe031559e6"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#8782652daf1067b7e38ff2a7efe512a885dacc2c"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4384,6 +4384,7 @@ dependencies = [
  "slog",
  "slog-global",
  "smallvec",
+ "sst_importer",
  "tempfile",
  "test_pd",
  "test_util",
@@ -4798,7 +4799,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#ecf99f4e4506fa681d77e829b02a4cbe031559e6"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#8782652daf1067b7e38ff2a7efe512a885dacc2c"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

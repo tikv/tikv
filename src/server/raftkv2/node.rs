@@ -17,6 +17,7 @@ use raftstore::{
 use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
 use resource_metering::CollectorRegHandle;
 use slog::{info, o, Logger};
+use sst_importer::SstImporter;
 use tikv_util::{
     config::VersionTrack,
     worker::{LazyWorker, Worker},
@@ -102,6 +103,7 @@ where
         pd_worker: LazyWorker<PdTask>,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
         state: &Mutex<GlobalReplicationState>,
+        sst_importer: Arc<SstImporter>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -140,6 +142,7 @@ where
             background,
             pd_worker,
             store_cfg,
+            sst_importer,
         )?;
 
         Ok(())
@@ -201,6 +204,7 @@ where
         background: Worker,
         pd_worker: LazyWorker<PdTask>,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
+        sst_importer: Arc<SstImporter>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -232,6 +236,7 @@ where
             collector_reg_handle,
             background,
             pd_worker,
+            sst_importer,
         )?;
         Ok(())
     }

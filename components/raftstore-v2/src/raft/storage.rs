@@ -340,7 +340,7 @@ mod tests {
     use super::*;
     use crate::{
         fsm::ApplyResReporter,
-        operation::{write_initial_states, CatchUpLogs},
+        operation::{test_util::create_tmp_importer, write_initial_states, CatchUpLogs},
         raft::Apply,
         router::ApplyRes,
     };
@@ -499,6 +499,7 @@ mod tests {
         worker.start(read_runner);
         let mut state = RegionLocalState::default();
         state.set_region(region.clone());
+        let (_tmp_dir, importer) = create_tmp_importer();
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -510,8 +511,9 @@ mod tests {
             Arc::new(FlushState::new(5)),
             None,
             5,
-            logger,
             None,
+            importer,
+            logger,
         );
 
         // Test get snapshot

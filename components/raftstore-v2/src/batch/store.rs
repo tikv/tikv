@@ -32,6 +32,7 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use slog::{warn, Logger};
+use sst_importer::SstImporter;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
@@ -85,6 +86,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub self_disk_usage: DiskUsage,
 
     pub snap_mgr: TabletSnapManager,
+    pub sst_importer: Arc<SstImporter>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
@@ -278,6 +280,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
     shutdown: Arc<AtomicBool>,
     snap_mgr: TabletSnapManager,
+    sst_importer: Arc<SstImporter>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -294,6 +297,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         shutdown: Arc<AtomicBool>,
         snap_mgr: TabletSnapManager,
         coprocessor_host: CoprocessorHost<EK>,
+        sst_importer: Arc<SstImporter>,
     ) -> Self {
         let pool_size = cfg.value().apply_batch_system.pool_size;
         let max_pool_size = std::cmp::max(
@@ -319,6 +323,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             snap_mgr,
             shutdown,
             coprocessor_host,
+            sst_importer,
         }
     }
 
@@ -437,6 +442,7 @@ where
             self_disk_usage: DiskUsage::Normal,
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
+            sst_importer: self.sst_importer.clone(),
         };
         poll_ctx.update_ticks_timeout();
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
@@ -529,6 +535,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         background: Worker,
         pd_worker: LazyWorker<pd::Task>,
+        sst_importer: Arc<SstImporter>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -629,6 +636,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             self.shutdown.clone(),
             snap_mgr,
             coprocessor_host,
+            sst_importer,
         );
         self.workers = Some(workers);
         self.schedulers = Some(schedulers);

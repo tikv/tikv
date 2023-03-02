@@ -13,6 +13,7 @@ use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raftstore::store::{Config, ReadTask};
 use slog::Logger;
+use sst_importer::SstImporter;
 use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
     timer::GLOBAL_TIMER_HANDLE,
@@ -75,8 +76,9 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
-        logger: Logger,
         buckets: Option<BucketStat>,
+        sst_importer: Arc<SstImporter>,
+        logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
         let apply = Apply::new(
@@ -89,8 +91,9 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             flush_state,
             log_recovery,
             applied_term,
-            logger,
             buckets,
+            sst_importer,
+            logger,
         );
         (
             ApplyScheduler { sender: tx },
