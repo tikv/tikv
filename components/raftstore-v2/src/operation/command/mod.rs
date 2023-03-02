@@ -300,13 +300,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             committed_time: Instant::now(),
         };
         assert!(
-            self.apply_scheduler().is_some(),
-            "apply_scheduler should be something. region_id {}",
-            self.region_id()
+            self.apply_scheduler().is_some() || ctx.router.is_shutdown(),
+            "{} apply_scheduler should not be None",
+            SlogFormat(&self.logger)
         );
-        self.apply_scheduler()
-            .unwrap()
-            .send(ApplyTask::CommittedEntries(apply));
+        if let Some(scheduler) = self.apply_scheduler() {
+            scheduler.send(ApplyTask::CommittedEntries(apply));
+        }
     }
 
     #[inline]

@@ -245,8 +245,9 @@ impl CachedRawClient {
         let latest_version = {
             let mut latest = self.core.latest.lock().unwrap();
             *latest = self.cache.clone();
+            let v = self.core.version.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = self.core.on_reconnect_tx.send(());
-            self.core.version.fetch_add(1, Ordering::Relaxed) + 1
+            v
         };
         debug_assert!(self.cache_version < latest_version);
         self.cache_version = latest_version;
