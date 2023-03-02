@@ -183,6 +183,7 @@ where
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
     pub coprocessor_host: CoprocessorHost<EK>,
+    pub ingest_copy_read_only: bool,
 }
 
 // A helper function to copy snapshot.
@@ -771,32 +772,26 @@ impl Snapshot {
         )
     }
 
-    fn validate(&self, for_send: bool) -> RaftStoreResult<()> {
+    fn validate<F>(&self, post_check: F) -> RaftStoreResult<()>
+    where
+        F: Fn(&CfFile, usize) -> RaftStoreResult<()>,
+    {
         for cf_file in &self.cf_files {
             let file_paths = cf_file.file_paths();
-            let clone_file_paths = cf_file.clone_file_paths();
-            for (i, file_path) in file_paths.iter().enumerate() {
+            for i in 0..file_paths.len() {
                 if cf_file.size[i] == 0 {
                     // Skip empty file. The checksum of this cf file should be 0 and
                     // this is checked when loading the snapshot meta.
                     continue;
                 }
 
-                let file_path = Path::new(file_path);
                 check_file_size_and_checksum(
-                    file_path,
+                    Path::new(&file_paths[i]),
                     cf_file.size[i],
                     cf_file.checksum[i],
                     self.mgr.encryption_key_manager.as_ref(),
                 )?;
-
-                if !for_send && !plain_file_used(cf_file.cf) {
-                    sst_importer::prepare_sst_for_ingestion(
-                        file_path,
-                        Path::new(&clone_file_paths[i]),
-                        self.mgr.encryption_key_manager.as_deref(),
-                    )?;
-                }
+                post_check(cf_file, i)?;
             }
         }
         Ok(())
@@ -852,7 +847,7 @@ impl Snapshot {
     {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(true) {
+            match self.validate(|_, _| -> RaftStoreResult<()> { Ok(()) }) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(?e;
@@ -1069,7 +1064,28 @@ impl Snapshot {
     }
 
     pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
-        box_try!(self.validate(false));
+        let post_check = |cf_file: &CfFile, offset: usize| {
+            if !plain_file_used(cf_file.cf) {
+                let file_paths = cf_file.file_paths();
+                let clone_file_paths = cf_file.clone_file_paths();
+                if !options.ingest_copy_read_only {
+                    sst_importer::prepare_sst_for_ingestion(
+                        &file_paths[offset],
+                        &clone_file_paths[offset],
+                        self.mgr.encryption_key_manager.as_deref(),
+                    )?;
+                } else {
+                    sst_importer::copy_sst_for_ingestion(
+                        &file_paths[offset],
+                        &clone_file_paths[offset],
+                        self.mgr.encryption_key_manager.as_deref(),
+                    )?;
+                }
+            }
+            Ok(())
+        };
+
+        box_try!(self.validate(post_check));
 
         let abort_checker = ApplyAbortChecker(options.abort);
         let coprocessor_host = options.coprocessor_host;

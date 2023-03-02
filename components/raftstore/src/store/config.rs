@@ -140,6 +140,14 @@ pub struct Config {
     #[online_config(skip)]
     pub snap_apply_batch_size: ReadableSize,
 
+    /// When applying a Region snapshot, its SST files can be modified by TiKV
+    /// itself. However those files could be read-only, for example, a TiKV
+    /// [agent](cmd/tikv-agent) is started based on a read-only remains. So
+    /// we can set `snap_apply_copy_read_only` to `true` to make a copy on
+    /// those SST files.
+    #[online_config(skip)]
+    pub snap_apply_copy_read_only: bool,
+
     // used to periodically check whether schedule pending applies in region runner
     #[doc(hidden)]
     #[online_config(skip)]
@@ -378,6 +386,7 @@ impl Default for Config {
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
+            snap_apply_copy_read_only: false,
             region_worker_tick_interval: if cfg!(feature = "test") {
                 ReadableDuration::millis(200)
             } else {

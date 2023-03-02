@@ -20,7 +20,7 @@ use tikv::{
     server::KvEngineFactoryBuilder,
     storage::config::EngineType,
 };
-use tikv_util::config::ReadableSize;
+use tikv_util::config::{ReadableDuration, ReadableSize};
 
 fn main() {
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
@@ -332,6 +332,10 @@ fn main() {
     } else {
         config.raftdb.defaultcf.disable_auto_compactions = true;
     }
+
+    // To limit memory components.
+    config.raft_store.raft_entry_cache_life_time = ReadableDuration::secs(1);
+    config.storage.block_cache.capacity = Some(ReadableSize::gb(1));
 
     match config.storage.engine {
         EngineType::RaftKv => server::server::run_tikv(config),

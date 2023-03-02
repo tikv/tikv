@@ -65,6 +65,45 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     Ok(())
 }
 
+/// Just like prepare_sst_for_ingestion, but
+/// * always use copy instead of hard link;
+/// * add write permission on the copied file if necessary.
+pub fn copy_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
+    path: P,
+    clone: Q,
+    encryption_key_manager: Option<&DataKeyManager>,
+) -> Result<()> {
+    let path = path.as_ref().to_str().unwrap();
+    let clone = clone.as_ref().to_str().unwrap();
+
+    if Path::new(clone).exists() {
+        file_system::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
+    }
+    // always try to remove the file from key manager because the clean up in
+    // rocksdb is not atomic, thus the file may be deleted but key in key
+    // manager is not.
+    if let Some(key_manager) = encryption_key_manager {
+        key_manager.delete_file(clone)?;
+    }
+
+    file_system::copy_and_sync(path, clone)
+        .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
+
+    let mut pmts = file_system::metadata(clone)?.permissions();
+    if pmts.readonly() {
+        pmts.set_readonly(false);
+        file_system::set_permissions(clone, pmts)?;
+    }
+
+    // sync clone dir
+    File::open(Path::new(clone).parent().unwrap())?.sync_all()?;
+    if let Some(key_manager) = encryption_key_manager {
+        key_manager.link_file(path, clone)?;
+    }
+
+    Ok(())
+}
+
 pub fn url_for<E: ExternalStorage>(storage: &E) -> String {
     storage
         .url()
