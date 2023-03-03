@@ -4,7 +4,6 @@ use std::{
     cmp::{self, Ordering as CmpOrdering, Reverse},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    fs,
     io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
     result, str,
@@ -1970,6 +1969,7 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
+        file_system::clean_up_trash(&path)?;
         Ok(Self {
             base: path,
             receiving: Arc::default(),
@@ -1993,7 +1993,7 @@ impl TabletSnapManager {
 
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
         let path = self.tablet_gen_path(key);
-        if path.exists() && let Err(e) = fs::remove_dir_all(path.as_path()) {
+        if path.exists() && let Err(e) = file_system::trash_dir_all(&path) {
             error!(
                 "delete snapshot failed";
                 "path" => %path.display(),

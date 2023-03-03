@@ -595,15 +595,13 @@ pub fn send_snap(
         let recv_result = receiver.next().await;
         send_timer.observe_duration();
         drop(client);
+        mgr.delete_snapshot(&key);
         match recv_result {
-            None => {
-                mgr.delete_snapshot(&key);
-                Ok(SendStat {
-                    key,
-                    total_size,
-                    elapsed: timer.saturating_elapsed(),
-                })
-            }
+            None => Ok(SendStat {
+                key,
+                total_size,
+                elapsed: timer.saturating_elapsed(),
+            }),
             Some(Err(e)) => Err(e.into()),
             Some(Ok(resp)) => Err(Error::Other(
                 format!("receive unexpected response {:?}", resp).into(),

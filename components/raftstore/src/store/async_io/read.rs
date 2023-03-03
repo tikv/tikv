@@ -123,7 +123,7 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
         let checkpointer_path = self.snap_mgr().tablet_gen_path(snap_key);
         if checkpointer_path.as_path().exists() {
             // Remove the old checkpoint directly.
-            std::fs::remove_dir_all(checkpointer_path.as_path())?;
+            file_system::trash_dir_all(&checkpointer_path)?;
         }
         // Here not checkpoint to a temporary directory first, the temporary directory
         // logic already implemented in rocksdb.

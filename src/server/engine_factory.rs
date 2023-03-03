@@ -226,7 +226,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         //   kv_db_opts,
         //   kv_cfs_opts,
         // )?;
-        let _ = std::fs::remove_dir_all(path);
+        let _ = file_system::trash_dir_all(path);
         if let Some(listener) = &self.inner.flow_listener {
             listener.clone_with(ctx.id).on_destroyed();
         }
