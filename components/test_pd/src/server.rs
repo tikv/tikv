@@ -196,7 +196,7 @@ impl<C: PdMocker> Clone for PdMock<C> {
 impl<C: PdMocker + Send + Sync + 'static> MetaStorage for PdMock<C> {
     fn watch(
         &mut self,
-        ctx: grpcio::RpcContext,
+        ctx: grpcio::RpcContext<'_>,
         req: kvproto::meta_storagepb::WatchRequest,
         sink: grpcio::ServerStreamingSink<kvproto::meta_storagepb::WatchResponse>,
     ) {
@@ -210,7 +210,7 @@ impl<C: PdMocker + Send + Sync + 'static> MetaStorage for PdMock<C> {
 
     fn get(
         &mut self,
-        ctx: grpcio::RpcContext,
+        ctx: grpcio::RpcContext<'_>,
         req: kvproto::meta_storagepb::GetRequest,
         sink: grpcio::UnarySink<kvproto::meta_storagepb::GetResponse>,
     ) {
@@ -219,7 +219,7 @@ impl<C: PdMocker + Send + Sync + 'static> MetaStorage for PdMock<C> {
 
     fn put(
         &mut self,
-        ctx: grpcio::RpcContext,
+        ctx: grpcio::RpcContext<'_>,
         req: kvproto::meta_storagepb::PutRequest,
         sink: grpcio::UnarySink<kvproto::meta_storagepb::PutResponse>,
     ) {

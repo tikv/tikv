@@ -306,8 +306,8 @@ mod tests {
         let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
         let insert = |k, v| w(c.set(kv(k, v)));
 
-        assert!(insert("c", "the rainbow-like summer").is_err());
-        assert!(w(c.get_latest(Keys::Key(MetaKey(vec![42u8])))).is_err());
+        insert("c", "the rainbow-like summer").unwrap_err();
+        w(c.get_latest(Keys::Key(MetaKey(vec![42u8])))).unwrap_err();
         assert!(w(c.watch(Keys::Key(MetaKey(vec![42u8])), 42)).is_err());
     }
 }
