@@ -361,10 +361,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
-        src_is_drained: bool,
+        src_is_drained: BatchExecIsDrain,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        assert!(src_is_drained);
+        assert!(src_is_drained.stop());
 
         let aggr_fns_len = entities.each_aggr_fn.len();
         let mut group_by_column = LazyBatchColumn::decoded_with_capacity_and_tp(
@@ -545,12 +545,12 @@ mod tests {
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let mut r = block_on(exec.next_batch(1));
             // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three
@@ -681,12 +681,12 @@ mod tests {
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let mut r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0]);
@@ -765,12 +765,12 @@ mod tests {
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let mut r = block_on(exec.next_batch(1));
             // col_4 can result in [NULL, "aa", "aaa"], thus there will be three groups.
@@ -935,13 +935,13 @@ mod tests {
                         physical_columns: LazyBatchColumnVec::empty(),
                         logical_rows: Vec::new(),
                         warnings: EvalWarnings::default(),
-                        is_drained: Ok(false),
+                        is_drained: Ok(BatchExecIsDrain::Remain),
                     },
                     BatchExecuteResult {
                         physical_columns: LazyBatchColumnVec::empty(),
                         logical_rows: Vec::new(),
                         warnings: EvalWarnings::default(),
-                        is_drained: Ok(true),
+                        is_drained: Ok(BatchExecIsDrain::Drain),
                     },
                 ],
             );
@@ -950,12 +950,12 @@ mod tests {
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 
@@ -998,12 +998,12 @@ mod tests {
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let mut r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
@@ -1069,12 +1069,12 @@ mod tests {
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
             let mut r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0]);
@@ -1135,7 +1135,7 @@ mod tests {
                 )]),
                 logical_rows: vec![6, 4, 5, 1, 3, 2, 0],
                 warnings: EvalWarnings::default(),
-                is_drained: Ok(true),
+                is_drained: Ok(BatchExecIsDrain::Drain),
             }],
         );
         let mut exec = exec_builder(src_exec);
