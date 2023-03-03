@@ -770,10 +770,10 @@ pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
 /// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
 #[inline]
-pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: &str) -> T {
+pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64) -> T {
     let mut result = T::default();
     result.merge_from_bytes(data).unwrap_or_else(|e| {
-        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
+        panic!("{} data is corrupted : {:?}", index, e);
     });
     result
 }
