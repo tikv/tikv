@@ -170,8 +170,9 @@ impl<T: Send + 'static> Receiver<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc::channel, thread, usize};
+    use std::{thread, usize};
     use test::Bencher;
+    use crate::ResourceConsumeType;
     use super::*;
 
     struct Msg(usize);

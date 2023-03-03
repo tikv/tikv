@@ -3810,6 +3810,9 @@ impl<EK: KvEngine> ResourceMetered for Msg<EK> {
                 let mut max_write_bytes = 0;
                 for cached_entries in &apply.entries {
                     cached_entries.iter_entries(|entry| {
+                        if entry.is_empty() {
+                            return;
+                        }
                         let write_bytes = entry.compute_size() as u64;
                         let group_name = entry.get_cmd().get_header().get_resource_group_name();
                         resource_ctl.consume(

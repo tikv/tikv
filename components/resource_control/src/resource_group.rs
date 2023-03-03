@@ -225,7 +225,7 @@ impl ResourceController {
     }
 
     #[inline]
-    fn resource_group(&self, name: &[u8]) -> MappedRwLockReadGuard<GroupPriorityTracker> {
+    fn resource_group(&self, name: &[u8]) -> MappedRwLockReadGuard<'_, GroupPriorityTracker> {
         let guard = self.resource_consumptions.read();
         RwLockReadGuard::map(guard, |m| {
             if let Some(g) = m.get(name) {
