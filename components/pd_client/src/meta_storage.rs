@@ -59,6 +59,7 @@ impl Get {
     }
 }
 
+/// A Put request to the meta store.
 #[repr(transparent)]
 #[derive(Clone, Debug)]
 pub struct Put {
@@ -66,6 +67,7 @@ pub struct Put {
 }
 
 impl Put {
+    /// Create a put request of the key value.
     pub fn of(key: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
         let mut inner = pb::PutRequest::default();
         inner.set_key(key.into());
@@ -73,6 +75,7 @@ impl Put {
         Self { inner }
     }
 
+    /// Enhance the put request, allow it to return the previous kv pair.
     pub fn fetch_prev_kv(mut self) -> Self {
         self.inner.prev_kv = true;
         self
@@ -92,6 +95,7 @@ pub struct Watch {
 }
 
 impl Watch {
+    /// Create a watch request for a key.
     pub fn of(key: impl Into<Vec<u8>>) -> Self {
         let mut inner = pb::WatchRequest::default();
         inner.set_key(key.into());
@@ -99,17 +103,20 @@ impl Watch {
         Self { inner }
     }
 
+    /// Enhance the request to allow it watch keys with the same prefix.
     pub fn prefixed(mut self) -> Self {
         let next = codec::next_prefix_of(self.inner.key.clone());
         self.inner.set_range_end(next);
         self
     }
 
+    /// Enhance the request to allow it watch keys until the range end.
     pub fn range_to(mut self, to: impl Into<Vec<u8>>) -> Self {
         self.inner.set_range_end(to.into());
         self
     }
 
+    /// Enhance the request to make it watch from a specified revision.
     pub fn from_rev(mut self, rev: i64) -> Self {
         self.inner.set_start_revision(rev);
         self
@@ -122,6 +129,7 @@ impl From<Watch> for pb::WatchRequest {
     }
 }
 
+/// The descriptor of source (caller) of the requests.
 #[derive(Clone, Copy)]
 pub enum Source {
     LogBackup = 0,
@@ -135,6 +143,7 @@ impl std::fmt::Display for Source {
     }
 }
 
+/// A wrapper over client which would fill the header fields for all requests.
 #[derive(Clone)]
 pub struct AutoHeader<S> {
     inner: S,
@@ -178,6 +187,9 @@ impl<S: MetaStorageClient> MetaStorageClient for AutoHeader<S> {
     }
 }
 
+/// A wrapper that makes every response and stream event get checked.
+/// When there is an error in the header, this client would return a [`Err`]
+/// variant directly.
 #[derive(Clone)]
 pub struct Checked<S>(S);
 
@@ -187,6 +199,8 @@ impl<S> Checked<S> {
     }
 }
 
+/// A wrapper that checks every event in the stream and returns an error
+/// variant when there is error in the header.
 pub struct CheckedStream<S>(S);
 
 fn check_resp_header(header: &pb::ResponseHeader) -> Result<()> {
@@ -271,6 +285,7 @@ impl<S: MetaStorageClient> MetaStorageClient for Arc<S> {
     }
 }
 
+/// A client which is able to play with the `meta_storage` service.
 pub trait MetaStorageClient: Send + Sync + 'static {
     // Note: some of our clients needs to maintain some state, which means we may
     // need to move part of the structure.
@@ -282,6 +297,7 @@ pub trait MetaStorageClient: Send + Sync + 'static {
     // would make `CheckedStream` impossible(How can we check ALL types? Or we may
     // make traits like `MetaStorageResponse` and constraint over the T), thankfully
     // there is only one streaming RPC in this service.
+    /// The stream that yielded by the watch RPC.
     type WatchStream: Stream<Item = Result<pb::WatchResponse>> + Unpin + Send;
 
     fn get(&self, req: Get) -> PdFuture<pb::GetResponse>;

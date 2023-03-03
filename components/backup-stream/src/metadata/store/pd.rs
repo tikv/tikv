@@ -218,7 +218,7 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use futures::{Future, StreamExt};
-    use pd_client::{AutoHeader, RpcClient};
+    use pd_client::{AutoHeader, Checked, RpcClient, Source};
     use test_pd::{mocker::MetaStorage, util::*, Server as PdServer};
     use tikv_util::config::ReadableDuration;
 
@@ -228,15 +228,14 @@ mod tests {
         store::{Keys, MetaStore},
     };
 
-    fn new_test_server_and_client() -> (PdServer<MetaStorage>, PdStore<RpcClient>) {
+    fn new_test_server_and_client<C>(
+        factory: impl FnOnce(RpcClient) -> C,
+    ) -> (PdServer<MetaStorage>, PdStore<C>) {
         let server = PdServer::with_case(1, Arc::<MetaStorage>::default());
         let eps = server.bind_addrs();
         let client =
             new_client_with_update_interval(eps, None, ReadableDuration(Duration::from_secs(99)));
-        (
-            server,
-            PdStore::new(AutoHeader::new(Arc::new(client), Source::LogBackup, 42)),
-        )
+        (server, PdStore::new(factory(client)))
     }
 
     fn w<T>(f: impl Future<Output = T>) -> T {
@@ -249,7 +248,8 @@ mod tests {
 
     #[test]
     fn test_query() {
-        let (_s, c) = new_test_server_and_client();
+        let (_s, c) =
+            new_test_server_and_client(|c| AutoHeader::new(Arc::new(c), Source::LogBackup, 42));
 
         let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
         let insert = |k, v| w(c.set(kv(k, v))).unwrap();
@@ -279,7 +279,8 @@ mod tests {
 
     #[test]
     fn test_watch() {
-        let (_s, c) = new_test_server_and_client();
+        let (_s, c) =
+            new_test_server_and_client(|c| AutoHeader::new(Arc::new(c), Source::LogBackup, 42));
         let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
         let insert = |k, v| w(c.set(kv(k, v))).unwrap();
 
@@ -297,5 +298,16 @@ mod tests {
 
         assert_eq!(items[0].pair, kv("a", "looking up at the ocean"));
         assert_eq!(items[1].pair, kv("b", "a folktale in the polar day"));
+    }
+
+    #[test]
+    fn test_check_error() {
+        let (_s, c) = new_test_server_and_client(|c| Checked::new(Arc::new(c)));
+        let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
+        let insert = |k, v| w(c.set(kv(k, v)));
+
+        assert!(insert("c", "the rainbow-like summer").is_err());
+        assert!(w(c.get_latest(Keys::Key(MetaKey(vec![42u8])))).is_err());
+        assert!(w(c.watch(Keys::Key(MetaKey(vec![42u8])), 42)).is_err());
     }
 }
