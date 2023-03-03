@@ -9,9 +9,9 @@ use std::{
 };
 
 use collections::HashSet;
-use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
-use futures::{sink::SinkExt, stream::TryStreamExt, TryFutureExt};
+use futures::{sink::SinkExt, stream::TryStreamExt, Stream, StreamExt, TryFutureExt};
 use futures_executor::{ThreadPool, ThreadPoolBuilder};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
@@ -24,20 +24,15 @@ use kvproto::{
         SwitchMode, WriteRequest_oneof_chunk as Chunk, *,
     },
     kvrpcpb::Context,
-    raft_cmdpb::{CmdType, DeleteRequest, PutRequest, RaftCmdRequest, RaftRequestHeader, Request},
-};
-use protobuf::Message;
-use raftstore::{
-    router::RaftStoreRouter,
-    store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
 };
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, Error, Result,
     SstImporter,
 };
+use tikv_kv::{Engine, Modify, SnapContext, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     config::ReadableSize,
-    future::{create_stream_with_buffer, paired_future_callback},
+    future::create_stream_with_buffer,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
 };
@@ -45,22 +40,54 @@ use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::make_rpc_error;
-use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_GAUGE};
+use crate::{
+    import::duplicate_detect::DuplicateDetector,
+    server::CONFIG_ROCKSDB_GAUGE,
+    storage::{self, errors::extract_region_error_from_error},
+};
 
 const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
+/// The extra bytes required by the wire encoding.
+/// Generally, a field (and a embedded message) would introduce 2 extra
+/// bytes. In detail, they are:
+/// - 2 bytes for the request type (Tag+Value).
+/// - 2 bytes for every string or bytes field (Tag+Length), they are:
+/// .  + the key field
+/// .  + the value field
+/// .  + the CF field (None for CF_DEFAULT)
+/// - 2 bytes for the embedded message field `PutRequest` (Tag+Length).
+/// In fact, the length field is encoded by varint, which may grow when the
+/// content length is greater than 128, however when the length is greater than
+/// 128, the extra 1~4 bytes can be ignored.
+const WIRE_EXTRA_BYTES: usize = 10;
+
+fn transfer_error(err: storage::Error) -> ImportPbError {
+    let mut e = ImportPbError::default();
+    if let Some(region_error) = extract_region_error_from_error(&err) {
+        e.set_store_error(region_error);
+    }
+    e.set_message(format!("failed to complete raft command: {:?}", err));
+    e
+}
+
+async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> storage::Result<()> {
+    match s.next().await {
+        Some(WriteEvent::Finished(Ok(()))) => Ok(()),
+        Some(WriteEvent::Finished(Err(e))) => Err(e.into()),
+        Some(e) => Err(box_err!("unexpected event: {:?}", e)),
+        None => Err(box_err!("stream closed")),
+    }
+}
 
 /// ImportSstService provides tikv-server with the ability to ingest SST files.
 ///
 /// It saves the SST sent from client to a file and then sends a command to
 /// raftstore to trigger the ingest process.
 #[derive(Clone)]
-pub struct ImportSstService<E, Router>
-where
-    E: KvEngine,
-{
+pub struct ImportSstService<E: Engine> {
     cfg: Config,
+    tablet_registry: E::Local,
     engine: E,
-    router: Router,
     threads: Arc<Runtime>,
     // For now, PiTR cannot be executed in the tokio runtime because it is synchronous and may
     // blocks. (tokio is so strict... it panics if we do insane things like blocking in an async
@@ -74,36 +101,43 @@ where
     raft_entry_max_size: ReadableSize,
 }
 
-pub struct SnapshotResult<E: KvEngine> {
-    snapshot: RegionSnapshot<E::Snapshot>,
-    term: u64,
-}
-
 struct RequestCollector {
-    context: Context,
     max_raft_req_size: usize,
     /// Retain the last ts of each key in each request.
     /// This is used for write CF because resolved ts observer hates duplicated
     /// key in the same request.
-    write_reqs: HashMap<Vec<u8>, (Request, u64)>,
+    write_reqs: HashMap<Vec<u8>, (Modify, u64)>,
     /// Collector favor that simple collect all items, and it do not contains
     /// duplicated key-value. This is used for default CF.
-    default_reqs: HashMap<Vec<u8>, Request>,
+    default_reqs: HashMap<Vec<u8>, Modify>,
     /// Size of all `Request`s.
     unpacked_size: usize,
 
-    pending_raft_reqs: Vec<RaftCmdRequest>,
+    pending_writes: Vec<WriteData>,
 }
 
 impl RequestCollector {
-    fn new(context: Context, max_raft_req_size: usize) -> Self {
+    fn record_size_of_message(&mut self, size: usize) {
+        // We make a raft command entry when we unpacked size grows to 7/8 of the max
+        // raft entry size.
+        //
+        // Which means, if we don't add the extra bytes, when the amplification by the
+        // extra bytes is greater than 8/7 (i.e. the average size of entry is
+        // less than 70B), we may encounter the "raft entry is too large" error.
+        self.unpacked_size += size + WIRE_EXTRA_BYTES;
+    }
+
+    fn release_message_of_size(&mut self, size: usize) {
+        self.unpacked_size -= size + WIRE_EXTRA_BYTES;
+    }
+
+    fn new(max_raft_req_size: usize) -> Self {
         Self {
-            context,
             max_raft_req_size,
             write_reqs: HashMap::default(),
             default_reqs: HashMap::default(),
             unpacked_size: 0,
-            pending_raft_reqs: Vec::new(),
+            pending_writes: Vec::new(),
         }
     }
 
@@ -113,41 +147,37 @@ impl RequestCollector {
         if k.is_empty() || (!is_delete && v.is_empty()) {
             return;
         }
-        let mut req = Request::default();
-        if is_delete {
-            let mut del = DeleteRequest::default();
-            del.set_key(k);
-            del.set_cf(cf.to_string());
-            req.set_cmd_type(CmdType::Delete);
-            req.set_delete(del);
+        // Filter out not supported CF.
+        let cf = match cf {
+            CF_WRITE => CF_WRITE,
+            CF_DEFAULT => CF_DEFAULT,
+            _ => return,
+        };
+        let m = if is_delete {
+            Modify::Delete(cf, Key::from_encoded(k))
         } else {
             if cf == CF_WRITE && !write_needs_restore(&v) {
                 return;
             }
 
-            let mut put = PutRequest::default();
-            put.set_key(k);
-            put.set_value(v);
-            put.set_cf(cf.to_string());
-            req.set_cmd_type(CmdType::Put);
-            req.set_put(put);
-        }
-        self.accept(cf, req);
+            Modify::Put(cf, Key::from_encoded(k), v)
+        };
+        self.accept(cf, m);
     }
 
     // we need to remove duplicate keys in here, since
     // in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
     // will panic if found duplicated entry during Vec<PutRequest>.
-    fn accept(&mut self, cf: &str, req: Request) {
-        let k = key_from_request(&req);
+    fn accept(&mut self, cf: &str, m: Modify) {
+        let k = m.key();
         match cf {
             CF_WRITE => {
-                let (encoded_key, ts) = match Key::split_on_ts_for(k) {
+                let (encoded_key, ts) = match Key::split_on_ts_for(k.as_encoded()) {
                     Ok(k) => k,
                     Err(err) => {
                         warn!(
                             "key without ts, skipping";
-                            "key" => %log_wrappers::Value::key(k),
+                            "key" => %k,
                             "err" => %err
                         );
                         return;
@@ -159,19 +189,19 @@ impl RequestCollector {
                     .map(|(_, old_ts)| *old_ts < ts.into_inner())
                     .unwrap_or(true)
                 {
-                    self.unpacked_size += req.compute_size() as usize;
+                    self.record_size_of_message(m.size());
                     if let Some((v, _)) = self
                         .write_reqs
-                        .insert(encoded_key.to_owned(), (req, ts.into_inner()))
+                        .insert(encoded_key.to_owned(), (m, ts.into_inner()))
                     {
-                        self.unpacked_size -= v.get_cached_size() as usize;
+                        self.release_message_of_size(v.size())
                     }
                 }
             }
             CF_DEFAULT => {
-                self.unpacked_size += req.compute_size() as usize;
-                if let Some(v) = self.default_reqs.insert(k.to_owned(), req) {
-                    self.unpacked_size -= v.get_cached_size() as usize;
+                self.record_size_of_message(m.size());
+                if let Some(v) = self.default_reqs.insert(k.as_encoded().clone(), m) {
+                    self.release_message_of_size(v.size());
                 }
             }
             _ => unreachable!(),
@@ -183,69 +213,61 @@ impl RequestCollector {
     }
 
     #[cfg(test)]
-    fn drain_unpacked_reqs(&mut self, cf: &str) -> Vec<Request> {
-        let res: Vec<Request> = if cf == CF_DEFAULT {
-            self.default_reqs.drain().map(|(_, req)| req).collect()
+    fn drain_unpacked_reqs(&mut self, cf: &str) -> Vec<Modify> {
+        let res: Vec<Modify> = if cf == CF_DEFAULT {
+            self.default_reqs.drain().map(|(_, m)| m).collect()
         } else {
-            self.write_reqs.drain().map(|(_, (req, _))| req).collect()
+            self.write_reqs.drain().map(|(_, (m, _))| m).collect()
         };
         for r in &res {
-            self.unpacked_size -= r.get_cached_size() as usize;
+            self.release_message_of_size(r.size());
         }
         res
     }
 
     #[inline]
-    fn drain_raft_reqs(&mut self, take_unpacked: bool) -> std::vec::Drain<'_, RaftCmdRequest> {
+    fn drain_pending_writes(&mut self, take_unpacked: bool) -> std::vec::Drain<'_, WriteData> {
         if take_unpacked {
             self.pack_all();
         }
-        self.pending_raft_reqs.drain(..)
+        self.pending_writes.drain(..)
     }
 
     fn pack_all(&mut self) {
         if self.unpacked_size == 0 {
             return;
         }
-        let mut cmd = RaftCmdRequest::default();
-        let mut header = make_request_header(self.context.clone());
         // Set the UUID of header to prevent raftstore batching our requests.
         // The current `resolved_ts` observer assumes that each batch of request doesn't
         // has two writes to the same key. (Even with 2 different TS). That was true
         // for normal cases because the latches reject concurrency write to keys.
         // However we have bypassed the latch layer :(
-        header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
-        cmd.set_header(header);
         let mut reqs: Vec<_> = self.write_reqs.drain().map(|(_, (req, _))| req).collect();
         reqs.append(&mut self.default_reqs.drain().map(|(_, req)| req).collect());
         if reqs.is_empty() {
             debug_assert!(false, "attempt to pack an empty request");
             return;
         }
-        cmd.set_requests(reqs.into());
-
-        self.pending_raft_reqs.push(cmd);
+        let mut data = WriteData::from_modifies(reqs);
+        data.set_avoid_batch(true);
+        self.pending_writes.push(data);
         self.unpacked_size = 0;
     }
 
     #[inline]
     fn is_empty(&self) -> bool {
-        self.pending_raft_reqs.is_empty() && self.unpacked_size == 0
+        self.pending_writes.is_empty() && self.unpacked_size == 0
     }
 }
 
-impl<E, Router> ImportSstService<E, Router>
-where
-    E: KvEngine,
-    Router: 'static + RaftStoreRouter<E>,
-{
+impl<E: Engine> ImportSstService<E> {
     pub fn new(
         cfg: Config,
         raft_entry_max_size: ReadableSize,
-        router: Router,
         engine: E,
+        tablet_registry: E::Local,
         importer: Arc<SstImporter>,
-    ) -> ImportSstService<E, Router> {
+    ) -> Self {
         let props = tikv_util::thread_group::current_properties();
         let threads = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(cfg.num_threads)
@@ -271,15 +293,15 @@ where
             .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        importer.start_switch_mode_check(threads.handle(), engine.clone());
+        importer.start_switch_mode_check(threads.handle(), tablet_registry.clone());
         threads.spawn(Self::tick(importer.clone()));
 
         ImportSstService {
             cfg,
-            engine,
+            tablet_registry,
             threads: Arc::new(threads),
             block_threads: Arc::new(block_threads),
-            router,
+            engine,
             importer,
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
@@ -306,46 +328,36 @@ where
         Ok(slots.remove(&p))
     }
 
-    async fn async_snapshot(
-        router: Router,
-        header: RaftRequestHeader,
-    ) -> std::result::Result<SnapshotResult<E>, errorpb::Error> {
-        let mut req = Request::default();
-        req.set_cmd_type(CmdType::Snap);
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header);
-        cmd.set_requests(vec![req].into());
-        let (cb, future) = paired_future_callback();
-        if let Err(e) = router.send_command(cmd, Callback::read(cb), RaftCmdExtraOpts::default()) {
-            return Err(e.into());
+    fn async_snapshot(
+        engine: &mut E,
+        context: &Context,
+    ) -> impl Future<Output = std::result::Result<E::Snap, errorpb::Error>> {
+        let res = engine.async_snapshot(SnapContext {
+            pb_ctx: context,
+            ..Default::default()
+        });
+        async move {
+            res.await.map_err(|e| {
+                let err: storage::Error = e.into();
+                if let Some(e) = extract_region_error_from_error(&err) {
+                    e
+                } else {
+                    let mut e = errorpb::Error::default();
+                    e.set_message(format!("{}", err));
+                    e
+                }
+            })
         }
-        let mut res = future.await.map_err(|_| {
-            let mut err = errorpb::Error::default();
-            let err_str = "too many sst files are ingesting";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(err_str.to_string());
-            err.set_message(err_str.to_string());
-            err.set_server_is_busy(server_is_busy_err);
-            err
-        })?;
-        let mut header = res.response.take_header();
-        if header.has_error() {
-            return Err(header.take_error());
-        }
-        Ok(SnapshotResult {
-            snapshot: res.snapshot.unwrap(),
-            term: header.get_current_term(),
-        })
     }
 
     fn check_write_stall(&self) -> Option<errorpb::Error> {
         if self.importer.get_mode() == SwitchMode::Normal
             && self
-                .engine
+                .tablet_registry
                 .ingest_maybe_slowdown_writes(CF_WRITE)
                 .expect("cf")
         {
-            match self.engine.get_sst_key_ranges(CF_WRITE, 0) {
+            match self.tablet_registry.get_sst_key_ranges(CF_WRITE, 0) {
                 Ok(l0_sst_ranges) => {
                     warn!(
                         "sst ingest is too slow";
@@ -368,14 +380,13 @@ where
     }
 
     fn ingest_files(
-        &self,
-        context: Context,
+        &mut self,
+        mut context: Context,
         label: &'static str,
         ssts: Vec<SstMeta>,
     ) -> impl Future<Output = Result<IngestResponse>> {
-        let header = make_request_header(context);
-        let snapshot_res = Self::async_snapshot(self.router.clone(), header.clone());
-        let router = self.router.clone();
+        let snapshot_res = Self::async_snapshot(&mut self.engine, &context);
+        let engine = self.engine.clone();
         let importer = self.importer.clone();
         async move {
             // check api version
@@ -394,17 +405,6 @@ where
             };
 
             fail_point!("import::sst_service::ingest");
-            // Make ingest command.
-            let mut cmd = RaftCmdRequest::default();
-            cmd.set_header(header);
-            cmd.mut_header().set_term(res.term);
-            for sst in ssts.iter() {
-                let mut ingest = Request::default();
-                ingest.set_cmd_type(CmdType::IngestSst);
-                ingest.mut_ingest_sst().set_sst(sst.clone());
-                cmd.mut_requests().push(ingest);
-            }
-
             // Here we shall check whether the file has been ingested before. This operation
             // must execute after geting a snapshot from raftstore to make sure that the
             // current leader has applied to current term.
@@ -423,20 +423,31 @@ where
                     return Ok(resp);
                 }
             }
+            let modifies = ssts
+                .iter()
+                .map(|s| Modify::Ingest(Box::new(s.clone())))
+                .collect();
+            context.set_term(res.ext().get_term().unwrap().into());
+            let region_id = context.get_region_id();
+            let res = engine.async_write(
+                &context,
+                WriteData::from_modifies(modifies),
+                WriteEvent::BASIC_EVENT,
+                None,
+            );
 
-            let (cb, future) = paired_future_callback();
-            if let Err(e) =
-                router.send_command(cmd, Callback::write(cb), RaftCmdExtraOpts::default())
-            {
-                resp.set_error(e.into());
-                return Ok(resp);
-            }
-
-            let mut res = future.await.map_err(Error::from)?;
-            let mut header = res.response.take_header();
-            if header.has_error() {
-                pb_error_inc(label, header.get_error());
-                resp.set_error(header.take_error());
+            let mut resp = IngestResponse::default();
+            if let Err(e) = wait_write(res).await {
+                if let Some(e) = extract_region_error_from_error(&e) {
+                    pb_error_inc(label, &e);
+                    resp.set_error(e);
+                } else {
+                    IMPORTER_ERROR_VEC
+                        .with_label_values(&[label, "unknown"])
+                        .inc();
+                    resp.mut_error()
+                        .set_message(format!("[region {}] ingest failed: {:?}", region_id, e));
+                }
             }
             Ok(resp)
         }
@@ -445,33 +456,14 @@ where
     async fn apply_imp(
         mut req: ApplyRequest,
         importer: Arc<SstImporter>,
-        router: Router,
+        engine: E,
         limiter: Limiter,
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {
-        type RaftWriteFuture = futures::channel::oneshot::Receiver<raftstore::store::WriteResponse>;
-        async fn handle_raft_write(fut: RaftWriteFuture) -> std::result::Result<(), ImportPbError> {
-            match fut.await {
-                Err(e) => {
-                    let msg = format!("failed to complete raft command: {}", e);
-                    let mut e = ImportPbError::default();
-                    e.set_message(msg);
-                    return Err(e);
-                }
-                Ok(mut r) if r.response.get_header().has_error() => {
-                    let mut e = ImportPbError::default();
-                    e.set_message("failed to complete raft command".to_string());
-                    e.set_store_error(r.response.take_header().take_error());
-                    return Err(e);
-                }
-                _ => {}
-            }
-            Ok(())
-        }
-
         let mut range: Option<Range> = None;
 
-        let mut collector = RequestCollector::new(req.take_context(), max_raft_size * 7 / 8);
+        let mut collector = RequestCollector::new(max_raft_size * 7 / 8);
+        let context = req.take_context();
         let mut metas = req.take_metas();
         let mut rules = req.take_rewrite_rules();
         // For compatibility with old requests.
@@ -485,7 +477,7 @@ where
             false,
         );
 
-        let mut inflight_futures: VecDeque<RaftWriteFuture> = VecDeque::new();
+        let mut inflight_futures = VecDeque::new();
 
         let mut tasks = metas.iter().zip(rules.iter()).peekable();
         while let Some((meta, rule)) = tasks.next() {
@@ -513,25 +505,19 @@ where
             }
 
             let is_last_task = tasks.peek().is_none();
-            for req in collector.drain_raft_reqs(is_last_task) {
-                while inflight_futures.len() >= MAX_INFLIGHT_RAFT_MSGS {
-                    handle_raft_write(inflight_futures.pop_front().unwrap()).await?;
-                }
-                let (cb, future) = paired_future_callback();
-                match router.send_command(req, Callback::write(cb), RaftCmdExtraOpts::default()) {
-                    Ok(_) => inflight_futures.push_back(future),
-                    Err(e) => {
-                        let msg = format!("failed to send raft command: {}", e);
-                        let mut e = ImportPbError::default();
-                        e.set_message(msg);
-                        return Err(e);
-                    }
+            for req in collector.drain_pending_writes(is_last_task) {
+                let f = engine.async_write(&context, req, WriteEvent::BASIC_EVENT, None);
+                inflight_futures.push_back(f);
+                if inflight_futures.len() >= MAX_INFLIGHT_RAFT_MSGS {
+                    wait_write(inflight_futures.pop_front().unwrap())
+                        .await
+                        .map_err(transfer_error)?;
                 }
             }
         }
         assert!(collector.is_empty());
-        for fut in inflight_futures {
-            handle_raft_write(fut).await?;
+        for f in inflight_futures {
+            wait_write(f).await.map_err(transfer_error)?;
         }
 
         Ok(range)
@@ -548,7 +534,7 @@ macro_rules! impl_write {
             sink: ClientStreamingSink<$resp_ty>,
         ) {
             let import = self.importer.clone();
-            let engine = self.engine.clone();
+            let tablet_registry = self.tablet_registry.clone();
             let (rx, buf_driver) =
                 create_stream_with_buffer(stream, self.cfg.stream_channel_window);
             let mut rx = rx.map_err(Error::from);
@@ -566,7 +552,7 @@ macro_rules! impl_write {
                         _ => return Err(Error::InvalidChunk),
                     };
 
-                    let writer = match import.$writer_fn(&engine, meta) {
+                    let writer = match import.$writer_fn(&tablet_registry, meta) {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
@@ -600,11 +586,7 @@ macro_rules! impl_write {
     };
 }
 
-impl<E, Router> ImportSst for ImportSstService<E, Router>
-where
-    E: KvEngine,
-    Router: 'static + RaftStoreRouter<E>,
-{
+impl<E: Engine> ImportSst for ImportSstService<E> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
@@ -620,8 +602,12 @@ where
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => self.importer.enter_normal_mode(self.engine.clone(), mf),
-                SwitchMode::Import => self.importer.enter_import_mode(self.engine.clone(), mf),
+                SwitchMode::Normal => self
+                    .importer
+                    .enter_normal_mode(self.tablet_registry.clone(), mf),
+                SwitchMode::Import => self
+                    .importer
+                    .enter_import_mode(self.tablet_registry.clone(), mf),
             }
         };
         match res {
@@ -721,7 +707,7 @@ where
         let label = "apply";
         let start = Instant::now();
         let importer = self.importer.clone();
-        let router = self.router.clone();
+        let engine = self.engine.clone();
         let limiter = self.limiter.clone();
         let max_raft_size = self.raft_entry_max_size.0 as usize;
 
@@ -733,7 +719,7 @@ where
 
             let mut resp = ApplyResponse::default();
 
-            match Self::apply_imp(req, importer, router, limiter, max_raft_size).await {
+            match Self::apply_imp(req, importer, engine, limiter, max_raft_size).await {
                 Ok(Some(r)) => resp.set_range(r),
                 Err(e) => resp.set_error(e),
                 _ => {}
@@ -756,7 +742,7 @@ where
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let engine = self.engine.clone();
+        let tablet_registry = self.tablet_registry.clone();
         let start = Instant::now();
 
         let handle_task = async move {
@@ -775,14 +761,14 @@ where
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
-            let res = importer.download_ext::<E>(
+            let res = importer.download_ext::<E::Local>(
                 req.get_sst(),
                 req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
                 cipher,
                 limiter,
-                engine,
+                tablet_registry,
                 DownloadExt::default()
                     .cache_key(req.get_storage_cache_id())
                     .req_type(req.get_request_type()),
@@ -906,7 +892,7 @@ where
     ) {
         let label = "compact";
         let timer = Instant::now_coarse();
-        let engine = self.engine.clone();
+        let tablet_registry = self.tablet_registry.clone();
 
         let handle_task = async move {
             let (start, end) = if !req.has_range() {
@@ -923,7 +909,7 @@ where
                 Some(req.get_output_level())
             };
 
-            let res = engine.compact_files_in_range(start, end, output_level);
+            let res = tablet_registry.compact_files_in_range(start, end, output_level);
             match res {
                 Ok(_) => info!(
                     "compact files in range";
@@ -984,7 +970,6 @@ where
         let label = "duplicate_detect";
         let timer = Instant::now_coarse();
         let context = request.take_context();
-        let router = self.router.clone();
         let start_key = request.take_start_key();
         let min_commit_ts = request.get_min_commit_ts();
         let end_key = if request.get_end_key().is_empty() {
@@ -993,11 +978,11 @@ where
             Some(request.take_end_key())
         };
         let key_only = request.get_key_only();
-        let snap_res = Self::async_snapshot(router, make_request_header(context));
+        let snap_res = Self::async_snapshot(&mut self.engine, &context);
         let handle_task = async move {
             let res = snap_res.await;
             let snapshot = match res {
-                Ok(snap) => snap.snapshot,
+                Ok(snap) => snap,
                 Err(e) => {
                     let mut resp = DuplicateDetectResponse::default();
                     pb_error_inc(label, &e);
@@ -1078,25 +1063,6 @@ fn pb_error_inc(type_: &str, e: &errorpb::Error) {
     IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
 }
 
-fn key_from_request(req: &Request) -> &[u8] {
-    if req.has_put() {
-        return req.get_put().get_key();
-    }
-    if req.has_delete() {
-        return req.get_delete().get_key();
-    }
-    panic!("trying to extract key from request is neither put nor delete.")
-}
-
-fn make_request_header(mut context: Context) -> RaftRequestHeader {
-    let region_id = context.get_region_id();
-    let mut header = RaftRequestHeader::default();
-    header.set_peer(context.take_peer());
-    header.set_region_id(region_id);
-    header.set_region_epoch(context.take_region_epoch());
-    header
-}
-
 fn write_needs_restore(write: &[u8]) -> bool {
     let w = WriteRef::parse(write);
     match w {
@@ -1127,10 +1093,12 @@ mod test {
     use std::collections::HashMap;
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
-    use kvproto::{kvrpcpb::Context, raft_cmdpb::*};
+    use kvproto::raft_cmdpb::Request;
+    use protobuf::Message;
+    use tikv_kv::Modify;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use crate::import::sst_service::{key_from_request, RequestCollector};
+    use crate::import::sst_service::RequestCollector;
 
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
@@ -1143,45 +1111,18 @@ mod test {
         (k.into_encoded(), val.to_owned())
     }
 
-    fn default_req(key: &[u8], val: &[u8], start_ts: u64) -> Request {
+    fn default_req(key: &[u8], val: &[u8], start_ts: u64) -> Modify {
         let (k, v) = default(key, val, start_ts);
-        req(k, v, CF_DEFAULT, CmdType::Put)
+        Modify::Put(CF_DEFAULT, Key::from_encoded(k), v)
     }
 
-    fn write_req(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> Request {
+    fn write_req(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> Modify {
         let (k, v) = write(key, ty, commit_ts, start_ts);
-        let cmd_type = if ty == WriteType::Delete {
-            CmdType::Delete
+        if ty == WriteType::Delete {
+            Modify::Delete(CF_WRITE, Key::from_encoded(k))
         } else {
-            CmdType::Put
-        };
-
-        req(k, v, CF_WRITE, cmd_type)
-    }
-
-    fn req(k: Vec<u8>, v: Vec<u8>, cf: &str, cmd_type: CmdType) -> Request {
-        let mut req = Request::default();
-        req.set_cmd_type(cmd_type);
-
-        match cmd_type {
-            CmdType::Put => {
-                let mut put = PutRequest::default();
-                put.set_key(k);
-                put.set_value(v);
-                put.set_cf(cf.to_string());
-
-                req.set_put(put)
-            }
-            CmdType::Delete => {
-                let mut del = DeleteRequest::default();
-                del.set_cf(cf.to_string());
-                del.set_key(k);
-
-                req.set_delete(del);
-            }
-            _ => panic!("invalid input cmd_type"),
+            Modify::Put(CF_WRITE, Key::from_encoded(k), v)
         }
-        req
     }
 
     #[test]
@@ -1191,27 +1132,30 @@ mod test {
             cf: &'static str,
             is_delete: bool,
             mutations: Vec<(Vec<u8>, Vec<u8>)>,
-            expected_reqs: Vec<Request>,
+            expected_reqs: Vec<Modify>,
         }
 
         fn run_case(c: &Case) {
-            let mut collector = RequestCollector::new(Context::new(), 1024);
+            let mut collector = RequestCollector::new(1024);
 
             for (k, v) in c.mutations.clone() {
                 collector.accept_kv(c.cf, c.is_delete, k, v);
             }
-            let reqs = collector.drain_raft_reqs(true);
+            let reqs = collector.drain_pending_writes(true);
 
             let mut req1: HashMap<_, _> = reqs
                 .into_iter()
-                .flat_map(|mut x| x.take_requests().into_iter())
+                .flat_map(|x| {
+                    assert!(x.avoid_batch);
+                    x.modifies.into_iter()
+                })
                 .map(|req| {
-                    let key = key_from_request(&req).to_owned();
+                    let key = req.key().to_owned();
                     (key, req)
                 })
                 .collect();
             for req in c.expected_reqs.iter() {
-                let r = req1.remove(key_from_request(req));
+                let r = req1.remove(req.key());
                 assert_eq!(r.as_ref(), Some(req), "{:?}", c);
             }
             assert!(req1.is_empty(), "{:?}\ncase = {:?}", req1, c);
@@ -1284,7 +1228,7 @@ mod test {
 
     #[test]
     fn test_request_collector_with_write_cf() {
-        let mut request_collector = RequestCollector::new(Context::new(), 102400);
+        let mut request_collector = RequestCollector::new(102400);
         let reqs = vec![
             write_req(b"foo", WriteType::Put, 40, 39),
             write_req(b"aar", WriteType::Put, 38, 37),
@@ -1301,18 +1245,14 @@ mod test {
             request_collector.accept(CF_WRITE, req);
         }
         let mut reqs: Vec<_> = request_collector.drain_unpacked_reqs(CF_WRITE);
-        reqs.sort_by(|r1, r2| {
-            let k1 = key_from_request(r1);
-            let k2 = key_from_request(r2);
-            k1.cmp(k2)
-        });
+        reqs.sort_by(|r1, r2| r1.key().cmp(r2.key()));
         assert_eq!(reqs, reqs_result);
         assert!(request_collector.is_empty());
     }
 
     #[test]
     fn test_request_collector_with_default_cf() {
-        let mut request_collector = RequestCollector::new(Context::new(), 102400);
+        let mut request_collector = RequestCollector::new(102400);
         let reqs = vec![
             default_req(b"foo", b"", 39),
             default_req(b"zzz", b"", 40),
@@ -1330,14 +1270,32 @@ mod test {
         }
         let mut reqs: Vec<_> = request_collector.drain_unpacked_reqs(CF_DEFAULT);
         reqs.sort_by(|r1, r2| {
-            let k1 = key_from_request(r1);
-            let (k1, ts1) = Key::split_on_ts_for(k1).unwrap();
-            let k2 = key_from_request(r2);
-            let (k2, ts2) = Key::split_on_ts_for(k2).unwrap();
+            let (k1, ts1) = Key::split_on_ts_for(r1.key().as_encoded()).unwrap();
+            let (k2, ts2) = Key::split_on_ts_for(r2.key().as_encoded()).unwrap();
 
             k1.cmp(k2).then(ts1.cmp(&ts2))
         });
         assert_eq!(reqs, reqs_result);
         assert!(request_collector.is_empty());
+    }
+
+    #[test]
+    fn test_collector_size() {
+        let mut request_collector = RequestCollector::new(1024);
+
+        for i in 0..100u64 {
+            request_collector.accept(CF_DEFAULT, default_req(&i.to_ne_bytes(), b"egg", i));
+        }
+
+        let pws = request_collector.pending_writes;
+        for w in pws {
+            let req_size = w
+                .modifies
+                .into_iter()
+                .map(Request::from)
+                .map(|x| x.compute_size())
+                .sum::<u32>();
+            assert!(req_size < 1024, "{}", req_size);
+        }
     }
 }

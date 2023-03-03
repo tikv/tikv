@@ -2,6 +2,8 @@
 
 //! This module implements the interactions with pd.
 
+use std::sync::atomic::Ordering;
+
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
@@ -47,8 +49,18 @@ impl Store {
 
         stats.set_start_time(self.start_time().unwrap() as u32);
 
-        stats.set_bytes_written(0);
-        stats.set_keys_written(0);
+        stats.set_bytes_written(
+            ctx.global_stat
+                .stat
+                .engine_total_bytes_written
+                .swap(0, Ordering::Relaxed),
+        );
+        stats.set_keys_written(
+            ctx.global_stat
+                .stat
+                .engine_total_keys_written
+                .swap(0, Ordering::Relaxed),
+        );
         stats.set_is_busy(false);
         // TODO: add query stats
         let task = pd::Task::StoreHeartbeat { stats };
