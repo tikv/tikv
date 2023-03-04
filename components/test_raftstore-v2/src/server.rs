@@ -254,7 +254,7 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
     pd_client: Arc<TestPdClient>,
-    // raft_client: RaftClient<AddressMap, FakeExtension>,
+    raft_client: RaftClient<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
     pub pending_services: HashMap<u64, PendingServices>,
@@ -286,7 +286,7 @@ impl ServerCluster {
             worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
-        let _raft_client = RaftClient::new(conn_builder);
+        let raft_client = RaftClient::new(conn_builder);
         ServerCluster {
             metas: HashMap::default(),
             addrs: map,
@@ -298,7 +298,7 @@ impl ServerCluster {
             snap_paths: HashMap::default(),
             pending_services: HashMap::default(),
             health_services: HashMap::default(),
-            // raft_client,
+            raft_client,
             concurrency_managers: HashMap::default(),
             env,
             txn_extra_schedulers: HashMap::default(),
@@ -774,6 +774,12 @@ impl Simulator for ServerCluster {
         };
 
         router.send_peer_msg(region_id, msg)
+    }
+
+    fn send_raft_msg(&mut self, msg: RaftMessage) -> raftstore::Result<()> {
+        self.raft_client.send(msg).unwrap();
+        self.raft_client.flush();
+        Ok(())
     }
 
     fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>> {

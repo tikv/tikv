@@ -8,7 +8,7 @@
 //! applied, the source peer will send an `AskCommitMerge` message to the target
 //! peer. (For simplicity, we send this message regardless of whether the target
 //! peer is leader.) The message will also carry some source region logs that
-//! may not be committed by some peers.
+//! may not be committed by some source peers.
 //!
 //! The source region cannot serve any writes until the merge is committed or
 //! rollback-ed. This is guaranteed by `MergeContext::prepare_status`.
@@ -38,6 +38,17 @@
 //! `PrepareMerge` command, it will send a checkpoint to the target peer (step
 //! 4). Here we use a temporary channel instead of directly sending message
 //! between apply FSMs like in v1.
+//!
+//! Here is a complete view of the process:
+//!
+//! |               Store 1               |     Store 2     |     Store 3     |
+//! |   Source Peer   |   Target Leader   |   Source Peer   |   source Peer   |
+//!  apply PrepareMerge
+//!         +------------------+
+//!            AskCommitMerge  |
+//!                            |
+//!                    propose CommitMerge
+//!                     
 
 use std::{any::Any, cmp, path::PathBuf};
 
@@ -45,7 +56,7 @@ use crossbeam::channel::SendError;
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext};
 use futures::channel::oneshot;
 use kvproto::{
-    metapb::{self, Region},
+    metapb::Region,
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CommitMergeRequest, RaftCmdRequest},
     raft_serverpb::PeerState,
 };
@@ -79,6 +90,7 @@ pub struct CommitMergeResult {
     source_path: PathBuf,
     region: Region,
     source: Region,
+    source_safe_ts: u64,
     tablet: Box<dyn Any + Send + Sync>,
 }
 
@@ -86,7 +98,8 @@ pub struct CommitMergeResult {
 pub struct CatchUpLogs {
     target_region_id: u64,
     merge: CommitMergeRequest,
-    tx: oneshot::Sender<()>,
+    // safe_ts.
+    tx: oneshot::Sender<u64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -96,11 +109,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         self.add_pending_tick(PeerTick::CheckMerge);
-        self.schedule_commit_merge_proposal(store_ctx);
+        self.ask_target_peer_to_commit_merge(store_ctx);
     }
 
     // Match v1::schedule_merge.
-    fn schedule_commit_merge_proposal<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+    fn ask_target_peer_to_commit_merge<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let state = self.applied_merge_state().unwrap();
         let target = state.get_target();
         let target_id = target.get_id();
@@ -178,7 +191,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         req: RaftCmdRequest,
     ) {
         match self.validate_commit_merge(&req) {
-            Some(true) => {
+            Some(true) if self.is_leader() => {
                 let (ch, _) = CmdResChannel::pair();
                 self.on_admin_command(store_ctx, req, ch);
             }
@@ -200,35 +213,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let expected_epoch = req.get_header().get_region_epoch();
         let source_region = req.get_admin_request().get_commit_merge().get_source();
         let region = self.region();
-        if util::is_epoch_stale(expected_epoch, region.get_region_epoch()) {
-            info!(
-                self.logger,
-                "reject commit merge because of stale";
-                "current_epoch" => ?region.get_region_epoch(),
-                "expected_epoch" => ?expected_epoch,
-            );
-            Some(false)
-        } else if self.storage().has_dirty_data() {
-            info!(self.logger, "reject commit merge because of dirty data");
-            Some(false)
-        // Match v1::check_merge_proposal.
-        } else if !util::is_sibling_regions(source_region, region) {
-            info!(
-                self.logger,
-                "reject commit merge because regions are not sibling";
-                "source" => ?source_region,
-                "target" => ?region,
-            );
-            Some(false)
-        } else if !region_on_same_stores(source_region, region) {
-            info!(
-                self.logger,
-                "reject commit merge because peers not matched";
-                "source" => ?source_region,
-                "target" => ?region,
-            );
-            Some(false)
-        } else if self
+        if self
             .storage()
             .region_state()
             .get_merged_records()
@@ -244,8 +229,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "source" => ?source_region,
             );
             None
+        } else if util::is_epoch_stale(expected_epoch, region.get_region_epoch()) {
+            info!(
+                self.logger,
+                "reject commit merge because of stale";
+                "current_epoch" => ?region.get_region_epoch(),
+                "expected_epoch" => ?expected_epoch,
+            );
+            Some(false)
         } else if expected_epoch == region.get_region_epoch() {
-            Some(true)
+            assert!(util::is_sibling_regions(source_region, region));
+            assert!(region_on_same_stores(source_region, region));
+            if self.storage().has_dirty_data() {
+                info!(self.logger, "ignore commit merge because of dirty data");
+                None
+            } else {
+                Some(true)
+            }
         } else {
             None
         }
@@ -256,6 +256,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) -> Result<u64> {
+        assert!(!self.storage().has_dirty_data());
         let mut proposal_ctx = ProposalContext::empty();
         proposal_ctx.insert(ProposalContext::COMMIT_MERGE);
         let data = req.write_to_bytes().unwrap();
@@ -279,18 +280,22 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let merge = req.get_commit_merge();
         let source_region = merge.get_source();
         let source_path = merge_source_path(reg, source_region.get_id(), merge.get_commit());
-        if !source_path.exists() {
-            let (tx, rx) = oneshot::channel();
-            self.res_reporter().redirect_catch_up_logs(CatchUpLogs {
-                target_region_id: self.region_id(),
-                merge: merge.clone(),
-                tx,
-            });
+        // Even if source_path exists, we still need to send it to acknowledge that we
+        // have committed the merge, so that the source peer can destroy itself.
+        let (tx, rx) = oneshot::channel();
+        self.res_reporter().redirect_catch_up_logs(CatchUpLogs {
+            target_region_id: self.region_id(),
+            merge: merge.clone(),
+            tx,
+        });
+        let source_safe_ts = if !source_path.exists() {
             rx.await.unwrap_or_else(|_| {
                 // TODO: handle this gracefully.
                 slog_panic!(self.logger, "source peer is missing");
-            });
-        }
+            })
+        } else {
+            0
+        };
         let ctx = TabletContext::new(source_region, None);
         let source_tablet = reg.tablet_factory().open_tablet(ctx, &source_path).unwrap();
 
@@ -315,26 +320,28 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
 
-        // TODO: check both are trimmed.
-
         let path = reg.tablet_path(self.region_id(), index);
-        // Check if the last merge is incomplete.
-        // At this point, admin.flushed is smaller than merge index. If `log_recovery`
-        // is None, it means no data cf is flushed after admin.flushed.
-        if path.exists()
-            && self
-                .log_recovery()
-                .as_ref()
-                .map_or(true, |trace| trace.iter().all(|i| *i < index))
-        {
+        if path.exists() {
+            // The server must have aborted before `flush_cfs` below completed. We can
+            // safely redo the merge.
             std::fs::remove_dir_all(&path).unwrap();
         }
         let mut ctx = TabletContext::new(&region, Some(index));
         ctx.flush_state = Some(self.flush_state().clone());
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
-        tablet.merge(&[&source_tablet, self.tablet()]).unwrap();
-        // This is only to consume in-memory tombstones, so that the two tablets don't
-        // overlap with each other. Remove this once trim check is finished.
+        tablet
+            .merge(&[&source_tablet, self.tablet()])
+            .unwrap_or_else(|e| {
+                slog_panic!(
+                    self.logger,
+                    "fails to merge tablet";
+                    "path" => %path.display(),
+                    "error" => ?e
+                )
+            });
+        // In order to avoid this flush, we need to
+        // (1) make `merge` re-entrant.
+        // (2) do not advance admin.flushed right away.
         tablet.flush_cfs(&[], true).unwrap();
         self.set_tablet(tablet.clone());
 
@@ -352,6 +359,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 source_path,
                 region,
                 source: source_region.to_owned(),
+                source_safe_ts,
                 tablet: Box::new(tablet),
             }),
         ))
@@ -373,7 +381,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     // Match v1::on_catch_up_logs_for_merge. Called on source peer.
-    pub fn on_catch_up_logs(&mut self, mut catch_up_logs: CatchUpLogs) {
+    pub fn on_catch_up_logs<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        mut catch_up_logs: CatchUpLogs,
+    ) {
         let source_id = catch_up_logs.merge.get_source().get_id();
         if source_id != self.region_id() {
             slog_panic!(
@@ -383,7 +395,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
         }
 
-        if let Some(ref cul) = self.merge_context().unwrap().catch_up_logs {
+        // Context would be empty if this peer hasn't applied PrepareMerge.
+        if let Some(cul) = self.merge_context().and_then(|c| c.catch_up_logs.as_ref()) {
             slog_panic!(
                 self.logger,
                 "get conflicting catch_up_logs";
@@ -410,12 +423,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.merge_context_mut().catch_up_logs = Some(catch_up_logs);
         } else {
             catch_up_logs.merge.clear_entries();
-            if catch_up_logs.tx.send(()).is_err() {
+            let safe_ts = store_ctx
+                .store_meta
+                .lock()
+                .unwrap()
+                .region_read_progress
+                .get(&self.region_id())
+                .unwrap()
+                .safe_ts();
+            if catch_up_logs.tx.send(safe_ts).is_err() {
                 error!(
                     self.logger,
                     "failed to respond to merge target, are we shutting down?"
                 );
+                // No need to do anything. Target peer might not need to wait
+                // for our signal.
             }
+            self.take_merge_context();
+            self.mark_for_destroy(None);
         }
     }
 
@@ -500,24 +525,32 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     // Called on source peer.
-    pub fn post_prepare_merge<T: Transport>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+    pub fn start_commit_merge<T: Transport>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         assert!(self.applied_merge_state().is_some());
-        if let Some(c) = &self.merge_context().unwrap().catch_up_logs
-            && self.catch_up_logs_ready(c)
-        {
-            let c = self.merge_context_mut().catch_up_logs.take().unwrap();
-            if c.tx.send(()).is_err() {
-                error!(
-                    self.logger,
-                    "failed to respond to merge target, are we shutting down?"
-                );
-                // TODO: rollback.
+        if let Some(c) = &self.merge_context().unwrap().catch_up_logs {
+            if self.catch_up_logs_ready(c) {
+                let c = self.merge_context_mut().catch_up_logs.take().unwrap();
+                let safe_ts = store_ctx
+                    .store_meta
+                    .lock()
+                    .unwrap()
+                    .region_read_progress
+                    .get(&self.region_id())
+                    .unwrap()
+                    .safe_ts();
+                if c.tx.send(safe_ts).is_err() {
+                    error!(
+                        self.logger,
+                        "failed to respond to merge target, are we shutting down?"
+                    );
+                    // TODO: rollback.
+                }
+                self.take_merge_context();
+                self.mark_for_destroy(None);
             }
-            self.take_merge_context();
-            self.mark_for_destroy(None);
-            return;
+        } else {
+            self.on_check_merge(store_ctx);
         }
-        self.on_check_merge(store_ctx);
     }
 }
 
@@ -535,11 +568,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
 
-            // In v2 we don't remove source region immediately.
-            let source_region = &meta.regions.get(&res.source.get_id()).unwrap().0;
             assert!(
-                source_region.get_end_key() == res.region.get_end_key()
-                    || source_region.get_start_key() == res.region.get_start_key()
+                res.source.get_end_key() == res.region.get_end_key()
+                    || res.source.get_start_key() == res.region.get_start_key()
             );
             meta.set_region(&res.region, true, &self.logger);
             let (reader, read_tablet) = meta.readers.get_mut(&res.region.get_id()).unwrap();
@@ -556,14 +587,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             // After the region commit merged, the region's key range is extended and the
             // region's `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`
-            let source_read_progress = meta
-                .region_read_progress
-                .remove(&res.source.get_id())
-                .unwrap();
             self.read_progress_mut().merge_safe_ts(
-                source_read_progress.safe_ts(),
+                res.source_safe_ts,
                 res.index,
                 &store_ctx.coprocessor_host,
+            );
+            self.txn_context().after_commit_merge(
+                store_ctx,
+                self.term(),
+                self.region(),
+                &self.logger,
             );
         }
         if let Some(tablet) = self.set_tablet(tablet) {
@@ -571,17 +604,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         self.record_tombstone_tablet_path(store_ctx, res.source_path, res.index);
 
-        // If a follower merges into a leader, a more recent read may happen
-        // on the leader of the follower. So max ts should be updated after
-        // a region merge.
-        self.txn_context()
-            .on_became_leader(store_ctx, self.term(), self.region(), &self.logger);
-
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after
         // merge and then transfer leader, the new leader may have stale size and keys.
         self.force_split_check(store_ctx);
         self.region_buckets_info_mut().set_bucket_stat(None);
+
+        let region_id = self.region_id();
+        let mut region_state = self.storage().region_state().clone();
+        region_state.set_state(PeerState::Normal);
+        region_state.set_region(self.region().clone());
+        // TODO: set_merged_records?
+        region_state.set_tablet_index(res.index);
+        self.state_changes_mut()
+            .put_region_state(region_id, res.index, &region_state)
+            .unwrap();
+        self.storage_mut().set_region_state(region_state);
+        self.storage_mut()
+            .apply_trace_mut()
+            .on_admin_flush(res.index);
+        self.set_has_extra_write();
 
         if self.is_leader() {
             self.region_heartbeat_pd(store_ctx);
@@ -593,56 +635,5 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
-
-        let region_id = self.region_id();
-        let region_state = self.storage().region_state().clone();
-        self.state_changes_mut()
-            .put_region_state(region_id, res.index, &region_state)
-            .unwrap();
-        self.storage_mut()
-            .apply_trace_mut()
-            .on_admin_flush(res.index);
-        self.set_has_extra_write();
-    }
-
-    // Match v1::on_merge_result. Called on source peer.
-    pub fn on_merge_result(&mut self, target_region_id: u64, target: metapb::Peer) {
-        let exists = self.applied_merge_state().map_or(true, |s| {
-            s.get_target()
-                .get_peers()
-                .iter()
-                .any(|p| p.get_store_id() == target.get_store_id() && p.get_id() <= target.get_id())
-        });
-        if !exists {
-            slog_panic!(
-                self.logger,
-                "unexpected merge result";
-                "merge_state" => ?self.applied_merge_state(),
-                "target" => ?target,
-            );
-        }
-        self.take_merge_context();
-        if self.is_handling_snapshot() {
-            slog_panic!(
-                self.logger,
-                "applying snapshot on getting merge result";
-                "target_region_id" => target_region_id,
-                "target" => ?target,
-            );
-        }
-        if !self.storage().is_initialized() {
-            slog_panic!(
-                self.logger,
-                "not initialized on getting merge result";
-                "target_region_id" => target_region_id,
-                "target" => ?target,
-            );
-        }
-        info!(
-            self.logger,
-            "merge finished";
-            "merge_state" => ?self.applied_merge_state(),
-        );
-        self.mark_for_destroy(None);
     }
 }

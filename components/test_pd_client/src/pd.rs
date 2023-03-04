@@ -1322,8 +1322,7 @@ impl TestPdClient {
             target_region_id: target,
             policy: Arc::new(RwLock::new(SchedulePolicy::TillSuccess)),
         };
-        self.schedule_operator(from, op.clone());
-        self.schedule_operator(target, op);
+        self.schedule_operator(from, op);
     }
 
     pub fn must_merge(&self, from: u64, target: u64) {

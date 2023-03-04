@@ -27,7 +27,10 @@ use kvproto::{
         AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RegionDetailResponse, Request,
         Response, StatusCmdType,
     },
-    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+        RegionLocalState, StoreIdent,
+    },
 };
 use pd_client::PdClient;
 use raftstore::{
@@ -46,8 +49,8 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
     is_error_response, new_admin_request, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd,
-    new_peer, new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd, new_request,
-    new_snap_cmd, new_status_request, new_store, new_tikv_config_with_api_ver,
+    new_peer, new_prepare_merge, new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd,
+    new_request, new_snap_cmd, new_status_request, new_store, new_tikv_config_with_api_ver,
     new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
     RawEngine,
 };
@@ -252,10 +255,42 @@ pub trait Simulator {
                 // todo: unwrap?
                 res = sub.result().fuse() => Ok(res.unwrap()),
                 _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request timeout for {:?}", timeout))),
-
             }
         })
     }
+
+    fn async_command_on_node(&self, node_id: u64, mut request: RaftCmdRequest) {
+        let region_id = request.get_header().get_region_id();
+
+        let (msg, _sub) = if request.has_admin_request() {
+            PeerMsg::admin_command(request)
+        } else {
+            let requests = request.get_requests();
+            let mut write_encoder = SimpleWriteEncoder::with_capacity(64);
+            for req in requests {
+                match req.get_cmd_type() {
+                    CmdType::Put => {
+                        let put = req.get_put();
+                        write_encoder.put(put.get_cf(), put.get_key(), put.get_value());
+                    }
+                    CmdType::Delete => {
+                        let delete = req.get_delete();
+                        write_encoder.delete(delete.get_cf(), delete.get_key());
+                    }
+                    CmdType::DeleteRange => {
+                        unimplemented!()
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            PeerMsg::simple_write(Box::new(request.take_header()), write_encoder.encode())
+        };
+
+        self.async_peer_msg_on_node(node_id, region_id, msg)
+            .unwrap();
+    }
+
+    fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
 }
 
 pub struct Cluster<T: Simulator> {
@@ -583,6 +618,10 @@ impl<T: Simulator> Cluster<T> {
             self.raft_engines[&node_id].clone(),
             self.tablet_registries[&node_id].clone(),
         )
+    }
+
+    pub fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {
+        self.sim.wl().send_raft_msg(msg)
     }
 
     pub fn read(
@@ -1005,6 +1044,27 @@ impl<T: Simulator> Cluster<T> {
         status_resp.take_region_detail()
     }
 
+    pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
+        self.apply_state(region_id, store_id).take_truncated_state()
+    }
+
+    pub fn wait_log_truncated(&self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let truncated_state = self.truncated_state(region_id, store_id);
+            if truncated_state.get_index() >= index {
+                return;
+            }
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not truncated to {}: {:?} on store {}",
+                    region_id, index, truncated_state, store_id,
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         self.get_impl(CF_DEFAULT, key, false)
     }
@@ -1348,6 +1408,73 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
+        let region = block_on(self.pd_client.get_region_by_id(target))
+            .unwrap()
+            .unwrap();
+        let prepare_merge = new_prepare_merge(region);
+        let source_region = block_on(self.pd_client.get_region_by_id(source))
+            .unwrap()
+            .unwrap();
+        new_admin_request(
+            source_region.get_id(),
+            source_region.get_region_epoch(),
+            prepare_merge,
+        )
+    }
+
+    pub fn merge_region(&mut self, source: u64, target: u64, _cb: Callback<RocksSnapshot>) {
+        // FIXME: callback is ignored.
+        let mut req = self.new_prepare_merge(source, target);
+        let leader = self.leader_of_region(source).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        self.sim
+            .rl()
+            .async_command_on_node(leader.get_store_id(), req);
+    }
+
+    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+        self.call_command_on_leader(
+            self.new_prepare_merge(source, target),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+    }
+
+    pub fn must_try_merge(&mut self, source: u64, target: u64) {
+        let resp = self.try_merge(source, target);
+        if is_error_response(&resp) {
+            panic!(
+                "{} failed to try merge to {}, resp {:?}",
+                source, target, resp
+            );
+        }
+    }
+
+    /// Make sure region not exists on that store.
+    pub fn must_region_not_exist(&mut self, region_id: u64, store_id: u64) {
+        let mut try_cnt = 0;
+        loop {
+            let status_cmd = new_region_detail_cmd();
+            let peer = new_peer(store_id, 0);
+            let req = new_status_request(region_id, peer, status_cmd);
+            let resp = self.call_command(req, Duration::from_secs(5)).unwrap();
+            if resp.get_header().has_error() && resp.get_header().get_error().has_region_not_found()
+            {
+                return;
+            }
+
+            if try_cnt > 250 {
+                panic!(
+                    "region {} still exists on store {} after {} tries: {:?}",
+                    region_id, store_id, try_cnt, resp
+                );
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
     }
@@ -1424,6 +1551,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_raft_local_state(&self, region_id: u64, store_id: u64) -> Option<RaftLocalState> {
         self.get_engine(store_id).get_raft_local_state(region_id)
+    }
+
+    pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> RaftLocalState {
+        self.get_raft_local_state(region_id, store_id).unwrap()
     }
 
     pub fn shutdown(&mut self) {
@@ -1539,10 +1670,10 @@ impl Peekable for WrapFactory {
     ) -> engine_traits::Result<Option<Self::DbVector>> {
         let region_id = self.region_id_of_key(key);
 
-        if let Ok(Some(state)) = self.get_region_state(region_id) {
-            if state.state == PeerState::Tombstone {
-                return Ok(None);
-            }
+        if let Ok(Some(state)) = self.get_region_state(region_id)
+            && state.state == PeerState::Tombstone
+        {
+            return Ok(None);
         }
 
         match self.get_tablet(key) {
@@ -1559,10 +1690,10 @@ impl Peekable for WrapFactory {
     ) -> engine_traits::Result<Option<Self::DbVector>> {
         let region_id = self.region_id_of_key(key);
 
-        if let Ok(Some(state)) = self.get_region_state(region_id) {
-            if state.state == PeerState::Tombstone {
-                return Ok(None);
-            }
+        if let Ok(Some(state)) = self.get_region_state(region_id)
+            && state.state == PeerState::Tombstone
+        {
+            return Ok(None);
         }
 
         match self.get_tablet(key) {

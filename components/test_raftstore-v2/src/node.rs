@@ -398,6 +398,10 @@ impl Simulator for NodeCluster {
         router.send_peer_msg(region_id, msg)
     }
 
+    fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {
+        self.trans.send(msg)
+    }
+
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut node) = self.nodes.remove(&node_id) {
             node.stop();

@@ -1,5 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(let_chains)]
+
 mod cluster;
 mod node;
 mod server;

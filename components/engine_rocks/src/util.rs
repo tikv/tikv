@@ -1,11 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fs, path::Path, str::FromStr, sync::Arc};
+use std::{ffi::CString, fs, path::Path, str::FromStr, sync::Arc};
 
 use engine_traits::{Engines, Range, Result, CF_DEFAULT};
 use rocksdb::{
-    load_latest_options, CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, Env,
-    Range as RocksRange, SliceTransform, DB,
+    load_latest_options, CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactionFilter,
+    CompactionFilterContext, CompactionFilterDecision, CompactionFilterFactory,
+    CompactionFilterValueType, Env, Range as RocksRange, SliceTransform, DB,
 };
 use slog_global::warn;
 
@@ -328,6 +329,112 @@ pub fn from_raw_perf_level(level: rocksdb::PerfLevel) -> engine_traits::PerfLeve
         }
         rocksdb::PerfLevel::EnableTime => engine_traits::PerfLevel::EnableTime,
         rocksdb::PerfLevel::OutOfBounds => engine_traits::PerfLevel::OutOfBounds,
+    }
+}
+
+struct KeyRange {
+    start_key: Box<[u8]>,
+    end_key: Box<[u8]>,
+}
+
+pub struct NoopFilter;
+
+impl CompactionFilter for NoopFilter {}
+
+pub struct NoopFactory;
+
+impl CompactionFilterFactory for NoopFactory {
+    type Filter = NoopFilter;
+    fn create_compaction_filter(
+        &self,
+        _context: &CompactionFilterContext,
+    ) -> Option<(CString, Self::Filter)> {
+        None
+    }
+}
+
+/// Used to build `RangeCompactionFilterFactory`, optionally stacked over
+/// another compaction filter factory.
+pub struct RangeCompactionFilterFactoryBuilder(Arc<KeyRange>);
+
+impl RangeCompactionFilterFactoryBuilder {
+    pub fn new(start_key: Vec<u8>, end_key: Vec<u8>) -> Self {
+        Self(Arc::new(KeyRange {
+            start_key: start_key.into_boxed_slice(),
+            end_key: end_key.into_boxed_slice(),
+        }))
+    }
+
+    pub fn build_with<C: CompactionFilterFactory>(
+        &self,
+        inner: C,
+    ) -> RangeCompactionFilterFactory<C> {
+        // TODO: should_filter_table_file_creation
+        RangeCompactionFilterFactory {
+            range: self.0.clone(),
+            inner_factory: Some(inner),
+        }
+    }
+
+    pub fn build(&self) -> RangeCompactionFilterFactory<NoopFactory> {
+        RangeCompactionFilterFactory {
+            range: self.0.clone(),
+            inner_factory: None,
+        }
+    }
+}
+
+pub struct RangeCompactionFilterFactory<C: CompactionFilterFactory> {
+    range: Arc<KeyRange>,
+    inner_factory: Option<C>,
+}
+
+impl<C: CompactionFilterFactory> CompactionFilterFactory for RangeCompactionFilterFactory<C> {
+    type Filter = RangeCompactionFilter<C::Filter>;
+
+    fn create_compaction_filter(
+        &self,
+        context: &CompactionFilterContext,
+    ) -> Option<(CString, Self::Filter)> {
+        if let Some(inner) = self.inner_factory.as_ref() {
+            if let Some((name, filter)) = inner.create_compaction_filter(context) {
+                let filter = RangeCompactionFilter {
+                    range: self.range.clone(),
+                    inner_filter: Some(filter),
+                };
+                return Some((name, filter));
+            }
+        }
+        let filter = RangeCompactionFilter {
+            range: self.range.clone(),
+            inner_filter: None,
+        };
+        Some((CString::new("region_filter").unwrap(), filter))
+    }
+}
+
+/// Filters out all keys within the key range.
+pub struct RangeCompactionFilter<C: CompactionFilter> {
+    range: Arc<KeyRange>,
+    inner_filter: Option<C>,
+}
+
+impl<C: CompactionFilter> CompactionFilter for RangeCompactionFilter<C> {
+    fn featured_filter(
+        &mut self,
+        level: usize,
+        key: &[u8],
+        seqno: u64,
+        value: &[u8],
+        value_type: CompactionFilterValueType,
+    ) -> CompactionFilterDecision {
+        if key < self.range.start_key.as_ref() || key >= self.range.end_key.as_ref() {
+            CompactionFilterDecision::Remove
+        } else if let Some(inner) = self.inner_filter.as_mut() {
+            inner.featured_filter(level, key, seqno, value, value_type)
+        } else {
+            CompactionFilterDecision::Keep
+        }
     }
 }
 

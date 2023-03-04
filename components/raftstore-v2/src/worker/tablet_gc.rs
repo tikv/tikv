@@ -162,13 +162,7 @@ impl<EK: KvEngine> Runner<EK> {
         let end_key = keys::data_end_key(&end);
         let range1 = Range::new(&[], &start_key);
         let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
-        // TODO: Avoid `DeleteByRange` after compaction filter is ready.
-        if let Err(e) = tablet
-            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2])
-            .and_then(|_| {
-                tablet.delete_ranges_cfs(DeleteStrategy::DeleteByRange, &[range1, range2])
-            })
-        {
+        if let Err(e) = tablet.delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2]) {
             error!(
                 self.logger,
                 "failed to trim tablet";

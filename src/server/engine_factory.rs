@@ -4,6 +4,7 @@ use std::{path::Path, sync::Arc};
 
 use engine_rocks::{
     raw::{Cache, Env},
+    util::RangeCompactionFilterFactoryBuilder,
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
     TabletLogger,
@@ -141,6 +142,11 @@ impl KvEngineFactory {
             .inner
             .rocksdb_config
             .build_opt(&self.inner.db_resources, for_engine);
+        // if for_engine == EngineType::RaftKv2 {
+        //     // Otherwise RocksDB would silently persist WAL data. It would be harder
+        // to     // detect if there have been illegal writes with
+        // disable_wal=false.     db_opts.avoid_flush_during_recovery(true);
+        // }
         if !self.inner.lite {
             db_opts.add_event_listener(RocksEventListener::new(
                 "kv",
@@ -158,6 +164,7 @@ impl KvEngineFactory {
             &self.inner.cf_resources,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
+            None,
             for_engine,
         )
     }
@@ -191,7 +198,16 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         let mut db_opts = self.db_opts(EngineType::RaftKv2);
         let tablet_name = path.file_name().unwrap().to_str().unwrap().to_string();
         db_opts.set_info_log(TabletLogger::new(tablet_name));
-        let cf_opts = self.cf_opts(EngineType::RaftKv2);
+        // let cf_opts = self.cf_opts(EngineType::RaftKv2);
+        let builder =
+            RangeCompactionFilterFactoryBuilder::new(ctx.start_key.to_vec(), ctx.end_key.to_vec());
+        let cf_opts = self.inner.rocksdb_config.build_cf_opts(
+            &self.inner.cf_resources,
+            self.inner.region_info_accessor.as_ref(),
+            self.inner.api_version,
+            Some(&builder),
+            EngineType::RaftKv2,
+        );
         if let Some(listener) = &self.inner.flow_listener {
             db_opts.add_event_listener(listener.clone_with(ctx.id));
         }

@@ -382,15 +382,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         mut res: CompactLogResult,
     ) {
         let first_index = self.entry_storage().first_index();
-        if res.compact_index <= first_index {
-            debug!(
-                self.logger,
-                "compact index <= first index, no need to compact";
-                "compact_index" => res.compact_index,
-                "first_index" => first_index,
-            );
-            return;
-        }
         if let Some(i) = self.merge_context().and_then(|c| c.max_compact_log_index())
             && res.compact_index > i
         {
@@ -401,6 +392,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "new_index" => i,
             );
             res.compact_index = i;
+        }
+        if res.compact_index <= first_index {
+            debug!(
+                self.logger,
+                "compact index <= first index, no need to compact";
+                "compact_index" => res.compact_index,
+                "first_index" => first_index,
+            );
+            return;
+        }
+        if res.compact_index >= self.compact_log_context().last_applying_index {
+            debug!(
+                self.logger,
+                "compact index >= last applying index, ignored";
+                "compact_index" => res.compact_index,
+                "first_index" => self.compact_log_context().last_applying_index,
+            );
+            return;
         }
         // TODO: check entry_cache_warmup_state
         self.entry_storage_mut()

@@ -52,7 +52,7 @@ use super::merge_source_path;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
-    operation::AdminCmdResult,
+    operation::{AdminCmdResult, SimpleWriteReqDecoder},
     raft::{Apply, Peer},
     router::CmdResChannel,
 };
@@ -120,6 +120,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let r = self
             .propose_locks_before_prepare_merge(store_ctx, pre_propose.lock_size_limit)
             .and_then(|_| {
+                assert!(!self.storage().has_dirty_data());
                 let mut proposal_ctx = ProposalContext::empty();
                 proposal_ctx.insert(ProposalContext::PREPARE_MERGE);
                 let data = req.write_to_bytes().unwrap();
@@ -246,11 +247,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if entry.get_data().is_empty() {
                 continue;
             }
-            let cmd: RaftCmdRequest =
-                util::parse_data_at(entry.get_data(), entry.get_index(), "tag");
-            if !cmd.has_admin_request() {
-                continue;
-            }
+            let Err(cmd) = SimpleWriteReqDecoder::new(
+                &self.logger,
+                entry.get_data(),
+                entry.get_index(),
+                entry.get_term(),
+            ) else { continue };
             let cmd_type = cmd.get_admin_request().get_cmd_type();
             match cmd_type {
                 AdminCmdType::TransferLeader
@@ -522,6 +524,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .enter_prepare_merge(res.state.get_commit());
         self.merge_context_mut().prepare_status = Some(PrepareStatus::Applied(res.state));
 
-        self.post_prepare_merge(store_ctx);
+        self.start_commit_merge(store_ctx);
     }
 }
