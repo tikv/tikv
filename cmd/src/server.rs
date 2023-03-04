@@ -393,6 +393,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 )
             },
         )
+        .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
         .unwrap();
     }
 
