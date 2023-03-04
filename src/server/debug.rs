@@ -623,6 +623,62 @@ impl<ER: RaftEngine> Debugger<ER> {
         Ok(())
     }
 
+    pub fn shrink_range(
+        &self,
+        region_id: u64,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
+    ) -> Result<()> {
+        let kv = &self.engines.kv;
+        let key = keys::region_state_key(region_id);
+        let mut state: RegionLocalState = match box_try!(kv.get_msg_cf(CF_RAFT, &key)) {
+            Some(s) => s,
+            None => return Err(box_err!("region local state not found")),
+        };
+        info!("checking state"; "state" => ?state);
+        let s = state.get_state();
+        if s != PeerState::Normal {
+            return Err(box_err!("can only modify normal state"));
+        }
+        let region = state.get_region();
+        let mut new_region = region.clone();
+        if let Some(k) = start_key {
+            if region.get_start_key() > &*k {
+                return Err(box_err!("local state has a larger start key"));
+            } else {
+                new_region.set_start_key(k);
+            }
+        }
+        if let Some(k) = end_key {
+            if !region.get_end_key().is_empty() && region.get_end_key() < &*k {
+                return Err(box_err!("local state has a smaller end key"));
+            } else {
+                new_region.set_end_key(k);
+            }
+        }
+        let new_start_key = new_region.get_start_key();
+        let new_end_key = new_region.get_end_key();
+        if !new_end_key.is_empty() && new_start_key >= new_end_key {
+            return Err(box_err!(
+                "invalid region range {} {}",
+                log_wrappers::Value::key(new_start_key),
+                log_wrappers::Value::key(new_end_key)
+            ));
+        }
+        if new_region == *region {
+            info!("region is the same, nothing to do.");
+            return Ok(());
+        }
+        state.set_region(new_region);
+        info!("writing new state: {:?}", state);
+        let mut kv_wb = self.engines.kv.write_batch();
+        box_try!(kv_wb.put_msg_cf(CF_RAFT, &key, &state));
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(kv_wb.write_opt(&write_opts));
+        Ok(())
+    }
+
     pub fn recreate_region(&self, region: Region) -> Result<()> {
         let region_id = region.get_id();
         let kv = &self.engines.kv;
