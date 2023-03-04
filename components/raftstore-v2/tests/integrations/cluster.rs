@@ -280,7 +280,6 @@ impl RunningState {
             raft_engine.clone(),
             router.clone(),
         )));
-        // db_opt.avoid_flush_during_recovery(true);
         let factory = Box::new(TestTabletFactory::new(db_opt, cf_opts));
         let registry = TabletRegistry::new(factory, path.join("tablets")).unwrap();
         if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
