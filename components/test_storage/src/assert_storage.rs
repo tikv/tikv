@@ -113,6 +113,30 @@ impl AssertionStorage<SimulateEngine> {
         self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
     }
 
+    pub fn batch_put_ok_for_cluster<'a>(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        keys: &[impl AsRef<[u8]>],
+        vals: impl Iterator<Item = &'a [u8]>,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+    ) {
+        let mutations: Vec<_> = keys
+            .iter()
+            .zip(vals)
+            .map(|(k, v)| Mutation::Put((Key::from_raw(k.as_ref()), v.to_vec())))
+            .collect();
+        let commit_keys: Vec<_> = keys.iter().map(|k| Key::from_raw(k.as_ref())).collect();
+        self.two_pc_ok_for_cluster(
+            cluster,
+            mutations,
+            keys[0].as_ref(),
+            commit_keys,
+            start_ts,
+            commit_ts,
+        );
+    }
+
     fn two_pc_ok_for_cluster(
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
