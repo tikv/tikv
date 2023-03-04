@@ -2264,7 +2264,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "99% gRPC messge duration",
+          "title": "99% gRPC message duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
