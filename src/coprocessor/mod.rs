@@ -41,6 +41,7 @@ use engine_rocks::PerfLevel;
 use kvproto::{coprocessor as coppb, kvrpcpb};
 use metrics::ReqTag;
 use rand::prelude::*;
+use tidb_query_common::execute_stats::ExecSummary;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
@@ -66,6 +67,11 @@ pub trait RequestHandler: Send {
 
     /// Collects scan statistics generated in this request handler so far.
     fn collect_scan_statistics(&mut self, _dest: &mut Statistics) {
+        // Do nothing by default
+    }
+
+    /// Collects scan executor time in this request handler so far.
+    fn collect_scan_summary(&mut self, _dest: &mut ExecSummary) {
         // Do nothing by default
     }
 

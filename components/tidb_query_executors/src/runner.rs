@@ -16,6 +16,8 @@ use yatp::task::future::reschedule;
 
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
+
+use tidb_query_common::execute_stats::ExecSummary;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
@@ -458,10 +460,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
-
-                // In case of this function is called multiple times.
-                self.exec_stats.clear();
-
                 return Ok(sel_resp);
             }
 
@@ -512,6 +510,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
     pub fn can_be_cached(&self) -> bool {
         self.out_most_executor.can_be_cached()
+    }
+
+    pub fn collect_scan_summary(&mut self, dest: &mut ExecSummary) {
+        // Get the first executor which is always the scan executor
+        if let Some(exec_stat) = self.exec_stats.summary_per_executor.first() {
+            dest.clone_from(exec_stat);
+        }
     }
 
     fn internal_handle_request(
