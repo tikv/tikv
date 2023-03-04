@@ -10,6 +10,8 @@
 //! In order to mutate the lock of a key stored in the lock table, it needs
 //! to be locked first using `lock_key` or `lock_keys`.
 
+use fail::fail_point;
+
 mod key_handle;
 mod lock_table;
 
@@ -90,7 +92,9 @@ impl ConcurrencyManager {
         key: &Key,
         check_fn: impl FnOnce(&Lock) -> Result<(), E>,
     ) -> Result<(), E> {
-        self.lock_table.check_key(key, check_fn)
+        let res = self.lock_table.check_key(key, check_fn);
+        fail_point!("cm_after_read_key_check");
+        res
     }
 
     /// Checks if there is a memory lock in the range which blocks the read.
@@ -102,7 +106,9 @@ impl ConcurrencyManager {
         end_key: Option<&Key>,
         check_fn: impl FnMut(&Key, &Lock) -> Result<(), E>,
     ) -> Result<(), E> {
-        self.lock_table.check_range(start_key, end_key, check_fn)
+        let res = self.lock_table.check_range(start_key, end_key, check_fn);
+        fail_point!("cm_after_read_range_check");
+        res
     }
 
     /// Find the minimum start_ts among all locks in memory.

@@ -107,7 +107,7 @@ fn test_observer_send_error() {
     );
     assert_eq!(must_check_lock_observer(&client, max_ts, true).len(), 1);
 
-    let observer_send_fp = "lock_observer_send";
+    let observer_send_fp = "lock_observer_send_full";
     fail::cfg(observer_send_fp, "return").unwrap();
     must_kv_prewrite(
         &client,
