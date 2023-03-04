@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    path::Path,
     sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
@@ -10,9 +11,10 @@ use api_version::{dispatch_api_version, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{KvEngine, TabletRegistry};
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
@@ -23,6 +25,7 @@ use kvproto::{
     kvrpcpb::{ApiVersion, Context},
     metapb,
     raft_cmdpb::RaftCmdResponse,
+    raft_serverpb::RaftMessage,
     tikvpb_grpc::TikvClient,
 };
 use pd_client::PdClient;
@@ -30,8 +33,8 @@ use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
     store::{
-        AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats, RegionSnapshot,
-        TabletSnapManager, WriteStats,
+        region_meta, AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats,
+        RegionSnapshot, TabletSnapManager, WriteStats,
     },
     RegionInfoAccessor,
 };
@@ -42,19 +45,20 @@ use security::SecurityManager;
 use slog_global::debug;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{AddressMap, Config};
+use test_raftstore::{filter_send, AddressMap, Config, Filter};
 use tikv::{
     coprocessor, coprocessor_v2,
+    import::SstImporter,
     read_pool::ReadPool,
     server::{
         gc_worker::GcWorker, load_statistics::ThreadLoadPool, lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker, resolve, service::DiagnosticsService, ConnectionBuilder,
-        Error, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2, Result as ServerResult, Server,
-        ServerTransport,
+        Error, Extension, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2, Result as ServerResult,
+        Server, ServerTransport,
     },
     storage::{
         self,
-        kv::{FakeExtension, SnapContext},
+        kv::{FakeExtension, RaftExtension, SnapContext},
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
@@ -81,16 +85,159 @@ impl FlowStatsReporter for DummyReporter {
     fn report_write_stats(&self, _write_stats: WriteStats) {}
 }
 
-type SimulateRaftExtension = <SimulateEngine as Engine>::RaftExtension;
+type SimulateRaftExtension = <TestRaftKv2 as Engine>::RaftExtension;
 type SimulateStoreTransport = SimulateTransport<RaftRouter<RocksEngine, RaftTestEngine>>;
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateRaftExtension, PdStoreAddrResolver>>;
 
 pub type SimulateEngine = RaftKv2<RocksEngine, RaftTestEngine>;
 
+// TestRaftKvv2 behaves the same way with RaftKv2, except that it has filters
+// that can mock various network conditions.
+#[derive(Clone)]
+pub struct TestRaftKv2 {
+    raftkv: SimulateEngine,
+    filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
+}
+
+impl TestRaftKv2 {
+    pub fn new(raftkv: SimulateEngine, filters: Arc<RwLock<Vec<Box<dyn Filter>>>>) -> TestRaftKv2 {
+        TestRaftKv2 { raftkv, filters }
+    }
+
+    pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
+        self.raftkv.set_txn_extra_scheduler(txn_extra_scheduler);
+    }
+}
+
+impl Engine for TestRaftKv2 {
+    type Snap = RegionSnapshot<<RocksEngine as KvEngine>::Snapshot>;
+    type Local = RocksEngine;
+
+    fn kv_engine(&self) -> Option<Self::Local> {
+        self.raftkv.kv_engine()
+    }
+
+    type RaftExtension = TestExtension;
+    fn raft_extension(&self) -> Self::RaftExtension {
+        TestExtension::new(self.raftkv.raft_extension(), self.filters.clone())
+    }
+
+    fn modify_on_kv_engine(
+        &self,
+        region_modifies: HashMap<u64, Vec<storage::kv::Modify>>,
+    ) -> storage::kv::Result<()> {
+        self.raftkv.modify_on_kv_engine(region_modifies)
+    }
+
+    type SnapshotRes = <SimulateEngine as Engine>::SnapshotRes;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        self.raftkv.async_snapshot(ctx)
+    }
+
+    type WriteRes = <SimulateEngine as Engine>::WriteRes;
+    fn async_write(
+        &self,
+        ctx: &Context,
+        batch: storage::kv::WriteData,
+        subscribed: u8,
+        on_applied: Option<storage::kv::OnAppliedCb>,
+    ) -> Self::WriteRes {
+        self.raftkv.async_write(ctx, batch, subscribed, on_applied)
+    }
+
+    #[inline]
+    fn precheck_write_with_ctx(&self, ctx: &Context) -> storage::kv::Result<()> {
+        self.raftkv.precheck_write_with_ctx(ctx)
+    }
+
+    #[inline]
+    fn schedule_txn_extra(&self, txn_extra: txn_types::TxnExtra) {
+        self.raftkv.schedule_txn_extra(txn_extra)
+    }
+}
+
+#[derive(Clone)]
+pub struct TestExtension {
+    extension: Extension<RocksEngine, RaftTestEngine>,
+    filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
+}
+
+impl TestExtension {
+    pub fn new(
+        extension: Extension<RocksEngine, RaftTestEngine>,
+        filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
+    ) -> Self {
+        TestExtension { extension, filters }
+    }
+}
+
+impl RaftExtension for TestExtension {
+    fn feed(&self, msg: RaftMessage, key_message: bool) {
+        let send = |msg| -> raftstore::Result<()> {
+            self.extension.feed(msg, key_message);
+            Ok(())
+        };
+
+        let _ = filter_send(&self.filters, msg, send);
+    }
+
+    #[inline]
+    fn report_reject_message(&self, region_id: u64, from_peer_id: u64) {
+        self.extension
+            .report_reject_message(region_id, from_peer_id)
+    }
+
+    #[inline]
+    fn report_peer_unreachable(&self, region_id: u64, to_peer_id: u64) {
+        self.extension
+            .report_peer_unreachable(region_id, to_peer_id)
+    }
+
+    #[inline]
+    fn report_store_unreachable(&self, store_id: u64) {
+        self.extension.report_store_unreachable(store_id)
+    }
+
+    #[inline]
+    fn report_snapshot_status(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        status: raft::SnapshotStatus,
+    ) {
+        self.extension
+            .report_snapshot_status(region_id, to_peer_id, status)
+    }
+
+    #[inline]
+    fn report_resolved(&self, store_id: u64, group_id: u64) {
+        self.extension.report_resolved(store_id, group_id)
+    }
+
+    #[inline]
+    fn split(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: String,
+    ) -> futures::future::BoxFuture<'static, storage::kv::Result<Vec<metapb::Region>>> {
+        self.extension
+            .split(region_id, region_epoch, split_keys, source)
+    }
+
+    fn query_region(
+        &self,
+        region_id: u64,
+    ) -> futures::future::BoxFuture<'static, storage::kv::Result<region_meta::RegionMeta>> {
+        self.extension.query_region(region_id)
+    }
+}
+
 pub struct ServerMeta {
     node: NodeV2<TestPdClient, RocksEngine, RaftTestEngine>,
-    server: Server<PdStoreAddrResolver, SimulateEngine>,
+    server: Server<PdStoreAddrResolver, TestRaftKv2>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: StoreRouter<RocksEngine, RaftTestEngine>,
@@ -102,7 +249,7 @@ type PendingServices = Vec<Box<dyn Fn() -> Service>>;
 pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: AddressMap,
-    pub storages: HashMap<u64, SimulateEngine>,
+    pub storages: HashMap<u64, TestRaftKv2>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
@@ -168,6 +315,7 @@ impl ServerCluster {
         node_id: u64,
         mut cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -225,9 +373,10 @@ impl ServerCluster {
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
         let sim_router = SimulateTransport::new(raft_router.clone());
-        // todo(SpadeA): simulate transport
-        let mut raft_kv_v2 =
-            RaftKv2::new(raft_router.clone(), region_info_accessor.region_leaders());
+        let mut raft_kv_v2 = TestRaftKv2::new(
+            RaftKv2::new(raft_router.clone(), region_info_accessor.region_leaders()),
+            sim_router.filters().clone(),
+        );
 
         // Create storage.
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -317,7 +466,20 @@ impl ServerCluster {
 
         ReplicaReadLockChecker::new(concurrency_manager.clone()).register(&mut coprocessor_host);
 
-        // todo: Import Sst Service
+        // Create import service.
+        let importer = {
+            let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
+            Arc::new(
+                SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
+            )
+        };
+        // let import_service = ImportSstService::new(
+        // cfg.import.clone(),
+        // cfg.raft_store.raft_entry_max_size,
+        // raft_kv_2.clone(),
+        // tablet_registry.clone(),
+        // Arc::clone(&importer),
+        // );
 
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service();
@@ -382,6 +544,7 @@ impl ServerCluster {
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));
             svr.register_service(create_deadlock(deadlock_service.clone()));
+            // svr.register_service(create_import_sst(import_service.clone()));
             if let Some(svcs) = self.pending_services.get(&node_id) {
                 for fact in svcs {
                     svr.register_service(fact());
@@ -428,6 +591,7 @@ impl ServerCluster {
             pd_worker,
             Arc::new(VersionTrack::new(raft_store)),
             &state,
+            importer,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -525,12 +689,20 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn add_recv_filter(&mut self, _node_id: u64, _filter: Box<dyn test_raftstore::Filter>) {
-        unimplemented!()
+    fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn test_raftstore::Filter>) {
+        self.metas
+            .get_mut(&node_id)
+            .unwrap()
+            .sim_router
+            .add_filter(filter);
     }
 
-    fn clear_recv_filters(&mut self, _node_id: u64) {
-        unimplemented!()
+    fn clear_recv_filters(&mut self, node_id: u64) {
+        self.metas
+            .get_mut(&node_id)
+            .unwrap()
+            .sim_router
+            .clear_filters();
     }
 
     fn run_node(
@@ -538,6 +710,7 @@ impl Simulator for ServerCluster {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -548,6 +721,7 @@ impl Simulator for ServerCluster {
                 node_id,
                 cfg,
                 store_meta,
+                key_manager,
                 raft_engine,
                 tablet_registry,
                 resource_manager

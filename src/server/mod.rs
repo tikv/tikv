@@ -36,7 +36,7 @@ pub use self::{
     proxy::{build_forward_option, get_target_address, Proxy},
     raft_client::{ConnectionBuilder, RaftClient},
     raftkv::RaftKv,
-    raftkv2::{NodeV2, RaftKv2},
+    raftkv2::{Extension, NodeV2, RaftKv2},
     resolve::{PdStoreAddrResolver, StoreAddrResolver},
     server::{Server, GRPC_THREAD_PREFIX},
     transport::ServerTransport,

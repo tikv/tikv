@@ -1361,6 +1361,7 @@ pub mod test_gc_worker {
                         let bytes = keys::data_end_key(key2.as_encoded());
                         *key2 = Key::from_encoded(bytes);
                     }
+                    Modify::Ingest(_) => unimplemented!(),
                 }
             }
             write_modifies(&self.kv_engine().unwrap(), modifies)
@@ -1388,6 +1389,7 @@ pub mod test_gc_worker {
                     *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
                     *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
                 }
+                Modify::Ingest(_) => unimplemented!(),
             });
             self.0.async_write(ctx, batch, subscribed, on_applied)
         }

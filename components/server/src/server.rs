@@ -1245,7 +1245,7 @@ where
         let import_service = ImportSstService::new(
             self.config.import.clone(),
             self.config.raft_store.raft_entry_max_size,
-            self.router.clone(),
+            engines.engine.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
         );
