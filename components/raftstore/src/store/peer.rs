@@ -65,9 +65,10 @@ use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{
     self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
-    Lease, LeaseState, ADMIN_CMD_EPOCH_MAP, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+    Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
 };
 use super::DestroyPeerJob;
+use crate::store::util::admin_cmd_epoch_lookup;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
@@ -237,7 +238,7 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
 }
 
 struct CmdEpochChecker<S: Snapshot> {
-    // Although it's a deque, because of the characteristics of the settings from `ADMIN_CMD_EPOCH_MAP`,
+    // Although it's a deque, because of the characteristics of the settings from `admin_cmd_epoch_lookup`,
     // the max size of admin cmd is 2, i.e. split/merge and change peer.
     proposed_admin_cmd: VecDeque<ProposedAdminCmd<S>>,
     term: u64,
@@ -275,8 +276,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
         } else {
             let cmd_type = req.get_admin_request().get_cmd_type();
-            // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
-            let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+            let epoch_state = admin_cmd_epoch_lookup(cmd_type);
             (epoch_state.check_ver, epoch_state.check_conf_ver)
         };
         self.last_conflict_index(check_ver, check_conf_ver)
@@ -284,8 +284,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
 
     pub fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
         self.maybe_update_term(term);
-        // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
-        let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+        let epoch_state = admin_cmd_epoch_lookup(cmd_type);
         assert!(self
             .last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
             .is_none());
