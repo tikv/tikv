@@ -15,22 +15,6 @@
 //!
 //! ## Apply (`Apply::apply_commit_merge`)
 //!
-//! ```text
-//!                   (5) CommitMergeResult
-//!        +-----------------------------------------+
-//!        |                                         |
-//! +------+-------+     (1) CommitMerge      +------v------+
-//! | target apply <--------------------------+ target peer +
-//! +---^--+-------+                          +-----^v------+
-//!     |  +------------------------------------(redirect)
-//!     |                                            |
-//!     +----------------------------------------+   | (2) CatchUpLogs
-//!     (4) signal                               |   |
-//! +--------------+  (3) PrepareMergeResult  +--+---v------+
-//! | source apply +--------------------------> source peer +
-//! +--------------+                          +-------------+
-//! ```
-//!
 //! At first, target region will not apply the `CommitMerge` command. Instead
 //! the apply progress will be paused and it redirects the log entries from
 //! source region, as a `CatchUpLogs` message, to the local source region peer
@@ -41,14 +25,29 @@
 //!
 //! Here is a complete view of the process:
 //!
-//! |               Store 1               |     Store 2     |     Store 3     |
-//! |   Source Peer   |   Target Leader   |   Source Peer   |   source Peer   |
+//! ```text
+//! |               Store 1               |              Store 2              |
+//! |   Source Peer   |   Target Leader   |   Source Peer   |   Target Peer   |
+//!         |
 //!  apply PrepareMerge
-//!         +------------------+
-//!            AskCommitMerge  |
-//!                            |
-//!                    propose CommitMerge
-//!                     
+//!          \
+//!           +--------------+
+//!           `AskCommitMerge`\
+//!                            \
+//!                    propose CommitMerge ---------------> propose CommitMerge
+//!                     apply CommitMerge                    apply CommitMerge
+//!                            /|                                   /|
+//!           +---------------+ |                     +------------+ |
+//!          /  `CatchUpLogs`   |                    / `CatchUpLogs` |
+//!         /                   |                   /                |
+//!    destroy self        (complete)         append logs         (pause)
+//!                                                |                 .
+//!                                        apply PrepareMerge        .
+//!                                                |                 .
+//!                                                +-----------> (continue)
+//!                                                |                 |
+//!                                           destroy self       (complete)
+//! ```
 
 use std::{any::Any, cmp, path::PathBuf};
 
