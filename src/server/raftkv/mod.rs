@@ -393,6 +393,9 @@ where
                         let bytes = keys::data_end_key(key2.as_encoded());
                         *key2 = Key::from_encoded(bytes);
                     }
+                    Modify::Ingest(_) => {
+                        return Err(box_err!("ingest sst is not supported in local engine"));
+                    }
                 }
             }
         }
@@ -449,6 +452,9 @@ where
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
         let mut header = new_request_header(ctx);
+        if batch.avoid_batch {
+            header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
+        }
         let mut flags = 0;
         if txn_extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();

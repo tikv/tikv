@@ -151,7 +151,7 @@ pub struct RocksEngine {
 }
 
 impl RocksEngine {
-    pub(crate) fn new(db: DB) -> RocksEngine {
+    pub fn new(db: DB) -> RocksEngine {
         let db = Arc::new(db);
         RocksEngine {
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
