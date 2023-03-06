@@ -378,11 +378,13 @@ impl RangeCompactionFilterFactoryBuilder {
         inner: C,
     ) -> RangeCompactionFilterFactory<C> {
         assert!(inner.should_filter_table_file_creation(DBTableFileCreationReason::Compaction));
-        assert!(inner.should_filter_table_file_creation(DBTableFileCreationReason::Flush));
+        let inner_filter_flush =
+            inner.should_filter_table_file_creation(DBTableFileCreationReason::Flush);
         assert!(!inner.should_filter_table_file_creation(DBTableFileCreationReason::Recovery));
         assert!(!inner.should_filter_table_file_creation(DBTableFileCreationReason::Misc));
         RangeCompactionFilterFactory {
             range: self.0.clone(),
+            inner_filter_flush,
             inner_factory: Some(inner),
         }
     }
@@ -390,6 +392,7 @@ impl RangeCompactionFilterFactoryBuilder {
     pub fn build(&self) -> RangeCompactionFilterFactory<NoopFactory> {
         RangeCompactionFilterFactory {
             range: self.0.clone(),
+            inner_filter_flush: false,
             inner_factory: None,
         }
     }
@@ -397,6 +400,8 @@ impl RangeCompactionFilterFactoryBuilder {
 
 pub struct RangeCompactionFilterFactory<C: CompactionFilterFactory> {
     range: Arc<KeyRange>,
+    // TODO: remove this when all filters are enabled for flush.
+    inner_filter_flush: bool,
     inner_factory: Option<C>,
 }
 
@@ -407,14 +412,17 @@ impl<C: CompactionFilterFactory> CompactionFilterFactory for RangeCompactionFilt
         &self,
         context: &CompactionFilterContext,
     ) -> Option<(CString, Self::Filter)> {
-        if let Some(inner) = self.inner_factory.as_ref() {
-            if let Some((name, filter)) = inner.create_compaction_filter(context) {
-                let filter = RangeCompactionFilter {
-                    range: self.range.clone(),
-                    inner_filter: Some(filter),
-                };
-                return Some((name, filter));
-            }
+        let inner_should_filter =
+            context.reason() != DBTableFileCreationReason::Flush || self.inner_filter_flush;
+        if inner_should_filter
+            && let Some(inner) = self.inner_factory.as_ref()
+            && let Some((name, filter)) = inner.create_compaction_filter(context)
+        {
+            let filter = RangeCompactionFilter {
+                range: self.range.clone(),
+                inner_filter: Some(filter),
+            };
+            return Some((name, filter));
         }
         let filter = RangeCompactionFilter {
             range: self.range.clone(),

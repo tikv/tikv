@@ -15,7 +15,7 @@ use std::{
 use engine_rocks::{
     raw::{
         CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-        CompactionFilterFactory, CompactionFilterValueType, DBTableFileCreationReason,
+        CompactionFilterFactory, CompactionFilterValueType,
     },
     RocksEngine, RocksMvccProperties, RocksWriteBatchVec,
 };
@@ -277,13 +277,6 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         );
         let name = CString::new("write_compaction_filter").unwrap();
         Some((name, filter))
-    }
-
-    fn should_filter_table_file_creation(&self, reason: DBTableFileCreationReason) -> bool {
-        matches!(
-            reason,
-            DBTableFileCreationReason::Flush | DBTableFileCreationReason::Compaction
-        )
     }
 }
 

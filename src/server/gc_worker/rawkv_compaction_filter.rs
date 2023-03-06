@@ -10,7 +10,7 @@ use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_rocks::{
     raw::{
         CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-        CompactionFilterFactory, CompactionFilterValueType, DBTableFileCreationReason,
+        CompactionFilterFactory, CompactionFilterValueType,
     },
     RocksEngine,
 };
@@ -103,13 +103,6 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         );
         let name = CString::new("raw_compaction_filter").unwrap();
         Some((name, filter))
-    }
-
-    fn should_filter_table_file_creation(&self, reason: DBTableFileCreationReason) -> bool {
-        matches!(
-            reason,
-            DBTableFileCreationReason::Flush | DBTableFileCreationReason::Compaction
-        )
     }
 }
 

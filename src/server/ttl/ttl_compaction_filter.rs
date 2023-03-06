@@ -6,7 +6,7 @@ use api_version::{KeyMode, KvFormat, RawValue};
 use engine_rocks::{
     raw::{
         CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-        CompactionFilterFactory, CompactionFilterValueType, DBTableFileCreationReason,
+        CompactionFilterFactory, CompactionFilterValueType,
     },
     RocksTtlProperties,
 };
@@ -48,13 +48,6 @@ impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
             _phantom: PhantomData,
         };
         Some((name, filter))
-    }
-
-    fn should_filter_table_file_creation(&self, reason: DBTableFileCreationReason) -> bool {
-        matches!(
-            reason,
-            DBTableFileCreationReason::Flush | DBTableFileCreationReason::Compaction
-        )
     }
 }
 
