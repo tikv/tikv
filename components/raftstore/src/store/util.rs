@@ -25,10 +25,7 @@ use kvproto::{
     },
     raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
-use protobuf::{
-    wire_format::WireType,
-    CodedInputStream, Message, {self},
-};
+use protobuf::{self, wire_format::WireType, CodedInputStream, Message};
 use raft::{
     eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
     Changer, RawNode, INVALID_INDEX,
