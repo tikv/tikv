@@ -855,7 +855,7 @@ fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
 fn has_admin_request(entry: &Entry) -> bool {
     // need to handle ConfChange entry type
     if entry.get_entry_type() != EntryType::EntryNormal {
-        return false;
+        return true;
     }
 
     // HACK: check admin request field in serialized data from `RaftCmdRequest`
@@ -865,7 +865,7 @@ fn has_admin_request(entry: &Entry) -> bool {
     // `raft_cmdpb.rs` for reference.
     let mut is = CodedInputStream::from_bytes(entry.get_data());
     if is.eof().unwrap() {
-        return true;
+        return false;
     }
     let (mut field_number, wire_type) = is.read_tag_unpack().unwrap();
     // Header field is of number 1
@@ -1077,15 +1077,15 @@ impl ParsedEntry {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entry.get_context().is_empty()
+        self.entry.get_data().is_empty()
     }
 
     pub fn bytes_capacity(&self) -> usize {
         bytes_capacity(&self.entry.data) + bytes_capacity(&self.entry.context)
     }
 
-    fn lazy_parse(&mut self) {
-        assert!(!self.entry.get_context().is_empty());
+    fn parse(&mut self) {
+        assert!(!self.is_empty());
 
         let data = self.entry.get_data();
         let index = self.entry.get_index();
@@ -1110,23 +1110,25 @@ impl ParsedEntry {
 
     pub fn get_cmd(&mut self) -> &RaftCmdRequest {
         if !self.parsed {
-            self.lazy_parse();
+            self.parse();
         }
         self.cmd.as_ref().unwrap()
     }
 
     pub fn take_cmd(&mut self) -> RaftCmdRequest {
         if !self.parsed {
-            self.lazy_parse();
+            self.parse();
         }
+        self.parsed = false;
         self.cmd.take().unwrap()
     }
 
-    pub fn take_conf_change(&mut self) -> ConfChangeV2 {
+    pub fn take_conf_change(&mut self) -> (ConfChangeV2, RaftCmdRequest) {
         if !self.parsed {
-            self.lazy_parse();
+            self.parse();
         }
-        self.conf_change.take().unwrap()
+        self.parsed = false;
+        (self.conf_change.take().unwrap(), self.cmd.take().unwrap())
     }
 
     pub fn can_witness_skip(&self) -> bool {
@@ -1367,8 +1369,7 @@ where
             ApplyResult::Yield
         });
         let (index, term) = (entry.get_index(), entry.get_term());
-        let conf_change = entry.take_conf_change();
-        let cmd = entry.take_cmd();
+        let (conf_change, cmd) = entry.take_conf_change();
         match self.process_raft_cmd(apply_ctx, index, term, cmd) {
             ApplyResult::None => {
                 // If failed, tell Raft that the `ConfChange` was aborted.
