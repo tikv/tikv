@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub mod elementary;
+pub mod write_batch;
 
 use std::{
     fmt::{self, Debug, Formatter},

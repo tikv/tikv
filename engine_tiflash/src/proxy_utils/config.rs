@@ -7,6 +7,7 @@ use serde_derive::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub struct EngineStoreConfig {
     pub enable_fast_add_peer: bool,
+    pub enable_unips: bool,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -14,6 +15,7 @@ impl Default for EngineStoreConfig {
     fn default() -> Self {
         Self {
             enable_fast_add_peer: false,
+            enable_unips: false,
         }
     }
 }

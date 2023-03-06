@@ -142,6 +142,14 @@ pub fn new_mock_cluster(id: u64, count: usize) -> (Cluster<NodeCluster>, Arc<Tes
     // Compat new proxy
     cluster.cfg.mock_cfg.proxy_compat = true;
 
+    #[cfg(feature = "enable-pagestorage")]
+    {
+        cluster.cfg.proxy_cfg.engine_store.enable_unips = true;
+    }
+    #[cfg(not(feature = "enable-pagestorage"))]
+    {
+        cluster.cfg.proxy_cfg.engine_store.enable_unips = false;
+    }
     (cluster, pd_client)
 }
 
@@ -154,6 +162,14 @@ pub fn new_mock_cluster_snap(id: u64, count: usize) -> (Cluster<NodeCluster>, Ar
     // Compat new proxy
     cluster.cfg.mock_cfg.proxy_compat = true;
 
+    #[cfg(feature = "enable-pagestorage")]
+    {
+        cluster.cfg.proxy_cfg.engine_store.enable_unips = true;
+    }
+    #[cfg(not(feature = "enable-pagestorage"))]
+    {
+        cluster.cfg.proxy_cfg.engine_store.enable_unips = false;
+    }
     (cluster, pd_client)
 }
 

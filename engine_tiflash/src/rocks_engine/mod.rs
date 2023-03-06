@@ -3,9 +3,7 @@
 mod engine;
 pub use engine::*;
 
-#[cfg(not(feature = "enable-pagestorage"))]
 pub mod write_batch;
-#[cfg(not(feature = "enable-pagestorage"))]
 pub use write_batch::*;
 
 pub mod db_vector;

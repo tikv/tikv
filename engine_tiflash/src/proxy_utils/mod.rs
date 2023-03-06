@@ -9,7 +9,7 @@ pub use engine_ext::*;
 mod proxy_ext;
 pub use proxy_ext::*;
 
-use crate::util::get_cf_handle;
+use crate::{mixed_engine::write_batch::RocksWriteBatchVec, util::get_cf_handle};
 
 pub fn do_write(cf: &str, key: &[u8]) -> bool {
     fail::fail_point!("before_tiflash_do_write", |_| true);
@@ -22,7 +22,7 @@ pub fn do_write(cf: &str, key: &[u8]) -> bool {
     }
 }
 
-pub fn cf_to_name(batch: &crate::RocksWriteBatchVec, cf: u32) -> &'static str {
+pub fn cf_to_name(batch: &RocksWriteBatchVec, cf: u32) -> &'static str {
     // d 0 w 2 l 1
     let handle_default = get_cf_handle(batch.db.as_ref(), engine_traits::CF_DEFAULT).unwrap();
     let d = handle_default.id();
@@ -42,7 +42,7 @@ pub fn cf_to_name(batch: &crate::RocksWriteBatchVec, cf: u32) -> &'static str {
 }
 
 #[cfg(any(test, feature = "testexport"))]
-pub fn check_double_write(batch: &crate::RocksWriteBatchVec) {
+pub fn check_double_write(batch: &RocksWriteBatchVec) {
     // It will fire if we write by both observer(compat_old_proxy is not enabled)
     // and TiKV's WriteBatch.
     fail::fail_point!("before_tiflash_check_double_write", |_| {});
@@ -61,9 +61,9 @@ pub fn check_double_write(batch: &crate::RocksWriteBatchVec) {
     }
 }
 #[cfg(not(any(test, feature = "testexport")))]
-pub fn check_double_write(_: &crate::RocksWriteBatchVec) {}
+pub fn check_double_write(_: &RocksWriteBatchVec) {}
 
-pub fn log_check_double_write(batch: &crate::RocksWriteBatchVec) -> bool {
+pub fn log_check_double_write(batch: &RocksWriteBatchVec) -> bool {
     check_double_write(batch);
     // TODO(tiflash) re-support this tracker.
     let mut e = true;

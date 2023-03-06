@@ -4,7 +4,10 @@ use engine_rocks::RocksEngineIterator;
 use engine_traits::{IterOptions, Iterable, ReadOptions, Result};
 
 use crate::{
-    mixed_engine::{elementary::ElementaryEngine, MixedDbVector},
+    mixed_engine::{
+        elementary::{ElementaryEngine, ElementaryWriteBatch},
+        MixedDbVector,
+    },
     PageStorageExt,
 };
 
@@ -89,6 +92,13 @@ impl ElementaryEngine for PSElementEngine {
         let r = self.rocks.iterator_opt(cf, opts);
         panic!("iterator_opt should not be called in PS engine");
         r
+    }
+
+    fn element_wb(&self) -> Box<dyn ElementaryWriteBatch> {
+        Box::new(super::PSElementWriteBatch {
+            ps_ext: self.ps_ext.clone(),
+            ps_wb: self.ps_ext.create_write_batch(),
+        })
     }
 }
 

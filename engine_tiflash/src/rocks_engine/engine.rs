@@ -1,13 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![allow(unused_variables)]
-
 use engine_rocks::RocksEngineIterator;
 use engine_traits::{IterOptions, Iterable, Peekable, ReadOptions, Result};
 use rocksdb::Writable;
 
 use crate::{
-    mixed_engine::{elementary::ElementaryEngine, MixedDbVector},
+    mixed_engine::{
+        elementary::{ElementaryEngine, ElementaryWriteBatch},
+        MixedDbVector,
+    },
     r2e,
     util::get_cf_handle,
 };
@@ -79,5 +81,9 @@ impl ElementaryEngine for RocksElementEngine {
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<RocksEngineIterator> {
         self.rocks.iterator_opt(cf, opts)
+    }
+
+    fn element_wb(&self) -> Box<dyn ElementaryWriteBatch> {
+        Box::new(super::RocksElementWriteBatch {})
     }
 }

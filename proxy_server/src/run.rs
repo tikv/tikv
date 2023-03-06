@@ -357,13 +357,10 @@ pub unsafe fn run_tikv_proxy(
                 engine_store_server_helper,
             )
         } else {
-            #[cfg(feature = "enable-pagestorage")]
-            {
+            if proxy_config.engine_store.enable_unips {
                 tikv_util::info!("bootstrap with pagestorage");
                 run_impl::<PSLogEngine, API>(config, proxy_config, engine_store_server_helper)
-            }
-            #[cfg(not(feature = "enable-pagestorage"))]
-            {
+            } else {
                 tikv_util::info!("bootstrap with tikv-raft-engine");
                 run_impl::<RaftLogEngine, API>(config, proxy_config, engine_store_server_helper)
             }

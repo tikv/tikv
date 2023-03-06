@@ -1,10 +1,39 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::Debug;
+
 use engine_rocks::RocksEngineIterator;
-use engine_traits::{IterOptions, ReadOptions, Result};
+use engine_traits::{IterOptions, ReadOptions, Result, WriteOptions};
 
 use super::MixedDbVector;
-pub trait ElementaryEngine: std::fmt::Debug {
+use crate::mixed_engine::write_batch::RocksWriteBatchVec;
+
+pub trait ElementaryWriteBatch: Send {
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    fn use_default(&self) -> bool;
+
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()>;
+
+    fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()>;
+
+    fn delete(&mut self, key: &[u8]) -> Result<()>;
+
+    fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()>;
+
+    fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64>;
+
+    fn data_size(&self) -> usize;
+
+    fn count(&self) -> usize;
+
+    fn is_empty(&self) -> bool;
+
+    fn clear(&mut self);
+
+    fn merge(&mut self, other: RocksWriteBatchVec) -> Result<()>;
+}
+pub trait ElementaryEngine: Debug {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()>;
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()>;
@@ -33,4 +62,6 @@ pub trait ElementaryEngine: std::fmt::Debug {
     ) -> Result<()>;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<RocksEngineIterator>;
+
+    fn element_wb(&self) -> Box<dyn ElementaryWriteBatch>;
 }

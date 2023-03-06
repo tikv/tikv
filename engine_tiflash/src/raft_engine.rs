@@ -16,7 +16,7 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
 
-use crate::{util, RocksEngine, RocksWriteBatchVec};
+use crate::{mixed_engine::write_batch::RocksWriteBatchVec, util, RocksEngine};
 
 impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -236,18 +236,11 @@ impl RaftEngine for RocksEngine {
     type LogBatch = RocksWriteBatchVec;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
-        #[cfg(feature = "enable-pagestorage")]
-        {
-            RocksWriteBatchVec::with_unit_capacity(
-                self,
-                self.ps_ext.as_ref().unwrap().create_write_batch(),
-                capacity,
-            )
-        }
-        #[cfg(not(feature = "enable-pagestorage"))]
-        {
-            RocksWriteBatchVec::with_unit_capacity(self, capacity)
-        }
+        RocksWriteBatchVec::with_unit_capacity(
+            self.element_engine.as_ref().unwrap().element_wb(),
+            self,
+            capacity,
+        )
     }
 
     fn sync(&self) -> Result<()> {

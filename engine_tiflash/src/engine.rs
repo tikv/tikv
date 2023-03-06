@@ -54,10 +54,11 @@ impl RocksEngine {
         engine_store_hub: Option<Arc<dyn EngineStoreHub + Send + Sync>>,
         config_set: Option<Arc<crate::ProxyEngineConfigSet>>,
     ) {
-        #[cfg(feature = "enable-pagestorage")]
-        tikv_util::info!("enabled pagestorage");
-        #[cfg(not(feature = "enable-pagestorage"))]
-        tikv_util::info!("disabled pagestorage");
+        let enable_unips = if let Some(s) = config_set.as_ref() {
+            s.engine_store.enable_unips
+        } else {
+            false
+        };
         self.proxy_ext = ProxyEngineExt {
             engine_store_server_helper,
             pool_capacity: snap_handle_pool_size,
@@ -69,15 +70,14 @@ impl RocksEngine {
         let ps_ext = PageStorageExt {
             engine_store_server_helper,
         };
-        #[cfg(feature = "enable-pagestorage")]
-        {
+        if enable_unips {
+            tikv_util::info!("enabled pagestorage");
             self.element_engine = Some(Arc::new(crate::ps_engine::PSElementEngine {
                 ps_ext: ps_ext.clone(),
                 rocks: self.rocks.clone(),
             }))
-        }
-        #[cfg(not(feature = "enable-pagestorage"))]
-        {
+        } else {
+            tikv_util::info!("disabled pagestorage");
             self.element_engine = Some(Arc::new(crate::rocks_engine::RocksElementEngine {
                 rocks: self.rocks.clone(),
             }))

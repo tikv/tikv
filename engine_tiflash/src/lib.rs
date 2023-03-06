@@ -56,10 +56,6 @@ pub use crate::table_properties::*;
 mod mixed_engine;
 mod ps_engine;
 mod rocks_engine;
-#[cfg(feature = "enable-pagestorage")]
-pub use crate::ps_engine::ps_write_batch::*;
-#[cfg(not(feature = "enable-pagestorage"))]
-pub use crate::rocks_engine::write_batch::*;
 pub use crate::{ps_engine::PSLogEngine, rocks_engine::db_vector};
 
 pub mod mvcc_properties;
