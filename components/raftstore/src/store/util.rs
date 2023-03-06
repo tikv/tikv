@@ -39,6 +39,7 @@ use tikv_util::{
     Either,
 };
 use time::{Duration, Timespec};
+use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 
 use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
@@ -1234,6 +1235,16 @@ impl RegionReadProgress {
         }
     }
 
+    pub fn update_advance_resolved_ts_notify(&self, advance_notify: Arc<Notify>) {
+        self.core.lock().unwrap().advance_notify = Some(advance_notify);
+    }
+
+    pub fn notify_advance_resolved_ts(&self) {
+        if let Ok(core) = self.core.try_lock() && let Some(advance_notify) = &core.advance_notify {
+            advance_notify.notify_waiters();
+        }
+    }
+
     pub fn update_applied<E: KvEngine>(&self, applied: u64, coprocessor: &CoprocessorHost<E>) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.update_applied(applied) {
@@ -1397,6 +1408,8 @@ pub struct RegionReadProgressCore {
     pause: bool,
     // Discard incoming `(idx, ts)`
     discard: bool,
+    // A notify to trigger advancing resolved ts immediately.
+    advance_notify: Option<Arc<Notify>>,
 }
 
 // A helpful wrapper of `(apply_index, safe_ts)` item
@@ -1468,6 +1481,7 @@ impl RegionReadProgressCore {
             last_merge_index: 0,
             pause: is_witness,
             discard: is_witness,
+            advance_notify: None,
         }
     }
 

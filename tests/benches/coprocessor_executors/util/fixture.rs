@@ -314,7 +314,11 @@ impl BatchExecutor for BatchFixtureExecutor {
             physical_columns,
             logical_rows,
             warnings: EvalWarnings::default(),
-            is_drained: Ok(self.columns[0].is_empty()),
+            is_drained: Ok(if self.columns[0].is_empty() {
+                BatchExecIsDrain::Drain
+            } else {
+                BatchExecIsDrain::Remain
+            }),
         }
     }
 

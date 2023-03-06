@@ -2479,14 +2479,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .global_stat
                 .stat
                 .engine_total_bytes_written
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         stats.set_keys_written(
             self.ctx
                 .global_stat
                 .stat
                 .engine_total_keys_written
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
 
         stats.set_is_busy(
@@ -2494,7 +2494,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .global_stat
                 .stat
                 .is_busy
-                .swap(false, Ordering::SeqCst),
+                .swap(false, Ordering::Relaxed),
         );
 
         let mut query_stats = QueryStats::default();
@@ -2503,21 +2503,21 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .global_stat
                 .stat
                 .engine_total_query_put
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         query_stats.set_delete(
             self.ctx
                 .global_stat
                 .stat
                 .engine_total_query_delete
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         query_stats.set_delete_range(
             self.ctx
                 .global_stat
                 .stat
                 .engine_total_query_delete_range
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         stats.set_query_stats(query_stats);
 

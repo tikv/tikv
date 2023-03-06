@@ -16,7 +16,11 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::{mem, sync::atomic::Ordering, time::Duration};
+use std::{
+    mem,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
@@ -35,11 +39,11 @@ use raftstore::{
         local_metrics::RaftMetrics,
         metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
         msg::ErrorCallback,
-        util, Config, WriteCallback,
+        util, Config, Transport, WriteCallback,
     },
     Error, Result,
 };
-use slog::{info, warn};
+use slog::{error, info, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
@@ -59,10 +63,11 @@ mod control;
 mod write;
 
 pub use admin::{
-    report_split_init_finish, temp_split_path, AdminCmdResult, CompactLogContext, RequestHalfSplit,
-    RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
+    report_split_init_finish, temp_split_path, AdminCmdResult, CompactLogContext, MergeContext,
+    RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
+use pd_client::{BucketMeta, BucketStat};
 pub use write::{
     SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
 };
@@ -122,6 +127,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
+        let buckets = self.region_buckets_info().bucket_stat().clone();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
             &store_ctx.cfg,
             self.peer().clone(),
@@ -132,6 +138,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.flush_state().clone(),
             self.storage().apply_trace().log_recovery(),
             self.entry_storage().applied_term(),
+            buckets,
+            store_ctx.sst_importer.clone(),
             logger,
         );
 
@@ -292,13 +300,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             committed_time: Instant::now(),
         };
         assert!(
-            self.apply_scheduler().is_some(),
-            "apply_scheduler should be something. region_id {}",
-            self.region_id()
+            self.apply_scheduler().is_some() || ctx.router.is_shutdown(),
+            "{} apply_scheduler should not be None",
+            SlogFormat(&self.logger)
         );
-        self.apply_scheduler()
-            .unwrap()
-            .send(ApplyTask::CommittedEntries(apply));
+        if let Some(scheduler) = self.apply_scheduler() {
+            scheduler.send(ApplyTask::CommittedEntries(apply));
+        }
     }
 
     #[inline]
@@ -319,12 +327,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn on_apply_res<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, apply_res: ApplyRes) {
-        if !self.serving() {
-            return;
+    pub fn on_apply_res<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        apply_res: ApplyRes,
+    ) {
+        if !self.serving() || !apply_res.admin_result.is_empty() {
+            // TODO: remove following log once stable.
+            info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         }
-        // TODO: remove following log once stable.
-        info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
             // Ignore admin command side effects, otherwise it may split incomplete
@@ -347,11 +358,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
                 AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
                 AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
+                AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
             }
         }
-
+        self.region_buckets_info_mut()
+            .add_bucket_flow(&apply_res.bucket_stat);
         self.update_split_flow_control(&apply_res.metrics);
         self.update_stat(&apply_res.metrics);
+        ctx.store_stat.engine_total_bytes_written += apply_res.metrics.written_bytes;
+        ctx.store_stat.engine_total_keys_written += apply_res.metrics.written_keys;
 
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);
@@ -365,6 +380,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         entry_storage.set_applied_term(apply_res.applied_term);
         if !is_leader {
             entry_storage.compact_entry_cache(apply_res.applied_index + 1);
+        }
+        if is_leader {
+            self.retry_pending_prepare_merge(ctx, apply_res.applied_index);
         }
         self.on_data_modified(apply_res.modifications);
         self.handle_read_on_apply(
@@ -391,7 +409,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let last_applying_index = self.compact_log_context().last_applying_index();
         let committed_index = self.entry_storage().commit_index();
-        if last_applying_index < committed_index {
+        if last_applying_index < committed_index || !self.serving() {
             // We need to continue to apply after previous page is finished.
             self.set_has_ready();
         }
@@ -463,6 +481,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         dr.notify_only,
                     );
                 }
+                SimpleWrite::Ingest(_) => {
+                    error!(
+                        self.logger,
+                        "IngestSST is not supposed to be called on local engine"
+                    );
+                }
             }
         }
         self.apply_flow_control_mut().need_flush = true;
@@ -476,6 +500,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.maybe_reschedule(written_bytes).await
     }
 
+    pub fn on_refresh_buckets(&mut self, meta: Arc<BucketMeta>) {
+        let mut new = BucketStat::from_meta(meta);
+        if let Some(origin) = self.buckets.as_ref() {
+            new.merge(origin);
+        }
+        self.buckets.replace(new);
+    }
+
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
@@ -483,7 +515,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
         for (e, ch) in ce.entry_and_proposals {
             if self.tombstone() {
-                apply::notify_req_region_removed(self.region_state().get_region().get_id(), ch);
+                apply::notify_req_region_removed(self.region_id(), ch);
                 continue;
             }
             if !e.get_data().is_empty() {
@@ -529,7 +561,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 Ok(decoder) => {
                     util::compare_region_epoch(
                         decoder.header().get_region_epoch(),
-                        self.region_state().get_region(),
+                        self.region(),
                         false,
                         true,
                         true,
@@ -551,6 +583,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                     dr.end_key,
                                     dr.notify_only,
                                 )?;
+                            }
+                            SimpleWrite::Ingest(ssts) => {
+                                self.apply_ingest(ssts)?;
                             }
                         }
                     }
@@ -576,14 +611,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
         };
 
-        util::check_req_region_epoch(&req, self.region_state().get_region(), true)?;
+        util::check_req_region_epoch(&req, self.region(), true)?;
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
-                AdminCmdType::CompactLog => self.apply_compact_log(admin_req, entry.index)?,
+                AdminCmdType::CompactLog => self.apply_compact_log(admin_req, log_index)?,
                 AdminCmdType::Split => self.apply_split(admin_req, log_index)?,
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index)?,
-                AdminCmdType::PrepareMerge => unimplemented!(),
+                AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
                 AdminCmdType::CommitMerge => unimplemented!(),
                 AdminCmdType::RollbackMerge => unimplemented!(),
                 AdminCmdType::TransferLeader => {
@@ -720,8 +755,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.admin_result = self.take_admin_result().into_boxed_slice();
         apply_res.modifications = *self.modifications_mut();
         apply_res.metrics = mem::take(&mut self.metrics);
+        apply_res.bucket_stat = self.buckets.clone();
         let written_bytes = apply_res.metrics.written_bytes;
         self.res_reporter().report(apply_res);
+        if let Some(buckets) = &mut self.buckets {
+            buckets.clear_stats();
+        }
 
         // Report result first and then invoking callbacks. This may delays callback a
         // little bit, but can make sure all following messages must see the side

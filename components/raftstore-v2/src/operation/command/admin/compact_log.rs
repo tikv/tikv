@@ -18,7 +18,8 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequ
 use protobuf::Message;
 use raftstore::{
     store::{
-        fsm::new_admin_request, needs_evict_entry_cache, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
+        fsm::new_admin_request, metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache, Transport,
+        WriteTask, RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
@@ -167,6 +168,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 last_idx,
                 replicated_idx
             );
+            REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
         }
 
         // leader may call `get_term()` on the latest replicated index, so compact
@@ -182,13 +184,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 >= store_ctx.cfg.raft_log_gc_size_limit().0
         {
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
-        } else if replicated_idx < first_idx
-            || last_idx - first_idx < 3
-            || replicated_idx - first_idx < store_ctx.cfg.raft_log_gc_threshold
-                && self
-                    .compact_log_context_mut()
-                    .maybe_skip_compact_log(store_ctx.cfg.raft_log_reserve_max_ticks)
+        } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
+            store_ctx.raft_metrics.raft_log_gc_skipped.reserve_log.inc();
+            return;
+        } else if replicated_idx - first_idx < store_ctx.cfg.raft_log_gc_threshold
+            && self
+                .compact_log_context_mut()
+                .maybe_skip_compact_log(store_ctx.cfg.raft_log_reserve_max_ticks)
         {
+            store_ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .threshold_limit
+                .inc();
             return;
         } else {
             replicated_idx
@@ -197,6 +205,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Have no idea why subtract 1 here, but original code did this by magic.
         compact_idx -= 1;
         if compact_idx < first_idx {
+            // In case compact_idx == first_idx before subtraction.
+            store_ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .compact_idx_too_small
+                .inc();
             return;
         }
 
@@ -351,7 +365,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_compact_log<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        res: CompactLogResult,
+        mut res: CompactLogResult,
     ) {
         let first_index = self.entry_storage().first_index();
         if res.compact_index <= first_index {
@@ -363,7 +377,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             return;
         }
-        // TODO: check is_merging
+        if let Some(i) = self.merge_context().and_then(|c| c.max_compact_log_index())
+            && res.compact_index > i
+        {
+            info!(
+                self.logger,
+                "in merging mode, adjust compact index";
+                "old_index" => res.compact_index,
+                "new_index" => i,
+            );
+            res.compact_index = i;
+        }
         // TODO: check entry_cache_warmup_state
         self.entry_storage_mut()
             .compact_entry_cache(res.compact_index);
@@ -388,10 +412,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // All logs < perssited_apply will be deleted, so should check with +1.
         if old_truncated + 1 < self.storage().apply_trace().persisted_apply_index()
-            && let Some(index) = self.compact_log_index() {
+            && let Some(index) = self.compact_log_index()
+        {
             // Raft Engine doesn't care about first index.
-            if let Err(e) =
-            store_ctx
+            if let Err(e) = store_ctx
                 .engine
                 .gc(self.region_id(), 0, index, self.state_changes_mut())
             {
@@ -432,7 +456,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // If it's snapshot, logs are gc already.
             if !task.has_snapshot
                 && old_persisted < self.entry_storage().truncated_index() + 1
-                && let Some(index) = self.compact_log_index() {
+                && let Some(index) = self.compact_log_index()
+            {
                 let batch = task.extra_write.ensure_v2(|| self.entry_storage().raft_engine().log_batch(0));
                 // Raft Engine doesn't care about first index.
                 if let Err(e) =

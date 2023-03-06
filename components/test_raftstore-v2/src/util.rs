@@ -7,11 +7,12 @@ use engine_rocks::{RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
-use kvproto::kvrpcpb::Context;
+use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb::RaftCmdResponse};
+use raftstore::Result;
 use rand::RngCore;
 use server::server2::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use test_raftstore::{new_put_cf_cmd, Config};
+use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, Config};
 use tikv::{
     server::KvEngineFactoryBuilder,
     storage::{
@@ -124,12 +125,12 @@ pub fn put_cf_till_size<T: Simulator>(
     key.into_bytes()
 }
 
-pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_snapshot(config: &mut Config) {
     // Truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
-    cluster.cfg.raft_store.merge_max_log_gap = 1;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    config.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    config.raft_store.raft_log_gc_count_limit = Some(2);
+    config.raft_store.merge_max_log_gap = 1;
+    config.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
 
 pub fn configure_for_lease_read_v2<T: Simulator>(
@@ -188,4 +189,23 @@ pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64, regio
         thread::sleep(Duration::from_millis(1 << retry));
     }
     assert!(snapshot.ext().is_max_ts_synced());
+}
+
+// Issue a read request on the specified peer.
+pub fn read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(key)],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    cluster.read(None, request, timeout)
 }

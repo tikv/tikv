@@ -7,6 +7,7 @@ use std::borrow::Cow;
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+use kvproto::{errorpb, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{Config, TabletSnapManager, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
@@ -18,7 +19,7 @@ use tikv_util::{
 use crate::{
     batch::StoreContext,
     raft::{Peer, Storage},
-    router::{PeerMsg, PeerTick},
+    router::{PeerMsg, PeerTick, QueryResult},
     Result,
 };
 
@@ -195,6 +196,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
         }
+        self.fsm.peer.maybe_gen_approximate_buckets(self.store_ctx);
         // Speed up setup if there is only one peer.
         if self.fsm.peer.is_leader() {
             self.fsm.peer.set_has_ready();
@@ -223,7 +225,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::ReactivateMemoryLock => {
                 self.fsm.peer.on_reactivate_memory_lock_tick(self.store_ctx)
             }
-            PeerTick::ReportBuckets => unimplemented!(),
+            PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted(),
             PeerTick::GcPeer => self.fsm.peer_mut().on_gc_peer_tick(self.store_ctx),
         }
@@ -305,6 +307,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         .peer_mut()
                         .on_request_split(self.store_ctx, request, ch)
                 }
+                PeerMsg::RefreshRegionBuckets {
+                    region_epoch,
+                    buckets,
+                    bucket_ranges,
+                } => self.on_refresh_region_buckets(region_epoch, buckets, bucket_ranges),
                 PeerMsg::RequestHalfSplit { request, ch } => self
                     .fsm
                     .peer_mut()
@@ -327,5 +334,35 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         // TODO: instead of propose pending commands immediately, we should use timeout.
         self.fsm.peer.propose_pending_writes(self.store_ctx);
         self.schedule_pending_ticks();
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> Drop for PeerFsm<EK, ER> {
+    fn drop(&mut self) {
+        self.peer_mut().pending_reads_mut().clear_all(None);
+
+        let region_id = self.peer().region_id();
+
+        let build_resp = || {
+            let mut err = errorpb::Error::default();
+            err.set_message("region is not found".to_owned());
+            err.mut_region_not_found().set_region_id(region_id);
+            let mut resp = RaftCmdResponse::default();
+            resp.mut_header().set_error(err);
+            resp
+        };
+        while let Ok(msg) = self.receiver.try_recv() {
+            match msg {
+                // Only these messages need to be responded explicitly as they rely on
+                // deterministic response.
+                PeerMsg::RaftQuery(query) => {
+                    query.ch.set_result(QueryResult::Response(build_resp()));
+                }
+                PeerMsg::SimpleWrite(w) => {
+                    w.ch.set_result(build_resp());
+                }
+                _ => continue,
+            }
+        }
     }
 }
