@@ -455,7 +455,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             if offsets.len() != 1 {
                 continue;
             }
-            // For the sinlge-column group, its fm_sketch is the same as that of the
+            // For the single-column group, its fm_sketch is the same as that of the
             // corresponding column. Hence, we don't maintain its fm_sketch in
             // collect_column_group. We just copy the corresponding column's fm_sketch after
             // iterating all rows. Also, we can directly copy total_size and null_count.
@@ -546,7 +546,7 @@ impl BaseRowSampleCollector {
         for i in 0..column_groups.len() {
             let offsets = column_groups[i].get_column_offsets();
             if offsets.len() == 1 {
-                // For the sinlge-column group, its fm_sketch is the same as that of the
+                // For the single-column group, its fm_sketch is the same as that of the
                 // corresponding column. Hence, we don't need to maintain its
                 // fm_sketch. We just copy the corresponding column's fm_sketch after iterating
                 // all rows. Also, we can directly copy total_size and null_count.
