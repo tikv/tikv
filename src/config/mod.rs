@@ -2605,7 +2605,7 @@ impl Default for BackupStreamConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
-            max_flush_interval: ReadableDuration::minutes(2),
+            max_flush_interval: ReadableDuration::secs(150),
             // use at most 50% of vCPU by default
             num_threads: cpu_num.clamp(2.0, 16.0) as usize,
             enable: true,

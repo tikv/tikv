@@ -24,7 +24,7 @@ impl Default for Config {
             num_threads: 8,
             stream_channel_window: 128,
             import_mode_timeout: ReadableDuration::minutes(10),
-            memory_use_ratio: 0.3,
+            memory_use_ratio: 0.15,
         }
     }
 }
