@@ -182,19 +182,13 @@ mod tests {
     impl ResourceMetered for Msg {
         fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
             // None
-            let mut dominant_group = "".to_owned();
-            let mut max_write_bytes = 0;
             let write_bytes = self.0 as u64;
             let group_name = "test".to_owned();
             resource_ctl.consume(
                 group_name.as_bytes(),
                 ResourceConsumeType::IoBytes(write_bytes),
             );
-            if write_bytes > max_write_bytes {
-                dominant_group = group_name;
-                max_write_bytes = write_bytes;
-            }
-            Some(dominant_group)
+            Some(group_name)
         }
     }
 
@@ -209,7 +203,7 @@ mod tests {
             let mut n2: usize = 0;
             loop {
                 if let Ok(n) = rx.recv() {
-                    n2 += 1;
+                    n2 += n;
                 } else {
                     return n2;
                 }

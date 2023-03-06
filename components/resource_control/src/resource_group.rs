@@ -536,6 +536,13 @@ pub(crate) mod tests {
             let group1 = new_resource_group_ru(format!("group{}", i), 100);
             resource_manager.add_resource_group(group1);
         }
+        // consume for default group
+        resource_ctl.consume(
+            b"default",
+            ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
+        );
+        resource_ctl_write.consume(b"default", ResourceConsumeType::IoBytes(10000));
+
         assert_eq!(resource_manager.get_all_resource_groups().len(), 10);
         assert_eq!(resource_ctl.resource_consumptions.read().len(), 11); // 10 + 1(default)
         assert_eq!(resource_ctl_write.resource_consumptions.read().len(), 11);
@@ -545,13 +552,18 @@ pub(crate) mod tests {
         assert_eq!(resource_ctl.resource_consumptions.read().len(), 6);
         assert_eq!(resource_ctl_write.resource_consumptions.read().len(), 6);
         assert!(resource_manager.get_resource_group("group1").is_none());
-        assert_eq!(
-            resource_ctl.resource_group("group2".as_bytes()).key(),
-            "default".as_bytes()
+        // should use the virtual time of default group for non-exist group
+        assert_ne!(
+            resource_ctl
+                .resource_group("group2".as_bytes())
+                .current_vt(),
+            0
         );
-        assert_eq!(
-            resource_ctl_write.resource_group("group2".as_bytes()).key(),
-            "default".as_bytes()
+        assert_ne!(
+            resource_ctl_write
+                .resource_group("group2".as_bytes())
+                .current_vt(),
+            0
         );
     }
 }

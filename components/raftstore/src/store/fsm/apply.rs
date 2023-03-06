@@ -9,7 +9,6 @@ use std::{
     cmp::{Ord, Ordering as CmpOrdering},
     collections::VecDeque,
     fmt::{self, Debug, Formatter},
-    io::BufRead,
     mem,
     ops::{Deref, DerefMut, Range as StdRange},
     sync::{
@@ -46,11 +45,7 @@ use kvproto::{
 };
 use pd_client::{BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
-use protobuf::{wire_format::WireType, CodedInputStream, Message};
-use raft::eraftpb::{
-    ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
-};
-use raft_proto::ConfChangeI;
+use raft::eraftpb::{ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot};
 use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
@@ -93,6 +88,7 @@ use crate::{
         util::{
             self, admin_cmd_epoch_lookup, check_flashback_state, check_req_region_epoch,
             compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
+            ParsedEntry,
         },
         Config, RegionSnapshot, RegionTask, WriteCallback,
     },
@@ -852,43 +848,6 @@ fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     false
 }
 
-fn has_admin_request(entry: &Entry) -> bool {
-    // need to handle ConfChange entry type
-    if entry.get_entry_type() != EntryType::EntryNormal {
-        return true;
-    }
-
-    // HACK: check admin request field in serialized data from `RaftCmdRequest`
-    // without deserializing all. It's done by checking the existence of the
-    // field number of `admin_request`.
-    // See the encoding in `write_to_with_cached_sizes()` of `RaftCmdRequest` in
-    // `raft_cmdpb.rs` for reference.
-    let mut is = CodedInputStream::from_bytes(entry.get_data());
-    if is.eof().unwrap() {
-        return false;
-    }
-    let (mut field_number, wire_type) = is.read_tag_unpack().unwrap();
-    // Header field is of number 1
-    if field_number == 1 {
-        if wire_type != WireType::WireTypeLengthDelimited {
-            panic!("unexpected wire type");
-        }
-        let len = is.read_raw_varint32().unwrap();
-        // skip parsing the content of `Header`
-        is.consume(len as usize);
-        // read next field number
-        (field_number, _) = is.read_tag_unpack().unwrap();
-    }
-
-    // `Requests` field is of number 2 and `AdminRequest` field is of number 3.
-    // - If the next field is 2, there must be no admin request as in one
-    //   `RaftCmdRequest`, either requests or admin_request is filled.
-    // - If the next field is 3, it's exactly an admin request.
-    // - If the next field is others, neither requests nor admin_request is filled,
-    //   so there is no admin request.
-    field_number == 3
-}
-
 /// A struct that stores the state related to Merge.
 ///
 /// When executing a `CommitMerge`, the source peer may have not applied
@@ -1041,99 +1000,6 @@ where
     buckets: Option<BucketStat>,
 
     unfinished_write_seqno: Vec<SequenceNumber>,
-}
-
-pub struct ParsedEntry {
-    entry: Entry,
-    cmd: Option<RaftCmdRequest>,
-    conf_change: Option<ConfChangeV2>,
-    parsed: bool,
-}
-
-impl ParsedEntry {
-    pub fn new(entry: Entry) -> ParsedEntry {
-        ParsedEntry {
-            entry,
-            cmd: None,
-            conf_change: None,
-            parsed: false,
-        }
-    }
-
-    pub fn get_entry_type(&self) -> EntryType {
-        self.entry.get_entry_type()
-    }
-
-    pub fn get_index(&self) -> u64 {
-        self.entry.get_index()
-    }
-
-    pub fn get_term(&self) -> u64 {
-        self.entry.get_term()
-    }
-
-    pub fn compute_size(&self) -> u32 {
-        self.entry.compute_size()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entry.get_data().is_empty()
-    }
-
-    pub fn bytes_capacity(&self) -> usize {
-        bytes_capacity(&self.entry.data) + bytes_capacity(&self.entry.context)
-    }
-
-    fn parse(&mut self) {
-        assert!(!self.is_empty());
-
-        let data = self.entry.get_data();
-        let index = self.entry.get_index();
-        // lazy parse the cmd from entry context
-        let conf_change = match self.entry.get_entry_type() {
-            EntryType::EntryConfChange => {
-                let conf_change: ConfChange = util::parse_data_at(data, index);
-                Some(conf_change.into_v2())
-            }
-            EntryType::EntryConfChangeV2 => Some(util::parse_data_at(data, index)),
-            EntryType::EntryNormal => {
-                self.cmd = Some(util::parse_data_at(data, index));
-                None
-            }
-        };
-        if let Some(conf_change) = conf_change {
-            self.cmd = Some(util::parse_data_at(conf_change.get_context(), index));
-            self.conf_change = Some(conf_change);
-        }
-        self.parsed = true;
-    }
-
-    pub fn get_cmd(&mut self) -> &RaftCmdRequest {
-        if !self.parsed {
-            self.parse();
-        }
-        self.cmd.as_ref().unwrap()
-    }
-
-    pub fn take_cmd(&mut self) -> RaftCmdRequest {
-        if !self.parsed {
-            self.parse();
-        }
-        self.parsed = false;
-        self.cmd.take().unwrap()
-    }
-
-    pub fn take_conf_change(&mut self) -> (ConfChangeV2, RaftCmdRequest) {
-        if !self.parsed {
-            self.parse();
-        }
-        self.parsed = false;
-        (self.conf_change.take().unwrap(), self.cmd.take().unwrap())
-    }
-
-    pub fn can_witness_skip(&self) -> bool {
-        !has_admin_request(&self.entry)
-    }
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -5057,7 +4923,6 @@ mod tests {
         time::*,
     };
 
-    use bytes::Bytes;
     use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot};
     use engine_traits::{Peekable as PeekableTrait, SyncMutable, WriteBatchExt};
@@ -5067,7 +4932,6 @@ mod tests {
         raft_cmdpb::*,
     };
     use protobuf::Message;
-    use raft::eraftpb::{ConfChange, ConfChangeV2};
     use sst_importer::Config as ImportConfig;
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
@@ -5172,42 +5036,6 @@ mod tests {
                 raft_engine: Box::new(PanicEngine),
             }
         }
-    }
-
-    #[test]
-    fn test_has_admin_request() {
-        let mut entry = Entry::new();
-        let mut req = RaftCmdRequest::default();
-        entry.set_entry_type(EntryType::EntryNormal);
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(!has_admin_request(&entry));
-
-        req.mut_admin_request()
-            .set_cmd_type(AdminCmdType::CompactLog);
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(has_admin_request(&entry));
-
-        let mut req = RaftCmdRequest::default();
-        let mut request = Request::default();
-        request.set_cmd_type(CmdType::Put);
-        req.set_requests(vec![request].into());
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(!has_admin_request(&entry));
-
-        entry.set_entry_type(EntryType::EntryConfChange);
-        let conf_change = ConfChange::new();
-        let data = conf_change.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(has_admin_request(&entry));
-
-        entry.set_entry_type(EntryType::EntryConfChangeV2);
-        let conf_change_v2 = ConfChangeV2::new();
-        let data = conf_change_v2.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(has_admin_request(&entry));
     }
 
     #[test]

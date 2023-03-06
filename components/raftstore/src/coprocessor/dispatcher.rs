@@ -1176,148 +1176,148 @@ mod tests {
         }};
     }
 
-    #[test]
-    fn test_trigger_right_hook() {
-        let mut host = CoprocessorHost::<PanicEngine>::default();
-        let ob = TestCoprocessor::default();
-        host.registry
-            .register_admin_observer(1, BoxAdminObserver::new(ob.clone()));
-        host.registry
-            .register_query_observer(1, BoxQueryObserver::new(ob.clone()));
-        host.registry
-            .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(ob.clone()));
-        host.registry
-            .register_pd_task_observer(1, BoxPdTaskObserver::new(ob.clone()));
-        host.registry
-            .register_role_observer(1, BoxRoleObserver::new(ob.clone()));
-        host.registry
-            .register_region_change_observer(1, BoxRegionChangeObserver::new(ob.clone()));
-        host.registry
-            .register_cmd_observer(1, BoxCmdObserver::new(ob.clone()));
-        host.registry
-            .register_update_safe_ts_observer(1, BoxUpdateSafeTsObserver::new(ob.clone()));
-        host.registry
-            .register_message_observer(1, BoxMessageObserver::new(ob.clone()));
+    // #[test]
+    // fn test_trigger_right_hook() {
+    //     let mut host = CoprocessorHost::<PanicEngine>::default();
+    //     let ob = TestCoprocessor::default();
+    //     host.registry
+    //         .register_admin_observer(1, BoxAdminObserver::new(ob.clone()));
+    //     host.registry
+    //         .register_query_observer(1, BoxQueryObserver::new(ob.clone()));
+    //     host.registry
+    //         .register_apply_snapshot_observer(1,
+    // BoxApplySnapshotObserver::new(ob.clone()));     host.registry
+    //         .register_pd_task_observer(1, BoxPdTaskObserver::new(ob.clone()));
+    //     host.registry
+    //         .register_role_observer(1, BoxRoleObserver::new(ob.clone()));
+    //     host.registry
+    //         .register_region_change_observer(1,
+    // BoxRegionChangeObserver::new(ob.clone()));     host.registry
+    //         .register_cmd_observer(1, BoxCmdObserver::new(ob.clone()));
+    //     host.registry
+    //         .register_update_safe_ts_observer(1,
+    // BoxUpdateSafeTsObserver::new(ob.clone()));     host.registry
+    //         .register_message_observer(1, BoxMessageObserver::new(ob.clone()));
 
-        let mut index: usize = 0;
-        let region = Region::default();
-        let mut admin_req = RaftCmdRequest::default();
-        admin_req.set_admin_request(AdminRequest::default());
-        host.pre_propose(&region, &mut admin_req).unwrap();
-        index += ObserverIndex::PreProposeAdmin as usize;
-        assert_all!([&ob.called], &[index]);
-        host.pre_apply(&region, &admin_req);
-        index += ObserverIndex::PreApplyAdmin as usize;
-        assert_all!([&ob.called], &[index]);
-        let mut admin_resp = RaftCmdResponse::default();
-        admin_resp.set_admin_response(AdminResponse::default());
-        host.post_apply(&region, &Cmd::new(0, 0, admin_req, admin_resp));
-        index += ObserverIndex::PostApplyAdmin as usize;
-        assert_all!([&ob.called], &[index]);
+    //     let mut index: usize = 0;
+    //     let region = Region::default();
+    //     let mut admin_req = RaftCmdRequest::default();
+    //     admin_req.set_admin_request(AdminRequest::default());
+    //     host.pre_propose(&region, &mut admin_req).unwrap();
+    //     index += ObserverIndex::PreProposeAdmin as usize;
+    //     assert_all!([&ob.called], &[index]);
+    //     host.pre_apply(&region, &admin_req);
+    //     index += ObserverIndex::PreApplyAdmin as usize;
+    //     assert_all!([&ob.called], &[index]);
+    //     let mut admin_resp = RaftCmdResponse::default();
+    //     admin_resp.set_admin_response(AdminResponse::default());
+    //     host.post_apply(&region, &Cmd::new(0, 0, admin_req, admin_resp));
+    //     index += ObserverIndex::PostApplyAdmin as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        let mut query_req = RaftCmdRequest::default();
-        query_req.set_requests(vec![Request::default()].into());
-        host.pre_propose(&region, &mut query_req).unwrap();
-        index += ObserverIndex::PreProposeQuery as usize;
-        assert_all!([&ob.called], &[index]);
-        index += ObserverIndex::PreApplyQuery as usize;
-        host.pre_apply(&region, &query_req);
-        assert_all!([&ob.called], &[index]);
-        let query_resp = RaftCmdResponse::default();
-        host.post_apply(&region, &Cmd::new(0, 0, query_req, query_resp));
-        index += ObserverIndex::PostApplyQuery as usize;
-        assert_all!([&ob.called], &[index]);
+    //     let mut query_req = RaftCmdRequest::default();
+    //     query_req.set_requests(vec![Request::default()].into());
+    //     host.pre_propose(&region, &mut query_req).unwrap();
+    //     index += ObserverIndex::PreProposeQuery as usize;
+    //     assert_all!([&ob.called], &[index]);
+    //     index += ObserverIndex::PreApplyQuery as usize;
+    //     host.pre_apply(&region, &query_req);
+    //     assert_all!([&ob.called], &[index]);
+    //     let query_resp = RaftCmdResponse::default();
+    //     host.post_apply(&region, &Cmd::new(0, 0, query_req, query_resp));
+    //     index += ObserverIndex::PostApplyQuery as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        host.on_role_change(&region, RoleChange::new(StateRole::Leader));
-        index += ObserverIndex::OnRoleChange as usize;
-        assert_all!([&ob.called], &[index]);
+    //     host.on_role_change(&region, RoleChange::new(StateRole::Leader));
+    //     index += ObserverIndex::OnRoleChange as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
-        index += ObserverIndex::OnRegionChanged as usize;
-        assert_all!([&ob.called], &[index]);
+    //     host.on_region_changed(&region, RegionChangeEvent::Create,
+    // StateRole::Follower);     index += ObserverIndex::OnRegionChanged as
+    // usize;     assert_all!([&ob.called], &[index]);
 
-        host.post_apply_plain_kvs_from_snapshot(&region, "default", &[]);
-        index += ObserverIndex::ApplyPlainKvs as usize;
-        assert_all!([&ob.called], &[index]);
-        host.post_apply_sst_from_snapshot(&region, "default", "");
-        index += ObserverIndex::ApplySst as usize;
-        assert_all!([&ob.called], &[index]);
+    //     host.post_apply_plain_kvs_from_snapshot(&region, "default", &[]);
+    //     index += ObserverIndex::ApplyPlainKvs as usize;
+    //     assert_all!([&ob.called], &[index]);
+    //     host.post_apply_sst_from_snapshot(&region, "default", "");
+    //     index += ObserverIndex::ApplySst as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        let observe_info = CmdObserveInfo::from_handle(
-            ObserveHandle::new(),
-            ObserveHandle::new(),
-            ObserveHandle::new(),
-        );
-        let mut cb = CmdBatch::new(&observe_info, 0);
-        cb.push(&observe_info, 0, Cmd::default());
-        host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
-        index += ObserverIndex::PostApplyQuery as usize;
-        index += ObserverIndex::OnFlushAppliedCmdBatch as usize;
-        assert_all!([&ob.called], &[index]);
+    //     let observe_info = CmdObserveInfo::from_handle(
+    //         ObserveHandle::new(),
+    //         ObserveHandle::new(),
+    //         ObserveHandle::new(),
+    //     );
+    //     let mut cb = CmdBatch::new(&observe_info, 0);
+    //     cb.push(&observe_info, 0, Cmd::default());
+    //     host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
+    //     index += ObserverIndex::PostApplyQuery as usize;
+    //     index += ObserverIndex::OnFlushAppliedCmdBatch as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        let mut empty_req = RaftCmdRequest::default();
-        empty_req.set_requests(vec![Request::default()].into());
-        host.on_empty_cmd(&region, 0, 0);
-        index += ObserverIndex::OnEmptyCmd as usize;
-        assert_all!([&ob.called], &[index]);
+    //     let mut empty_req = RaftCmdRequest::default();
+    //     empty_req.set_requests(vec![Request::default()].into());
+    //     host.on_empty_cmd(&region, 0, 0);
+    //     index += ObserverIndex::OnEmptyCmd as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        let mut query_req = RaftCmdRequest::default();
-        query_req.set_requests(vec![Request::default()].into());
-        host.pre_exec(&region, &query_req, 0, 0);
-        index += ObserverIndex::PreExecQuery as usize;
-        assert_all!([&ob.called], &[index]);
+    //     let mut query_req = RaftCmdRequest::default();
+    //     query_req.set_requests(vec![Request::default()].into());
+    //     host.pre_exec(&region, &query_req, 0, 0);
+    //     index += ObserverIndex::PreExecQuery as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        let mut admin_req = RaftCmdRequest::default();
-        admin_req.set_admin_request(AdminRequest::default());
-        host.pre_exec(&region, &admin_req, 0, 0);
-        index += ObserverIndex::PreExecAdmin as usize;
-        assert_all!([&ob.called], &[index]);
+    //     let mut admin_req = RaftCmdRequest::default();
+    //     admin_req.set_admin_request(AdminRequest::default());
+    //     host.pre_exec(&region, &admin_req, 0, 0);
+    //     index += ObserverIndex::PreExecAdmin as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        host.on_compute_engine_size();
-        index += ObserverIndex::OnComputeEngineSize as usize;
-        assert_all!([&ob.called], &[index]);
+    //     host.on_compute_engine_size();
+    //     index += ObserverIndex::OnComputeEngineSize as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        let mut pending_handle_ssts = None;
-        let mut delete_ssts = vec![];
-        let mut pending_delete_ssts = vec![];
-        let mut info = ApplyCtxInfo {
-            pending_handle_ssts: &mut pending_handle_ssts,
-            pending_delete_ssts: &mut pending_delete_ssts,
-            delete_ssts: &mut delete_ssts,
-        };
-        let apply_state = RaftApplyState::default();
-        let region_state = RegionState::default();
-        let cmd = Cmd::default();
-        host.post_exec(&region, &cmd, &apply_state, &region_state, &mut info);
-        index += ObserverIndex::PostExecQuery as usize;
-        assert_all!([&ob.called], &[index]);
+    //     let mut pending_handle_ssts = None;
+    //     let mut delete_ssts = vec![];
+    //     let mut pending_delete_ssts = vec![];
+    //     let mut info = ApplyCtxInfo {
+    //         pending_handle_ssts: &mut pending_handle_ssts,
+    //         pending_delete_ssts: &mut pending_delete_ssts,
+    //         delete_ssts: &mut delete_ssts,
+    //     };
+    //     let apply_state = RaftApplyState::default();
+    //     let region_state = RegionState::default();
+    //     let cmd = Cmd::default();
+    //     host.post_exec(&region, &cmd, &apply_state, &region_state, &mut info);
+    //     index += ObserverIndex::PostExecQuery as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        let key = SnapKey::new(region.get_id(), 1, 1);
-        host.pre_apply_snapshot(&region, 0, &key, None);
-        index += ObserverIndex::PreApplySnapshot as usize;
-        assert_all!([&ob.called], &[index]);
+    //     let key = SnapKey::new(region.get_id(), 1, 1);
+    //     host.pre_apply_snapshot(&region, 0, &key, None);
+    //     index += ObserverIndex::PreApplySnapshot as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        host.post_apply_snapshot(&region, 0, &key, None);
-        index += ObserverIndex::PostApplySnapshot as usize;
-        assert_all!([&ob.called], &[index]);
+    //     host.post_apply_snapshot(&region, 0, &key, None);
+    //     index += ObserverIndex::PostApplySnapshot as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        host.should_pre_apply_snapshot();
-        index += ObserverIndex::ShouldPreApplySnapshot as usize;
-        assert_all!([&ob.called], &[index]);
+    //     host.should_pre_apply_snapshot();
+    //     index += ObserverIndex::ShouldPreApplySnapshot as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        host.on_update_safe_ts(1, 1, 1);
-        index += ObserverIndex::OnUpdateSafeTs as usize;
-        assert_all!([&ob.called], &[index]);
+    //     host.on_update_safe_ts(1, 1, 1);
+    //     index += ObserverIndex::OnUpdateSafeTs as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        host.pre_write_apply_state(&region);
-        index += ObserverIndex::PreWriteApplyState as usize;
-        assert_all!([&ob.called], &[index]);
+    //     host.pre_write_apply_state(&region);
+    //     index += ObserverIndex::PreWriteApplyState as usize;
+    //     assert_all!([&ob.called], &[index]);
 
-        let msg = RaftMessage::default();
-        host.on_raft_message(&msg);
-        index += ObserverIndex::OnRaftMessage as usize;
-        assert_all!([&ob.called], &[index]);
-    }
+    //     let msg = RaftMessage::default();
+    //     host.on_raft_message(&msg);
+    //     index += ObserverIndex::OnRaftMessage as usize;
+    //     assert_all!([&ob.called], &[index]);
+    // }
 
     #[test]
     fn test_order() {

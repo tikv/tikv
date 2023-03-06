@@ -32,7 +32,7 @@ use super::{
 };
 use crate::{
     bytes_capacity,
-    store::{fsm::ParsedEntry, ReadTask},
+    store::{util::ParsedEntry, ReadTask},
     Result,
 };
 
