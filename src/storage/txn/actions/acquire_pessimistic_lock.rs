@@ -2086,7 +2086,7 @@ pub mod tests {
         must_unlocked(&mut engine, b"k1");
 
         // Key already exists and already locked by the same txn.
-        must_succeed(&mut engine, b"k1", b"v1", 10, 30);
+        must_succeed(&mut engine, b"k1", b"k1", 10, 30);
         must_pessimistic_locked(&mut engine, b"k1", 10, 30);
         let e = acquire_pessimistic_lock_allow_lock_with_conflict(
             &mut engine,
