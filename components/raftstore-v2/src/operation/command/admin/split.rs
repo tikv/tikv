@@ -664,13 +664,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     {
                         if store_ctx.router.is_shutdown() {
                             return;
-                        } else {
-                            slog_panic!(
-                                self.logger,
-                                "fails to send split peer intialization msg to store";
-                                "error" => ?e,
-                            );
                         }
+                        slog_panic!(
+                            self.logger,
+                            "fails to send split peer intialization msg to store";
+                            "error" => ?e,
+                        );
                     }
                 }
                 _ => unreachable!(),
