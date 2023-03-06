@@ -2237,6 +2237,22 @@ pub mod tests {
         .assert_locked_with_conflict(None, 20);
         must_pessimistic_locked(&mut engine, b"k2", 10, 20);
 
+        // Locked by a smaller for_update_ts.
+        acquire_pessimistic_lock_allow_lock_with_conflict(
+            &mut engine,
+            b"k2",
+            b"k2",
+            10,
+            25,
+            false,
+            false,
+            true,
+            false,
+        )
+        .unwrap()
+        .assert_empty();
+        must_pessimistic_locked(&mut engine, b"k2", 10, 25);
+
         // Key exists and no conflict.
         must_pessimistic_prewrite_put(&mut engine, b"k2", b"v2", b"k2", 10, 20, DoPessimisticCheck);
         must_commit(&mut engine, b"k2", 10, 30);
@@ -2295,6 +2311,25 @@ pub mod tests {
             b"k2",
             40,
             40,
+            false,
+            false,
+            true,
+            false,
+        )
+        .unwrap_err();
+        match e {
+            MvccError(box ErrorInner::AlreadyExist { .. }) => (),
+            e => panic!("unexpected error: {:?}", e),
+        }
+        must_pessimistic_locked(&mut engine, b"k2", 40, 50);
+
+        // Key exists, no conflict, and key is locked with a smaller for_update_ts.
+        let e = acquire_pessimistic_lock_allow_lock_with_conflict(
+            &mut engine,
+            b"k2",
+            b"k2",
+            40,
+            60,
             false,
             false,
             true,
