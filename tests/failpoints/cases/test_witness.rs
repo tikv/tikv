@@ -517,10 +517,9 @@ fn test_witness_leader_transfer_out() {
     let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
 
-    fail::cfg("ignore request snapshot", "pause").unwrap();
-
     // prevent this peer from applying the switch witness command until it's elected
     // as the Raft leader
+    fail::cfg("before_exec_batch_switch_witness", "pause").unwrap();
     let peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
     // nonwitness -> witness
     cluster
@@ -537,12 +536,12 @@ fn test_witness_leader_transfer_out() {
     // the leader is down
     cluster.stop_node(1);
 
-    fail::remove("ignore request snapshot");
-    // make sure the leader has became to the witness
-    std::thread::sleep(Duration::from_millis(500));
-
-    // witness would help to replicate the logs
+    // new leader would help to replicate the logs
     cluster.clear_send_filters();
+    std::thread::sleep(Duration::from_millis(1000));
+    // make sure the new leader has became to the witness
+    fail::remove("before_exec_batch_switch_witness");
+    std::thread::sleep(Duration::from_millis(500));
 
     // forbid writes
     let put = new_put_cmd(b"k3", b"v3");
@@ -555,6 +554,7 @@ fn test_witness_leader_transfer_out() {
     must_get_error_is_witness(&mut cluster, &region, read_index);
 
     let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+
     cluster.must_transfer_leader(region.get_id(), peer_on_store3);
     cluster.must_put(b"k1", b"v1");
     assert_eq!(
