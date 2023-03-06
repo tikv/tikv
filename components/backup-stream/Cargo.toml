@@ -52,6 +52,7 @@ log_wrappers = { workspace = true }
 online_config = { workspace = true }
 openssl = "0.10"
 pd_client = { workspace = true }
+pin-project = "1.0"
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
@@ -75,7 +76,6 @@ tonic = { version = "0.8", optional = true }
 txn_types = { workspace = true }
 uuid = "0.8"
 yatp = { workspace = true }
-pin-project = "1.0"
 
 [dev-dependencies]
 async-trait = "0.1"
