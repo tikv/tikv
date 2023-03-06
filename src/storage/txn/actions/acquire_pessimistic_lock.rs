@@ -2347,7 +2347,7 @@ pub mod tests {
         .assert_locked_with_conflict(Some(b"v1"), 30);
         must_pessimistic_locked(&mut engine, b"k1", 10, 30);
 
-        // Key exists ald locked with a larger for_update_ts (stale request)
+        // Key exists and is locked with a larger for_update_ts (stale request)
         must_succeed(&mut engine, b"k1", b"k1", 10, 40);
         acquire_pessimistic_lock_allow_lock_with_conflict(
             &mut engine,
