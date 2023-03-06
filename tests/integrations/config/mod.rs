@@ -208,6 +208,7 @@ fn test_serde_custom_tikv_config() {
         peer_stale_state_check_interval: ReadableDuration::hours(2),
         leader_transfer_max_log_lag: 123,
         snap_apply_batch_size: ReadableSize::mb(12),
+        snap_apply_copy_symlink: true,
         region_worker_tick_interval: ReadableDuration::millis(1000),
         clean_stale_ranges_tick: 10,
         lock_cf_compact_interval: ReadableDuration::minutes(12),

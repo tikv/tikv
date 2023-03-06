@@ -2,34 +2,25 @@
 
 #![feature(proc_macro_hygiene)]
 
-use std::{
-    fs::{copy, create_dir, metadata, read_dir, remove_dir_all, remove_file, set_permissions},
-    os::unix::fs::symlink,
-    path::{Path, PathBuf},
-    process,
-    sync::Arc,
-};
+mod utils;
+
+use std::{path::Path, process};
 
 use clap::{crate_authors, App, Arg};
 use encryption_export::data_key_manager_from_config;
 use engine_traits::Peekable;
 use kvproto::raft_serverpb::StoreIdent;
 use raft_engine::ReadableSize as RaftEngineCfgSize;
-use serde_json::{Map, Value};
-use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
-use tikv::{
-    config::{to_flatten_config_info, TikvConfig},
-    server::KvEngineFactoryBuilder,
-    storage::config::EngineType,
-};
+use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder, storage::config::EngineType};
 use tikv_util::config::{ReadableDuration, ReadableSize};
+use utils::{dup_kv_engine_files, dup_raft_engine_files, remove_and_recreate_dir, symlink_snaps};
 
 fn main() {
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
     let version_info = tikv::tikv_version_info(build_timestamp);
 
     let matches = App::new("TiKV agent")
-        .about("Start a TiKV instance copy at agent-dir")
+        .about("Start a TiKV shadow (of config) instance at agent-dir")
         .author(crate_authors!())
         .version(version_info.as_ref())
         .long_version(version_info.as_ref())
@@ -65,22 +56,6 @@ fn main() {
                 .value_name("FILE")
                 .help("Set the configuration file")
                 .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("config-check")
-                .required(false)
-                .long("config-check")
-                .takes_value(false)
-                .help("Check config file validity and exit"),
-        )
-        .arg(
-            Arg::with_name("config-info")
-                .required(false)
-                .long("config-info")
-                .takes_value(true)
-                .value_name("FORMAT")
-                .possible_values(&["json"])
-                .help("print configuration information with specified format")
         )
         .arg(
             Arg::with_name("log-level")
@@ -179,11 +154,6 @@ fn main() {
                 ),
         )
         .arg(
-            Arg::with_name("print-sample-config")
-                .long("print-sample-config")
-                .help("Print a sample config to stdout"),
-        )
-        .arg(
             Arg::with_name("metrics-addr")
                 .long("metrics-addr")
                 .value_name("IP:PORT")
@@ -196,28 +166,11 @@ fn main() {
         )
         .get_matches();
 
-    if matches.is_present("print-sample-config") {
-        let config = TikvConfig::default();
-        println!("{}", toml::to_string_pretty(&config).unwrap());
-        process::exit(0);
-    }
-
-    let mut unrecognized_keys = Vec::new();
-    let is_config_check = matches.is_present("config-check");
-
     let mut config = matches
         .value_of_os("config")
         .map_or_else(TikvConfig::default, |path| {
             let path = Path::new(path);
-            TikvConfig::from_file(
-                path,
-                if is_config_check {
-                    Some(&mut unrecognized_keys)
-                } else {
-                    None
-                },
-            )
-            .unwrap_or_else(|e| {
+            TikvConfig::from_file(path, None).unwrap_or_else(|e| {
                 panic!(
                     "invalid auto generated configuration file {}, err {}",
                     path.display(),
@@ -229,76 +182,40 @@ fn main() {
     server::setup::overwrite_config_with_cmd_args(&mut config, &matches);
     config.logger_compatible_adjust();
 
-    if is_config_check {
-        validate_and_persist_config(&mut config, false);
-        ensure_no_unrecognized_config(&unrecognized_keys);
-        println!("config check successful");
-        process::exit(0)
-    }
-
-    let is_config_info = matches.is_present("config-info");
-    if is_config_info {
-        let config_infos = to_flatten_config_info(&config);
-        let mut result = Map::new();
-        result.insert("Component".into(), "TiKV Server".into());
-        result.insert("Version".into(), tikv::tikv_build_version().into());
-        result.insert("Parameters".into(), Value::Array(config_infos));
-        println!("{}", serde_json::to_string_pretty(&result).unwrap());
-        process::exit(0);
+    if data_key_manager_from_config(&config.security.encryption, &config.storage.data_dir)
+        .unwrap()
+        .is_some()
+    {
+        eprintln!("agent mode isn't available with encryption");
+        process::exit(-1);
     }
 
     let agent_dir = matches.value_of("agent-dir").unwrap();
 
     if !matches.is_present("skip-build-agent-dir") {
-        if let Err(e) = remove_dir_all(agent_dir) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("remove {} fail: {:?}", agent_dir, e);
-                process::exit(-1);
-            } else {
-                println!("remove {} success", agent_dir);
-            }
-        }
-
-        if let Err(e) = create_dir(agent_dir) {
-            eprintln!("create {} fail: {:?}", agent_dir, e);
+        if let Err(e) = remove_and_recreate_dir(agent_dir) {
+            eprintln!("remove and re-create agent directory fail: {}", e);
             process::exit(-1);
         }
-        println!("create {} success", agent_dir);
+        println!("remove and re-create agent directory success");
 
-        match check_import_empty(&config) {
-            Ok(false) => {
-                let dir = PathBuf::from(&config.storage.data_dir).join("import");
-                eprintln!("import directory {} should be empty", dir.display());
-                process::exit(-1);
-            }
-            Err(e) => {
-                eprintln!("check import directory empty fail: {}", e);
-                process::exit(-1);
-            }
-            _ => {}
-        }
-
-        // TODO: find a way to only copy necessary snapshot files.
-
-        // Symlink files of kv engine and raft engine to the given agent dir.
-        if let Err(e) = symlink_kv_engine_files(&config, agent_dir) {
-            eprintln!("symlink_kv_engine_files: {}", e);
+        if let Err(e) = symlink_snaps(&config, agent_dir) {
+            eprintln!("symlink snapshot files fail: {}", e);
             process::exit(-1);
         }
-        if let Err(e) = symlink_raft_engine_files(&config, agent_dir) {
-            eprintln!("symlink_raft_engine_files: {}", e);
-            process::exit(-1);
-        }
+        println!("symlink snapshot files success");
 
-        // Some files should be copied instead of symlinked.
-        if let Err(e) = replace_kv_engine_symlinks(&config, agent_dir) {
-            eprintln!("replace_kv_engine_symlinks: {}", e);
+        if let Err(e) = dup_kv_engine_files(&config, agent_dir) {
+            eprintln!("symlink kv engine files fail: {}", e);
             process::exit(-1);
         }
-        if let Err(e) = replace_raft_engine_symlinks(&config, agent_dir) {
-            eprintln!("replace_raft_engine_symlinks: {}", e);
+        eprintln!("symlink kv engine files success");
+
+        if let Err(e) = dup_raft_engine_files(&config, agent_dir) {
+            eprintln!("symlink raft engine fail: {}", e);
             process::exit(-1);
         }
+        println!("symlink raft engine success");
     }
 
     config.storage.data_dir = agent_dir.to_owned();
@@ -312,15 +229,20 @@ fn main() {
     }
 
     if matches.is_present("omit-logs") {
-        // Avoid logs and place holders take memory.
         config.log.file.filename = "/dev/null".to_owned();
         config.log.file.max_backups = 0;
         config.slow_log_file = "/dev/null".to_owned();
         config.rocksdb.info_log_dir = "/tmp/".to_owned();
         config.raftdb.info_log_dir = "/tmp/".to_owned();
+    } else {
+        config.log.file.filename = "".to_owned();
+        config.log.file.max_backups = 0;
+        config.slow_log_file = "".to_owned();
+        config.rocksdb.info_log_dir = "".to_owned();
+        config.raftdb.info_log_dir = "".to_owned();
     }
 
-    // Try to avoid generating new disk files.
+    // Try to avoid generating new disk files, or delete new generated files ASAP.
     config.storage.reserve_space = ReadableSize(0);
     config.storage.reserve_raft_space = ReadableSize(0);
     config.rocksdb.defaultcf.disable_auto_compactions = true;
@@ -340,7 +262,7 @@ fn main() {
     config.storage.block_cache.capacity = Some(ReadableSize::gb(1));
 
     // For snapshot apply.
-    config.raft_store.snap_apply_copy_read_only = true;
+    config.raft_store.snap_apply_copy_symlink = true;
 
     match config.storage.engine {
         EngineType::RaftKv => server::server::run_tikv(config),
@@ -348,205 +270,9 @@ fn main() {
     }
 }
 
-fn check_import_empty(config: &TikvConfig) -> Result<bool, String> {
-    let dir = PathBuf::from(&config.storage.data_dir).join("import");
-    let readdir = read_dir(&dir).map_err(|e| format!("read_dir({}): {}", dir.display(), e))?;
-    for entry in readdir {
-        let entry = entry.map_err(|e| format!("dir_entry: {}", e))?;
-        let fname = entry.file_name().to_str().unwrap().to_owned();
-        if fname == ".clone" || fname == ".temp" {
-            continue;
-        }
-        return Ok(false);
-    }
-    Ok(true)
-}
-
-fn symlink_kv_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
-    let mut tmp_config = TikvConfig::default();
-    tmp_config.storage.data_dir = agent_dir.to_owned();
-    let kvdb = tmp_config.infer_kv_engine_path(None).unwrap();
-    create_dir(&kvdb).map_err(|e| format!("create_dir({}): {}", kvdb, e))?;
-
-    let source_kvdb = config.infer_kv_engine_path(None).unwrap();
-    symlink_stuffs(&source_kvdb, &kvdb, &["LOCK"])?;
-
-    if config.rocksdb.wal_dir != "" {
-        symlink_stuffs(&config.rocksdb.wal_dir, &kvdb, &[])?;
-    }
-
-    Ok(())
-}
-
-fn symlink_raft_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
-    if config.raft_engine.enable {
-        let mut tmp_config = TikvConfig::default();
-        tmp_config.storage.data_dir = agent_dir.to_owned();
-        let raftdb = tmp_config.infer_raft_engine_path(None).unwrap();
-        create_dir(&raftdb).map_err(|e| format!("create_dir({}): {}", raftdb, e))?;
-
-        let source_raftdb = config.infer_raft_engine_path(None).unwrap();
-        symlink_stuffs(&source_raftdb, &raftdb, &["LOCK"])?;
-    } else {
-        let mut tmp_config = TikvConfig::default();
-        tmp_config.storage.data_dir = agent_dir.to_owned();
-        let raftdb = tmp_config.infer_raft_db_path(None).unwrap();
-        create_dir(&raftdb).map_err(|e| format!("create_dir({}): {}", raftdb, e))?;
-
-        let source_raftdb = config.infer_raft_db_path(None).unwrap();
-        symlink_stuffs(&source_raftdb, &raftdb, &["LOCK"])?;
-
-        if config.raftdb.wal_dir != "" {
-            symlink_stuffs(&config.raftdb.wal_dir, &raftdb, &[])?;
-        }
-    }
-
-    Ok(())
-}
-
-fn symlink_stuffs(source_dir: &str, target_dir: &str, ignored: &[&str]) -> Result<(), String> {
-    let readdir = read_dir(source_dir).map_err(|e| format!("read_dir({}): {}", source_dir, e))?;
-    for entry in readdir {
-        let entry = entry.map_err(|e| format!("dir_entry: {}", e))?;
-        let fname = entry.file_name().to_str().unwrap().to_owned();
-        if !ignored.contains(&fname.as_ref()) {
-            let source = entry.path().canonicalize().unwrap();
-            let target = PathBuf::from(target_dir).join(fname);
-            symlink(&source, &target).map_err(|e| {
-                format!("symlink({}, {}): {}", source.display(), target.display(), e)
-            })?;
-            println!(
-                "symlinking from {} to {}",
-                source.display(),
-                target.display()
-            );
-        }
-    }
-    Ok(())
-}
-
-fn replace_kv_engine_symlinks(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
-    let mut tmp_config = TikvConfig::default();
-    tmp_config.storage.data_dir = agent_dir.to_owned();
-    let kvdb = tmp_config.infer_kv_engine_path(None).unwrap();
-
-    let selector = rocksdb_files_should_copy;
-    if config.rocksdb.wal_dir != "" {
-        replace_symlink_with_copy(&config.rocksdb.wal_dir, &kvdb, selector)
-    } else {
-        let source_kvdb = config.infer_kv_engine_path(None).unwrap();
-        replace_symlink_with_copy(&source_kvdb, &kvdb, selector)
-    }
-}
-
-fn replace_raft_engine_symlinks(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
-    if config.raft_engine.enable {
-        let selector = raft_engine_files_should_copy;
-
-        let mut tmp_config = TikvConfig::default();
-        tmp_config.storage.data_dir = agent_dir.to_owned();
-        let raftdb = tmp_config.infer_raft_engine_path(None).unwrap();
-
-        let source_raftdb = config.infer_raft_engine_path(None).unwrap();
-        replace_symlink_with_copy(&source_raftdb, &raftdb, selector)
-    } else {
-        let mut tmp_config = TikvConfig::default();
-        tmp_config.storage.data_dir = agent_dir.to_owned();
-        let raftdb = tmp_config.infer_raft_db_path(None).unwrap();
-
-        let selector = rocksdb_files_should_copy;
-        if config.raftdb.wal_dir != "" {
-            replace_symlink_with_copy(&config.raftdb.wal_dir, &raftdb, selector)
-        } else {
-            let source_raftdb = config.infer_raft_db_path(None).unwrap();
-            replace_symlink_with_copy(&source_raftdb, &raftdb, selector)
-        }
-    }
-}
-
-fn replace_symlink_with_copy<F>(
-    source_dir: &str,
-    target_dir: &str,
-    selector: F,
-) -> Result<(), String>
-where
-    F: Fn(&mut dyn Iterator<Item = String>) -> Vec<String>,
-{
-    let mut names = Vec::new();
-    let readdir = read_dir(target_dir).map_err(|e| format!("read_dir({}): {}", target_dir, e))?;
-    for entry in readdir {
-        let entry = entry.map_err(|e| format!("dir_entry: {}", e))?;
-        let fname = entry.file_name().to_str().unwrap().to_owned();
-        names.push(fname);
-    }
-
-    let kvdb_preifx = PathBuf::from(&target_dir);
-    let src_prefix = PathBuf::from(source_dir);
-    for name in (selector)(&mut names.into_iter()) {
-        let src = src_prefix.join(&name);
-        let dst = kvdb_preifx.join(&name);
-        remove_file(&dst).map_err(|e| format!("remove_file({}): {}", dst.display(), e))?;
-        copy(&src, &dst)
-            .map_err(|e| format!("copy({}, {}): {}", src.display(), dst.display(), e))?;
-        let mut pmt = metadata(&dst)
-            .map_err(|e| format!("metadata({}): {}", dst.display(), e))?
-            .permissions();
-        pmt.set_readonly(false);
-        set_permissions(&dst, pmt)
-            .map_err(|e| format!("set_permissions({}): {}", dst.display(), e))?;
-        println!(
-            "copy instead of symlink from {} to {}",
-            src.display(),
-            dst.display()
-        );
-    }
-
-    Ok(())
-}
-
-fn rocksdb_files_should_copy(iter: &mut dyn Iterator<Item = String>) -> Vec<String> {
-    let mut names = Vec::new();
-    for name in iter {
-        if name.ends_with(".log") {
-            names.push(name);
-        }
-    }
-    names.sort();
-    if let Some(last) = names.pop() {
-        names = vec![last];
-    }
-    names
-}
-
-fn raft_engine_files_should_copy(iter: &mut dyn Iterator<Item = String>) -> Vec<String> {
-    let (mut raftlogs, mut rewrites) = (Vec::new(), Vec::new());
-    for name in iter {
-        if name.ends_with(".raftlog") {
-            raftlogs.push(name);
-        } else if name.ends_with(".rewrite") {
-            rewrites.push(name);
-        }
-    }
-    raftlogs.sort();
-    rewrites.sort();
-
-    let mut names = Vec::new();
-    if let Some(last) = raftlogs.pop() {
-        names.push(last);
-    }
-    if let Some(last) = rewrites.pop() {
-        names.push(last);
-    }
-    names
-}
-
 fn get_cluster_id(config: &TikvConfig) -> Result<u64, String> {
-    let enc_mgr =
-        data_key_manager_from_config(&config.security.encryption, &config.storage.data_dir)
-            .map_err(|e| format!("data_key_manager_from_config fail: {}", e))?
-            .map(Arc::new);
     let env = config
-        .build_shared_rocks_env(enc_mgr, None)
+        .build_shared_rocks_env(None, None)
         .map_err(|e| format!("build_shared_rocks_env fail: {}", e))?;
     let cache = config
         .storage

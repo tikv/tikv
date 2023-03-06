@@ -183,7 +183,7 @@ where
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
     pub coprocessor_host: CoprocessorHost<EK>,
-    pub ingest_copy_read_only: bool,
+    pub ingest_copy_symlink: bool,
 }
 
 // A helper function to copy snapshot.
@@ -1068,14 +1068,14 @@ impl Snapshot {
             if !plain_file_used(cf_file.cf) {
                 let file_paths = cf_file.file_paths();
                 let clone_file_paths = cf_file.clone_file_paths();
-                if !options.ingest_copy_read_only {
-                    sst_importer::prepare_sst_for_ingestion(
+                if options.ingest_copy_symlink && is_symlink(&file_paths[offset])? {
+                    sst_importer::copy_sst_for_ingestion(
                         &file_paths[offset],
                         &clone_file_paths[offset],
                         self.mgr.encryption_key_manager.as_deref(),
                     )?;
                 } else {
-                    sst_importer::copy_sst_for_ingestion(
+                    sst_importer::prepare_sst_for_ingestion(
                         &file_paths[offset],
                         &clone_file_paths[offset],
                         self.mgr.encryption_key_manager.as_deref(),
@@ -2044,6 +2044,11 @@ impl TabletSnapManager {
     }
 }
 
+fn is_symlink<P: AsRef<Path>>(path: P) -> Result<bool> {
+    let metadata = box_try!(fs::symlink_metadata(path));
+    Ok(metadata.is_symlink())
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::{
@@ -2447,6 +2452,7 @@ pub mod tests {
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
+            ingest_copy_symlink: false,
         };
         // Verify the snapshot applying is ok.
         s4.apply(options).unwrap();
@@ -2683,6 +2689,7 @@ pub mod tests {
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
+            ingest_copy_symlink: false,
         };
         s5.apply(options).unwrap_err();
 
