@@ -445,15 +445,6 @@ pub struct CallbackWaitGroup {
     on_finish_all: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send + 'static>>>,
 }
 
-/// A shortcut for making an opaque future type for return type or argument
-/// type, which is sendable and not borrowing any variables.  
-///
-/// `fut![T]` == `impl Future<Output = T> + Send + 'static`
-#[macro_export(crate)]
-macro_rules! future {
-    ($t:ty) => { impl core::future::Future<Output = $t> + Send + 'static };
-}
-
 impl CallbackWaitGroup {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {

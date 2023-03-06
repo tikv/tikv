@@ -200,7 +200,7 @@ impl<T> Remote<T> {
     ///     .fulfill(42);
     /// assert!(remote_obj.wait_until_fill().is_none());
     /// ```
-    pub fn wait_until_fill(&self) -> Option<DownloadPromise<T>> {
+    pub async fn wait_until_fill(&self) -> Option<DownloadPromise<T>> {
         let mut l = self.0.as_ref().0.lock().unwrap();
         loop {
             match *l {
@@ -275,6 +275,8 @@ pub struct SstImporter {
     compression_types: HashMap<CfName, SstCompressionType>,
 
     cached_storage: CacheMap<StorageBackend>,
+    // We need to keep reference to the runtime so background tasks won't be dropped.
+    #[allow(dead_code)]
     download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: Arc<AtomicU64>,
@@ -483,29 +485,6 @@ impl SstImporter {
         self.switcher.get_mode()
     }
 
-    fn download_file_from_external_storage(
-        &self,
-        file_length: u64,
-        src_file_name: &str,
-        dst_file: std::path::PathBuf,
-        backend: &StorageBackend,
-        support_kms: bool,
-        speed_limiter: &Limiter,
-        restore_config: external_storage_export::RestoreConfig,
-    ) -> Result<()> {
-        self.download_rt
-            .block_on(self.async_download_file_from_external_storage(
-                file_length,
-                src_file_name,
-                dst_file,
-                backend,
-                support_kms,
-                speed_limiter,
-                "",
-                restore_config,
-            ))
-    }
-
     /// Create an external storage by the backend, and cache it with the key.
     /// If the cache exists, return it directly.
     pub fn external_storage_or_cache(
@@ -664,7 +643,7 @@ impl SstImporter {
         }
     }
 
-    pub fn do_read_kv_file(
+    pub async fn do_read_kv_file(
         &self,
         meta: &KvMeta,
         rewrite_rule: &RewriteRule,
@@ -684,6 +663,7 @@ impl SstImporter {
                 Entry::Occupied(mut ent) => match ent.get_mut() {
                     (CacheKvFile::Mem(buff), last_used) => {
                         *last_used = Instant::now();
+                        // FIXME: we shouldn't block here.
                         match buff.wait_until_fill() {
                             Some(handle) => handle,
                             None => return Ok(ent.get().0.clone()),
@@ -734,13 +714,15 @@ impl SstImporter {
             file_crypter: None,
         };
 
-        let buff = self.read_kv_files_from_external_storage(
-            file_length,
-            meta.get_name(),
-            ext_storage,
-            speed_limiter,
-            restore_config,
-        )?;
+        let buff = self
+            .read_kv_files_from_external_storage(
+                file_length,
+                meta.get_name(),
+                ext_storage,
+                speed_limiter,
+                restore_config,
+            )
+            .await?;
 
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         IMPORTER_APPLY_DURATION
@@ -774,7 +756,7 @@ impl SstImporter {
         }
     }
 
-    fn read_kv_files_from_external_storage(
+    async fn read_kv_files_from_external_storage(
         &self,
         file_length: u64,
         file_name: &str,
@@ -800,15 +782,14 @@ impl SstImporter {
             encrypt_wrap_reader(file_crypter, inner)?
         };
 
-        let r =
-            self.download_rt
-                .block_on(external_storage_export::read_external_storage_info_buff(
-                    &mut reader,
-                    speed_limiter,
-                    file_length,
-                    expected_sha256,
-                    external_storage_export::MIN_READ_SPEED,
-                ));
+        let r = external_storage_export::read_external_storage_info_buff(
+            &mut reader,
+            speed_limiter,
+            file_length,
+            expected_sha256,
+            external_storage_export::MIN_READ_SPEED,
+        )
+        .await;
         let url = ext_storage.url()?.to_string();
         let buff = r.map_err(|e| Error::CannotReadExternalStorage {
             url: url.to_string(),
@@ -820,7 +801,7 @@ impl SstImporter {
         Ok(buff)
     }
 
-    pub fn read_from_kv_file(
+    pub async fn read_from_kv_file(
         &self,
         meta: &KvMeta,
         rewrite_rule: &RewriteRule,
@@ -829,9 +810,11 @@ impl SstImporter {
         speed_limiter: &Limiter,
     ) -> Result<Arc<[u8]>> {
         let c = if self.import_support_download() {
-            self.do_download_kv_file(meta, backend, speed_limiter)?
+            self.do_download_kv_file(meta, backend, speed_limiter)
+                .await?
         } else {
-            self.do_read_kv_file(meta, rewrite_rule, ext_storage, speed_limiter)?
+            self.do_read_kv_file(meta, rewrite_rule, ext_storage, speed_limiter)
+                .await?
         };
         match c {
             // If cache memroy, it has been rewrite, return buffer directly.
@@ -849,7 +832,7 @@ impl SstImporter {
         }
     }
 
-    pub fn do_download_kv_file(
+    pub async fn do_download_kv_file(
         &self,
         meta: &KvMeta,
         backend: &StorageBackend,
@@ -889,7 +872,7 @@ impl SstImporter {
             expected_sha256,
             file_crypter: None,
         };
-        self.download_file_from_external_storage(
+        self.async_download_file_from_external_storage(
             meta.get_length(),
             src_name,
             path.temp.clone(),
@@ -897,8 +880,10 @@ impl SstImporter {
             false,
             // don't support encrypt for now.
             speed_limiter,
+            "",
             restore_config,
-        )?;
+        )
+        .await?;
         info!(
             "download file finished {}, offset {}, length {}",
             src_name,

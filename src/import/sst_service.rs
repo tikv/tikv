@@ -12,7 +12,6 @@ use collections::HashSet;
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, Stream, StreamExt, TryFutureExt};
-use futures_executor::{ThreadPool, ThreadPoolBuilder};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -39,7 +38,10 @@ use tikv_util::{
 use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
-use super::make_rpc_error;
+use super::{
+    make_rpc_error,
+    raft_applier::{self, TokioSpawner},
+};
 use crate::{
     import::duplicate_detect::DuplicateDetector,
     server::CONFIG_ROCKSDB_GAUGE,
@@ -89,16 +91,12 @@ pub struct ImportSstService<E: Engine> {
     tablet_registry: E::Local,
     engine: E,
     threads: Arc<Runtime>,
-    // For now, PiTR cannot be executed in the tokio runtime because it is synchronous and may
-    // blocks. (tokio is so strict... it panics if we do insane things like blocking in an async
-    // context.)
-    // We need to execute these code in a context which allows blocking.
-    // FIXME: Make PiTR restore asynchronous. Get rid of this pool.
-    block_threads: Arc<ThreadPool>,
     importer: Arc<SstImporter>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
+
+    applier: raft_applier::Handle,
 }
 
 struct RequestCollector {
@@ -281,31 +279,20 @@ impl<E: Engine> ImportSstService<E> {
             .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .build()
             .unwrap();
-        let props = tikv_util::thread_group::current_properties();
-        let block_threads = ThreadPoolBuilder::new()
-            .pool_size(cfg.num_threads)
-            .name_prefix("sst-importer")
-            .after_start_wrapper(move || {
-                tikv_util::thread_group::set_properties(props.clone());
-                tikv_alloc::add_thread_memory_accessor();
-                set_io_type(IoType::Import);
-            })
-            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
-            .create()
-            .unwrap();
         importer.start_switch_mode_check(threads.handle(), tablet_registry.clone());
         threads.spawn(Self::tick(importer.clone()));
+        let handle = raft_applier::Global::spawn_tokio(engine.clone(), threads.handle());
 
         ImportSstService {
             cfg,
             tablet_registry,
             threads: Arc::new(threads),
-            block_threads: Arc::new(block_threads),
             engine,
             importer,
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+            applier: handle,
         }
     }
 
@@ -456,7 +443,7 @@ impl<E: Engine> ImportSstService<E> {
     async fn apply_imp(
         mut req: ApplyRequest,
         importer: Arc<SstImporter>,
-        engine: E,
+        handle: raft_applier::Handle,
         limiter: Limiter,
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {
@@ -481,13 +468,16 @@ impl<E: Engine> ImportSstService<E> {
 
         let mut tasks = metas.iter().zip(rules.iter()).peekable();
         while let Some((meta, rule)) = tasks.next() {
-            let buff = importer.read_from_kv_file(
-                meta,
-                rule,
-                ext_storage.clone(),
-                req.get_storage_backend(),
-                &limiter,
-            )?;
+            let buff = importer
+                .as_ref()
+                .read_from_kv_file(
+                    meta,
+                    rule,
+                    ext_storage.clone(),
+                    req.get_storage_backend(),
+                    &limiter,
+                )
+                .await?;
             if let Some(mut r) = importer.do_apply_kv_file(
                 meta.get_start_key(),
                 meta.get_end_key(),
@@ -505,20 +495,17 @@ impl<E: Engine> ImportSstService<E> {
             }
 
             let is_last_task = tasks.peek().is_none();
-            for req in collector.drain_pending_writes(is_last_task) {
-                let f = engine.async_write(&context, req, WriteEvent::BASIC_EVENT, None);
-                inflight_futures.push_back(f);
-                if inflight_futures.len() >= MAX_INFLIGHT_RAFT_MSGS {
-                    wait_write(inflight_futures.pop_front().unwrap())
-                        .await
-                        .map_err(transfer_error)?;
-                }
+            inflight_futures.extend(
+                collector
+                    .drain_pending_writes(is_last_task)
+                    .map(|w| handle.write(w, context.clone()).map_err(transfer_error)),
+            );
+            if inflight_futures.len() >= MAX_INFLIGHT_RAFT_MSGS {
+                inflight_futures.pop_front().unwrap().await?;
             }
         }
         assert!(collector.is_empty());
-        for f in inflight_futures {
-            wait_write(f).await.map_err(transfer_error)?;
-        }
+        futures::future::try_join_all(inflight_futures).await?;
 
         Ok(range)
     }
@@ -680,6 +667,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let importer = Arc::clone(&self.importer);
         let start = Instant::now();
         let mut resp = ClearResponse::default();
+        let handle = self.applier.clone();
 
         let handle_task = async move {
             // Records how long the apply task waits to be scheduled.
@@ -695,6 +683,11 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             sst_importer::metrics::IMPORTER_APPLY_DURATION
                 .with_label_values(&[label])
                 .observe(start.saturating_elapsed().as_secs_f64());
+            if let Err(e) = handle.clear().await {
+                let mut import_err = ImportPbError::default();
+                import_err.set_message(format!("failed to clear appliers: {}", e));
+                resp.set_error(import_err);
+            }
 
             crate::send_rpc_response!(Ok(resp), sink, label, timer);
         };
@@ -707,9 +700,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "apply";
         let start = Instant::now();
         let importer = self.importer.clone();
-        let engine = self.engine.clone();
         let limiter = self.limiter.clone();
         let max_raft_size = self.raft_entry_max_size.0 as usize;
+        let applier = self.applier.clone();
 
         let handle_task = async move {
             // Records how long the apply task waits to be scheduled.
@@ -719,7 +712,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
 
             let mut resp = ApplyResponse::default();
 
-            match Self::apply_imp(req, importer, engine, limiter, max_raft_size).await {
+            match Self::apply_imp(req, importer, applier, limiter, max_raft_size).await {
                 Ok(Some(r)) => resp.set_range(r),
                 Err(e) => resp.set_error(e),
                 _ => {}
@@ -728,7 +721,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             debug!("finished apply kv file with {:?}", resp);
             crate::send_rpc_response!(Ok(resp), sink, label, start);
         };
-        self.block_threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Downloads the file and performs key-rewrite for later ingesting.
