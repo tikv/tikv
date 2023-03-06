@@ -609,7 +609,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 None => {
                     // None means the node is shutdown concurrently and thus the
                     // mailboxes in router have been cleared
-                    assert!(store_ctx.router.is_shutdown());
+                    assert!(
+                        store_ctx.router.is_shutdown(),
+                        "{} router should have been closed",
+                        SlogFormat(&self.logger)
+                    );
                     return;
                 }
             }
@@ -741,7 +745,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             } else {
                 // None means the node is shutdown concurrently and thus the
                 // mailboxes in router have been cleared
-                assert!(store_ctx.router.is_shutdown());
+                assert!(
+                    store_ctx.router.is_shutdown(),
+                    "{} router should have been closed",
+                    SlogFormat(&self.logger)
+                );
                 return;
             }
         }
