@@ -14,7 +14,7 @@ use futures::{
     channel::mpsc,
     compat::{Compat, Future01CompatExt},
     executor::block_on,
-    future::{self, BoxFuture, FutureExt, TryFutureExt},
+    future::{self, BoxFuture, FutureExt, TryFlattenStream, TryFutureExt},
     sink::SinkExt,
     stream::{ErrInto, StreamExt},
     TryStreamExt,
@@ -1174,7 +1174,7 @@ impl MetaStorageClient for RpcClient {
             .execute()
     }
 
-    fn watch(&self, req: Watch) -> PdFuture<Self::WatchStream> {
+    fn watch(&self, req: Watch) -> Self::WatchStream {
         let timer = Instant::now();
         let executor = move |client: &Client, req: WatchRequest| {
             let handler = {
@@ -1199,7 +1199,10 @@ impl MetaStorageClient for RpcClient {
         self.pd_client
             .request(req.into(), executor, LEADER_CHANGE_RETRY)
             .execute()
+            .try_flatten_stream()
     }
 
-    type WatchStream = ErrInto<grpcio::ClientSStreamReceiver<WatchResponse>, crate::Error>;
+    type WatchStream = TryFlattenStream<
+        PdFuture<ErrInto<grpcio::ClientSStreamReceiver<WatchResponse>, crate::Error>>,
+    >;
 }

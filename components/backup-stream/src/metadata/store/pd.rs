@@ -1,18 +1,10 @@
-use std::{
-    collections::VecDeque,
-    fmt::Display,
-    pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    task::ready,
-};
+use std::{collections::VecDeque, fmt::Display, pin::Pin, task::ready};
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
-use kvproto::meta_storagepb as mpb;
+use futures::{stream, Stream};
+use kvproto::meta_storagepb::{self as mpb, WatchResponse};
 use pd_client::{Get, MetaStorageClient, Put, Watch};
+use pin_project::pin_project;
 use tikv_util::{box_err, info};
 
 use super::{
@@ -48,54 +40,37 @@ fn unimplemented(name: impl Display) -> Error {
     ))
 }
 
-enum PdWatchStream<S> {
-    Running {
-        inner: S,
-        buf: VecDeque<KvEvent>,
-        canceled: Arc<AtomicBool>,
-    },
-    Canceled,
+#[pin_project]
+struct PdWatchStream<S> {
+    #[pin]
+    inner: S,
+    buf: VecDeque<KvEvent>,
 }
 
 impl<S> PdWatchStream<S> {
     /// Create a new Watch Stream from PD, with a function to cancel the stream.
-    fn new(inner: S) -> (Self, impl FnOnce()) {
-        let cancel = Arc::default();
-        let s = Self::Running {
+    fn new(inner: S) -> Self {
+        Self {
             inner,
             buf: Default::default(),
-            canceled: Arc::clone(&cancel),
-        };
-
-        (s, move || cancel.store(true, Ordering::SeqCst))
+        }
     }
 }
 
-impl<S: Stream<Item = pd_client::Result<mpb::WatchResponse>> + Unpin> Stream for PdWatchStream<S> {
+impl<S: Stream<Item = pd_client::Result<mpb::WatchResponse>>> Stream for PdWatchStream<S> {
     type Item = Result<KvEvent>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        // Safety: trivial projection.
-        let (inner, buf, canceled) = match &mut *self {
-            PdWatchStream::Running {
-                inner,
-                buf,
-                canceled,
-            } => (inner, buf, canceled),
-            PdWatchStream::Canceled => return None.into(),
-        };
         loop {
+            let this = self.as_mut().project();
+            let buf = this.buf;
             if let Some(x) = buf.pop_front() {
                 return Some(Ok(x)).into();
             }
-            if canceled.load(Ordering::SeqCst) {
-                *self.get_mut() = Self::Canceled;
-                return None.into();
-            }
-            let resp = ready!(inner.poll_next_unpin(cx));
+            let resp = ready!(this.inner.poll_next(cx));
             match resp {
                 None => return None.into(),
                 Some(Err(err)) => return Some(Err(Error::Pd(err))).into(),
@@ -139,7 +114,11 @@ impl Snapshot for RevOnly {
 pub struct RevOnly(i64);
 
 #[async_trait]
-impl<PD: MetaStorageClient + Clone> MetaStore for PdStore<PD> {
+impl<
+    St: Stream<Item = pd_client::Result<WatchResponse>> + Send + 'static,
+    PD: MetaStorageClient<WatchStream = St> + Clone,
+> MetaStore for PdStore<PD>
+{
     type Snap = RevOnly;
 
     async fn snapshot(&self) -> Result<Self::Snap> {
@@ -166,12 +145,11 @@ impl<PD: MetaStorageClient + Clone> MetaStore for PdStore<PD> {
                 use futures::stream::StreamExt;
                 let stream = self
                     .client
-                    .watch(Watch::of(k).prefixed().from_rev(start_rev))
-                    .await?;
-                let (stream, cancel) = PdWatchStream::new(stream);
+                    .watch(Watch::of(k).prefixed().from_rev(start_rev));
+                let (stream, cancel) = stream::abortable(PdWatchStream::new(stream));
                 Ok(KvChangeSubscription {
                     stream: stream.boxed(),
-                    cancel: Box::pin(async { cancel() }),
+                    cancel: Box::pin(async move { cancel.abort() }),
                 })
             }
             _ => Err(unimplemented("watch distinct keys or range of keys")),

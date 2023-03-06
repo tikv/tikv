@@ -537,6 +537,7 @@ dependencies = [
  "online_config",
  "openssl",
  "pd_client",
+ "pin-project",
  "prometheus",
  "protobuf",
  "raft",

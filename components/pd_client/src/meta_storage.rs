@@ -3,9 +3,9 @@
 //! `meta_storage` is the API set for storing generic KV pairs.
 //! It is a trimmed version of the KV service of etcd, along with some metrics.
 
-use std::{sync::Arc, task::ready};
+use std::{pin::Pin, sync::Arc, task::ready};
 
-use futures::{FutureExt, Stream, StreamExt, TryFutureExt};
+use futures::{FutureExt, Stream};
 use kvproto::meta_storagepb as pb;
 use tikv_util::{box_err, codec};
 
@@ -181,7 +181,7 @@ impl<S: MetaStorageClient> MetaStorageClient for AutoHeader<S> {
         self.inner.put(req)
     }
 
-    fn watch(&self, mut req: Watch) -> PdFuture<Self::WatchStream> {
+    fn watch(&self, mut req: Watch) -> Self::WatchStream {
         self.prepare_header(req.inner.mut_header());
         self.inner.watch(req)
     }
@@ -219,14 +219,16 @@ fn check_resp_header(header: &pb::ResponseHeader) -> Result<()> {
     Ok(())
 }
 
-impl<S: Stream<Item = Result<pb::WatchResponse>> + Unpin + Send> Stream for CheckedStream<S> {
+impl<S: Stream<Item = Result<pb::WatchResponse>>> Stream for CheckedStream<S> {
     type Item = Result<pb::WatchResponse>;
 
     fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        let item = ready!(self.0.poll_next_unpin(cx));
+        // SAFETY: trivial projection.
+        let inner = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().0) };
+        let item = ready!(inner.poll_next(cx));
         item.map(|r| {
             r.and_then(|resp| {
                 check_resp_header(resp.get_header())?;
@@ -264,8 +266,8 @@ impl<S: MetaStorageClient> MetaStorageClient for Checked<S> {
             .boxed()
     }
 
-    fn watch(&self, req: Watch) -> PdFuture<Self::WatchStream> {
-        self.0.watch(req).map_ok(|s| CheckedStream(s)).boxed()
+    fn watch(&self, req: Watch) -> Self::WatchStream {
+        CheckedStream(self.0.watch(req))
     }
 }
 
@@ -280,27 +282,21 @@ impl<S: MetaStorageClient> MetaStorageClient for Arc<S> {
         Arc::as_ref(self).put(req)
     }
 
-    fn watch(&self, req: Watch) -> PdFuture<Self::WatchStream> {
+    fn watch(&self, req: Watch) -> Self::WatchStream {
         Arc::as_ref(self).watch(req)
     }
 }
 
 /// A client which is able to play with the `meta_storage` service.
 pub trait MetaStorageClient: Send + Sync + 'static {
-    // Note: some of our clients needs to maintain some state, which means we may
-    // need to move part of the structure.
-    // Though we can write some unsafe code and prove the move won't make wrong
-    // things, for keeping things simple, we added the `Unpin` constraint here.
-    // Given before the stream generator get stable, there shouldn't be too many
-    // stream implementation that must be pinned...
-    // Note': Perhaps we'd better make it generic over response here, however that
+    // Note: Perhaps we'd better make it generic over response here, however that
     // would make `CheckedStream` impossible(How can we check ALL types? Or we may
     // make traits like `MetaStorageResponse` and constraint over the T), thankfully
     // there is only one streaming RPC in this service.
     /// The stream that yielded by the watch RPC.
-    type WatchStream: Stream<Item = Result<pb::WatchResponse>> + Unpin + Send;
+    type WatchStream: Stream<Item = Result<pb::WatchResponse>>;
 
     fn get(&self, req: Get) -> PdFuture<pb::GetResponse>;
     fn put(&self, req: Put) -> PdFuture<pb::PutResponse>;
-    fn watch(&self, req: Watch) -> PdFuture<Self::WatchStream>;
+    fn watch(&self, req: Watch) -> Self::WatchStream;
 }
