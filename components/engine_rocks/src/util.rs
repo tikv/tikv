@@ -352,13 +352,6 @@ impl CompactionFilterFactory for NoopFactory {
     ) -> Option<(CString, Self::Filter)> {
         None
     }
-
-    fn should_filter_table_file_creation(&self, reason: DBTableFileCreationReason) -> bool {
-        matches!(
-            reason,
-            DBTableFileCreationReason::Flush | DBTableFileCreationReason::Compaction
-        )
-    }
 }
 
 /// Used to build `RangeCompactionFilterFactory`, optionally stacked over
