@@ -411,8 +411,8 @@ impl<R: RaftExtension> Runnable for TabletRunner<R> {
             }
             Task::Send { addr, msg, cb } => {
                 let region_id = msg.get_region_id();
-                let sending_count = self.sending_count.load(Ordering::SeqCst);
-                if sending_count >= self.cfg.concurrent_send_snap_limit {
+                if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
+                {
                     warn!(
                         "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
                         addr, msg
