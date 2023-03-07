@@ -20,6 +20,7 @@ use parking_lot::Mutex;
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::SecurityManager;
+use smallvec::SmallVec;
 use tikv_util::worker::FutureWorker;
 use tracker::TrackerToken;
 use txn_types::{Key, TimeStamp};
@@ -43,8 +44,8 @@ use super::txn::commands::WriteResultLockInfo;
 use crate::{
     server::{resolve::StoreAddrResolver, Error, Result},
     storage::{
-        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
-        txn::Error as TxnError,
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
+        txn::{commands::ReleasedLocks, Error as TxnError},
         DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
     },
 };
@@ -519,6 +520,59 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
     fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult;
 
     fn queues_are_empty(&self) -> bool;
+
+    // The lock manager decides how to handle the released locks, and returns 3
+    // lists as actions to take a result
+    // (0) The list of lock wait entries that should be woken up immediately. This
+    // is the legacy mode, responses are directly returned to TiDB. (1) The list
+    // of futures that should be woken up after a delay. (2) The list of lock
+    // wait entries that should be resumed after current command's success.
+    fn actions_for_released_locks(
+        &self,
+        released_locks: ReleasedLocks,
+        wake_up_delay_duration_ms: u64,
+    ) -> Option<(
+        SmallVec<[(Box<LockWaitEntry>, ReleasedLock); 4]>,
+        SmallVec<[DelayedNotifyAllFuture; 4]>,
+        SmallVec<[Box<LockWaitEntry>; 4]>,
+    )> {
+        // This function is always called when holding the latch of the involved keys.
+        // So if we found the lock waiting queues are empty, there's no chance
+        // that other threads/commands adds new lock-wait entries to the keys
+        // concurrently. Therefore it's safe to skip waking up when we found the
+        // lock waiting queues are empty.
+        if self.queues_are_empty() {
+            return None;
+        }
+
+        Some(released_locks.into_iter().fold(
+            (SmallVec::new(), SmallVec::new(), SmallVec::new()),
+            |mut acc, released_lock| {
+                let (lock_wait_entry, delay_wake_up_future) = match self.pop_for_waking_up(
+                    &released_lock.key,
+                    released_lock.start_ts,
+                    released_lock.commit_ts,
+                    wake_up_delay_duration_ms,
+                ) {
+                    Some(e) => e,
+                    None => return acc,
+                };
+
+                if lock_wait_entry.parameters.allow_lock_with_conflict {
+                    // resume this lock request
+                    acc.2.push(lock_wait_entry);
+                } else {
+                    // respond to TiDB immediately
+                    acc.0.push((lock_wait_entry, released_lock));
+                }
+                if let Some(f) = delay_wake_up_future {
+                    // respond to TiDB later
+                    acc.1.push(f);
+                }
+                acc
+            },
+        ))
+    }
 }
 
 // For test

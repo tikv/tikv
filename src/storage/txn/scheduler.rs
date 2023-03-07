@@ -903,59 +903,34 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         );
     }
 
+    // wakes up locks in the legacy mode
+    // returns the locks to be resumed after current cmd finishes
     fn on_release_locks(
         &self,
         group_name: &str,
         released_locks: ReleasedLocks,
     ) -> SVec<Box<LockWaitEntry>> {
-        // This function is always called when holding the latch of the involved keys.
-        // So if we found the lock waiting queues are empty, there's no chance
-        // that other threads/commands adds new lock-wait entries to the keys
-        // concurrently. Therefore it's safe to skip waking up when we found the
-        // lock waiting queues are empty.
-        if self.inner.lock_mgr.queues_are_empty() {
-            return smallvec![];
-        }
-
-        let mut legacy_wake_up_list = SVec::new();
-        let mut delay_wake_up_futures = SVec::new();
-        let mut resumable_wake_up_list = SVec::new();
-        let wake_up_delay_duration_ms = self
-            .inner
-            .pessimistic_lock_wake_up_delay_duration_ms
-            .load(Ordering::Relaxed);
-
-        released_locks.into_iter().for_each(|released_lock| {
-            let (lock_wait_entry, delay_wake_up_future) =
-                match self.inner.lock_mgr.pop_for_waking_up(
-                    &released_lock.key,
-                    released_lock.start_ts,
-                    released_lock.commit_ts,
-                    wake_up_delay_duration_ms,
-                ) {
-                    Some(e) => e,
-                    None => return,
-                };
-
-            if lock_wait_entry.parameters.allow_lock_with_conflict {
-                resumable_wake_up_list.push(lock_wait_entry);
-            } else {
-                legacy_wake_up_list.push((lock_wait_entry, released_lock));
-            }
-            if let Some(f) = delay_wake_up_future {
-                delay_wake_up_futures.push(f);
-            }
-        });
-
-        if !legacy_wake_up_list.is_empty() || !delay_wake_up_futures.is_empty() {
-            self.wake_up_legacy_pessimistic_locks(
-                group_name,
-                legacy_wake_up_list,
-                delay_wake_up_futures,
-            );
-        }
-
-        resumable_wake_up_list
+        self.inner
+            .lock_mgr
+            .actions_for_released_locks(
+                released_locks,
+                self.inner
+                    .pessimistic_lock_wake_up_delay_duration_ms
+                    .load(Ordering::Relaxed),
+            )
+            .map(
+                |(legacy_wake_up_list, delay_wake_up_futures, resumable_wake_up_list)| {
+                    if !legacy_wake_up_list.is_empty() || !delay_wake_up_futures.is_empty() {
+                        self.wake_up_legacy_pessimistic_locks(
+                            group_name,
+                            legacy_wake_up_list,
+                            delay_wake_up_futures,
+                        );
+                    }
+                    resumable_wake_up_list
+                },
+            )
+            .unwrap_or_default()
     }
 
     fn on_acquired_locks_finished(
@@ -1390,23 +1365,23 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             .map(|txn_ext| txn_ext.pessimistic_locks.write());
         let removed_pessimistic_locks = match pessimistic_locks_guard.as_mut() {
             Some(locks)
-                // If there is a leader or region change, removing the locks is unnecessary.
-                if locks.term == term && locks.version == version && !locks.is_empty() =>
-            {
-                to_be_write
-                    .modifies
-                    .iter()
-                    .filter_map(|write| match write {
-                        Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
-                            locks.get_mut(key).map(|(_, deleted)| {
-                                *deleted = true;
-                                key.to_owned()
-                            })
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-            }
+            // If there is a leader or region change, removing the locks is unnecessary.
+            if locks.term == term && locks.version == version && !locks.is_empty() =>
+                {
+                    to_be_write
+                        .modifies
+                        .iter()
+                        .filter_map(|write| match write {
+                            Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
+                                locks.get_mut(key).map(|(_, deleted)| {
+                                    *deleted = true;
+                                    key.to_owned()
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                }
             _ => vec![],
         };
         // Keep the read lock guard of the pessimistic lock table until the request is
