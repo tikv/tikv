@@ -450,6 +450,24 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc_by(quota_delay.as_micros() as u64);
             }
         }
+        for i in 0..self.column_groups.len() {
+            let offsets = self.column_groups[i].get_column_offsets();
+            if offsets.len() != 1 {
+                continue;
+            }
+            // For the single-column group, its fm_sketch is the same as that of the
+            // corresponding column. Hence, we don't maintain its fm_sketch in
+            // collect_column_group. We just copy the corresponding column's fm_sketch after
+            // iterating all rows. Also, we can directly copy total_size and null_count.
+            let col_pos = offsets[0] as usize;
+            let col_group_pos = self.columns_info.len() + i;
+            collector.mut_base().fm_sketches[col_group_pos] =
+                collector.mut_base().fm_sketches[col_pos].clone();
+            collector.mut_base().null_count[col_group_pos] =
+                collector.mut_base().null_count[col_pos];
+            collector.mut_base().total_sizes[col_group_pos] =
+                collector.mut_base().total_sizes[col_pos];
+        }
         Ok(AnalyzeSamplingResult::new(collector))
     }
 }
@@ -527,37 +545,29 @@ impl BaseRowSampleCollector {
         let col_len = columns_val.len();
         for i in 0..column_groups.len() {
             let offsets = column_groups[i].get_column_offsets();
-            let mut has_null = true;
+            if offsets.len() == 1 {
+                // For the single-column group, its fm_sketch is the same as that of the
+                // corresponding column. Hence, we don't need to maintain its
+                // fm_sketch. We just copy the corresponding column's fm_sketch after iterating
+                // all rows. Also, we can directly copy total_size and null_count.
+                continue;
+            }
+            // We don't maintain the null count information for the multi-column group.
             for j in offsets {
                 if columns_val[*j as usize][0] == NIL_FLAG {
                     continue;
                 }
-                has_null = false;
                 self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64 - 1
             }
-            // We only maintain the null count for single column case.
-            if has_null && offsets.len() == 1 {
-                self.null_count[col_len + i] += 1;
-                continue;
-            }
-            if offsets.len() == 1 {
-                let offset = offsets[0] as usize;
-                if columns_info[offset].as_accessor().is_string_like() {
-                    self.fm_sketches[col_len + i].insert(&collation_keys_val[offset]);
+            let mut hasher = Hasher128::with_seed(0);
+            for j in offsets {
+                if columns_info[*j as usize].as_accessor().is_string_like() {
+                    hasher.write(&collation_keys_val[*j as usize]);
                 } else {
-                    self.fm_sketches[col_len + i].insert(&columns_val[offset]);
+                    hasher.write(&columns_val[*j as usize]);
                 }
-            } else {
-                let mut hasher = Hasher128::with_seed(0);
-                for j in offsets {
-                    if columns_info[*j as usize].as_accessor().is_string_like() {
-                        hasher.write(&collation_keys_val[*j as usize]);
-                    } else {
-                        hasher.write(&columns_val[*j as usize]);
-                    }
-                }
-                self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
             }
+            self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
         }
     }
 
