@@ -5156,6 +5156,8 @@ where
             return Err(Error::IsWitness(self.region_id()));
         }
 
+        fail_point!("ignore_forbid_leader_to_be_witness", |_| Ok(None));
+
         // Forbid requests to switch it into a witness when it's a leader
         if self.fsm.peer.is_leader()
             && msg.has_admin_request()
@@ -6474,6 +6476,8 @@ where
                     if !self.fsm.peer.is_leader() {
                         let _ = self.fsm.peer.get_store().clear_data();
                     } else {
+                        // Avoid calling `clear_data` as the region worker may be scanning snapshot,
+                        // to avoid problems (although no problems were found by testing).
                         self.fsm.peer.delay_clean_data = true;
                     }
                 } else {
