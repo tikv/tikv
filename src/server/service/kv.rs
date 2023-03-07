@@ -214,6 +214,10 @@ macro_rules! set_total_time {
             .mut_exec_details_v2()
             .mut_time_detail()
             .set_total_rpc_wall_time_ns($duration.as_nanos() as u64);
+        $resp
+            .mut_exec_details_v2()
+            .mut_time_detail_v2()
+            .set_total_rpc_wall_time_ns($duration.as_nanos() as u64);
     };
 }
 
