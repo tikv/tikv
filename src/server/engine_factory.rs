@@ -192,8 +192,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         let tablet_name = path.file_name().unwrap().to_str().unwrap().to_string();
         db_opts.set_info_log(TabletLogger::new(tablet_name));
         let cf_opts = self.cf_opts(EngineType::RaftKv2);
-        if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
-            db_opts.add_event_listener(listener.clone_with(ctx.id, suffix));
+        if let Some(listener) = &self.inner.flow_listener {
+            db_opts.add_event_listener(listener.clone_with(ctx.id));
         }
         if let Some(storage) = &self.inner.state_storage
             && let Some(flush_state) = ctx.flush_state {
@@ -209,8 +209,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
             engine_rocks::util::new_engine_opt(path.to_str().unwrap(), db_opts, cf_opts);
         if let Err(e) = &kv_engine {
             error!("failed to create tablet"; "id" => ctx.id, "suffix" => ?ctx.suffix, "path" => %path.display(), "err" => ?e);
-        } else if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
-            listener.clone_with(ctx.id, suffix).on_created();
+        } else if let Some(listener) = &self.inner.flow_listener {
+            listener.clone_with(ctx.id).on_created();
         }
         kv_engine
     }
@@ -227,8 +227,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         //   kv_cfs_opts,
         // )?;
         let _ = std::fs::remove_dir_all(path);
-        if let Some(listener) = &self.inner.flow_listener && let Some(suffix) = ctx.suffix {
-            listener.clone_with(ctx.id, suffix).on_destroyed();
+        if let Some(listener) = &self.inner.flow_listener {
+            listener.clone_with(ctx.id).on_destroyed();
         }
         Ok(())
     }

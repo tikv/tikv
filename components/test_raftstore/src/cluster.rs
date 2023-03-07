@@ -1339,6 +1339,10 @@ impl<T: Simulator> Cluster<T> {
         self.sim.wl().add_send_filter(node_id, filter);
     }
 
+    pub fn clear_send_filter_on_node(&mut self, node_id: u64) {
+        self.sim.wl().clear_send_filters(node_id);
+    }
+
     pub fn add_recv_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
         self.sim.wl().add_recv_filter(node_id, filter);
     }
@@ -1350,6 +1354,10 @@ impl<T: Simulator> Cluster<T> {
                 sim.add_send_filter(node_id, filter);
             }
         }
+    }
+
+    pub fn clear_recv_filter_on_node(&mut self, node_id: u64) {
+        self.sim.wl().clear_recv_filters(node_id);
     }
 
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
@@ -1828,6 +1836,10 @@ impl<T: Simulator> Cluster<T> {
         ctx.set_peer(leader);
         ctx.set_region_epoch(epoch);
         ctx
+    }
+
+    pub fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
+        self.sim.rl().get_router(node_id)
     }
 
     pub fn refresh_region_bucket_keys(
