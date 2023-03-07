@@ -202,7 +202,7 @@ mod tests {
         let t = thread::spawn(move || {
             let mut n2: usize = 0;
             loop {
-                if let Ok(n) = rx.recv() {
+                if let Ok(Msg(n)) = rx.recv() {
                     n2 += n;
                 } else {
                     return n2;
