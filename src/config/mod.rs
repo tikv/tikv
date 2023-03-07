@@ -320,8 +320,7 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub min_write_buffer_number_to_merge: i32,
             pub max_bytes_for_level_base: ReadableSize,
-            pub target_file_size_base: ReadableSize,
-            pub target_file_size_multiplier: i32,
+            pub target_file_size_base: Option<ReadableSize>,
             pub level0_file_num_compaction_trigger: i32,
             pub level0_slowdown_writes_trigger: Option<i32>,
             pub level0_stop_writes_trigger: Option<i32>,
@@ -377,6 +376,11 @@ macro_rules! cf_config {
         }
 
         impl $name {
+            #[inline]
+            fn target_file_size_base(&self) -> u64 {
+                self.target_file_size_base.unwrap_or(ReadableSize::mb(8)).0
+            }
+
             fn validate(&self) -> Result<(), Box<dyn Error>> {
                 if self.block_size.0 as usize > MAX_BLOCK_SIZE {
                     return Err(format!(
@@ -450,7 +454,7 @@ macro_rules! write_into_metrics {
             .set($cf.max_bytes_for_level_base.0 as f64);
         $metrics
             .with_label_values(&[$tag, "target_file_size_base"])
-            .set($cf.target_file_size_base.0 as f64);
+            .set($cf.target_file_size_base() as f64);
         $metrics
             .with_label_values(&[$tag, "level0_file_num_compaction_trigger"])
             .set($cf.level0_file_num_compaction_trigger.into());
@@ -572,10 +576,7 @@ macro_rules! build_cf_opt {
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
         cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
         cf_opts.set_max_bytes_for_level_base($opt.max_bytes_for_level_base.0);
-        cf_opts.set_target_file_size_base($opt.target_file_size_base.0);
-        if $opt.target_file_size_multiplier != 0 {
-            cf_opts.set_target_file_size_multiplier($opt.target_file_size_multiplier);
-        }
+        cf_opts.set_target_file_size_base($opt.target_file_size_base());
         cf_opts.set_level_zero_file_num_compaction_trigger($opt.level0_file_num_compaction_trigger);
         cf_opts.set_level_zero_slowdown_writes_trigger(
             $opt.level0_slowdown_writes_trigger.unwrap_or_default(),
@@ -662,8 +663,7 @@ impl Default for DefaultCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(8),
-            target_file_size_multiplier: 0,
+            target_file_size_base: None,
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
@@ -788,8 +788,7 @@ impl Default for WriteCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(8),
-            target_file_size_multiplier: 0,
+            target_file_size_base: None,
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
@@ -895,8 +894,7 @@ impl Default for LockCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
-            target_file_size_base: ReadableSize::mb(8),
-            target_file_size_multiplier: 0,
+            target_file_size_base: None,
             level0_file_num_compaction_trigger: 1,
             level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
@@ -979,8 +977,7 @@ impl Default for RaftCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
-            target_file_size_base: ReadableSize::mb(8),
-            target_file_size_multiplier: 0,
+            target_file_size_base: None,
             level0_file_num_compaction_trigger: 1,
             level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
@@ -1241,16 +1238,14 @@ impl DbConfig {
                 self.write_buffer_limit.get_or_insert(ReadableSize(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                 ));
-                if self.writecf.enable_compaction_guard != Some(true)
-                    && self.writecf.target_file_size_multiplier == 0
-                {
-                    self.writecf.target_file_size_multiplier = 2;
-                }
-                if self.defaultcf.enable_compaction_guard != Some(true)
-                    && self.defaultcf.target_file_size_multiplier == 0
-                {
-                    self.defaultcf.target_file_size_multiplier = 2;
-                }
+                // In RaftKv2, every region uses its own rocksdb instance, it's actually the
+                // even stricter compaction guard, so use the same output file size base.
+                self.writecf
+                    .target_file_size_base
+                    .get_or_insert(self.writecf.compaction_guard_max_output_file_size);
+                self.defaultcf
+                    .target_file_size_base
+                    .get_or_insert(self.defaultcf.compaction_guard_max_output_file_size);
                 self.defaultcf.disable_write_stall = true;
                 self.writecf.disable_write_stall = true;
                 self.lockcf.disable_write_stall = true;
@@ -1492,8 +1487,7 @@ impl Default for RaftDefaultCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(8),
-            target_file_size_multiplier: 0,
+            target_file_size_base: None,
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
@@ -4790,7 +4784,7 @@ mod tests {
         cfg.rocksdb.max_background_jobs = 4;
         cfg.rocksdb.max_background_flushes = 2;
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
-        cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
+        cfg.rocksdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(64));
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.rocksdb.rate_limiter_auto_tuned = false;
@@ -5238,33 +5232,33 @@ mod tests {
         let no_limiter: Option<ConcurrentTaskLimiter> = None;
         // Test comopaction guard disabled.
         let config = DefaultCfConfig {
-            target_file_size_base: ReadableSize::mb(16),
+            target_file_size_base: Some(ReadableSize::mb(16)),
             enable_compaction_guard: Some(false),
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
         let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
         assert_eq!(
-            config.target_file_size_base.0,
+            config.target_file_size_base(),
             cf_opts.get_target_file_size_base()
         );
 
         // Test compaction guard enabled but region info provider is missing.
         let config = DefaultCfConfig {
-            target_file_size_base: ReadableSize::mb(16),
+            target_file_size_base: Some(ReadableSize::mb(16)),
             enable_compaction_guard: Some(true),
             ..Default::default()
         };
         let provider: Option<MockRegionInfoProvider> = None;
         let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
         assert_eq!(
-            config.target_file_size_base.0,
+            config.target_file_size_base(),
             cf_opts.get_target_file_size_base()
         );
 
         // Test compaction guard enabled.
         let config = DefaultCfConfig {
-            target_file_size_base: ReadableSize::mb(16),
+            target_file_size_base: Some(ReadableSize::mb(16)),
             enable_compaction_guard: Some(true),
             compaction_guard_min_output_file_size: ReadableSize::mb(4),
             compaction_guard_max_output_file_size: ReadableSize::mb(64),
@@ -5572,10 +5566,10 @@ mod tests {
             Some(default_cfg.coprocessor.region_split_size() * 3 / 4 / ReadableSize::kb(1));
         default_cfg.raft_store.region_split_check_diff =
             Some(default_cfg.coprocessor.region_split_size() / 16);
-        default_cfg.rocksdb.writecf.target_file_size_multiplier = 1;
-        default_cfg.rocksdb.defaultcf.target_file_size_multiplier = 1;
-        default_cfg.rocksdb.lockcf.target_file_size_multiplier = 1;
-        default_cfg.raftdb.defaultcf.target_file_size_multiplier = 1;
+        default_cfg.rocksdb.writecf.target_file_size_base = Some(ReadableSize::mb(8));
+        default_cfg.rocksdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
+        default_cfg.rocksdb.lockcf.target_file_size_base = Some(ReadableSize::mb(8));
+        default_cfg.raftdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
