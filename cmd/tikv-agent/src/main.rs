@@ -209,7 +209,7 @@ fn main() {
             eprintln!("symlink kv engine files fail: {}", e);
             process::exit(-1);
         }
-        eprintln!("symlink kv engine files success");
+        println!("symlink kv engine files success");
 
         if let Err(e) = dup_raft_engine_files(&config, agent_dir) {
             eprintln!("symlink raft engine fail: {}", e);

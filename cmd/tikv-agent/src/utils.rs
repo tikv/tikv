@@ -70,12 +70,13 @@ pub fn dup_raft_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(),
 
     if config.raft_engine.enable {
         let dst = dst_config.infer_raft_engine_path(None).unwrap();
+        let mut raft_engine_cfg = config.raft_engine.config();
+        raft_engine_cfg.dir = config.infer_raft_engine_path(None).unwrap();
         // NOTE: it's ok to used `DefaultFileSystem` whatever the original instance
         // is encrypted or not because only `open` is used in `minimum_copy`. Seems
         // this behavior will never be changed, however we can custom a file system
         // which panics in all other calls later.
-        let fs = Arc::new(DefaultFileSystem);
-        minimum_copy(&config.raft_engine.config(), fs, dst)?;
+        minimum_copy(&raft_engine_cfg, Arc::new(DefaultFileSystem), dst)?;
     } else {
         let dst = dst_config.infer_raft_db_path(None).unwrap();
         create_dir(&dst)?;
