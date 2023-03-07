@@ -72,6 +72,7 @@ use slog::{debug, error, info, warn};
 use tikv_util::{
     slog_panic,
     store::{find_peer, region_on_same_stores},
+    time::Instant,
 };
 
 use super::merge_source_path;
@@ -281,7 +282,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let source_path = merge_source_path(reg, source_region.get_id(), merge.get_commit());
         // Even if source_path exists, we still need to send it to acknowledge that we
         // have committed the merge, so that the source peer can destroy itself.
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
+        let now = Instant::now_coarse();
         self.res_reporter().redirect_catch_up_logs(CatchUpLogs {
             target_region_id: self.region_id(),
             merge: merge.clone(),
@@ -289,14 +291,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         });
         let source_safe_ts = if !source_path.exists() {
             rx.await.unwrap_or_else(|_| {
-                // TODO: handle this gracefully.
                 slog_panic!(self.logger, "source peer is missing");
             })
         } else {
-            0
+            // Source could've been destroyed already.
+            rx.try_recv().ok().flatten().unwrap_or(0)
         };
-        let ctx = TabletContext::new(source_region, None);
-        let source_tablet = reg.tablet_factory().open_tablet(ctx, &source_path).unwrap();
+        let wait_time = now.saturating_elapsed();
 
         info!(
             self.logger,
@@ -306,6 +307,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             "index" => index,
             "source_region" => ?source_region,
         );
+
+        let ctx = TabletContext::new(source_region, None);
+        let source_tablet = reg
+            .tablet_factory()
+            .open_tablet(ctx, &source_path)
+            .unwrap_or_else(|e| {
+                slog_panic!(self.logger, "failed to open source checkpoint"; "err" => ?e);
+            });
+        let open_time = now.saturating_elapsed();
+
         let mut region = self.region().clone();
         // Use a max value so that pd can ensure overlapped region has a priority.
         let version = cmp::max(
@@ -338,10 +349,23 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     "error" => ?e
                 )
             });
+        let merge_time = now.saturating_elapsed();
         // In order to avoid this flush, we need to
         // (1) make `merge` re-entrant.
         // (2) do not advance admin.flushed right away.
         tablet.flush_cfs(&[], true).unwrap();
+        let flush_time = now.saturating_elapsed();
+
+        info!(
+            self.logger,
+            "applied CommitMerge";
+            "source_region" => ?source_region,
+            "wait_ms" => wait_time.as_millis(),
+            "open_ms" => open_time.saturating_sub(wait_time).as_millis(),
+            "merge_ms" => merge_time.saturating_sub(open_time).as_millis(),
+            "flush_ms" => flush_time.saturating_sub(merge_time).as_millis(),
+        );
+
         self.set_tablet(tablet.clone());
 
         self.region_state_mut().set_region(region.clone());
