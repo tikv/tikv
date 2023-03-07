@@ -680,7 +680,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         let now = Instant::now();
-        for i in from + 1..to {
+        for i in from + 1..=to {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
                     for tracker in trackers {
@@ -699,7 +699,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         let now = Instant::now();
-        for i in from + 1..to {
+        for i in from + 1..=to {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
                     let commit_persisted = i <= self.persisted_index();

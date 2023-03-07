@@ -241,6 +241,7 @@ pub struct ServerMeta {
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: StoreRouter<RocksEngine, RaftTestEngine>,
+    gc_worker: GcWorker<TestRaftKv2>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
@@ -623,6 +624,7 @@ impl ServerCluster {
                 node,
                 server,
                 sim_router,
+                gc_worker,
                 sim_trans: simulate_trans,
                 rsmeter_cleanup,
             },
@@ -632,6 +634,11 @@ impl ServerCluster {
             .insert(node_id, concurrency_manager);
 
         Ok(node_id)
+    }
+
+    /// To trigger GC manually.
+    pub fn get_gc_worker(&self, node_id: u64) -> &GcWorker<TestRaftKv2> {
+        &self.metas.get(&node_id).unwrap().gc_worker
     }
 
     pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<CausalTsProviderImpl>> {
