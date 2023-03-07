@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Condvar, Mutex,
+        Arc,
     },
     time::Duration,
 };
@@ -40,7 +40,10 @@ use tikv_util::{
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
 };
-use tokio::runtime::{Handle, Runtime};
+use tokio::{
+    runtime::{Handle, Runtime},
+    sync::{Mutex, MutexGuard},
+};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -115,23 +118,8 @@ pub enum CacheKvFile {
 /// This structure doesn't manage how it is downloaded, it just manages the
 /// state. You need to provide the manually downloaded data to the
 /// [`DownloadPromise`].
-/// Below is the state transform of this:
-/// ```text
-///                           DownloadPromise::fulfill
-///               +-----------+         +-----------+
-///               |Downloading+-------->|Cached     |
-///               +--+--------+         +-----------+
-///                  |     ^
-///                  |     |
-/// DownloadPromise  |     | Somebody takes
-/// dropped          |     | over the duty.
-///                  v     |
-///               +--------+--+
-///               |Leaked     |
-///               +-----------+
-/// ```
 #[derive(Debug)]
-pub struct Remote<T>(Arc<(Mutex<FileCacheInner<T>>, Condvar)>);
+pub struct Remote<T>(Arc<Mutex<FileCacheInner<T>>>);
 
 impl<T> Clone for Remote<T> {
     fn clone(&self) -> Self {
@@ -142,48 +130,35 @@ impl<T> Clone for Remote<T> {
 /// When holding this, the holder has promised to downloading the remote object
 /// into local, then provide it to others waiting the object, by
 /// [`Self::fulfill()`].
-pub struct DownloadPromise<T>(Arc<(Mutex<FileCacheInner<T>>, Condvar)>);
+pub struct DownloadPromise<'a, T>(MutexGuard<'a, FileCacheInner<T>>, Remote<T>);
 
-impl<T> DownloadPromise<T> {
+impl<'a, T> DownloadPromise<'a, T> {
     /// provide the downloaded data and make it cached.
-    pub fn fulfill(self, item: T) -> Remote<T> {
-        let mut l = self.0.as_ref().0.lock().unwrap();
-        debug_assert!(matches!(*l, FileCacheInner::Downloading));
+    pub fn fulfill(mut self, item: T) -> Remote<T> {
+        let l = &mut *self.0;
+        debug_assert!(matches!(*l, FileCacheInner::Pending));
         *l = FileCacheInner::Cached(item);
-        self.0.as_ref().1.notify_all();
-        drop(l);
-        Remote(Arc::clone(&self.0))
+        drop(self.0);
+
+        self.1
     }
 }
 
-impl<T> Drop for DownloadPromise<T> {
-    fn drop(&mut self) {
-        let mut l = self.0.as_ref().0.lock().unwrap();
-        if matches!(*l, FileCacheInner::Downloading) {
-            *l = FileCacheInner::Leaked;
-            self.0.as_ref().1.notify_one();
-        }
+impl<T> Default for Remote<T> {
+    fn default() -> Self {
+        let inner = Arc::new(Mutex::new(FileCacheInner::Pending));
+        Self(inner)
     }
 }
 
 impl<T> Remote<T> {
-    /// create a downloading remote object.
-    /// it returns the handle to the remote object and a [`DownloadPromise`],
-    /// the latter can be used to fulfill the remote object.
-    ///
-    /// # Examples
-    /// ```
-    /// # use sst_importer::sst_importer::Remote;
-    /// let (remote_obj, promise) = Remote::download();
-    /// promise.fulfill(42);
-    /// assert_eq!(remote_obj.get(), Some(42));
-    /// ```
-    pub fn download() -> (Self, DownloadPromise<T>) {
-        let inner = Arc::new((Mutex::new(FileCacheInner::Downloading), Condvar::new()));
-        (Self(Arc::clone(&inner)), DownloadPromise(inner))
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Block and wait until the remote object is downloaded.
+    /// Block and wait until the remote object is downloaded or being able to be
+    /// exclusively downloading.
+    ///
     /// # Returns
     /// If the remote object has been fulfilled, return `None`.
     /// If the remote object hasn't been fulfilled, return a
@@ -192,27 +167,19 @@ impl<T> Remote<T> {
     /// # Examples
     /// ```
     /// # use sst_importer::sst_importer::Remote;
-    /// let (remote_obj, promise) = Remote::download();
-    /// drop(promise);
-    /// let new_promise = remote_obj.wait_until_fill();
+    /// # use futures::executor::block_on;
+    /// let remote_obj = Remote::new();
+    /// let new_promise = block_on(remote_obj.wait_for_duty_or_fill());
     /// new_promise
     ///     .expect("wait_until_fill should return new promise when old promise dropped")
     ///     .fulfill(42);
-    /// assert!(remote_obj.wait_until_fill().is_none());
+    /// assert!(block_on(remote_obj.wait_for_duty_or_fill()).is_none());
     /// ```
-    pub fn wait_until_fill(&self) -> Option<DownloadPromise<T>> {
-        let mut l = self.0.as_ref().0.lock().unwrap();
-        loop {
-            match *l {
-                FileCacheInner::Downloading => {
-                    l = self.0.as_ref().1.wait(l).unwrap();
-                }
-                FileCacheInner::Leaked => {
-                    *l = FileCacheInner::Downloading;
-                    return Some(DownloadPromise(Arc::clone(&self.0)));
-                }
-                FileCacheInner::Cached(_) => return None,
-            }
+    pub async fn wait_for_duty_or_fill(&self) -> Option<DownloadPromise<'_, T>> {
+        let l = self.0.lock().await;
+        match &*l {
+            FileCacheInner::Pending => Some(DownloadPromise(l, self.clone())),
+            FileCacheInner::Cached(_) => None,
         }
     }
 }
@@ -220,9 +187,9 @@ impl<T> Remote<T> {
 impl<T: ShareOwned> Remote<T> {
     /// Fetch the internal object of the remote object.
     pub fn get(&self) -> Option<<T as ShareOwned>::Shared> {
-        let l = self.0.as_ref().0.lock().unwrap();
+        let l = self.0.blocking_lock();
         match *l {
-            FileCacheInner::Downloading | FileCacheInner::Leaked => None,
+            FileCacheInner::Pending => None,
             FileCacheInner::Cached(ref t) => Some(t.share_owned()),
         }
     }
@@ -240,8 +207,7 @@ fn bug(message: impl std::fmt::Display) -> Error {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FileCacheInner<T> {
-    Downloading,
-    Leaked,
+    Pending,
     Cached(T),
 }
 
@@ -485,6 +451,30 @@ impl SstImporter {
         self.switcher.get_mode()
     }
 
+    #[cfg(test)]
+    fn download_file_from_external_storage(
+        &self,
+        file_length: u64,
+        src_file_name: &str,
+        dst_file: std::path::PathBuf,
+        backend: &StorageBackend,
+        support_kms: bool,
+        speed_limiter: &Limiter,
+        restore_config: external_storage_export::RestoreConfig,
+    ) -> Result<()> {
+        self.download_rt
+            .block_on(self.async_download_file_from_external_storage(
+                file_length,
+                src_file_name,
+                dst_file,
+                backend,
+                support_kms,
+                speed_limiter,
+                "",
+                restore_config,
+            ))
+    }
+
     /// Create an external storage by the backend, and cache it with the key.
     /// If the cache exists, return it directly.
     pub fn external_storage_or_cache(
@@ -653,7 +643,7 @@ impl SstImporter {
         let start = Instant::now();
         let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
 
-        let promise = {
+        let cache = {
             let lock = self.file_locks.entry(dst_name);
             IMPORTER_APPLY_DURATION
                 .with_label_values(&["download-get-lock"])
@@ -663,11 +653,7 @@ impl SstImporter {
                 Entry::Occupied(mut ent) => match ent.get_mut() {
                     (CacheKvFile::Mem(buff), last_used) => {
                         *last_used = Instant::now();
-                        // FIXME: we shouldn't block here.
-                        match buff.wait_until_fill() {
-                            Some(handle) => handle,
-                            None => return Ok(ent.get().0.clone()),
-                        }
+                        buff.clone()
                     }
                     _ => {
                         return Err(bug(concat!(
@@ -679,11 +665,18 @@ impl SstImporter {
                     }
                 },
                 Entry::Vacant(ent) => {
-                    let (cache, handle) = Remote::download();
-                    ent.insert((CacheKvFile::Mem(cache), Instant::now()));
-                    handle
+                    let cache = Remote::new();
+                    ent.insert((CacheKvFile::Mem(cache.clone()), Instant::now()));
+                    cache
                 }
             }
+        };
+        let promise = match cache.wait_for_duty_or_fill().await {
+            Some(h) => h,
+            // We need to `Clone` here or rustc complains `cache` would be used then...
+            // Anyway, comparing to downloading a remote file, increasing an atomic value has little
+            // overhead.
+            None => return Ok(CacheKvFile::Mem(cache.clone())),
         };
 
         let permit = self
@@ -1968,14 +1961,13 @@ mod tests {
 
         // test do_read_kv_file()
         let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
-        let output = importer
-            .do_read_kv_file(
-                &kv_meta,
-                rewrite_rule,
-                ext_storage,
-                &Limiter::new(f64::INFINITY),
-            )
-            .unwrap();
+        let output = block_on_external_io(importer.do_read_kv_file(
+            &kv_meta,
+            rewrite_rule,
+            ext_storage,
+            &Limiter::new(f64::INFINITY),
+        ))
+        .unwrap();
 
         assert!(
             matches!(output.clone(), CacheKvFile::Mem(rc) if &*rc.get().unwrap() == buff.as_slice()),
@@ -2032,15 +2024,14 @@ mod tests {
             ..Default::default()
         };
 
-        let output = importer
-            .read_kv_files_from_external_storage(
-                kv_meta.get_length(),
-                kv_meta.get_name(),
-                ext_storage.clone(),
-                &Limiter::new(f64::INFINITY),
-                restore_config,
-            )
-            .unwrap();
+        let output = block_on_external_io(importer.read_kv_files_from_external_storage(
+            kv_meta.get_length(),
+            kv_meta.get_name(),
+            ext_storage.clone(),
+            &Limiter::new(f64::INFINITY),
+            restore_config,
+        ))
+        .unwrap();
         assert_eq!(
             buff,
             output,
@@ -2056,15 +2047,14 @@ mod tests {
             ..Default::default()
         };
 
-        let output = importer
-            .read_kv_files_from_external_storage(
-                len,
-                kv_meta.get_name(),
-                ext_storage,
-                &Limiter::new(f64::INFINITY),
-                restore_config,
-            )
-            .unwrap();
+        let output = block_on_external_io(importer.read_kv_files_from_external_storage(
+            len,
+            kv_meta.get_name(),
+            ext_storage,
+            &Limiter::new(f64::INFINITY),
+            restore_config,
+        ))
+        .unwrap();
         assert_eq!(&buff[offset as _..(offset + len) as _], &output[..]);
     }
 
@@ -2098,15 +2088,14 @@ mod tests {
 
         // test do_download_kv_file().
         assert!(importer.import_support_download());
-        let output = importer
-            .read_from_kv_file(
-                &kv_meta,
-                rewrite_rule,
-                ext_storage,
-                &backend,
-                &Limiter::new(f64::INFINITY),
-            )
-            .unwrap();
+        let output = block_on_external_io(importer.read_from_kv_file(
+            &kv_meta,
+            rewrite_rule,
+            ext_storage,
+            &backend,
+            &Limiter::new(f64::INFINITY),
+        ))
+        .unwrap();
         assert_eq!(*output, buff);
         check_file_exists(&path.save, None);
 
@@ -3017,7 +3006,7 @@ mod tests {
             SstImporter::new(&Config::default(), import_dir, None, ApiVersion::V1).unwrap();
 
         let key = "file1";
-        let (r, _) = Remote::download();
+        let r = Remote::new();
         let value = (CacheKvFile::Mem(r), Instant::now());
         let lock = importer.file_locks.entry(key.to_string()).or_insert(value);
 
@@ -3038,13 +3027,14 @@ mod tests {
 
     #[test]
     fn test_remote_waiting() {
-        let (r, dl) = Remote::download();
+        let r = Remote::new();
+        let dl = block_on_external_io(r.wait_for_duty_or_fill()).unwrap();
         let r2 = r.clone();
         let js = (0..2)
             .map(|_| {
                 let r = r.clone();
                 std::thread::spawn(move || {
-                    assert!(r.wait_until_fill().is_none());
+                    assert!(block_on_external_io(r.wait_for_duty_or_fill()).is_none());
                     r.get()
                 })
             })
@@ -3058,9 +3048,12 @@ mod tests {
 
     #[test]
     fn test_remote_drop_in_one_thread() {
-        let (r, dl) = Remote::download();
-        drop(dl);
-        let p = r.wait_until_fill();
+        let r = Remote::new();
+        let p = block_on_external_io(r.wait_for_duty_or_fill());
+        assert!(p.is_some());
+        drop(p);
+
+        let p = block_on_external_io(r.wait_for_duty_or_fill());
         assert!(p.is_some());
         p.unwrap().fulfill("Kitty");
         assert_eq!(r.get(), Some("Kitty"));
@@ -3068,18 +3061,19 @@ mod tests {
 
     #[test]
     fn test_remote_take_duty() {
-        let (r, dl) = Remote::download();
+        let r = Remote::new();
         let js = (0..4).map(|i| {
             let r = r.clone();
             std::thread::Builder::new()
                 .name(format!("rd-{}", i))
-                .spawn_wrapper(move || match r.wait_until_fill() {
-                    Some(x) => x.fulfill(42).get(),
-                    None => r.get(),
-                })
+                .spawn_wrapper(
+                    move || match block_on_external_io(r.wait_for_duty_or_fill()) {
+                        Some(x) => x.fulfill(42).get(),
+                        None => r.get(),
+                    },
+                )
                 .unwrap()
         });
-        drop(dl);
         for j in js {
             assert!(matches!(j.join(), Ok(Some(42))));
         }

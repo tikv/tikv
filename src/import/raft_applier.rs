@@ -4,7 +4,6 @@
 
 use std::{collections::HashMap, marker::PhantomData, rc::Rc, sync::Arc, time::Duration};
 
-use collections::HashMapEntry;
 use futures::{Future, Stream, StreamExt};
 use kvproto::kvrpcpb::Context;
 use tikv_kv::{Engine, WriteData, WriteEvent};
@@ -125,19 +124,16 @@ impl RegionHandle {
 
 impl<E: Engine> Global<E, TokioLocalSpawner> {
     pub fn spawn_tokio(engine: E, rt: &tokio::runtime::Handle) -> Handle {
-        let eng = engine.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         rt.spawn_blocking(move || {
-            let (app, handle) = Global::<E, TokioLocalSpawner>::create(eng);
+            let (app, handle) = Global::<E, TokioLocalSpawner>::create(engine);
             // Once it fail, the outer rx would know.
             let _ = tx.send(handle);
             let local = tokio::task::LocalSet::new();
             tokio::runtime::Handle::current().block_on(local.run_until(app.main_loop()))
         });
-        let handle = rx
-            .blocking_recv()
-            .expect("failed to initialize the raft writer");
-        handle
+        rx.blocking_recv()
+            .expect("failed to initialize the raft writer")
     }
 }
 
