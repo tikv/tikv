@@ -550,6 +550,9 @@ async fn send_snap_files(
     head.mut_head().set_message(msg);
     let missing = find_missing(&path, head, &mut sender, receiver, &limiter).await?;
     let total_sent = send_missing(&path, missing, &mut sender, &limiter).await?;
+    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+        .send
+        .inc_by(total_sent);
     info!("sent all snap file finish"; "snap_key" => %key, "region_id" => region_id, "to_peer" => to_peer);
     sender.close().await?;
     Ok(total_sent)
