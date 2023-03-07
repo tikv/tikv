@@ -200,7 +200,7 @@ impl<T> Remote<T> {
     ///     .fulfill(42);
     /// assert!(remote_obj.wait_until_fill().is_none());
     /// ```
-    pub async fn wait_until_fill(&self) -> Option<DownloadPromise<T>> {
+    pub fn wait_until_fill(&self) -> Option<DownloadPromise<T>> {
         let mut l = self.0.as_ref().0.lock().unwrap();
         loop {
             match *l {

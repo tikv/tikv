@@ -38,10 +38,7 @@ use tikv_util::{
 use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
-use super::{
-    make_rpc_error,
-    raft_applier::{self, TokioSpawner},
-};
+use super::{make_rpc_error, raft_applier};
 use crate::{
     import::duplicate_detect::DuplicateDetector,
     server::CONFIG_ROCKSDB_GAUGE,

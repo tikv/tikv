@@ -2,8 +2,9 @@
 //! This module contains types for asynchronously applying the write batches
 //! into the storage.
 
-use std::{collections::HashMap, marker::PhantomData, rc::Rc, sync::Arc};
+use std::{collections::HashMap, marker::PhantomData, rc::Rc, sync::Arc, time::Duration};
 
+use collections::HashMapEntry;
 use futures::{Future, Stream, StreamExt};
 use kvproto::kvrpcpb::Context;
 use tikv_kv::{Engine, WriteData, WriteEvent};
@@ -14,10 +15,11 @@ use crate::storage;
 
 const MAX_INFLIGHT_RAFT_MESSAGE: usize = 64;
 const MAX_PENDING_RAFT_MESSAGE: usize = 1024;
+const REGION_WRITER_MAX_IDLE_TIME: Duration = Duration::from_secs(30);
 
-pub struct TokioSpawner;
+pub struct TokioLocalSpawner;
 
-impl Spawner for TokioSpawner {
+impl Spawner for TokioLocalSpawner {
     fn spawn<F>(task: F)
     where
         F: Future<Output = ()> + 'static,
@@ -121,12 +123,12 @@ impl RegionHandle {
     }
 }
 
-impl<E: Engine> Global<E, TokioSpawner> {
+impl<E: Engine> Global<E, TokioLocalSpawner> {
     pub fn spawn_tokio(engine: E, rt: &tokio::runtime::Handle) -> Handle {
         let eng = engine.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         rt.spawn_blocking(move || {
-            let (app, handle) = Global::<E, TokioSpawner>::create(eng);
+            let (app, handle) = Global::<E, TokioLocalSpawner>::create(eng);
             // Once it fail, the outer rx would know.
             let _ = tx.send(handle);
             let local = tokio::task::LocalSet::new();
@@ -157,11 +159,18 @@ impl<E: Engine, S: Spawner> Global<E, S> {
             match msg {
                 GlobalMessage::Apply { wb, ctx, cb } => {
                     let rid = ctx.get_region_id();
-                    let ent = self.regions.entry(rid);
-                    let eng = Rc::clone(&self.engine);
-                    let reg = ent.or_insert_with(move || Region::<E, S>::spawn(eng));
+                    let eng = &self.engine;
+                    let rgn = &mut self.regions;
 
-                    reg.forward_write(wb, ctx, cb).await;
+                    let hnd = rgn
+                        .entry(rid)
+                        .and_modify(|hnd| {
+                            if hnd.tx.is_closed() {
+                                *hnd = Region::<E, S>::spawn(Rc::clone(eng));
+                            }
+                        })
+                        .or_insert_with(|| Region::<E, S>::spawn(Rc::clone(eng)));
+                    hnd.forward_write(wb, ctx, cb).await;
                 }
                 GlobalMessage::Clear { cb } => {
                     self.regions.clear();
@@ -186,7 +195,9 @@ impl<E: Engine, S: Spawner> Region<E, S> {
     }
 
     async fn main_loop(mut self) {
-        while let Some(msg) = self.incoming.recv().await {
+        while let Ok(Some(msg)) =
+            tokio::time::timeout(REGION_WRITER_MAX_IDLE_TIME, self.incoming.recv()).await
+        {
             match msg {
                 RegionMessage::Apply { wb, cb, ctx } => {
                     let q = Arc::clone(&self.quota)
