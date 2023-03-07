@@ -4,7 +4,7 @@ use std::{path::Path, sync::Arc};
 
 use engine_rocks::{
     raw::{Cache, Env},
-    util::RangeCompactionFilterFactoryBuilder,
+    util::RangeCompactionFilterFactory,
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
     TabletLogger,
@@ -156,7 +156,7 @@ impl KvEngineFactory {
 
     fn cf_opts(
         &self,
-        filter_builder: Option<&RangeCompactionFilterFactoryBuilder>,
+        filter_builder: Option<&RangeCompactionFilterFactory>,
         for_engine: EngineType,
     ) -> Vec<(&str, RocksCfOptions)> {
         self.inner.rocksdb_config.build_cf_opts(
@@ -197,9 +197,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         let mut db_opts = self.db_opts(EngineType::RaftKv2);
         let tablet_name = path.file_name().unwrap().to_str().unwrap().to_string();
         db_opts.set_info_log(TabletLogger::new(tablet_name));
-        let builder =
-            RangeCompactionFilterFactoryBuilder::new(ctx.start_key.to_vec(), ctx.end_key.to_vec());
-        let cf_opts = self.cf_opts(Some(&builder), EngineType::RaftKv2);
+        let factory = RangeCompactionFilterFactory::new(ctx.start_key.clone(), ctx.end_key.clone());
+        let cf_opts = self.cf_opts(Some(&factory), EngineType::RaftKv2);
         if let Some(listener) = &self.inner.flow_listener {
             db_opts.add_event_listener(listener.clone_with(ctx.id));
         }

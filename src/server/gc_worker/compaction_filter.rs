@@ -1068,7 +1068,7 @@ pub mod tests {
 
             // Wait up to 1 second, and treat as no task if timeout.
             if let Ok(Some(task)) = gc_runner.gc_receiver.recv_timeout(Duration::new(1, 0)) {
-                assert!(expect_tasks, "a GC task is expected");
+                assert!(expect_tasks, "unexpected GC task");
                 match task {
                     GcTask::GcKeys { keys, .. } => {
                         assert_eq!(keys.len(), 1);
@@ -1080,7 +1080,7 @@ pub mod tests {
                 }
                 return;
             }
-            assert!(!expect_tasks, "no GC task is expected");
+            assert!(!expect_tasks, "no GC task after 1 second");
         };
 
         // No key switch after the deletion mark.
