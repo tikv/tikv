@@ -342,6 +342,15 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
 
                 if partition_by.is_empty() {
                     Box::new(
+                        BatchLimitExecutor::new(
+                            executor,
+                            d.get_limit() as usize,
+                            is_src_scan_executor,
+                        )?
+                        .collect_summary(summary_slot_index),
+                    )
+                } else {
+                    Box::new(
                         BatchPartitionTopNExecutor::new(
                             config.clone(),
                             executor,
@@ -349,15 +358,6 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                             vec![],
                             vec![],
                             d.get_limit() as usize,
-                        )?
-                        .collect_summary(summary_slot_index),
-                    )
-                } else {
-                    Box::new(
-                        BatchLimitExecutor::new(
-                            executor,
-                            d.get_limit() as usize,
-                            is_src_scan_executor,
                         )?
                         .collect_summary(summary_slot_index),
                     )
