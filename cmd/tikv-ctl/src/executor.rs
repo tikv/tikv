@@ -1,13 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::ToOwned, cmp::Ordering, pin::Pin, str, string::ToString, sync::Arc, time::Duration, u64,
+    borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, str, string::ToString, sync::Arc,
+    time::Duration, u64,
 };
 
 use encryption_export::data_key_manager_from_config;
 use engine_rocks::util::{db_exist, new_engine_opt};
 use engine_traits::{
-    Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    Engines, Error as EngineError, RaftEngine, TabletRegistry, ALL_CFS, CF_DEFAULT, CF_LOCK,
+    CF_WRITE, DATA_CFS,
 };
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Environment};
@@ -25,12 +27,15 @@ use raft_log_engine::RaftLogEngine;
 use raftstore::store::{util::build_key_range, INIT_EPOCH_CONF_VER};
 use security::SecurityManager;
 use serde_json::json;
+use server::fatal;
 use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
         debug::{BottommostLevelCompaction, Debugger, RegionInfo},
+        debug2::DebuggerV2,
         KvEngineFactoryBuilder,
     },
+    storage::config::EngineType,
 };
 use tikv_util::escape;
 
@@ -72,13 +77,10 @@ pub fn new_debug_executor(
     let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache)
         .lite(true)
         .build();
-    let kv_db = match factory.create_shared_db(data_dir) {
-        Ok(db) => db,
-        Err(e) => handle_engine_error(e),
-    };
 
     let cfg_controller = ConfigController::default();
     if !cfg.raft_engine.enable {
+        assert_eq!(EngineType::RaftKv, cfg.storage.engine);
         let raft_db_opts = cfg.raftdb.build_opt(env, None);
         let raft_db_cf_opts = cfg.raftdb.build_cf_opts(factory.block_cache());
         let raft_path = cfg.infer_raft_db_path(Some(data_dir)).unwrap();
@@ -87,6 +89,10 @@ pub fn new_debug_executor(
             tikv_util::logger::exit_process_gracefully(-1);
         }
         let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
+            Ok(db) => db,
+            Err(e) => handle_engine_error(e),
+        };
+        let kv_db = match factory.create_shared_db(data_dir) {
             Ok(db) => db,
             Err(e) => handle_engine_error(e),
         };
@@ -100,8 +106,23 @@ pub fn new_debug_executor(
             tikv_util::logger::exit_process_gracefully(-1);
         }
         let raft_db = RaftLogEngine::new(config, key_manager, None /* io_rate_limiter */).unwrap();
-        let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
-        Box::new(debugger) as Box<dyn DebugExecutor>
+        match cfg.storage.engine {
+            EngineType::RaftKv => {
+                let kv_db = match factory.create_shared_db(data_dir) {
+                    Ok(db) => db,
+                    Err(e) => handle_engine_error(e),
+                };
+                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+                Box::new(debugger) as Box<dyn DebugExecutor>
+            }
+            EngineType::RaftKv2 => {
+                let registry =
+                    TabletRegistry::new(Box::new(factory), Path::new(data_dir).join("tablets"))
+                        .unwrap_or_else(|e| fatal!("failed to create tablet registry {:?}", e));
+                let debugger = DebuggerV2::new(registry, raft_db, cfg_controller);
+                Box::new(debugger) as Box<dyn DebugExecutor>
+            }
+        }
     }
 }
 
@@ -1112,3 +1133,5 @@ fn handle_engine_error(err: EngineError) -> ! {
 
     tikv_util::logger::exit_process_gracefully(-1);
 }
+
+impl DebugExecutor for DebuggerV2 {}
