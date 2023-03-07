@@ -362,18 +362,17 @@ fn filter_by_reason(factory: &impl CompactionFilterFactory) -> FilterByReason {
     r
 }
 
-pub struct StackableCompactionFilterFactory<A: CompactionFilterFactory, B: CompactionFilterFactory>
-{
+pub struct StackingCompactionFilterFactory<A: CompactionFilterFactory, B: CompactionFilterFactory> {
     outer_should_filter: FilterByReason,
     outer: A,
     inner_should_filter: FilterByReason,
     inner: B,
 }
 
-impl<A: CompactionFilterFactory, B: CompactionFilterFactory>
-    StackableCompactionFilterFactory<A, B>
-{
+impl<A: CompactionFilterFactory, B: CompactionFilterFactory> StackingCompactionFilterFactory<A, B> {
     /// Creates a factory of stacked filter with `outer` on top of `inner`.
+    /// Table keys will be filtered through `outer` first before reaching
+    /// `inner`.
     pub fn new(outer: A, inner: B) -> Self {
         let outer_should_filter = filter_by_reason(&outer);
         let inner_should_filter = filter_by_reason(&inner);
@@ -387,9 +386,9 @@ impl<A: CompactionFilterFactory, B: CompactionFilterFactory>
 }
 
 impl<A: CompactionFilterFactory, B: CompactionFilterFactory> CompactionFilterFactory
-    for StackableCompactionFilterFactory<A, B>
+    for StackingCompactionFilterFactory<A, B>
 {
-    type Filter = StackableCompactionFilter<A::Filter, B::Filter>;
+    type Filter = StackingCompactionFilter<A::Filter, B::Filter>;
 
     fn create_compaction_filter(
         &self,
@@ -412,7 +411,7 @@ impl<A: CompactionFilterFactory, B: CompactionFilterFactory> CompactionFilterFac
             full_name += "+";
             full_name += name.to_str().unwrap();
         }
-        let filter = StackableCompactionFilter {
+        let filter = StackingCompactionFilter {
             outer: outer_filter,
             inner: inner_filter,
         };
@@ -425,14 +424,12 @@ impl<A: CompactionFilterFactory, B: CompactionFilterFactory> CompactionFilterFac
     }
 }
 
-pub struct StackableCompactionFilter<A: CompactionFilter, B: CompactionFilter> {
+pub struct StackingCompactionFilter<A: CompactionFilter, B: CompactionFilter> {
     outer: Option<A>,
     inner: Option<B>,
 }
 
-impl<A: CompactionFilter, B: CompactionFilter> CompactionFilter
-    for StackableCompactionFilter<A, B>
-{
+impl<A: CompactionFilter, B: CompactionFilter> CompactionFilter for StackingCompactionFilter<A, B> {
     fn featured_filter(
         &mut self,
         level: usize,
@@ -482,7 +479,7 @@ impl CompactionFilterFactory for RangeCompactionFilterFactory {
     }
 }
 
-/// Filters out all keys within the key range.
+/// Filters out all keys outside the key range.
 pub struct RangeCompactionFilter(Arc<OwnedRange>);
 
 impl CompactionFilter for RangeCompactionFilter {

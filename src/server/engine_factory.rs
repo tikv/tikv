@@ -156,14 +156,14 @@ impl KvEngineFactory {
 
     fn cf_opts(
         &self,
-        filter_builder: Option<&RangeCompactionFilterFactory>,
+        filter_factory: Option<&RangeCompactionFilterFactory>,
         for_engine: EngineType,
     ) -> Vec<(&str, RocksCfOptions)> {
         self.inner.rocksdb_config.build_cf_opts(
             &self.inner.cf_resources,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
-            filter_builder,
+            filter_factory,
             for_engine,
         )
     }
