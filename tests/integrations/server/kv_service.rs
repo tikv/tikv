@@ -289,6 +289,7 @@ fn test_mvcc_basic() {
     assert!(!get_resp.has_region_error());
     assert!(!get_resp.has_error());
     assert!(get_resp.get_exec_details_v2().has_time_detail());
+    assert!(get_resp.get_exec_details_v2().has_time_detail_v2());
     let scan_detail_v2 = get_resp.get_exec_details_v2().get_scan_detail_v2();
     assert_eq!(scan_detail_v2.get_total_versions(), 1);
     assert_eq!(scan_detail_v2.get_processed_versions(), 1);
@@ -321,6 +322,7 @@ fn test_mvcc_basic() {
     batch_get_req.version = batch_get_version;
     let batch_get_resp = client.kv_batch_get(&batch_get_req).unwrap();
     assert!(batch_get_resp.get_exec_details_v2().has_time_detail());
+    assert!(batch_get_resp.get_exec_details_v2().has_time_detail_v2());
     let scan_detail_v2 = batch_get_resp.get_exec_details_v2().get_scan_detail_v2();
     assert_eq!(scan_detail_v2.get_total_versions(), 1);
     assert_eq!(scan_detail_v2.get_processed_versions(), 1);
@@ -2310,6 +2312,7 @@ fn test_txn_api_version() {
                 assert!(!get_resp.has_region_error());
                 assert!(!get_resp.has_error());
                 assert!(get_resp.get_exec_details_v2().has_time_detail());
+                assert!(get_resp.get_exec_details_v2().has_time_detail_v2());
             }
             {
                 // Pessimistic Lock
@@ -2489,7 +2492,7 @@ fn test_rpc_wall_time() {
     assert!(
         get_resp
             .get_exec_details_v2()
-            .get_time_detail()
+            .get_time_detail_v2()
             .get_total_rpc_wall_time_ns()
             > 0
     );
@@ -2523,7 +2526,7 @@ fn test_rpc_wall_time() {
         assert!(
             resp.get_get()
                 .get_exec_details_v2()
-                .get_time_detail()
+                .get_time_detail_v2()
                 .get_total_rpc_wall_time_ns()
                 > 0
         );

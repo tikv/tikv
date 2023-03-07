@@ -713,10 +713,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let process_wall_time =
                         stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
                     let latency_stats = StageLatencyStats {
-                        schedule_wait_time_ms: duration_to_ms(schedule_wait_time),
-                        snapshot_wait_time_ms: duration_to_ms(snapshot_wait_time),
-                        wait_wall_time_ms: duration_to_ms(wait_wall_time),
-                        process_wall_time_ms: duration_to_ms(process_wall_time),
+                        schedule_wait_time_ns: schedule_wait_time.as_nanos() as u64,
+                        snapshot_wait_time_ns: snapshot_wait_time.as_nanos() as u64,
+                        wait_wall_time_ns: wait_wall_time.as_nanos() as u64,
+                        process_wall_time_ns: process_wall_time.as_nanos() as u64,
                     };
                     with_tls_tracker(|tracker| {
                         tracker.metrics.read_pool_schedule_wait_nanos =
@@ -1077,10 +1077,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             schedule_wait_time.as_nanos() as u64;
                     });
                     let latency_stats = StageLatencyStats {
-                        schedule_wait_time_ms: duration_to_ms(schedule_wait_time),
-                        snapshot_wait_time_ms: duration_to_ms(snapshot_wait_time),
-                        wait_wall_time_ms: duration_to_ms(wait_wall_time),
-                        process_wall_time_ms: duration_to_ms(process_wall_time),
+                        schedule_wait_time_ns: duration_to_ms(schedule_wait_time),
+                        snapshot_wait_time_ns: duration_to_ms(snapshot_wait_time),
+                        wait_wall_time_ns: duration_to_ms(wait_wall_time),
+                        process_wall_time_ns: duration_to_ms(process_wall_time),
                     };
                     Ok((
                         result?,
