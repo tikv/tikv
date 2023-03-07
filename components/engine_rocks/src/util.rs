@@ -344,8 +344,8 @@ fn reason_to_index(reason: DBTableFileCreationReason) -> usize {
     match reason {
         DBTableFileCreationReason::Flush => 0,
         DBTableFileCreationReason::Compaction => 1,
-        DBTableFileCreationReason::Recovery => 3,
-        DBTableFileCreationReason::Misc => 4,
+        DBTableFileCreationReason::Recovery => 2,
+        DBTableFileCreationReason::Misc => 3,
     }
 }
 
