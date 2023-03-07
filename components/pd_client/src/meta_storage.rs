@@ -1,4 +1,4 @@
-// Copyrighfield1 2023 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! `meta_storage` is the API set for storing generic KV pairs.
 //! It is a trimmed version of the KV service of etcd, along with some metrics.
