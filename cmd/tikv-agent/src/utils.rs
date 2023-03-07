@@ -61,6 +61,9 @@ pub fn dup_kv_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(), S
     Ok(())
 }
 
+/// Symlink or copy Raft engine files from the original TiKV instance (specified
+/// by `config`) to `agent_dir`. Then `agent_dir` can be used to run a new TiKV
+/// instance, without any modifications on the original TiKV data.
 pub fn dup_raft_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
     let mut dst_config = TikvConfig::default();
     dst_config.storage.data_dir = agent_dir.to_owned();
