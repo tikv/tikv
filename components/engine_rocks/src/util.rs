@@ -408,7 +408,7 @@ impl<A: CompactionFilterFactory, B: CompactionFilterFactory> CompactionFilterFac
             && let Some((name, filter)) = self.inner.create_compaction_filter(context)
         {
             inner_filter = Some(filter);
-            full_name += "+";
+            full_name += ".";
             full_name += name.to_str().unwrap();
         }
         let filter = StackingCompactionFilter {

@@ -729,7 +729,7 @@ impl DefaultCfConfig {
             match api_version {
                 ApiVersion::V1 => {
                     cf_opts
-                        .set_compaction_filter_factory("filter_factory", factory.clone())
+                        .set_compaction_filter_factory("range_filter_factory", factory.clone())
                         .unwrap();
                 }
                 ApiVersion::V1ttl => {
@@ -743,7 +743,7 @@ impl DefaultCfConfig {
                     );
                     cf_opts
                         .set_compaction_filter_factory(
-                            "filter_factory+ttl_compaction_filter_factory",
+                            "range_filter_factory.ttl_compaction_filter_factory",
                             factory,
                         )
                         .unwrap();
@@ -755,7 +755,7 @@ impl DefaultCfConfig {
                     );
                     cf_opts
                         .set_compaction_filter_factory(
-                            "filter_factory+apiv2_gc_compaction_filter_factory",
+                            "range_filter_factory.apiv2_gc_compaction_filter_factory",
                             factory,
                         )
                         .unwrap();
@@ -902,7 +902,10 @@ impl WriteCfConfig {
             let factory =
                 StackingCompactionFilterFactory::new(factory.clone(), WriteCompactionFilterFactory);
             cf_opts
-                .set_compaction_filter_factory("write_compaction_filter_factory", factory)
+                .set_compaction_filter_factory(
+                    "range_filter_factory.write_compaction_filter_factory",
+                    factory,
+                )
                 .unwrap();
         } else {
             cf_opts
@@ -1006,7 +1009,7 @@ impl LockCfConfig {
         cf_opts.set_memtable_prefix_bloom_size_ratio(bloom_filter_ratio(for_engine));
         if let Some(factory) = filter_factory {
             cf_opts
-                .set_compaction_filter_factory("filter_factory", factory.clone())
+                .set_compaction_filter_factory("range_filter_factory", factory.clone())
                 .unwrap();
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
