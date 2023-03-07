@@ -2108,7 +2108,7 @@ pub mod tests {
 
         // Key already exists and already locked by a larger for_update_ts (stale
         // request).
-        must_succeed(&mut engine, b"k1", b"v1", 10, 40);
+        must_succeed(&mut engine, b"k1", b"k1", 10, 40);
         must_pessimistic_locked(&mut engine, b"k1", 10, 40);
         let e = acquire_pessimistic_lock_allow_lock_with_conflict(
             &mut engine,
