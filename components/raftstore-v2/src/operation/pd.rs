@@ -2,10 +2,12 @@
 
 //! This module implements the interactions with pd.
 
+use std::sync::atomic::Ordering;
+
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
-use raftstore::store::Transport;
+use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, Transport};
 use slog::error;
 use tikv_util::slog_panic;
 
@@ -41,14 +43,31 @@ impl Store {
             let meta = ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.readers.len() as u32);
         }
-
+        // todo: imple snapshot status report
         stats.set_sending_snap_count(0);
         stats.set_receiving_snap_count(0);
 
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+            .with_label_values(&["sending"])
+            .set(stats.get_sending_snap_count() as i64);
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+            .with_label_values(&["receiving"])
+            .set(stats.get_receiving_snap_count() as i64);
+
         stats.set_start_time(self.start_time().unwrap() as u32);
 
-        stats.set_bytes_written(0);
-        stats.set_keys_written(0);
+        stats.set_bytes_written(
+            ctx.global_stat
+                .stat
+                .engine_total_bytes_written
+                .swap(0, Ordering::Relaxed),
+        );
+        stats.set_keys_written(
+            ctx.global_stat
+                .stat
+                .engine_total_keys_written
+                .swap(0, Ordering::Relaxed),
+        );
         stats.set_is_busy(false);
         // TODO: add query stats
         let task = pd::Task::StoreHeartbeat { stats };

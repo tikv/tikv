@@ -27,7 +27,7 @@ use kvproto::{
         AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RegionDetailResponse, Request,
         Response, StatusCmdType,
     },
-    raft_serverpb::{PeerState, RaftApplyState, RegionLocalState, StoreIdent},
+    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
 };
 use pd_client::PdClient;
 use raftstore::{
@@ -53,8 +53,13 @@ use test_raftstore::{
 };
 use tikv::server::Result as ServerResult;
 use tikv_util::{
-    box_err, box_try, debug, error, safe_panic, thread_group::GroupProperties, time::Instant,
-    timer::GLOBAL_TIMER_HANDLE, warn, worker::LazyWorker, HandyRwLock,
+    box_err, box_try, debug, error, safe_panic,
+    thread_group::GroupProperties,
+    time::{Instant, ThreadReadId},
+    timer::GLOBAL_TIMER_HANDLE,
+    warn,
+    worker::LazyWorker,
+    HandyRwLock,
 };
 
 use crate::create_test_engine;
@@ -74,6 +79,7 @@ pub trait Simulator {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
+        key_mgr: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<RocksEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -313,6 +319,17 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
+    pub fn flush_data(&self) {
+        for reg in self.tablet_registries.values() {
+            reg.for_each_opened_tablet(|_, cached| -> bool {
+                if let Some(tablet) = cached.latest() {
+                    tablet.flush_cf(CF_DEFAULT, true /* sync */).unwrap();
+                }
+                true
+            });
+        }
+    }
+
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
     // initialize first region in all stores, then start the cluster.
     pub fn run(&mut self) {
@@ -383,6 +400,7 @@ impl<T: Simulator> Cluster<T> {
                 id,
                 self.cfg.clone(),
                 store_meta.clone(),
+                key_mgr.clone(),
                 raft_engine.clone(),
                 tablet_registry.clone(),
                 &self.resource_manager,
@@ -424,10 +442,12 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
 
         debug!("calling run node"; "node_id" => node_id);
+        let key_mgr = self.key_managers_map.get(&node_id).unwrap().clone();
         self.sim.wl().run_node(
             node_id,
             cfg,
             store_meta,
+            key_mgr,
             raft_engine,
             tablet_registry,
             &self.resource_manager,
@@ -563,6 +583,22 @@ impl<T: Simulator> Cluster<T> {
             self.raft_engines[&node_id].clone(),
             self.tablet_registries[&node_id].clone(),
         )
+    }
+
+    pub fn read(
+        &self,
+        // v2 does not need this
+        _batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        match self.sim.wl().read(request.clone(), timeout) {
+            Err(e) => {
+                warn!("failed to read {:?}: {:?}", request, e);
+                Err(e)
+            }
+            a => a,
+        }
     }
 
     // mixed read and write requests are not supportted
@@ -1107,8 +1143,16 @@ impl<T: Simulator> Cluster<T> {
         self.sim.wl().add_send_filter(node_id, filter);
     }
 
+    pub fn clear_send_filter_on_node(&mut self, node_id: u64) {
+        self.sim.wl().clear_send_filters(node_id);
+    }
+
     pub fn add_recv_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
         self.sim.wl().add_recv_filter(node_id, filter);
+    }
+
+    pub fn clear_recv_filter_on_node(&mut self, node_id: u64) {
+        self.sim.wl().clear_recv_filters(node_id);
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
@@ -1308,6 +1352,10 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().get_snap_dir(node_id)
     }
 
+    pub fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>> {
+        self.sim.rl().get_router(node_id)
+    }
+
     pub fn refresh_region_bucket_keys(
         &mut self,
         _region: &metapb::Region,
@@ -1324,6 +1372,58 @@ impl<T: Simulator> Cluster<T> {
         _expected_bucket_ranges: Option<Vec<BucketRange>>,
     ) {
         unimplemented!()
+    }
+
+    pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer, check_exist: bool) {
+        let timer = Instant::now();
+        let mut state;
+        loop {
+            state = self.region_local_state(region_id, peer.get_store_id());
+            if state.get_state() == PeerState::Tombstone
+                && (!check_exist || state.get_region().get_peers().contains(&peer))
+            {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "{:?} is still not gc in region {} {:?}",
+            peer, region_id, state
+        );
+    }
+
+    pub fn wait_destroy_and_clean(&self, region_id: u64, peer: metapb::Peer) {
+        let timer = Instant::now();
+        self.wait_tombstone(region_id, peer.clone(), false);
+        let mut state;
+        loop {
+            state = self.get_raft_local_state(region_id, peer.get_store_id());
+            if state.is_none() {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "{:?} is still not cleaned in region {} {:?}",
+            peer, region_id, state
+        );
+    }
+
+    pub fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
+        self.get_engine(store_id)
+            .get_region_state(region_id)
+            .unwrap()
+            .unwrap()
+    }
+
+    pub fn get_raft_local_state(&self, region_id: u64, store_id: u64) -> Option<RaftLocalState> {
+        self.get_engine(store_id).get_raft_local_state(region_id)
     }
 
     pub fn shutdown(&mut self) {
@@ -1422,6 +1522,10 @@ impl WrapFactory {
 
     pub fn get_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
         self.raft_engine.get_apply_state(region_id, u64::MAX)
+    }
+
+    pub fn get_raft_local_state(&self, region_id: u64) -> Option<RaftLocalState> {
+        self.raft_engine.get_raft_state(region_id).unwrap()
     }
 }
 

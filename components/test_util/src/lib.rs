@@ -15,6 +15,7 @@ mod security;
 
 use std::{
     env,
+    fmt::Debug,
     sync::atomic::{AtomicU16, Ordering},
     thread,
 };
@@ -117,4 +118,39 @@ pub fn temp_dir(prefix: impl Into<Option<&'static str>>, prefer_mem: bool) -> te
         }
         _ => builder.tempdir().unwrap(),
     }
+}
+
+/// Compare two structs and provide more helpful debug difference.
+#[track_caller]
+pub fn assert_eq_debug<C: PartialEq + Debug>(lhs: &C, rhs: &C) {
+    if lhs == rhs {
+        return;
+    }
+    let lhs_str = format!("{:?}", lhs);
+    let rhs_str = format!("{:?}", rhs);
+
+    fn find_index(l: impl Iterator<Item = (u8, u8)>) -> usize {
+        let it = l
+            .enumerate()
+            .take_while(|(_, (l, r))| l == r)
+            .filter(|(_, (l, _))| *l == b' ');
+        let mut last = None;
+        let mut second = None;
+        for a in it {
+            second = last;
+            last = Some(a);
+        }
+        second.map_or(0, |(i, _)| i)
+    }
+    let cpl = find_index(lhs_str.bytes().zip(rhs_str.bytes()));
+    let csl = find_index(lhs_str.bytes().rev().zip(rhs_str.bytes().rev()));
+    if cpl + csl > lhs_str.len() || cpl + csl > rhs_str.len() {
+        assert_eq!(lhs, rhs);
+    }
+    let lhs_diff = String::from_utf8_lossy(&lhs_str.as_bytes()[cpl..lhs_str.len() - csl]);
+    let rhs_diff = String::from_utf8_lossy(&rhs_str.as_bytes()[cpl..rhs_str.len() - csl]);
+    panic!(
+        "config not matched:\nlhs: ...{}...,\nrhs: ...{}...",
+        lhs_diff, rhs_diff
+    );
 }
