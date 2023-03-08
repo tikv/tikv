@@ -595,6 +595,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        debug!("storage.get";
+            "key" => %key,
+            "start_ts" => start_ts,
+            "region_id" => ctx.get_region_id(),
+            "peer" => ?ctx.get_peer(),
+            "replica read" => ctx.get_replica_read(),
+        );
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
@@ -675,6 +682,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         r
                     })
                     });
+                    debug!("storage.get() done"; "start_ts" => start_ts, "key" => ?key, "value" => ?result);
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
                         ctx.get_region_id(),
