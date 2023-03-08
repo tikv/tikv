@@ -1792,7 +1792,7 @@ where
     fn handle_put(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
-        debug!("handle put"; "key" => hex::encode_upper(key), "value" => hex::encode_upper(key), "index" => ctx.exec_log_index);
+        debug!("handle put"; "key" => log_wrappers::hex_encode_upper(key), "value" => log_wrappers::hex_encode_upper(key), "index" => ctx.exec_log_index);
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
         if let Some(s) = self.buckets.as_mut() {

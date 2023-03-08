@@ -178,7 +178,7 @@ impl<S: Snapshot> PointGetter<S> {
                 debug!("*** point getter with access lock";
                     "start_ts" => self.ts,
                     "access_locks" => ?self.access_locks,
-                    "key" => user_key,
+                    "key" => %user_key,
                     "data" => ?data,
                 );
                 return data;
@@ -222,7 +222,7 @@ impl<S: Snapshot> PointGetter<S> {
                     debug!("*** getter with bypass lock";
                         "start_ts" => self.ts,
                         "bypass_locks" => ?self.bypass_locks,
-                        "key" => user_key,
+                        "key" => %user_key,
                         "lock ts" => lock.ts,
                     );
                 }

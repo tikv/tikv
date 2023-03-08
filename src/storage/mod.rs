@@ -2929,7 +2929,7 @@ fn prepare_snap_ctx<'a>(
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {
-    let keys: Vec<_> = keys.clone().into_iter().collect();
+    let keys: Vec<_> = keys.into_iter().collect();
     info!("prepare_snap_ctx"; "cmd" => ?cmd, "start_ts" => start_ts, "stale_read" => pb_ctx.get_stale_read(),
         "isolation_level" => ?pb_ctx.get_isolation_level(), "bypass_locks" => ?bypass_locks, "keys" => ?keys);
     // Update max_ts and check the in-memory lock table before getting the snapshot
