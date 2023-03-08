@@ -17,11 +17,11 @@
 //!
 //! At first, target region will not apply the `CommitMerge` command. Instead
 //! the apply progress will be paused and it redirects the log entries from
-//! source region, as a `CatchUpLogs` message, to the local source region peer
-//! (step 2). When the source region peer has applied all logs up to the prior
-//! `PrepareMerge` command, it will send a checkpoint to the target peer (step
-//! 4). Here we use a temporary channel instead of directly sending message
-//! between apply FSMs like in v1.
+//! source region, as a `CatchUpLogs` message, to the local source region peer.
+//! When the source region peer has applied all logs up to the prior
+//! `PrepareMerge` command, it will signal the target peer. Here we use a
+//! temporary channel instead of directly sending message between apply FSMs
+//! like in v1.
 //!
 //! Here is a complete view of the process:
 //!
@@ -311,16 +311,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             merge: merge.clone(),
             tx,
         });
-        let source_safe_ts = if !source_path.exists() {
-            // TODO: what if shutdown?
-            rx.await.unwrap_or_else(|_| {
+        // TODO: what if shutdown?
+        let source_safe_ts = rx.await.unwrap_or_else(|_| {
+            if source_path.exists() {
+                // Source is probably already destroyed.
+                0
+            } else {
                 slog_panic!(self.logger, "source peer is missing");
-            })
-        } else {
-            // In this case, we are only sending `CatchUpLogs` to destroy source peer.
-            // Chances are that it is already destroyed.
-            rx.await.unwrap_or(0)
-        };
+            }
+        });
         let wait_time = now.saturating_elapsed();
 
         info!(

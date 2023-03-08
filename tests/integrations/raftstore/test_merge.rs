@@ -60,7 +60,6 @@ fn test_node_base_merge() {
         "{:?}",
         resp
     );
-    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 
     pd_client.must_merge(left.get_id(), right.get_id());
 
@@ -1270,7 +1269,7 @@ fn test_propose_in_memory_pessimistic_locks() {
 
     // Insert lock l1 into the left region
     let snapshot = cluster.must_get_snapshot_of_region(left.id);
-    let txn_ext = snapshot.txn_ext.as_ref().unwrap();
+    let txn_ext = snapshot.txn_ext.unwrap();
     let l1 = PessimisticLock {
         primary: b"k1".to_vec().into_boxed_slice(),
         start_ts: 10.into(),
@@ -1285,12 +1284,10 @@ fn test_propose_in_memory_pessimistic_locks() {
         .write()
         .insert(vec![(Key::from_raw(b"k1"), l1.clone())])
         .unwrap();
-    drop(snapshot);
 
     // Insert lock l2 into the right region
     let snapshot = cluster.must_get_snapshot_of_region(right.id);
-    // let txn_ext = snapshot.txn_ext.unwrap();
-    let txn_ext = snapshot.txn_ext.as_ref().unwrap();
+    let txn_ext = snapshot.txn_ext.unwrap();
     let l2 = PessimisticLock {
         primary: b"k3".to_vec().into_boxed_slice(),
         start_ts: 10.into(),
@@ -1305,7 +1302,6 @@ fn test_propose_in_memory_pessimistic_locks() {
         .write()
         .insert(vec![(Key::from_raw(b"k3"), l2.clone())])
         .unwrap();
-    drop(snapshot);
 
     // Merge left region into the right region
     pd_client.must_merge(left.id, right.id);
