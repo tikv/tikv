@@ -217,7 +217,9 @@ async fn is_sst_match_preview(
     }
 
     if preview_meta.trailing_chunk.is_empty() {
-        return Ok(true);
+        // A safet check to detect wrong protocol implementation. Only head chunk
+        // contains all the data can trailing chunk be empty.
+        return Ok(head_len as u64 == preview_meta.file_size);
     }
 
     f.seek(SeekFrom::End(-(trailing_len as i64)))?;
