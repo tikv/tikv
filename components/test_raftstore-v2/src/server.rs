@@ -636,7 +636,6 @@ impl ServerCluster {
         Ok(node_id)
     }
 
-    /// To trigger GC manually.
     pub fn get_gc_worker(&self, node_id: u64) -> &GcWorker<TestRaftKv2> {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
