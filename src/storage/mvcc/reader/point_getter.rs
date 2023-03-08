@@ -174,7 +174,14 @@ impl<S: Snapshot> PointGetter<S> {
             // Check locks that signal concurrent writes for `Si` or more recent writes for
             // `RcCheckTs`.
             if let Some(lock) = self.load_and_check_lock(user_key)? {
-                return self.load_data_from_lock(user_key, lock);
+                let data = self.load_data_from_lock(user_key, lock);
+                debug!("*** point getter with access lock";
+                    "start_ts" => self.ts,
+                    "access_locks" => ?self.access_locks,
+                    "key" => user_key,
+                    "data" => ?data,
+                );
+                return data;
             }
         }
 
@@ -211,6 +218,14 @@ impl<S: Snapshot> PointGetter<S> {
                 }
                 Err(e.into())
             } else {
+                if self.bypass_locks.contains(lock.ts) {
+                    debug!("*** getter with bypass lock";
+                        "start_ts" => self.ts,
+                        "bypass_locks" => ?self.bypass_locks,
+                        "key" => user_key,
+                        "lock ts" => lock.ts,
+                    );
+                }
                 Ok(None)
             }
         } else {
