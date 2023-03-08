@@ -185,6 +185,7 @@ api_version = { workspace = true, features = ["testexport"] }
 example_coprocessor_plugin = { workspace = true } # should be a binary dependency
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
+raftstore = { workspace = true, features = ["testexport"] }
 reqwest = { version = "0.11", features = ["blocking"] }
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }

@@ -162,6 +162,9 @@ async fn send_snap_files(
         }
     }
     info!("sent all snap file finish"; "snap_key" => %key);
+    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+        .send
+        .inc_by(total_sent);
     sender.close().await?;
     Ok(total_sent)
 }

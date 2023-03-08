@@ -15,6 +15,7 @@ use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
 use futures::{Future, Stream, StreamExt};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
 pub use node::NodeV2;
+pub use raft_extension::Extension;
 use raftstore::store::{util::encode_start_ts_into_flag_data, RegionSnapshot};
 use raftstore_v2::{
     router::{

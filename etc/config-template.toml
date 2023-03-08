@@ -515,8 +515,8 @@
 ## Value -1 means files opened are always kept open and RocksDB will prefetch index and filter
 ## blocks into block cache at startup. So if your database has a large working set, it will take
 ## several minutes to open the DB. You may need to increase this if your database has a large
-## working set. You can estimate the number of files based on `target-file-size-base` and
-## `target_file_size_multiplier` for level-based compaction.
+## working set. You can estimate the number of files based on `target-file-size-base` for
+## level-based compaction.
 # max-open-files = 40960
 
 ## Max size of RocksDB's MANIFEST file.

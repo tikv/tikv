@@ -18,7 +18,8 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequ
 use protobuf::Message;
 use raftstore::{
     store::{
-        fsm::new_admin_request, needs_evict_entry_cache, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
+        fsm::new_admin_request, metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache, Transport,
+        WriteTask, RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
@@ -167,6 +168,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 last_idx,
                 replicated_idx
             );
+            REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
         }
 
         // leader may call `get_term()` on the latest replicated index, so compact
@@ -182,13 +184,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 >= store_ctx.cfg.raft_log_gc_size_limit().0
         {
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
-        } else if replicated_idx < first_idx
-            || last_idx - first_idx < 3
-            || replicated_idx - first_idx < store_ctx.cfg.raft_log_gc_threshold
-                && self
-                    .compact_log_context_mut()
-                    .maybe_skip_compact_log(store_ctx.cfg.raft_log_reserve_max_ticks)
+        } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
+            store_ctx.raft_metrics.raft_log_gc_skipped.reserve_log.inc();
+            return;
+        } else if replicated_idx - first_idx < store_ctx.cfg.raft_log_gc_threshold
+            && self
+                .compact_log_context_mut()
+                .maybe_skip_compact_log(store_ctx.cfg.raft_log_reserve_max_ticks)
         {
+            store_ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .threshold_limit
+                .inc();
             return;
         } else {
             replicated_idx
@@ -197,6 +205,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Have no idea why subtract 1 here, but original code did this by magic.
         compact_idx -= 1;
         if compact_idx < first_idx {
+            // In case compact_idx == first_idx before subtraction.
+            store_ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .compact_idx_too_small
+                .inc();
             return;
         }
 
