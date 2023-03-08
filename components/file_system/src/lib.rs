@@ -464,7 +464,7 @@ pub fn trash_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
     remove_dir_all(trash_path)
 }
 
-/// When using `trash_dir_all`, it's possible the directory is marked as transh
+/// When using `trash_dir_all`, it's possible the directory is marked as trash
 /// but not being actually deleted after a restart. This function can be used
 /// to resume all those removal in the given directory.
 #[inline]
