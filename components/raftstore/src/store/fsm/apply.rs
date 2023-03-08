@@ -1725,13 +1725,14 @@ where
         );
 
         let requests = req.get_requests();
+        let start_ts_str = req.get_header().get_resource_group_name();
 
         let mut ranges = vec![];
         let mut ssts = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
             match cmd_type {
-                CmdType::Put => self.handle_put(ctx, req),
+                CmdType::Put => self.handle_put(ctx, req, start_ts_str),
                 CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::DeleteRange => {
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
@@ -1789,10 +1790,21 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+    fn handle_put(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        req: &Request,
+        start_ts: &str,
+    ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
-        info!("handle put"; "key" => log_wrappers::hex_encode_upper(key), "value" => log_wrappers::hex_encode_upper(value), "index" => ctx.exec_log_index);
+
+        info!("handle put";
+            "start_ts" => ?start_ts,
+            "key" => log_wrappers::hex_encode_upper(key),
+            "value" => log_wrappers::hex_encode_upper(value),
+            "index" => ctx.exec_log_index);
+
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
         if let Some(s) = self.buckets.as_mut() {

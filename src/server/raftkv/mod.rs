@@ -455,6 +455,8 @@ where
         if batch.avoid_batch {
             header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
         }
+        // Debug, set uuid using start_ts.
+        header.set_resource_group_name(ctx.get_txn_source().to_string());
         let mut flags = 0;
         if txn_extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();
