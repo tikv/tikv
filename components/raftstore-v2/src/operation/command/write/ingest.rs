@@ -70,6 +70,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let epoch = self.region().get_region_epoch();
         let mut stale_ssts = Vec::from(ssts);
         stale_ssts.retain(|sst| util::is_epoch_stale(sst.get_region_epoch(), epoch));
+        if stale_ssts.is_empty() {
+            return;
+        }
         let _ = ctx
             .schedulers
             .tablet_gc
