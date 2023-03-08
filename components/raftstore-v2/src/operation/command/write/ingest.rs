@@ -75,17 +75,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if stale_cnt == 0 {
             return;
         }
-        let stale_ssts = if stale_cnt == ssts.len() {
-            ssts
-        } else {
-            let mut ssts = Vec::from(ssts);
-            ssts.retain(|sst| util::is_epoch_stale(sst.get_region_epoch(), epoch));
-            ssts.into_boxed_slice()
-        };
+        let mut stale_ssts = Vec::from(ssts);
+        stale_ssts.retain(|sst| util::is_epoch_stale(sst.get_region_epoch(), epoch));
         let _ = ctx
             .schedulers
             .tablet_gc
-            .schedule(tablet_gc::Task::CleanupImportSst(stale_ssts));
+            .schedule(tablet_gc::Task::CleanupImportSst(stale_ssts.into()));
     }
 }
 
