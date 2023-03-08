@@ -23,7 +23,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use tikv_util::{
     codec::number::decode_u64,
-    debug, error,
+    debug, error, info,
     lru::LruCache,
     store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
@@ -145,7 +145,7 @@ pub trait ReadExecutor {
                         let mut res = ReadIndexResponse::default();
                         res.set_read_index(read_index);
                         resp.set_read_index(res);
-                        debug!("*** read_index response";
+                        info!("*** read_index response";
                             "req.start_ts" => req.get_read_index().get_start_ts(),
                             "req.key_ranges" => ?req.get_read_index().get_key_ranges(),
                             "read_index" => read_index
@@ -956,7 +956,7 @@ where
                     .iter()
                     .filter(|r| r.has_read_index())
                     .for_each(|r| {
-                        debug!("*** using local reader";
+                        info!("*** using local reader";
                             "start ts" => r.get_read_index().get_start_ts(),
                             "key ranges" => ?r.get_read_index().get_key_ranges(),
                         );
@@ -1051,7 +1051,7 @@ where
                     .iter()
                     .filter(|r| r.has_read_index())
                     .for_each(|r| {
-                        debug!("*** redirecting to raftstore";
+                        info!("*** redirecting to raftstore";
                             "start ts" => r.get_read_index().get_start_ts(),
                             "key ranges" => ?r.get_read_index().get_key_ranges(),
                         );

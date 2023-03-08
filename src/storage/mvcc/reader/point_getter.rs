@@ -175,7 +175,7 @@ impl<S: Snapshot> PointGetter<S> {
             // `RcCheckTs`.
             if let Some(lock) = self.load_and_check_lock(user_key)? {
                 let data = self.load_data_from_lock(user_key, lock);
-                debug!("*** point getter with access lock";
+                info!("*** point getter with access lock";
                     "start_ts" => self.ts,
                     "access_locks" => ?self.access_locks,
                     "key" => %user_key,
@@ -219,7 +219,7 @@ impl<S: Snapshot> PointGetter<S> {
                 Err(e.into())
             } else {
                 if self.bypass_locks.contains(lock.ts) {
-                    debug!("*** getter with bypass lock";
+                    info!("*** getter with bypass lock";
                         "start_ts" => self.ts,
                         "bypass_locks" => ?self.bypass_locks,
                         "key" => %user_key,

@@ -4089,7 +4089,7 @@ where
         locked: Option<&LockInfo>,
     ) -> (Uuid, bool) {
         let res = propose_read_index(&mut self.raft_group, request, locked);
-        debug!("*** propose read index";
+        info!("*** propose read index";
             "start_ts" => ?request.map(|r| r.get_start_ts()),
             "uuid" => ?res.0,
             "dropped" => res.1

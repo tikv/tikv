@@ -595,7 +595,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
-        debug!("storage.get";
+        info!("storage.get";
             "key" => %key,
             "start_ts" => start_ts,
             "region_id" => ctx.get_region_id(),
@@ -682,7 +682,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         r
                     })
                     });
-                    debug!("storage.get() done"; "start_ts" => start_ts, "key" => ?key, "value" => ?result);
+                    info!("storage.get() done"; "start_ts" => start_ts, "key" => ?key, "value" => ?result);
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
                         ctx.get_region_id(),
