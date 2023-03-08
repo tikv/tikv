@@ -411,11 +411,15 @@ impl<A: CompactionFilterFactory, B: CompactionFilterFactory> CompactionFilterFac
             full_name += ".";
             full_name += name.to_str().unwrap();
         }
-        let filter = StackingCompactionFilter {
-            outer: outer_filter,
-            inner: inner_filter,
-        };
-        Some((CString::new(full_name).unwrap(), filter))
+        if outer_filter.is_none() && inner_filter.is_none() {
+            None
+        } else {
+            let filter = StackingCompactionFilter {
+                outer: outer_filter,
+                inner: inner_filter,
+            };
+            Some((CString::new(full_name).unwrap(), filter))
+        }
     }
 
     fn should_filter_table_file_creation(&self, reason: DBTableFileCreationReason) -> bool {
