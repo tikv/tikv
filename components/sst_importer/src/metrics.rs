@@ -113,7 +113,7 @@ lazy_static! {
     ).unwrap();
     pub static ref CACHE_EVENT: IntCounterVec = register_int_counter_vec!(
         "tikv_import_apply_cache_event",
-        "The events of caching. event = {add, remove, out-of-quota}",
+        "The events of caching. event = {add, remove, out-of-quota, hit}",
         &["type"]
     ).unwrap();
 }
