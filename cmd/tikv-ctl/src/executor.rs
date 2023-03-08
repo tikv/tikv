@@ -1156,7 +1156,8 @@ impl DebugExecutor for DebuggerV2 {
     }
 
     fn get_raft_log(&self, region: u64, index: u64) -> Entry {
-        unimplemented!()
+        self.raft_log(region, index)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::raft_log", e))
     }
 
     fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {

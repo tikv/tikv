@@ -6428,6 +6428,7 @@ dependencies = [
  "serde_derive",
  "serde_ignored",
  "serde_json",
+ "server",
  "slog",
  "slog-global",
  "smallvec",
