@@ -223,7 +223,13 @@ impl PessimisticLockKeyResult {
     }
 
     pub fn assert_empty(&self) {
-        assert!(matches!(self, Self::Empty));
+        match self {
+            Self::Empty => (),
+            x => panic!(
+                "pessimistic lock key result not match, expected Empty, got {:?}",
+                x
+            ),
+        }
     }
 
     #[cfg(test)]
