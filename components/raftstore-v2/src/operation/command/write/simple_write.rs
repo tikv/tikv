@@ -30,6 +30,11 @@ impl SimpleWriteBinary {
     pub fn freeze(&mut self) {
         self.write_type = WriteType::Unspecified;
     }
+
+    #[inline]
+    pub fn data_size(&self) -> usize {
+        self.buf.len()
+    }
 }
 
 /// We usually use `RaftCmdRequest` for read write request. But the codec is

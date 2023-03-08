@@ -365,6 +365,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .add_bucket_flow(&apply_res.bucket_stat);
         self.update_split_flow_control(&apply_res.metrics);
         self.update_stat(&apply_res.metrics);
+        ctx.store_stat.engine_total_bytes_written += apply_res.metrics.written_bytes;
+        ctx.store_stat.engine_total_keys_written += apply_res.metrics.written_keys;
 
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);

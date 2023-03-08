@@ -17,10 +17,16 @@ pub use service::ResourceManagerService;
 pub mod channel;
 pub use channel::ResourceMetered;
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, Default)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[online_config(skip)]
     pub enabled: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
