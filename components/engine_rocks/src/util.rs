@@ -408,7 +408,9 @@ impl<A: CompactionFilterFactory, B: CompactionFilterFactory> CompactionFilterFac
             && let Some((name, filter)) = self.inner.create_compaction_filter(context)
         {
             inner_filter = Some(filter);
-            full_name += ".";
+            if !full_name.is_empty() {
+                full_name += ".";
+            }
             full_name += name.to_str().unwrap();
         }
         if outer_filter.is_none() && inner_filter.is_none() {
