@@ -69,7 +69,7 @@ impl ResourceGroupManager {
         let group_name = rg.get_name().to_ascii_lowercase();
         self.registry.lock().unwrap().iter().for_each(|controller| {
             let ru_quota = Self::get_ru_setting(&rg, controller.is_read);
-            controller.add_resource_group(group_name.clone().into_bytes(), ru_quota);
+            controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
         });
         info!("add resource group"; "name"=> &rg.name, "ru" => rg.get_r_u_settings().get_r_u().get_settings().get_fill_rate());
         self.resource_groups.insert(group_name, rg);
@@ -115,7 +115,7 @@ impl ResourceGroupManager {
         self.registry.lock().unwrap().push(controller.clone());
         for g in &self.resource_groups {
             let ru_quota = Self::get_ru_setting(g.value(), controller.is_read);
-            controller.add_resource_group(g.key().clone().into_bytes(), ru_quota);
+            controller.add_resource_group(g.key().clone().into_bytes(), ru_quota, g.priority);
         }
         controller
     }
@@ -159,7 +159,7 @@ impl ResourceController {
             last_min_vt: AtomicU64::new(0),
         };
         // add the "default" resource group
-        controller.add_resource_group(DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(), 0);
+        controller.add_resource_group(DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(), 0, 1);
         controller
     }
 
@@ -174,14 +174,14 @@ impl ResourceController {
         }
     }
 
-    fn add_resource_group(&self, name: Vec<u8>, ru_quota: u64) {
+    fn add_resource_group(&self, name: Vec<u8>, ru_quota: u64, priority: u64) {
         let mut max_ru_quota = self.max_ru_quota.lock().unwrap();
         if ru_quota > *max_ru_quota {
             *max_ru_quota = ru_quota;
             // adjust all group weight because the current value is too small.
-            self.adjust_all_resource_group_factors(ru_quota);
+            self.adjust_all_resource_group_factors(ru_quota, priority);
         }
-        let weight = Self::calculate_factor(*max_ru_quota, ru_quota);
+        let weight = Self::calculate_factor(*max_ru_quota, ru_quota) * priority;
 
         let vt_delta_for_get = if self.is_read {
             DEFAULT_PRIORITY_PER_READ_TASK * weight
@@ -204,16 +204,16 @@ impl ResourceController {
     // adjust all the existing groups. As we expect this won't happen very
     // often, and iterate 10k entry cost less than 5ms, so the performance is
     // acceptable.
-    fn adjust_all_resource_group_factors(&self, max_ru_quota: u64) {
+    fn adjust_all_resource_group_factors(&self, max_ru_quota: u64, priority: u64) {
         self.resource_consumptions.iter_mut().for_each(|mut g| {
-            g.value_mut().weight = Self::calculate_factor(max_ru_quota, g.ru_quota);
+            g.value_mut().weight = Self::calculate_factor(max_ru_quota, g.ru_quota) * priority;
         });
     }
 
     fn remove_resource_group(&self, name: &[u8]) {
         // do not remove the default resource group, reset to default setting instead.
         if DEFAULT_RESOURCE_GROUP_NAME.as_bytes() == name {
-            self.add_resource_group(DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(), 0);
+            self.add_resource_group(DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(), 0, 1);
             return;
         }
         self.resource_consumptions.remove(name);

@@ -710,6 +710,7 @@ where
 struct ResouceGroupSetting {
     name: String,
     ru: u64,
+    priority: u64,
     burst_limit: i64,
 }
 
@@ -722,6 +723,7 @@ fn into_debug_request_group(rg: ResourceGroup) -> ResouceGroupSetting {
             .get_r_u()
             .get_settings()
             .get_fill_rate(),
+        priority: rg.priority,
         burst_limit: rg
             .r_u_settings
             .get_ref()
