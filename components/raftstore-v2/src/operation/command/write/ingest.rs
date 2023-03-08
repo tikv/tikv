@@ -68,13 +68,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ssts: Box<[SstMeta]>,
     ) {
         let epoch = self.region().get_region_epoch();
-        let stale_cnt = ssts
-            .iter()
-            .filter(|sst| util::is_epoch_stale(sst.get_region_epoch(), epoch))
-            .count();
-        if stale_cnt == 0 {
-            return;
-        }
         let mut stale_ssts = Vec::from(ssts);
         stale_ssts.retain(|sst| util::is_epoch_stale(sst.get_region_epoch(), epoch));
         let _ = ctx
