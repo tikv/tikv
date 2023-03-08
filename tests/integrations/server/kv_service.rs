@@ -2496,6 +2496,16 @@ fn test_rpc_wall_time() {
             .get_total_rpc_wall_time_ns()
             > 0
     );
+    assert_eq!(
+        get_resp
+            .get_exec_details_v2()
+            .get_time_detail_v2()
+            .get_total_rpc_wall_time_ns(),
+        get_resp
+            .get_exec_details_v2()
+            .get_time_detail()
+            .get_total_rpc_wall_time_ns()
+    );
 
     let (mut sender, receiver) = client.batch_commands().unwrap();
     let mut batch_req = BatchCommandsRequest::default();

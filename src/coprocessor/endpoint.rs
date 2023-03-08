@@ -1561,14 +1561,6 @@ mod tests {
                 ),
                 PAYLOAD_SMALL.saturating_sub(COARSE_ERROR)
             );
-            assert_ge!(
-                Duration::from_millis(
-                    resp.get_exec_details_v2()
-                        .get_time_detail()
-                        .get_process_wall_time_ms()
-                ),
-                PAYLOAD_SMALL.saturating_sub(COARSE_ERROR)
-            );
             assert_lt!(
                 Duration::from_nanos(
                     resp.get_exec_details_v2()
@@ -1629,6 +1621,22 @@ mod tests {
                         .get_wait_wall_time_ns()
                 ),
                 wait_time + HANDLE_ERROR + COARSE_ERROR
+            );
+
+            // check TimeDetail and TimeDetailV2 has the same value.
+            let time_detail = resp.get_exec_details_v2().get_time_detail();
+            let time_detail_v2 = resp.get_exec_details_v2().get_time_detail_v2();
+            assert_eq!(
+                time_detail.get_process_wall_time_ms(),
+                time_detail_v2.get_process_wall_time_ns() / 1_000_000,
+            );
+            assert_eq!(
+                time_detail.get_wait_wall_time_ms(),
+                time_detail_v2.get_wait_wall_time_ns() / 1_000_000,
+            );
+            assert_eq!(
+                time_detail.get_kv_read_wall_time_ms(),
+                time_detail_v2.get_kv_read_wall_time_ns() / 1_000_000,
             );
         }
 
