@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use raft_engine::{copy::minimum_copy, env::DefaultFileSystem};
+use raft_engine::{Engine as RaftEngine, env::DefaultFileSystem};
 use regex::Regex;
 use tikv::config::TikvConfig;
 
@@ -72,11 +72,14 @@ pub fn dup_raft_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(),
         let dst = dst_config.infer_raft_engine_path(None).unwrap();
         let mut raft_engine_cfg = config.raft_engine.config();
         raft_engine_cfg.dir = config.infer_raft_engine_path(None).unwrap();
-        // NOTE: it's ok to used `DefaultFileSystem` whatever the original instance
-        // is encrypted or not because only `open` is used in `minimum_copy`. Seems
+        // NOTE: it's ok to used `DefaultFileSystem` whatever the original instance is
+        // encrypted or not because only `open` is used in `RaftEngine::fork`. Seems
         // this behavior will never be changed, however we can custom a file system
         // which panics in all other calls later.
-        minimum_copy(&raft_engine_cfg, Arc::new(DefaultFileSystem), dst)?;
+        let details = RaftEngine::fork(&raft_engine_cfg, Arc::new(DefaultFileSystem), dst)?;
+        for copied in &details.copied {
+            add_write_permission(copied)?;
+        }
     } else {
         let dst = dst_config.infer_raft_db_path(None).unwrap();
         create_dir(&dst)?;

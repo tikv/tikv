@@ -223,11 +223,6 @@ fn main() {
     config.raftdb.wal_dir = "".to_owned();
     config.raft_engine.mut_config().dir = "".to_owned();
 
-    if matches.is_present("show-cluster-id") {
-        println!("cluster-id: {:?}", get_cluster_id(&config));
-        process::exit(0);
-    }
-
     if matches.is_present("omit-logs") {
         config.log.file.filename = "/dev/null".to_owned();
         config.log.file.max_backups = 0;
@@ -263,6 +258,11 @@ fn main() {
 
     // For snapshot apply.
     config.raft_store.snap_apply_copy_symlink = true;
+
+    if matches.is_present("show-cluster-id") {
+        println!("cluster-id: {:?}", get_cluster_id(&config));
+        process::exit(0);
+    }
 
     match config.storage.engine {
         EngineType::RaftKv => server::server::run_tikv(config),
