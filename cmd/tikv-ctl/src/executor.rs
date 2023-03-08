@@ -1135,7 +1135,7 @@ fn handle_engine_error(err: EngineError) -> ! {
     tikv_util::logger::exit_process_gracefully(-1);
 }
 
-impl DebugExecutor for DebuggerV2 {
+impl<ER: RaftEngine> DebugExecutor for DebuggerV2<ER> {
     fn check_local_mode(&self) {}
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
@@ -1152,7 +1152,8 @@ impl DebugExecutor for DebuggerV2 {
     }
 
     fn get_region_info(&self, region: u64) -> RegionInfo {
-        unimplemented!()
+        self.region_info(region)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::region_info", e))
     }
 
     fn get_raft_log(&self, region: u64, index: u64) -> Entry {

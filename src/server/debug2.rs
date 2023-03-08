@@ -24,6 +24,7 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
         raft_engine: ER,
         cfg_controller: ConfigController,
     ) -> Self {
+        println!("Debugger for raftstore-v2 is used");
         DebuggerV2 {
             tablet_reg,
             raft_engine,
