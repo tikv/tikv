@@ -22,7 +22,6 @@ test-engines-rocksdb = [
 test-engines-panic = [
   "engine_test/test-engines-panic",
 ]
-enable-pagestorage = []
 
 cloud-aws = ["sst_importer/cloud-aws"]
 cloud-gcp = ["sst_importer/cloud-gcp"]

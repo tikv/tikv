@@ -78,10 +78,11 @@ pub fn overwrite_config_with_cmd_args(
     // The special case is engine-addr:
     // 1. If we have set our own engine-addr, we just ignore what TiFlash gives us.
     // 2. However, if we have not set our own value, we use what TiFlash gives us.
-    // Which is:     a. If `flash.proxy.server.engine-addr` is not set by
-    // TiFlash,        it will use `flash.service_addr` as `engine-addr` here.
-    //     b. Otherwise, TiFlash will use `flash.proxy.server.engine-addr` as
-    // `advertise-engine-addr`.
+    //      Which is:
+    //      a. If `flash.proxy.server.engine-addr` is not set by
+    //      TiFlash, it will use `flash.service_addr` as `engine-addr` here.
+    //      b. Otherwise, TiFlash will use `flash.proxy.server.engine-addr` as
+    //      `advertise-engine-addr`.
     if proxy_config.server.engine_addr.is_empty() {
         if let Some(engine_addr) = matches.value_of("engine-addr") {
             proxy_config.server.engine_addr = engine_addr.to_owned();
@@ -142,4 +143,11 @@ pub fn overwrite_config_with_cmd_args(
                 .unwrap(),
         ),
     );
+
+    if let Some(unips_enabled_str) = matches.value_of("unips-enabled") {
+        let enabled = unips_enabled_str.parse().unwrap_or_else(|e| {
+            fatal!("invalid unips-enabled: {}", e);
+        });
+        proxy_config.engine_store.enable_unips = enabled;
+    }
 }

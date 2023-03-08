@@ -267,6 +267,13 @@ pub unsafe fn run_proxy(
                 .long("only-decryption")
                 .help("Only do decryption in Proxy"),
         )
+        .arg(
+            Arg::with_name("unips-enabled")
+                .long("unips-enabled")
+                .help("Force enable unips")
+                .required(false)
+                .takes_value(true),
+        )
         .get_matches_from(args);
 
     if matches.is_present("print-sample-config") {

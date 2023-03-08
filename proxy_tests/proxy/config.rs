@@ -14,9 +14,9 @@ use crate::proxy::*;
 
 /// We test here if we can use proxy's default value without given file.
 /// Normally, we only need to add config tests in
-/// `test_config_proxy_default_no_config_item`.
+/// `test_default_no_config_item`.
 #[test]
-fn test_config_proxy_default_no_config_file() {
+fn test_default_no_config_file() {
     let args: Vec<&str> = vec![];
     let matches = App::new("RaftStore Proxy")
         .arg(
@@ -51,7 +51,7 @@ fn test_config_proxy_default_no_config_file() {
 /// Add assertion in this function, if we add some new items in
 /// `ProxyConfig`.
 #[test]
-fn test_config_proxy_default_no_config_item() {
+fn test_default_no_config_item() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
     let text = "z=4\n[rocksdb]\nmax-open-files=56\n";
     write!(file, "{}", text).unwrap();
@@ -125,9 +125,29 @@ fn test_config_proxy_default_no_config_item() {
     assert_eq!(config.server.reject_messages_on_memory_ratio, 0.05);
 }
 
+#[test]
+fn test_cmdline_overwrite() {
+    let args = vec!["test_cmdline_overwrite1", "--unips-enabled", "true"];
+    let matches = App::new("RaftStore Proxy")
+        .arg(
+            Arg::with_name("unips-enabled")
+                .long("unips-enabled")
+                .required(true)
+                .takes_value(true),
+        )
+        .get_matches_from(args);
+    let mut v: Vec<String> = vec![];
+    let mut config = gen_tikv_config(&None, false, &mut v);
+    let mut proxy_config = gen_proxy_config(&None, false, &mut v);
+    proxy_config.engine_store.enable_unips = false;
+    overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
+    address_proxy_config(&mut config, &proxy_config);
+    assert_eq!(proxy_config.engine_store.enable_unips, true);
+}
+
 /// We test if the engine-label is set properly.
 #[test]
-fn test_config_proxy_engine_label() {
+fn test_engine_label() {
     // case-1: If engine-label not specified in arguments, use default value.
     let args: Vec<&str> = vec![];
     let matches = App::new("RaftStore Proxy").get_matches_from(args);
@@ -176,7 +196,7 @@ fn test_config_proxy_engine_label() {
 // when a config item which is both defined by ProxyConfig and TikvConfig.
 // We only nned to add tests to this function when the logic is different.
 #[test]
-fn test_config_proxy_overwrite() {
+fn test_overwrite() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
     write!(
         file,
@@ -203,7 +223,7 @@ apply-low-priority-pool-size = 41
 }
 
 #[test]
-fn test_config_proxy_owned_config() {
+fn test_owned_config() {
     test_util::init_log_for_test();
     let mut file = tempfile::NamedTempFile::new().unwrap();
     write!(
