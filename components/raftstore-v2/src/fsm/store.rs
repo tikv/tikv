@@ -230,6 +230,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         );
 
         self.on_pd_store_heartbeat();
+        self.schedule_tick(
+            StoreTick::CleanupImportSst,
+            self.store_ctx.cfg.cleanup_import_sst_interval.0,
+        );
     }
 
     pub fn schedule_tick(&mut self, tick: StoreTick, timeout: Duration) {
@@ -253,6 +257,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
     fn on_tick(&mut self, tick: StoreTick) {
         match tick {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat(),
+            StoreTick::CleanupImportSst => self.on_cleanup_import_sst(),
             _ => unimplemented!(),
         }
     }

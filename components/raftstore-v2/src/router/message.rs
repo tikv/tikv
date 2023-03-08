@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 
 use kvproto::{
+    import_sstpb::SstMeta,
     metapb,
     metapb::RegionEpoch,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
@@ -206,6 +207,7 @@ pub enum PeerMsg {
     TabletTrimmed {
         tablet_index: u64,
     },
+    CleanupImportSst(Box<[SstMeta]>),
     AskCommitMerge(RaftCmdRequest),
     RejectCommitMerge {
         index: u64,

@@ -327,6 +327,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::TabletTrimmed { tablet_index } => {
                     self.fsm.peer_mut().on_tablet_trimmed(tablet_index)
                 }
+                PeerMsg::CleanupImportSst(ssts) => self
+                    .fsm
+                    .peer_mut()
+                    .on_cleanup_import_sst(self.store_ctx, ssts),
                 PeerMsg::AskCommitMerge(req) => {
                     self.fsm.peer_mut().on_ask_commit_merge(self.store_ctx, req)
                 }
