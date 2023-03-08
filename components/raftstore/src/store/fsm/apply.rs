@@ -1797,9 +1797,14 @@ where
         start_ts: &str,
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.put.inc();
-        let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
+        let (key, value, cf) = (
+            req.get_put().get_key(),
+            req.get_put().get_value(),
+            req.get_put().get_cf(),
+        );
 
         info!("handle put";
+            "cf" => ?cf,
             "start_ts" => ?start_ts,
             "key" => log_wrappers::hex_encode_upper(key),
             "value" => log_wrappers::hex_encode_upper(value),
