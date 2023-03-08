@@ -1203,15 +1203,7 @@ impl AnalyzeMixedResult {
 #[cfg(test)]
 mod tests {
     use ::std::collections::HashMap;
-    use tidb_query_datatype::{
-        codec::{
-            batch::LazyBatchColumn,
-            collation::{collator::CollatorUtf8Mb4Bin, Collator},
-            data_type::{ChunkRef, ChunkedVecBytes, VectorValue},
-            {datum, datum::Datum},
-        },
-        EvalType, FieldTypeTp,
-    };
+    use tidb_query_datatype::codec::{datum, datum::Datum};
 
 
     use super::*;
@@ -1255,7 +1247,9 @@ mod tests {
         for loop_i in 0..loop_cnt {
             let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                if collector.pick_sample() {
+                    collector.push_sample(&[row.clone()]);
+                }
             }
             assert_eq!(collector.samples.len(), sample_num);
             for sample in &collector.samples {
@@ -1304,7 +1298,9 @@ mod tests {
             let mut collector =
                 BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                if collector.pick_sample() {
+                    collector.push_sample(&[row.clone()]);
+                }
             }
             for sample in &collector.samples {
                 *item_cnt.entry(sample[0].clone()).or_insert(0) += 1;
@@ -1350,7 +1346,9 @@ mod tests {
             // Test for ReservoirRowSampleCollector
             let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                if collector.pick_sample() {
+                    collector.push_sample(&[row.clone()]);
+                }
             }
             assert_eq!(collector.samples.len(), 0);
         }
@@ -1359,93 +1357,12 @@ mod tests {
             let mut collector =
                 BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                if collector.pick_sample() {
+                    collector.push_sample(&[row.clone()]);
+                }
             }
             assert_eq!(collector.samples.len(), 0);
         }
-    }
-
-    fn prepare_encode_columns_arguments() -> (
-        Vec<tipb::ColumnInfo>,
-        Vec<LazyBatchColumn>,
-    ) {
-        let mut columns_info = Vec::new();
-        for i in 1..4 {
-            let mut col_info = tipb::ColumnInfo::default();
-            col_info.set_column_id(i as i64);
-            col_info.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
-            col_info
-                .as_mut_accessor()
-                .set_collation(Collation::Utf8Mb4Bin);
-            columns_info.push(col_info);
-        }
-        let mut columns_slice = Vec::new();
-        for _ in 0..3 {
-            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
-            col.mut_decoded().push_bytes(Some(b"abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789".to_vec()));
-            columns_slice.push(col)
-        }
-        (columns_info, columns_slice)
-    }
-
-
-    fn encode_columns_twice(columns_info: &Vec<tipb::ColumnInfo>, columns_slice: &Vec<LazyBatchColumn>, column_vals: &mut Vec<Vec<u8>>, collation_key_vals: &mut Vec<Vec<u8>>) {
-        for i in 0..columns_info.len() {
-            column_vals[i].clear();
-            collation_key_vals[i].clear();
-            columns_slice[i].encode(
-                0,
-                &columns_info[i],
-                &mut EvalContext::default(),
-                &mut column_vals[i],
-            ).unwrap();
-            println!("i={:?}, column_vals[i].len()={:?}, column_vals[i]={:?}", i, column_vals[i].len(), column_vals[i]);
-            if columns_info[i].as_accessor().is_string_like() {
-                let mut mut_val = &column_vals[i][..];
-                let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &columns_info[i]).unwrap();
-                CollatorUtf8Mb4Bin::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string().unwrap().unwrap()).unwrap();
-                println!("twice, i={:?}, collation_key_vals[i].len()={:?}, collation_key_vals[i]={:?}", i, collation_key_vals[i].len(), collation_key_vals[i]);
-            }
-        }
-    }
-
-    fn encode_columns_once(columns_info: &Vec<tipb::ColumnInfo>, columns_slice: &Vec<LazyBatchColumn>, column_vals: &mut Vec<Vec<u8>>, collation_key_vals: &mut Vec<Vec<u8>>) {
-        for i in 0..columns_info.len() {
-            column_vals[i].clear();
-            collation_key_vals[i].clear();
-            match columns_slice[i] {
-                LazyBatchColumn::Decoded(VectorValue::Bytes(ref vec)) => {
-                    match vec.get_option_ref(0) {
-                        Some(val) => {
-                            if columns_info[i].as_accessor().is_string_like() {
-                                CollatorUtf8Mb4Bin::write_sort_key(&mut collation_key_vals[i], val).unwrap();
-                                println!("once, i={:?}, collation_key_vals[i].len()={:?}, collation_key_vals[i]={:?}", i, collation_key_vals[i].len(), collation_key_vals[i]);
-                            } else {
-                                panic!()
-                            }
-                        }
-                        _ => panic!()
-                    }
-                }
-                _ => panic!()
-            }
-        }
-    }
-
-    #[test]
-    fn test_encode_columns_twice() {
-        let (columns_info, columns_slice) = prepare_encode_columns_arguments();
-        let mut column_vals = vec![vec![0; 200]; 3];
-        let mut collation_key_vals = vec![vec![0; 200]; 3];
-        encode_columns_twice(&columns_info, &columns_slice, &mut column_vals, &mut collation_key_vals);
-    }
-
-    #[test]
-    fn test_encode_columns_once() {
-        let (columns_info, columns_slice) = prepare_encode_columns_arguments();
-        let mut column_vals = vec![vec![0; 200]; 3];
-        let mut collation_key_vals = vec![vec![0; 200]; 3];
-        encode_columns_once(&columns_info, &columns_slice, &mut column_vals, &mut collation_key_vals);
     }
 }
 
@@ -1455,7 +1372,6 @@ mod benches {
         codec::{
             batch::LazyBatchColumn,
             collation::{collator::CollatorUtf8Mb4Bin, Collator},
-            data_type::{ChunkRef, ChunkedVecBytes, VectorValue},
         },
         EvalType, FieldTypeTp,
     };
@@ -1535,179 +1451,6 @@ mod benches {
                 &columns_info,
                 &column_groups,
             );
-        })
-    }
-
-    fn prepare_encode_columns_arguments() -> (
-        Vec<tipb::ColumnInfo>,
-        Vec<LazyBatchColumn>,
-    ) {
-        let mut columns_info = Vec::new();
-        for i in 1..4 {
-            let mut col_info = tipb::ColumnInfo::default();
-            col_info.set_column_id(i as i64);
-            col_info.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
-            col_info
-                .as_mut_accessor()
-                .set_collation(Collation::Utf8Mb4Bin);
-            columns_info.push(col_info);
-        }
-        let mut columns_slice = Vec::new();
-        for _ in 0..3 {
-            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
-            col.mut_decoded().push_bytes(Some(b"abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789".to_vec()));
-            columns_slice.push(col)
-        }
-        (columns_info, columns_slice)
-    }
-
-    fn encode_columns_twice(columns_info: &Vec<tipb::ColumnInfo>, columns_slice: &Vec<LazyBatchColumn>, column_vals: &mut Vec<Vec<u8>>, collation_key_vals: &mut Vec<Vec<u8>>) {
-        for i in 0..columns_info.len() {
-            column_vals[i].clear();
-            collation_key_vals[i].clear();
-            columns_slice[i].encode(
-                0,
-                &columns_info[i],
-                &mut EvalContext::default(),
-                &mut column_vals[i],
-            ).unwrap();
-            if columns_info[i].as_accessor().is_string_like() {
-                let mut mut_val = &column_vals[i][..];
-                let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &columns_info[i]).unwrap();
-                CollatorUtf8Mb4Bin::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string().unwrap().unwrap()).unwrap();
-            }
-        }
-    }
-
-    fn encode_columns_twice_with_ctx(columns_info: &Vec<tipb::ColumnInfo>, columns_slice: &Vec<LazyBatchColumn>, ctx: &mut EvalContext, column_vals: &mut Vec<Vec<u8>>, collation_key_vals: &mut Vec<Vec<u8>>) {
-        for i in 0..columns_info.len() {
-            column_vals[i].clear();
-            collation_key_vals[i].clear();
-            columns_slice[i].encode(
-                0,
-                &columns_info[i],
-                ctx,
-                &mut column_vals[i],
-            ).unwrap();
-            if columns_info[i].as_accessor().is_string_like() {
-                let mut mut_val = &column_vals[i][..];
-                let decoded_val = table::decode_col_value(&mut mut_val, ctx, &columns_info[i]).unwrap();
-                CollatorUtf8Mb4Bin::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string().unwrap().unwrap()).unwrap();
-            }
-        }
-    }
-
-    fn encode_columns_without_encode(columns_info: &Vec<tipb::ColumnInfo>, columns_slice: &Vec<LazyBatchColumn>, column_vals: &mut Vec<Vec<u8>>, collation_key_vals: &mut Vec<Vec<u8>>) {
-        for i in 0..columns_info.len() {
-            collation_key_vals[i].clear();
-            if columns_info[i].as_accessor().is_string_like() {
-                let mut mut_val = &column_vals[i][..];
-                let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &columns_info[i]).unwrap();
-                CollatorUtf8Mb4Bin::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string().unwrap().unwrap()).unwrap();
-            }
-        }
-    }
-
-    fn encode_columns_with_ctx_without_encode(columns_info: &Vec<tipb::ColumnInfo>, columns_slice: &Vec<LazyBatchColumn>, ctx: &mut EvalContext, column_vals: &mut Vec<Vec<u8>>, collation_key_vals: &mut Vec<Vec<u8>>) {
-        for i in 0..columns_info.len() {
-            collation_key_vals[i].clear();
-            if columns_info[i].as_accessor().is_string_like() {
-                let mut mut_val = &column_vals[i][..];
-                let decoded_val = table::decode_col_value(&mut mut_val, ctx, &columns_info[i]).unwrap();
-                CollatorUtf8Mb4Bin::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string().unwrap().unwrap()).unwrap();
-            }
-        }
-    }
-
-    fn encode_columns_once(columns_info: &Vec<tipb::ColumnInfo>, columns_slice: &Vec<LazyBatchColumn>, column_vals: &mut Vec<Vec<u8>>, collation_key_vals: &mut Vec<Vec<u8>>) {
-        for i in 0..columns_info.len() {
-            column_vals[i].clear();
-            collation_key_vals[i].clear();
-            match columns_slice[i] {
-                LazyBatchColumn::Decoded(VectorValue::Bytes(ref vec)) => {
-                    match vec.get_option_ref(0) {
-                        Some(val) => {
-                            if columns_info[i].as_accessor().is_string_like() {
-                                CollatorUtf8Mb4Bin::write_sort_key(&mut collation_key_vals[i], val).unwrap();
-                            } else {
-                                panic!()
-                            }
-                        }
-                        None => panic!()
-                    }
-                }
-                _ => panic!()
-            }
-        }
-    }
-
-    #[bench]
-    fn bench_encode_columns_twice(b: &mut test::Bencher) {
-        let (columns_info, columns_slice) = prepare_encode_columns_arguments();
-        let mut column_vals = vec![vec![0; 200]; 3];
-        let mut collation_key_vals = vec![vec![0; 200]; 3];
-        b.iter(|| {
-            encode_columns_twice(&columns_info, &columns_slice, &mut column_vals, &mut collation_key_vals);
-        })
-    }
-
-    #[bench]
-    fn bench_encode_columns_twice_with_ctx(b: &mut test::Bencher) {
-        let (columns_info, columns_slice) = prepare_encode_columns_arguments();
-        let mut column_vals = vec![vec![0; 200]; 3];
-        let mut collation_key_vals = vec![vec![0; 200]; 3];
-        let mut ctx = EvalContext::default();
-        b.iter(|| {
-            encode_columns_twice_with_ctx(&columns_info, &columns_slice, &mut ctx, &mut column_vals, &mut collation_key_vals);
-        })
-    }
-
-    #[bench]
-    fn bench_encode_columns_without_encode(b: &mut test::Bencher) {
-        let (columns_info, columns_slice) = prepare_encode_columns_arguments();
-        let mut column_vals = vec![vec![0; 200]; 3];
-        let mut collation_key_vals = vec![vec![0; 200]; 3];
-        for i in 0..columns_info.len() {
-            column_vals[i].clear();
-            columns_slice[i].encode(
-                0,
-                &columns_info[i],
-                &mut EvalContext::default(),
-                &mut column_vals[i],
-            ).unwrap();
-        }
-        b.iter(|| {
-            encode_columns_without_encode(&columns_info, &columns_slice, &mut column_vals, &mut collation_key_vals);
-        })
-    }
-
-    #[bench]
-    fn bench_encode_columns_with_ctx_without_encode(b: &mut test::Bencher) {
-        let (columns_info, columns_slice) = prepare_encode_columns_arguments();
-        let mut column_vals = vec![vec![0; 200]; 3];
-        let mut collation_key_vals = vec![vec![0; 200]; 3];
-        let mut ctx = EvalContext::default();
-        for i in 0..columns_info.len() {
-            column_vals[i].clear();
-            columns_slice[i].encode(
-                0,
-                &columns_info[i],
-                &mut ctx,
-                &mut column_vals[i],
-            ).unwrap();
-        }
-        b.iter(|| {
-            encode_columns_with_ctx_without_encode(&columns_info, &columns_slice, &mut ctx, &mut column_vals, &mut collation_key_vals);
-        })
-    }
-
-    #[bench]
-    fn bench_encode_columns_once(b: &mut test::Bencher) {
-        let (columns_info, columns_slice) = prepare_encode_columns_arguments();
-        let mut column_vals = vec![vec![0; 200]; 3];
-        let mut collation_key_vals = vec![vec![0; 200]; 3];
-        b.iter(|| {
-            encode_columns_once(&columns_info, &columns_slice, &mut column_vals, &mut collation_key_vals);
         })
     }
 }
