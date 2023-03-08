@@ -180,6 +180,51 @@ fn protocol_error(exp: &str, act: impl Debug) -> Error {
     Error::Other(format!("protocol error: expect {exp}, but got {act:?}").into())
 }
 
+/// Check if a local SST file matches the preview meta.
+///
+/// It's considered matched when:
+/// 1. Have the same file size;
+/// 2. The first `PREVIEW_CHUNK_LEN` bytes are the same, this contains the
+/// actual data of an SST;
+/// 3. The last `PREVIEW_CHUNK_LEN` bytes are the same, this contains checksum,
+/// properties and other medata of an SST.
+async fn is_sst_match_preview(
+    preview_meta: &TabletSnapshotFileMeta,
+    target: &Path,
+    buffer: &mut Vec<u8>,
+    limiter: &Limiter,
+) -> Result<bool> {
+    let mut f = File::open(target)?;
+    let exist_len = f.metadata()?.len();
+    if exist_len != preview_meta.file_size {
+        return Ok(false);
+    }
+
+    let head_len = preview_meta.head_chunk.len();
+    let trailing_len = preview_meta.trailing_chunk.len();
+    if head_len as u64 > preview_meta.file_size || trailing_len as u64 > preview_meta.file_size {
+        return Err(Error::Other(
+            format!(
+                "invalid chunk length {} {} {}",
+                preview_meta.file_size, head_len, trailing_len
+            )
+            .into(),
+        ));
+    }
+    read_to(&mut f, buffer, head_len, limiter).await?;
+    if *buffer != preview_meta.head_chunk {
+        return Ok(false);
+    }
+
+    if preview_meta.trailing_chunk.is_empty() {
+        return Ok(true);
+    }
+
+    f.seek(SeekFrom::End(-(trailing_len as i64)))?;
+    read_to(&mut f, buffer, trailing_len, limiter).await?;
+    Ok(*buffer == preview_meta.trailing_chunk)
+}
+
 async fn cleanup_cache(
     path: &Path,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
@@ -216,28 +261,9 @@ async fn cleanup_cache(
         let mut buffer = Vec::with_capacity(PREVIEW_CHUNK_LEN);
         for meta in preview.take_meta().into_vec() {
             if is_sst(&meta.file_name) && let Some(p) = exists.remove(&meta.file_name) {
-                let mut f = File::open(&p)?;
-                let exist_len = f.metadata()?.len();
-                if exist_len == meta.file_size {
-                    let head_len = meta.head_chunk.len();
-                    let trailing_len = meta.trailing_chunk.len();
-                    if head_len as u64 > meta.file_size || trailing_len as u64 > meta.file_size {
-                        return Err(Error::Other(format!("invalid chunk length {} {} {}", meta.file_size, head_len, trailing_len).into()));
-                    }
-                    // Usually the file is in page cache.
-                    read_to(&mut f, &mut buffer, head_len, limiter).await?;
-                    if buffer == meta.head_chunk {
-                        if meta.trailing_chunk.is_empty() {
-                            reused += meta.file_size;
-                            continue;
-                        }
-                        f.seek(SeekFrom::End(-(trailing_len as i64)))?;
-                        read_to(&mut f, &mut buffer, trailing_len, limiter).await?;
-                        if buffer == meta.trailing_chunk {
-                            reused += meta.file_size;
-                            continue;
-                        }
-                    }
+                if is_sst_match_preview(&meta, &p, &mut buffer, limiter).await? {
+                    reused += meta.file_size;
+                    continue;
                 }
                 // We should not write to the file directly as it's hard linked.
                 fs::remove_file(p)?;
