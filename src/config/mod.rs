@@ -33,7 +33,10 @@ use engine_rocks::{
         DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env,
         PrepopulateBlockCache, RateLimiter, WriteBufferManager,
     },
-    util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
+    util::{
+        FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
+        RangeCompactionFilterFactory, StackingCompactionFilterFactory,
+    },
     RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
     RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics,
     RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
@@ -702,6 +705,7 @@ impl DefaultCfConfig {
         shared: &CfResources,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
+        filter_factory: Option<&RangeCompactionFilterFactory>,
         for_engine: EngineType,
     ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(
@@ -721,29 +725,67 @@ impl DefaultCfConfig {
             RawMvccPropertiesCollectorFactory::default(),
         );
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        match api_version {
-            ApiVersion::V1 => {
-                // nothing to do
-            }
-            ApiVersion::V1ttl => {
-                cf_opts.add_table_properties_collector_factory(
-                    "tikv.ttl-properties-collector",
-                    TtlPropertiesCollectorFactory::<ApiV1Ttl>::default(),
-                );
-                cf_opts
-                    .set_compaction_filter_factory(
-                        "ttl_compaction_filter_factory",
+        if let Some(factory) = filter_factory {
+            match api_version {
+                ApiVersion::V1 => {
+                    cf_opts
+                        .set_compaction_filter_factory("range_filter_factory", factory.clone())
+                        .unwrap();
+                }
+                ApiVersion::V1ttl => {
+                    cf_opts.add_table_properties_collector_factory(
+                        "tikv.ttl-properties-collector",
+                        TtlPropertiesCollectorFactory::<ApiV1Ttl>::default(),
+                    );
+                    let factory = StackingCompactionFilterFactory::new(
+                        factory.clone(),
                         TtlCompactionFilterFactory::<ApiV1Ttl>::default(),
-                    )
-                    .unwrap();
-            }
-            ApiVersion::V2 => {
-                cf_opts
-                    .set_compaction_filter_factory(
-                        "apiv2_gc_compaction_filter_factory",
+                    );
+                    cf_opts
+                        .set_compaction_filter_factory(
+                            "range_filter_factory.ttl_compaction_filter_factory",
+                            factory,
+                        )
+                        .unwrap();
+                }
+                ApiVersion::V2 => {
+                    let factory = StackingCompactionFilterFactory::new(
+                        factory.clone(),
                         RawCompactionFilterFactory,
-                    )
-                    .unwrap();
+                    );
+                    cf_opts
+                        .set_compaction_filter_factory(
+                            "range_filter_factory.apiv2_gc_compaction_filter_factory",
+                            factory,
+                        )
+                        .unwrap();
+                }
+            }
+        } else {
+            match api_version {
+                ApiVersion::V1 => {
+                    // nothing to do
+                }
+                ApiVersion::V1ttl => {
+                    cf_opts.add_table_properties_collector_factory(
+                        "tikv.ttl-properties-collector",
+                        TtlPropertiesCollectorFactory::<ApiV1Ttl>::default(),
+                    );
+                    cf_opts
+                        .set_compaction_filter_factory(
+                            "ttl_compaction_filter_factory",
+                            TtlCompactionFilterFactory::<ApiV1Ttl>::default(),
+                        )
+                        .unwrap();
+                }
+                ApiVersion::V2 => {
+                    cf_opts
+                        .set_compaction_filter_factory(
+                            "apiv2_gc_compaction_filter_factory",
+                            RawCompactionFilterFactory,
+                        )
+                        .unwrap();
+                }
             }
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
@@ -827,6 +869,7 @@ impl WriteCfConfig {
         &self,
         shared: &CfResources,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        filter_factory: Option<&RangeCompactionFilterFactory>,
         for_engine: EngineType,
     ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(
@@ -855,12 +898,23 @@ impl WriteCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        cf_opts
-            .set_compaction_filter_factory(
-                "write_compaction_filter_factory",
-                WriteCompactionFilterFactory,
-            )
-            .unwrap();
+        if let Some(factory) = filter_factory {
+            let factory =
+                StackingCompactionFilterFactory::new(factory.clone(), WriteCompactionFilterFactory);
+            cf_opts
+                .set_compaction_filter_factory(
+                    "range_filter_factory.write_compaction_filter_factory",
+                    factory,
+                )
+                .unwrap();
+        } else {
+            cf_opts
+                .set_compaction_filter_factory(
+                    "write_compaction_filter_factory",
+                    WriteCompactionFilterFactory,
+                )
+                .unwrap();
+        }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
@@ -930,7 +984,12 @@ impl Default for LockCfConfig {
 }
 
 impl LockCfConfig {
-    pub fn build_opt(&self, shared: &CfResources, for_engine: EngineType) -> RocksCfOptions {
+    pub fn build_opt(
+        &self,
+        shared: &CfResources,
+        filter_factory: Option<&RangeCompactionFilterFactory>,
+        for_engine: EngineType,
+    ) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(
             self,
@@ -948,6 +1007,11 @@ impl LockCfConfig {
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(bloom_filter_ratio(for_engine));
+        if let Some(factory) = filter_factory {
+            cf_opts
+                .set_compaction_filter_factory("range_filter_factory", factory.clone())
+                .unwrap();
+        }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
@@ -1386,19 +1450,28 @@ impl DbConfig {
         shared: &CfResources,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
+        filter_factory: Option<&RangeCompactionFilterFactory>,
         for_engine: EngineType,
     ) -> Vec<(&'static str, RocksCfOptions)> {
         let mut cf_opts = Vec::with_capacity(4);
         cf_opts.push((
             CF_DEFAULT,
-            self.defaultcf
-                .build_opt(shared, region_info_accessor, api_version, for_engine),
+            self.defaultcf.build_opt(
+                shared,
+                region_info_accessor,
+                api_version,
+                filter_factory,
+                for_engine,
+            ),
         ));
-        cf_opts.push((CF_LOCK, self.lockcf.build_opt(shared, for_engine)));
+        cf_opts.push((
+            CF_LOCK,
+            self.lockcf.build_opt(shared, filter_factory, for_engine),
+        ));
         cf_opts.push((
             CF_WRITE,
             self.writecf
-                .build_opt(shared, region_info_accessor, for_engine),
+                .build_opt(shared, region_info_accessor, filter_factory, for_engine),
         ));
         if for_engine == EngineType::RaftKv {
             cf_opts.push((CF_RAFT, self.raftcf.build_opt(shared)));
@@ -3159,7 +3232,10 @@ impl TikvConfig {
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
             if !self.raft_engine.enable {
-                panic!("partitioned-raft-kv only supports raft log engine.");
+                return Err("partitioned-raft-kv only supports raft log engine.".into());
+            }
+            if self.rocksdb.titan.enabled {
+                return Err("partitioned-raft-kv doesn't support titan.".into());
             }
         }
 
@@ -4634,6 +4710,7 @@ mod tests {
                 ),
                 None,
                 cfg.storage.api_version(),
+                None,
                 cfg.storage.engine,
             ),
             None,
