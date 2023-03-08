@@ -365,7 +365,7 @@ pub mod ctor {
         use engine_rocks::{
             get_env,
             properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
-            util::{new_engine_opt as rocks_new_engine_opt, RangeCompactionFilterFactoryBuilder},
+            util::{new_engine_opt as rocks_new_engine_opt, RangeCompactionFilterFactory},
             RocksCfOptions, RocksDbOptions, RocksPersistenceListener,
         };
         use engine_traits::{
@@ -425,15 +425,14 @@ pub mod ctor {
                     );
                     rocks_db_opts.add_event_listener(RocksPersistenceListener::new(listener));
                 }
-                let builder = RangeCompactionFilterFactoryBuilder::new(
-                    ctx.start_key.to_vec(),
-                    ctx.end_key.to_vec(),
-                );
+                let factory =
+                    RangeCompactionFilterFactory::new(ctx.start_key.clone(), ctx.end_key.clone());
                 let rocks_cfs_opts = cf_opts
                     .iter()
                     .map(|(name, opt)| {
                         let mut opt = get_rocks_cf_opts(opt);
-                        opt.set_compaction_filter_factory("range_filter_factory", builder.build())
+                        // We assume `get_rocks_cf_opts` didn't set a factory already.
+                        opt.set_compaction_filter_factory("range_filter_factory", factory.clone())
                             .unwrap();
                         (*name, opt)
                     })

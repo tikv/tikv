@@ -12,7 +12,8 @@ pub use rocksdb::{
     CompactionFilterValueType, CompactionJobInfo, CompactionOptions, CompactionPriority,
     ConcurrentTaskLimiter, DBBottommostLevelCompaction, DBCompactionFilter, DBCompactionStyle,
     DBCompressionType, DBEntryType, DBRateLimiterMode, DBRecoveryMode, DBStatisticsTickerType,
-    DBTitanDBBlobRunMode, Env, EventListener, IngestExternalFileOptions, LRUCacheOptions,
-    MemoryAllocator, PerfContext, PrepopulateBlockCache, Range, RateLimiter, SliceTransform,
-    Statistics, TablePropertiesCollector, TablePropertiesCollectorFactory, WriteBufferManager,
+    DBTableFileCreationReason, DBTitanDBBlobRunMode, Env, EventListener, IngestExternalFileOptions,
+    LRUCacheOptions, MemoryAllocator, PerfContext, PrepopulateBlockCache, Range, RateLimiter,
+    SliceTransform, Statistics, TablePropertiesCollector, TablePropertiesCollectorFactory,
+    WriteBufferManager,
 };

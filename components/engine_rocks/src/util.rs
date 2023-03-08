@@ -6,7 +6,8 @@ use engine_traits::{Engines, Range, Result, CF_DEFAULT};
 use rocksdb::{
     load_latest_options, CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactionFilter,
     CompactionFilterContext, CompactionFilterDecision, CompactionFilterFactory,
-    CompactionFilterValueType, Env, Range as RocksRange, SliceTransform, DB,
+    CompactionFilterValueType, DBTableFileCreationReason, Env, Range as RocksRange, SliceTransform,
+    DB,
 };
 use slog_global::warn;
 
@@ -332,94 +333,109 @@ pub fn from_raw_perf_level(level: rocksdb::PerfLevel) -> engine_traits::PerfLeve
     }
 }
 
-struct KeyRange {
+struct OwnedRange {
     start_key: Box<[u8]>,
     end_key: Box<[u8]>,
 }
 
-pub struct NoopFilter;
+type FilterByReason = [bool; 4];
 
-impl CompactionFilter for NoopFilter {}
-
-pub struct NoopFactory;
-
-impl CompactionFilterFactory for NoopFactory {
-    type Filter = NoopFilter;
-    fn create_compaction_filter(
-        &self,
-        _context: &CompactionFilterContext,
-    ) -> Option<(CString, Self::Filter)> {
-        None
+fn reason_to_index(reason: DBTableFileCreationReason) -> usize {
+    match reason {
+        DBTableFileCreationReason::Flush => 0,
+        DBTableFileCreationReason::Compaction => 1,
+        DBTableFileCreationReason::Recovery => 2,
+        DBTableFileCreationReason::Misc => 3,
     }
 }
 
-/// Used to build `RangeCompactionFilterFactory`, optionally stacked over
-/// another compaction filter factory.
-pub struct RangeCompactionFilterFactoryBuilder(Arc<KeyRange>);
+fn filter_by_reason(factory: &impl CompactionFilterFactory) -> FilterByReason {
+    let mut r = FilterByReason::default();
+    r[reason_to_index(DBTableFileCreationReason::Flush)] =
+        factory.should_filter_table_file_creation(DBTableFileCreationReason::Flush);
+    r[reason_to_index(DBTableFileCreationReason::Compaction)] =
+        factory.should_filter_table_file_creation(DBTableFileCreationReason::Compaction);
+    r[reason_to_index(DBTableFileCreationReason::Recovery)] =
+        factory.should_filter_table_file_creation(DBTableFileCreationReason::Recovery);
+    r[reason_to_index(DBTableFileCreationReason::Misc)] =
+        factory.should_filter_table_file_creation(DBTableFileCreationReason::Misc);
+    r
+}
 
-impl RangeCompactionFilterFactoryBuilder {
-    pub fn new(start_key: Vec<u8>, end_key: Vec<u8>) -> Self {
-        Self(Arc::new(KeyRange {
-            start_key: start_key.into_boxed_slice(),
-            end_key: end_key.into_boxed_slice(),
-        }))
-    }
+pub struct StackingCompactionFilterFactory<A: CompactionFilterFactory, B: CompactionFilterFactory> {
+    outer_should_filter: FilterByReason,
+    outer: A,
+    inner_should_filter: FilterByReason,
+    inner: B,
+}
 
-    pub fn build_with<C: CompactionFilterFactory>(
-        &self,
-        inner: C,
-    ) -> RangeCompactionFilterFactory<C> {
-        // TODO: should_filter_table_file_creation
-        RangeCompactionFilterFactory {
-            range: self.0.clone(),
-            inner_factory: Some(inner),
+impl<A: CompactionFilterFactory, B: CompactionFilterFactory> StackingCompactionFilterFactory<A, B> {
+    /// Creates a factory of stacked filter with `outer` on top of `inner`.
+    /// Table keys will be filtered through `outer` first before reaching
+    /// `inner`.
+    pub fn new(outer: A, inner: B) -> Self {
+        let outer_should_filter = filter_by_reason(&outer);
+        let inner_should_filter = filter_by_reason(&inner);
+        Self {
+            outer_should_filter,
+            outer,
+            inner_should_filter,
+            inner,
         }
     }
-
-    pub fn build(&self) -> RangeCompactionFilterFactory<NoopFactory> {
-        RangeCompactionFilterFactory {
-            range: self.0.clone(),
-            inner_factory: None,
-        }
-    }
 }
 
-pub struct RangeCompactionFilterFactory<C: CompactionFilterFactory> {
-    range: Arc<KeyRange>,
-    inner_factory: Option<C>,
-}
-
-impl<C: CompactionFilterFactory> CompactionFilterFactory for RangeCompactionFilterFactory<C> {
-    type Filter = RangeCompactionFilter<C::Filter>;
+impl<A: CompactionFilterFactory, B: CompactionFilterFactory> CompactionFilterFactory
+    for StackingCompactionFilterFactory<A, B>
+{
+    type Filter = StackingCompactionFilter<A::Filter, B::Filter>;
 
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
     ) -> Option<(CString, Self::Filter)> {
-        if let Some(inner) = self.inner_factory.as_ref() {
-            if let Some((name, filter)) = inner.create_compaction_filter(context) {
-                let filter = RangeCompactionFilter {
-                    range: self.range.clone(),
-                    inner_filter: Some(filter),
-                };
-                return Some((name, filter));
-            }
+        let i = reason_to_index(context.reason());
+        let mut outer_filter = None;
+        let mut inner_filter = None;
+        let mut full_name = String::new();
+        if self.outer_should_filter[i]
+            && let Some((name, filter)) = self.outer.create_compaction_filter(context)
+        {
+            outer_filter = Some(filter);
+            full_name = name.into_string().unwrap();
         }
-        let filter = RangeCompactionFilter {
-            range: self.range.clone(),
-            inner_filter: None,
-        };
-        Some((CString::new("region_filter").unwrap(), filter))
+        if self.inner_should_filter[i]
+            && let Some((name, filter)) = self.inner.create_compaction_filter(context)
+        {
+            inner_filter = Some(filter);
+            if !full_name.is_empty() {
+                full_name += ".";
+            }
+            full_name += name.to_str().unwrap();
+        }
+        if outer_filter.is_none() && inner_filter.is_none() {
+            None
+        } else {
+            let filter = StackingCompactionFilter {
+                outer: outer_filter,
+                inner: inner_filter,
+            };
+            Some((CString::new(full_name).unwrap(), filter))
+        }
+    }
+
+    fn should_filter_table_file_creation(&self, reason: DBTableFileCreationReason) -> bool {
+        let i = reason_to_index(reason);
+        self.outer_should_filter[i] || self.inner_should_filter[i]
     }
 }
 
-/// Filters out all keys within the key range.
-pub struct RangeCompactionFilter<C: CompactionFilter> {
-    range: Arc<KeyRange>,
-    inner_filter: Option<C>,
+pub struct StackingCompactionFilter<A: CompactionFilter, B: CompactionFilter> {
+    outer: Option<A>,
+    inner: Option<B>,
 }
 
-impl<C: CompactionFilter> CompactionFilter for RangeCompactionFilter<C> {
+impl<A: CompactionFilter, B: CompactionFilter> CompactionFilter for StackingCompactionFilter<A, B> {
     fn featured_filter(
         &mut self,
         level: usize,
@@ -428,10 +444,61 @@ impl<C: CompactionFilter> CompactionFilter for RangeCompactionFilter<C> {
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
-        if key < self.range.start_key.as_ref() || key >= self.range.end_key.as_ref() {
-            CompactionFilterDecision::Remove
-        } else if let Some(inner) = self.inner_filter.as_mut() {
+        if let Some(outer) = self.outer.as_mut()
+            && let r = outer.featured_filter(level, key, seqno, value, value_type)
+            && !matches!(r, CompactionFilterDecision::Keep)
+        {
+            r
+        } else if let Some(inner) = self.inner.as_mut() {
             inner.featured_filter(level, key, seqno, value, value_type)
+        } else {
+            CompactionFilterDecision::Keep
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RangeCompactionFilterFactory(Arc<OwnedRange>);
+
+impl RangeCompactionFilterFactory {
+    pub fn new(start_key: Box<[u8]>, end_key: Box<[u8]>) -> Self {
+        let range = OwnedRange { start_key, end_key };
+        Self(Arc::new(range))
+    }
+}
+
+impl CompactionFilterFactory for RangeCompactionFilterFactory {
+    type Filter = RangeCompactionFilter;
+
+    fn create_compaction_filter(
+        &self,
+        _context: &CompactionFilterContext,
+    ) -> Option<(CString, Self::Filter)> {
+        Some((
+            CString::new("range_filter").unwrap(),
+            RangeCompactionFilter(self.0.clone()),
+        ))
+    }
+
+    fn should_filter_table_file_creation(&self, _reason: DBTableFileCreationReason) -> bool {
+        true
+    }
+}
+
+/// Filters out all keys outside the key range.
+pub struct RangeCompactionFilter(Arc<OwnedRange>);
+
+impl CompactionFilter for RangeCompactionFilter {
+    fn featured_filter(
+        &mut self,
+        _level: usize,
+        key: &[u8],
+        _seqno: u64,
+        _value: &[u8],
+        _value_type: CompactionFilterValueType,
+    ) -> CompactionFilterDecision {
+        if key < self.0.start_key.as_ref() || key >= self.0.end_key.as_ref() {
+            CompactionFilterDecision::Remove
         } else {
             CompactionFilterDecision::Keep
         }

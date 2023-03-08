@@ -178,6 +178,7 @@ impl<EK: KvEngine> Runner<EK> {
                 let range1 = Range::new(&[], &start_key);
                 let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
                 for r in [range1, range2] {
+                    // When compaction filter is present, trivial move is disallowed.
                     if let Err(e) =
                         tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1)
                     {

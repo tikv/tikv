@@ -2862,7 +2862,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#2d27c13793160a23fce1dadb844b0c1cba6d867f"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#635d0c5bc9791d8b34cc06612f4666a141190a63"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2881,7 +2881,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#2d27c13793160a23fce1dadb844b0c1cba6d867f"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#635d0c5bc9791d8b34cc06612f4666a141190a63"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4799,7 +4799,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#2d27c13793160a23fce1dadb844b0c1cba6d867f"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=221107-merge#635d0c5bc9791d8b34cc06612f4666a141190a63"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -6701,7 +6701,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#614f3ffd42ddc84b78ff59d65f105f2099a6f1b1"
+source = "git+https://github.com/pingcap/tipb.git#955fbdc879517f16b7a2f5967f143b92a6ab03dd"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
