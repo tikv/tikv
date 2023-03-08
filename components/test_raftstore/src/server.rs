@@ -50,7 +50,7 @@ use test_pd_client::TestPdClient;
 use tikv::{
     config::ConfigController,
     coprocessor, coprocessor_v2,
-    import::{ImportSstService, SstImporter},
+    import::{ImportSstService, LocalTablets, SstImporter},
     read_pool::ReadPool,
     server::{
         gc_worker::GcWorker,
@@ -441,7 +441,7 @@ impl ServerCluster {
             cfg.import.clone(),
             cfg.raft_store.raft_entry_max_size,
             engine,
-            engines.kv.clone(),
+            LocalTablets::Singleton(engines.kv.clone()),
             Arc::clone(&importer),
         );
 
