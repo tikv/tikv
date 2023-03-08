@@ -2,6 +2,7 @@
 
 pub mod commit;
 pub mod prepare;
+pub mod rollback;
 
 use std::path::PathBuf;
 

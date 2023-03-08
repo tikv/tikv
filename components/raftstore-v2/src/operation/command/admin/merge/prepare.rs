@@ -16,7 +16,7 @@
 //! Raft proposal. To guarantee the consistency of lock serialization, we might
 //! need to wait for some in-flight logs to be applied. During the wait, all
 //! incoming write proposals will be rejected. Read the comments of
-//! `MergeContext::WaitForFence` for more details.
+//! `PrepareStatus::WaitForFence` for more details.
 //!
 //! ## Apply (`Apply::apply_prepare_merge`)
 //!
@@ -98,6 +98,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<u64> {
+        // Best effort. Remove when trim check is implemented.
         if self.storage().has_dirty_data() {
             return Err(box_err!(
                 "{} source peer has dirty data, try again later",
@@ -120,7 +121,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let r = self
             .propose_locks_before_prepare_merge(store_ctx, pre_propose.lock_size_limit)
             .and_then(|_| {
-                assert!(!self.storage().has_dirty_data());
                 let mut proposal_ctx = ProposalContext::empty();
                 proposal_ctx.insert(ProposalContext::PREPARE_MERGE);
                 let data = req.write_to_bytes().unwrap();
