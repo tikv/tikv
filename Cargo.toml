@@ -232,7 +232,6 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229
 # will _not_ propagate the feature `x` into `cmd`'s direct dependencies.
 resolver = "2"
 members = [
-  "cmd/tikv-agent",
   "cmd/tikv-ctl",
   "cmd/tikv-server",
   "components/api_version",

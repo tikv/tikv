@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use raft_engine::{Engine as RaftEngine, env::DefaultFileSystem};
+use raft_engine::{env::DefaultFileSystem, Engine as RaftEngine};
 use regex::Regex;
 use tikv::config::TikvConfig;
 

@@ -6463,27 +6463,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tikv-agent"
-version = "0.0.1"
-dependencies = [
- "cc",
- "clap 2.33.0",
- "encryption",
- "encryption_export",
- "engine_traits",
- "keys",
- "kvproto",
- "raft-engine",
- "regex",
- "serde_json",
- "server",
- "tikv",
- "tikv_util",
- "time",
- "toml",
-]
-
-[[package]]
 name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
@@ -6573,9 +6552,16 @@ version = "0.0.1"
 dependencies = [
  "cc",
  "clap 2.33.0",
+ "encryption_export",
+ "engine_traits",
+ "keys",
+ "kvproto",
+ "raft-engine",
+ "regex",
  "serde_json",
  "server",
  "tikv",
+ "tikv_util",
  "time",
  "toml",
 ]
