@@ -276,6 +276,13 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
                     }
                 }
                 self.reads[offset].read_index = Some(index);
+                debug!(
+                    "*** advance_replica_reads";
+                    // "start_ts" => self.reads[offset].start_ts,
+                    "uuid" => ?uuid,
+                    "read-index" => index,
+                    "offset" => offset
+                );
                 min_changed_offset = cmp::min(min_changed_offset, offset);
                 max_changed_offset = cmp::max(max_changed_offset, offset);
                 continue;
