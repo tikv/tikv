@@ -22,7 +22,7 @@ use tidb_query_datatype::{
             encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG,
             UINT_FLAG,
         },
-        table,
+        table, datum_codec::{DatumFlagAndPayloadEncoder, EvaluableDatumEncoder},
     },
     def::Collation,
     expr::{EvalConfig, EvalContext},
@@ -378,6 +378,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
 
         let mut is_drained = false;
         let mut collector = self.new_collector();
+        let mut ctx = EvalContext::default();
         while !is_drained {
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             let mut read_size: usize = 0;
@@ -400,86 +401,64 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     for i in 0..self.columns_info.len() {
                         column_vals[i].clear();
                         collation_key_vals[i].clear();
-                        match columns_slice[i] {
-                            LazyBatchColumn::Raw(ref v) => {
-                                panic!()
-                            }
-                            LazyBatchColumn::Decoded(ref v) => {
-                                match v {
-                                    VectorValue::Bytes(ref vec) => {
-                                        match vec.get_option_ref(logical_row) {
-                                            Some(val) => {
-                                                if columns_info[i].as_accessor().is_string_like() {
-                                                    if pick {
-                                                        columns_slice[i].encode(
-                                                            *logical_row,
-                                                            &self.columns_info[i],
-                                                            &mut EvalContext::default(),
-                                                            &mut column_vals[i],
-                                                        )?;
-                                                    }
-                                                    match_template_collator! {
-                                                        TT, match self.columns_info[i].as_accessor().collation()? {
-                                                            Collation::TT => {
-                                                                TT::write_sort_key(&mut collation_key_vals[i], val)?;
-                                                            }
-                                                        }
-                                                    };
-                                                } else {
-                                                    columns_slice[i].encode(
-                                                        *logical_row,
-                                                        &self.columns_info[i],
-                                                        &mut EvalContext::default(),
-                                                        &mut column_vals[i],
-                                                    )?;
+                        let mut sort_key_shortcut = false;
+                        if self.columns_info[i].as_accessor().is_string_like() {
+                            if let LazyBatchColumn::Decoded(VectorValue::Bytes(ref vec)) = columns_slice[i] {
+                                sort_key_shortcut = true;
+                                match vec.get_option_ref(logical_index) {
+                                    Some(val) => {
+                                        match_template_collator! {
+                                            TT, match self.columns_info[i].as_accessor().collation()? {
+                                                Collation::TT => {
+                                                    TT::write_sort_key(&mut collation_key_vals[i], val)?;
                                                 }
                                             }
-                                            _ => {
-                                                columns_slice[i].encode(
-                                                    *logical_row,
-                                                    &self.columns_info[i],
-                                                    &mut EvalContext::default(),
-                                                    &mut column_vals[i],
-                                                )?;
+                                        };
+                                    }
+                                    None => {
+                                        collation_key_vals[i].write_evaluable_datum_null()?;
+                                    }
+                                }
+                            }
+                        }
+                        if sort_key_shortcut {
+                            if pick {
+                                columns_slice[i].encode(
+                                    *logical_row,
+                                    &self.columns_info[i],
+                                    &mut ctx,
+                                    &mut column_vals[i],
+                                )?; 
+                                read_size += column_vals[i].len();
+                            } else {
+                                read_size += collation_key_vals[i].len();
+                            }
+                        } else {
+                            columns_slice[i].encode(
+                                *logical_row,
+                                &self.columns_info[i],
+                                &mut ctx,
+                                &mut column_vals[i],
+                            )?;
+                            if self.columns_info[i].as_accessor().is_string_like() {
+                                match_template_collator! {
+                                    TT, match self.columns_info[i].as_accessor().collation()? {
+                                        Collation::TT => {
+                                            let mut mut_val = &column_vals[i][..];
+                                            let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &self.columns_info[i])?;
+                                            if decoded_val == Datum::Null {
+                                                collation_key_vals[i].clone_from(&column_vals[i]);
+                                            } else {
+                                                // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
+                                                // So it is safe the unwrap the Ok value.
+                                                TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
                                             }
                                         }
                                     }
-                                    _ => {
-                                        columns_slice[i].encode(
-                                            *logical_row,
-                                            &self.columns_info[i],
-                                            &mut EvalContext::default(),
-                                            &mut column_vals[i],
-                                        )?;
-                                    }
-                                }
-
+                                };
                             }
-                        };
-                        columns_slice[i].encode(
-                            *logical_row,
-                            &self.columns_info[i],
-                            &mut EvalContext::default(),
-                            &mut column_vals[i],
-                        )?;
-                        if self.columns_info[i].as_accessor().is_string_like() {
-                            match_template_collator! {
-                                TT, match self.columns_info[i].as_accessor().collation()? {
-                                    Collation::TT => {
-                                        let mut mut_val = &column_vals[i][..];
-                                        let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.columns_info[i])?;
-                                        if decoded_val == Datum::Null {
-                                            collation_key_vals[i].clone_from(&column_vals[i]);
-                                        } else {
-                                            // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
-                                            // So it is safe the unwrap the Ok value.
-                                            TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
-                                        }
-                                    }
-                                }
-                            };
+                            read_size += column_vals[i].len();
                         }
-                        read_size += column_vals[i].len();
                     }
                     collector.mut_base().count += 1;
                     collector.mut_base().collect_column_group(
