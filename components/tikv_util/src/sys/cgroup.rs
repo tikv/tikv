@@ -560,7 +560,6 @@ mod tests {
             ("-18446744073709551610", None), // Raise InvalidDigit instead of NegOverflow.
             ("0.1", None),
         ];
-        println!("{:?}", "-18446744073709551610".parse::<u64>());
         for (content, expect) in cases.into_iter() {
             let limit = parse_memory_max(content);
             assert_eq!(limit, expect);

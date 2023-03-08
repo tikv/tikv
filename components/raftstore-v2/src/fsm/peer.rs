@@ -327,6 +327,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::TabletTrimmed { tablet_index } => {
                     self.fsm.peer_mut().on_tablet_trimmed(tablet_index)
                 }
+                PeerMsg::CleanupImportSst(ssts) => self
+                    .fsm
+                    .peer_mut()
+                    .on_cleanup_import_sst(self.store_ctx, ssts),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }
