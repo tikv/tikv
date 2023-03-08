@@ -4,7 +4,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::TabletRegistry;
 use raft_log_engine::RaftLogEngine;
 
-use crate::config::ConfigController;
+use crate::{config::ConfigController, server::debug::Result};
 
 // Debugger for raftstore-v2
 #[derive(Clone)]
@@ -25,5 +25,9 @@ impl DebuggerV2 {
             raft_engine,
             cfg_controller,
         }
+    }
+
+    pub fn get_all_regions_in_store(&self) -> Result<Vec<u64>> {
+        unimplemented!()
     }
 }

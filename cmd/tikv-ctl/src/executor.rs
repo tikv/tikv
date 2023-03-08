@@ -28,6 +28,7 @@ use raftstore::store::{util::build_key_range, INIT_EPOCH_CONF_VER};
 use security::SecurityManager;
 use serde_json::json;
 use server::fatal;
+use slog_global::crit;
 use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
@@ -1134,4 +1135,116 @@ fn handle_engine_error(err: EngineError) -> ! {
     tikv_util::logger::exit_process_gracefully(-1);
 }
 
-impl DebugExecutor for DebuggerV2 {}
+impl DebugExecutor for DebuggerV2 {
+    fn check_local_mode(&self) {}
+
+    fn get_all_regions_in_store(&self) -> Vec<u64> {
+        self.get_all_regions_in_store()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_regions_in_store", e))
+    }
+
+    fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
+        unimplemented!()
+    }
+
+    fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
+        unimplemented!()
+    }
+
+    fn get_region_info(&self, region: u64) -> RegionInfo {
+        unimplemented!()
+    }
+
+    fn get_raft_log(&self, region: u64, index: u64) -> Entry {
+        unimplemented!()
+    }
+
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
+        unimplemented!()
+    }
+
+    fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
+        unimplemented!()
+    }
+
+    fn do_compaction(
+        &self,
+        db: DbType,
+        cf: &str,
+        from: &[u8],
+        to: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    ) {
+        unimplemented!()
+    }
+
+    fn set_region_tombstone(&self, regions: Vec<Region>) {
+        unimplemented!()
+    }
+
+    fn set_region_tombstone_by_id(&self, regions: Vec<u64>) {
+        unimplemented!()
+    }
+
+    fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
+        unimplemented!()
+    }
+
+    fn recover_all(&self, threads: usize, read_only: bool) {
+        unimplemented!()
+    }
+
+    fn print_bad_regions(&self) {
+        unimplemented!()
+    }
+
+    fn remove_fail_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    ) {
+        unimplemented!()
+    }
+
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
+        unimplemented!()
+    }
+
+    fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
+        unimplemented!()
+    }
+
+    fn dump_metrics(&self, tags: Vec<&str>) {
+        unimplemented!()
+    }
+
+    fn check_region_consistency(&self, _: u64) {
+        unimplemented!()
+    }
+
+    fn modify_tikv_config(&self, config_name: &str, config_value: &str) {
+        unimplemented!()
+    }
+
+    fn dump_region_properties(&self, region_id: u64) {
+        unimplemented!()
+    }
+
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+        unimplemented!()
+    }
+
+    fn dump_store_info(&self) {
+        unimplemented!()
+    }
+
+    fn dump_cluster_info(&self) {
+        unimplemented!()
+    }
+
+    fn reset_to_version(&self, version: u64) {
+        unimplemented!()
+    }
+}
