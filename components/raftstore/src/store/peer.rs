@@ -3399,6 +3399,7 @@ where
                     "re-propose read index request because the response is lost";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer_id(),
+                    "uuid" => %read.id,
                 );
                 RAFT_READ_INDEX_PENDING_COUNT.sub(1);
                 self.send_read_command(ctx, read_cmd);

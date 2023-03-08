@@ -721,6 +721,7 @@ where
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
             let apply_res = mem::take(&mut self.apply_res);
+            debug!("notify apply"; "apply_res" => ?apply_res);
             self.notifier.notify(apply_res);
         }
 
@@ -1791,6 +1792,7 @@ where
     fn handle_put(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
+        debug!("handle put"; "key" => hex::encode_upper(key), "value" => hex::encode_upper(key), "index" => ctx.exec_log_index);
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
         if let Some(s) = self.buckets.as_mut() {

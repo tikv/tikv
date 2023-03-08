@@ -47,19 +47,6 @@
 //! * the [`engine_traits`](::engine_traits) crate, more detail of the engine
 //!   abstraction.
 
-pub mod config;
-pub mod config_manager;
-pub mod errors;
-pub mod kv;
-pub mod lock_manager;
-pub(crate) mod metrics;
-pub mod mvcc;
-pub mod raw;
-pub mod txn;
-
-mod read_pool;
-mod types;
-
 use std::{
     borrow::Cow,
     iter,
@@ -137,6 +124,19 @@ use crate::{
         types::StorageCallbackType,
     },
 };
+
+pub mod config;
+pub mod config_manager;
+pub mod errors;
+pub mod kv;
+pub mod lock_manager;
+pub(crate) mod metrics;
+pub mod mvcc;
+pub mod raw;
+pub mod txn;
+
+mod read_pool;
+mod types;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -648,6 +648,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 )?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                info!("snapshot got"; "start_ts" => start_ts, "key" => ?key);
 
                 {
                     let begin_instant = Instant::now();
@@ -2920,6 +2921,9 @@ fn prepare_snap_ctx<'a>(
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {
+    let keys: Vec<_> = keys.clone().into_iter().collect();
+    info!("prepare_snap_ctx"; "cmd" => ?cmd, "start_ts" => start_ts, "stale_read" => pb_ctx.get_stale_read(),
+        "isolation_level" => ?pb_ctx.get_isolation_level(), "bypass_locks" => ?bypass_locks, "keys" => ?keys);
     // Update max_ts and check the in-memory lock table before getting the snapshot
     if !pb_ctx.get_stale_read() {
         concurrency_manager.update_max_ts(start_ts);

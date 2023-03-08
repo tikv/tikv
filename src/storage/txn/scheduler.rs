@@ -709,6 +709,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
                         debug!(
                             "process cmd with snapshot";
+                            "cmd" => ?task.cmd,
                             "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
                             "trakcer" => ?task.tracker
                         );
@@ -1505,7 +1506,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 WriteEvent::Finished(res) => {
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
-
+                    debug!("async write applied callback"; "cid" => cid, "ok" => ok);
                     sched.on_write_finished(
                         cid,
                         pr,

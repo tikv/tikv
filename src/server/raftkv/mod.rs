@@ -711,6 +711,17 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
         let mut rctx = ReadIndexContext::parse(msg.get_entries()[0].get_data()).unwrap();
         if let Some(mut request) = rctx.request.take() {
             let begin_instant = Instant::now();
+            let ranges: Vec<_> = request
+                .get_key_ranges()
+                .iter()
+                .map(|r| {
+                    (
+                        Key::from_encoded(r.get_start_key().to_vec()),
+                        Key::from_encoded(r.get_end_key().to_vec()),
+                    )
+                })
+                .collect();
+            info!("replica read lock check"; "start_ts" => request.get_start_ts(), "ranges" => ?ranges, "uuid" => %rctx.id);
 
             let start_ts = request.get_start_ts().into();
             self.concurrency_manager.update_max_ts(start_ts);
@@ -751,6 +762,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 }
             }
+            info!("replica read check res"; "uuid" => %rctx.id, "locked" => ?rctx.locked);
             msg.mut_entries()[0].set_data(rctx.to_bytes().into());
         }
     }
