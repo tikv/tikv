@@ -355,10 +355,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let path = reg.tablet_path(self.region_id(), index);
         if path.exists() {
-            // The server must have aborted before `flush_cfs` below completed. We can
-            // safely redo the merge.
+            // Redo merge.
             std::fs::remove_dir_all(&path).unwrap();
         }
+        // Avoid seqno jump back between self.tablet and the newly created tablet.
+        self.tablet().flush_cfs(&[], true).unwrap();
+        let flush_time = now.saturating_elapsed();
         let mut ctx = TabletContext::new(&region, Some(index));
         ctx.flush_state = Some(self.flush_state().clone());
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
@@ -373,11 +375,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 )
             });
         let merge_time = now.saturating_elapsed();
-        // In order to avoid this flush, we need to
-        // (1) make `merge` re-entrant.
-        // (2) do not advance admin.flushed right away.
-        tablet.flush_cfs(&[], true).unwrap();
-        let flush_time = now.saturating_elapsed();
 
         info!(
             self.logger,
@@ -385,8 +382,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             "source_region" => ?source_region,
             "wait_ms" => wait_time.as_millis(),
             "open_ms" => open_time.saturating_sub(wait_time).as_millis(),
-            "merge_ms" => merge_time.saturating_sub(open_time).as_millis(),
-            "flush_ms" => flush_time.saturating_sub(merge_time).as_millis(),
+            "merge_ms" => flush_time.saturating_sub(open_time).as_millis(),
+            "flush_ms" => merge_time.saturating_sub(flush_time).as_millis(),
         );
 
         self.set_tablet(tablet.clone());

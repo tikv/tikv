@@ -189,6 +189,8 @@ impl RocksPersistenceListener {
 
 impl rocksdb::EventListener for RocksPersistenceListener {
     fn on_memtable_sealed(&self, info: &MemTableInfo) {
+        // Note: first_seqno is effectively the smallest seqno of memtable.
+        // earliest_seqno has ambiguous semantics.
         self.0
             .on_memtable_sealed(info.cf_name().to_string(), info.first_seqno());
     }
