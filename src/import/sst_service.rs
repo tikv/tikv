@@ -466,7 +466,6 @@ impl<E: Engine> ImportSstService<E> {
         let mut tasks = metas.iter().zip(rules.iter()).peekable();
         while let Some((meta, rule)) = tasks.next() {
             let buff = importer
-                .as_ref()
                 .read_from_kv_file(
                     meta,
                     rule,

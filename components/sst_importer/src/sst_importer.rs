@@ -42,7 +42,7 @@ use tikv_util::{
 };
 use tokio::{
     runtime::{Handle, Runtime},
-    sync::{Mutex, MutexGuard, OnceCell},
+    sync::OnceCell,
 };
 use txn_types::{Key, TimeStamp, WriteRef};
 
@@ -131,7 +131,7 @@ impl CacheKvFile {
                 if let Some(a) = buff.get() {
                     return Arc::strong_count(&a.content);
                 }
-                Arc::strong_count(&buff)
+                Arc::strong_count(buff)
             }
             CacheKvFile::Fs(path) => Arc::strong_count(path),
         }
@@ -1364,10 +1364,7 @@ mod tests {
     use tempfile::Builder;
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{
-        codec::stream_event::EventEncoder, stream::block_on_external_io,
-        sys::thread::StdThreadBuildWrapper,
-    };
+    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
 
@@ -1903,7 +1900,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            matches!(output.clone(), CacheKvFile::Mem(rc) if &*rc.get().unwrap() == buff.as_slice()),
+            matches!(output.clone(), CacheKvFile::Mem(rc) if &*rc.get().unwrap().content == buff.as_slice()),
             "{:?}",
             output
         );
