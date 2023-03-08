@@ -60,28 +60,6 @@ fn test_interaction() {
     fail::remove("on_empty_cmd_normal");
 }
 
-#[cfg(feature = "enable-pagestorage")]
-#[test]
-fn test_ps_write() {
-    use engine_traits::WriteBatchExt;
-    let (mut cluster, _pd_client) = new_mock_cluster(0, 1);
-
-    let _ = cluster.run();
-    // initialize ffi struct
-    cluster.must_put(b"k1", b"v1");
-
-    let engine = cluster.get_engine(1);
-    let mut wb = engine.write_batch();
-    wb.put(&[0x03], &[0x03, 0x04, 0x05]).unwrap();
-    wb.put(&[0x04], &[0x03, 0x04, 0x05, 0x06]).unwrap();
-    wb.write().unwrap();
-    let v = engine.get_value(&[0x03]).unwrap().unwrap();
-    assert!(v == &[0x03, 0x04, 0x05]);
-    let v = engine.get_value(&[0x04]).unwrap().unwrap();
-    assert!(v == &[0x03, 0x04, 0x05, 0x06]);
-    cluster.shutdown();
-}
-
 enum TransferLeaderRunMode {
     FilterAll,
     AlsoCheckCompactLog,

@@ -38,7 +38,7 @@ impl MockPSWriteBatch {
 }
 
 pub struct MockPSUniversalPage {
-    data: Vec<u8>,
+    pub data: Vec<u8>,
 }
 
 impl From<BaseBuffView> for MockPSUniversalPage {
@@ -148,11 +148,9 @@ pub unsafe extern "C" fn ffi_mockps_handle_consume_wb(
     for (_, write) in wb.data.drain(..) {
         match write {
             MockPSSingleWrite::Put(w) => {
-                assert!(w.0.starts_with(&[0x02]));
                 guard.insert(w.0, w.1);
             }
             MockPSSingleWrite::Delete(w) => {
-                assert!(w.starts_with(&[0x02]));
                 guard.remove(&w);
             }
         }

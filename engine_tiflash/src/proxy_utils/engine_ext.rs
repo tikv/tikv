@@ -58,16 +58,31 @@ impl PageStorageExt {
     }
 
     pub fn write_batch_put_page(&self, wb: RawVoidPtr, page_id: &[u8], page: &[u8]) {
-        self.helper().wb_put_page(wb, page_id.into(), page.into())
+        self.helper().wb_put_page(
+            wb,
+            super::key_format::add_kv_engine_prefix(page_id)
+                .as_slice()
+                .into(),
+            page.into(),
+        )
     }
 
     pub fn write_batch_del_page(&self, wb: RawVoidPtr, page_id: &[u8]) {
-        self.helper().wb_del_page(wb, page_id.into())
+        self.helper().wb_del_page(
+            wb,
+            super::key_format::add_kv_engine_prefix(page_id)
+                .as_slice()
+                .into(),
+        )
     }
 
     pub fn read_page(&self, page_id: &[u8]) -> Option<Vec<u8>> {
         // TODO maybe we can steal memory from C++ here to reduce redundant copy?
-        let value = self.helper().read_page(page_id.into());
+        let value = self.helper().read_page(
+            super::key_format::add_kv_engine_prefix(page_id)
+                .as_slice()
+                .into(),
+        );
         return if value.view.len == 0 {
             None
         } else {
@@ -82,16 +97,21 @@ impl PageStorageExt {
         end_page_id: &[u8],
         f: &mut dyn FnMut(&[u8], &[u8]) -> engine_traits::Result<bool>,
     ) {
-        let values = self
-            .helper()
-            .scan_page(start_page_id.into(), end_page_id.into());
+        let values = self.helper().scan_page(
+            super::key_format::add_kv_engine_prefix(start_page_id)
+                .as_slice()
+                .into(),
+            super::key_format::add_kv_engine_prefix(end_page_id)
+                .as_slice()
+                .into(),
+        );
         let arr = values.inner as *mut PageAndCppStrWithView;
         for i in 0..values.len {
             let value = unsafe { &*arr.offset(i as isize) };
             if value.page_view.len != 0 {
                 // remove the prefix 0x01 added to all kv engine key
                 f(
-                    &(value.key_view.to_slice()[1..]),
+                    super::key_format::remove_prefix(value.key_view.to_slice()),
                     value.page_view.to_slice(),
                 )
                 .unwrap();

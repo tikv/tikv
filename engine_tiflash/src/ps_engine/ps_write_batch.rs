@@ -6,7 +6,6 @@ use proxy_ffi::interfaces_ffi::RawCppPtr;
 
 use crate::{
     mixed_engine::{elementary::ElementaryWriteBatch, write_batch::RocksWriteBatchVec},
-    ps_engine::add_prefix,
     PageStorageExt,
 };
 
@@ -25,26 +24,22 @@ impl ElementaryWriteBatch for PSElementWriteBatch {
     }
 
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.ps_ext
-            .write_batch_put_page(self.ps_wb.ptr, add_prefix(key).as_slice(), value);
+        self.ps_ext.write_batch_put_page(self.ps_wb.ptr, key, value);
         Ok(())
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        self.ps_ext
-            .write_batch_put_page(self.ps_wb.ptr, add_prefix(key).as_slice(), value);
+        self.ps_ext.write_batch_put_page(self.ps_wb.ptr, key, value);
         Ok(())
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<()> {
-        self.ps_ext
-            .write_batch_del_page(self.ps_wb.ptr, add_prefix(key).as_slice());
+        self.ps_ext.write_batch_del_page(self.ps_wb.ptr, key);
         Ok(())
     }
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
-        self.ps_ext
-            .write_batch_del_page(self.ps_wb.ptr, add_prefix(key).as_slice());
+        self.ps_ext.write_batch_del_page(self.ps_wb.ptr, key);
         Ok(())
     }
 

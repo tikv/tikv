@@ -23,38 +23,34 @@ unsafe impl Sync for PSElementEngine {}
 impl ElementaryEngine for PSElementEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let ps_wb = self.ps_ext.create_write_batch();
-        self.ps_ext
-            .write_batch_put_page(ps_wb.ptr, add_prefix(key).as_slice(), value);
+        self.ps_ext.write_batch_put_page(ps_wb.ptr, key, value);
         self.ps_ext.consume_write_batch(ps_wb.ptr);
         Ok(())
     }
 
     fn put_cf(&self, _cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let ps_wb = self.ps_ext.create_write_batch();
-        self.ps_ext
-            .write_batch_put_page(ps_wb.ptr, add_prefix(key).as_slice(), value);
+        self.ps_ext.write_batch_put_page(ps_wb.ptr, key, value);
         self.ps_ext.consume_write_batch(ps_wb.ptr);
         Ok(())
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
         let ps_wb = self.ps_ext.create_write_batch();
-        self.ps_ext
-            .write_batch_del_page(ps_wb.ptr, add_prefix(key).as_slice());
+        self.ps_ext.write_batch_del_page(ps_wb.ptr, key);
         self.ps_ext.consume_write_batch(ps_wb.ptr);
         Ok(())
     }
 
     fn delete_cf(&self, _cf: &str, key: &[u8]) -> Result<()> {
         let ps_wb = self.ps_ext.create_write_batch();
-        self.ps_ext
-            .write_batch_del_page(ps_wb.ptr, add_prefix(key).as_slice());
+        self.ps_ext.write_batch_del_page(ps_wb.ptr, key);
         self.ps_ext.consume_write_batch(ps_wb.ptr);
         Ok(())
     }
 
     fn get_value_opt(&self, _opts: &ReadOptions, key: &[u8]) -> Result<Option<MixedDbVector>> {
-        let result = self.ps_ext.read_page(add_prefix(key).as_slice());
+        let result = self.ps_ext.read_page(key);
         match result {
             None => Ok(None),
             Some(v) => Ok(Some(MixedDbVector::from_raw_ps(v))),
@@ -78,11 +74,7 @@ impl ElementaryEngine for PSElementEngine {
         _fill_cache: bool,
         f: &mut dyn FnMut(&[u8], &[u8]) -> Result<bool>,
     ) -> Result<()> {
-        self.ps_ext.scan_page(
-            add_prefix(start_key).as_slice(),
-            add_prefix(end_key).as_slice(),
-            f,
-        );
+        self.ps_ext.scan_page(start_key, end_key, f);
         Ok(())
     }
 
@@ -100,16 +92,4 @@ impl ElementaryEngine for PSElementEngine {
             ps_wb: self.ps_ext.create_write_batch(),
         })
     }
-}
-
-// Some data may be migrated from kv engine to raft engine in the future,
-// so kv engine and raft engine may write and delete the same key in the code
-// base. To distinguish data managed by kv engine and raft engine, we prepend an
-// `0x02` to the key written by kv engine.
-// So kv engine won't scan any key from raft engine, and vice versa.
-pub fn add_prefix(key: &[u8]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(key.len() + 1);
-    v.push(0x02);
-    v.extend_from_slice(key);
-    v
 }

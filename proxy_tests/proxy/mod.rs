@@ -10,6 +10,7 @@
 extern crate slog_global;
 
 mod config;
+mod engine;
 mod fast_add_peer;
 mod ffi;
 mod flashback;

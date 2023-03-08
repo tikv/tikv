@@ -6,6 +6,7 @@ mod config;
 pub use config::*;
 pub(crate) mod engine_ext;
 pub use engine_ext::*;
+pub mod key_format;
 mod proxy_ext;
 pub use proxy_ext::*;
 
