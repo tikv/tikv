@@ -230,7 +230,7 @@ fn test_node_merge_prerequisites_check() {
         3,
     )));
     // It doesn't matter if the index and term is correct.
-    let compact_log = new_compact_log_request(100, 10);
+    let compact_log = new_compact_log_request(0, 10);
     let req = new_admin_request(right.get_id(), right.get_region_epoch(), compact_log);
     debug!("requesting {:?}", req);
     let _res = cluster

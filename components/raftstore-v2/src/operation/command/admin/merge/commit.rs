@@ -34,7 +34,7 @@
 //!           +--------------+
 //!           `AskCommitMerge`\
 //!                            \
-//!                    propose CommitMerge ---------------> propose CommitMerge
+//!                    propose CommitMerge ---------------> append CommitMerge
 //!                     apply CommitMerge                    apply CommitMerge
 //!                            /|                                   /|
 //!           +---------------+ |                     +------------+ |

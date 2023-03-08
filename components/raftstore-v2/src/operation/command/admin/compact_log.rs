@@ -416,15 +416,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             return;
         }
-        if res.compact_index >= self.compact_log_context().last_applying_index {
-            debug!(
-                self.logger,
-                "compact index >= last applying index, ignored";
-                "compact_index" => res.compact_index,
-                "first_index" => self.compact_log_context().last_applying_index,
-            );
-            return;
-        }
+        assert!(
+            res.compact_index < self.compact_log_context().last_applying_index,
+            "{}, {}",
+            res.compact_index,
+            self.compact_log_context().last_applying_index
+        );
         // TODO: check entry_cache_warmup_state
         self.entry_storage_mut()
             .compact_entry_cache(res.compact_index);
