@@ -466,6 +466,8 @@ where
         if txn_extra.allowed_in_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
+        // Debug, set resource_group_name using start_ts.
+        header.set_flag_data(ctx.get_txn_source().to_le_bytes().to_vec());
         header.set_flags(flags);
 
         let mut cmd = RaftCmdRequest::default();
@@ -715,6 +717,17 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
         let mut rctx = ReadIndexContext::parse(msg.get_entries()[0].get_data()).unwrap();
         if let Some(mut request) = rctx.request.take() {
             let begin_instant = Instant::now();
+            let ranges: Vec<_> = request
+                .get_key_ranges()
+                .iter()
+                .map(|r| {
+                    (
+                        Key::from_encoded(r.get_start_key().to_vec()),
+                        Key::from_encoded(r.get_end_key().to_vec()),
+                    )
+                })
+                .collect();
+            info!("replica read memory lock check"; "start_ts" => request.get_start_ts(), "ranges" => ?ranges, "uuid" => %rctx.id);
 
             let start_ts = request.get_start_ts().into();
             self.concurrency_manager.update_max_ts(start_ts);
