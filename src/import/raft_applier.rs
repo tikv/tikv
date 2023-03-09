@@ -17,12 +17,6 @@ use tokio::sync::{
 
 use crate::storage;
 
-#[cfg(test)]
-lazy_static! {
-    pub static ref PENDING_RAFT_REQUEST_HINT: dashmap::DashMap<u64, usize> =
-        dashmap::DashMap::new();
-}
-
 const MAX_INFLIGHT_RAFT_MESSAGE: usize = 8;
 // Given we are fully asynchronous, smaller buffer size can better back-pressure
 // the producer.
@@ -71,6 +65,7 @@ async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> sto
 
 type OnComplete<T> = oneshot::Sender<T>;
 
+#[derive(Debug)]
 enum GlobalMessage {
     Apply {
         wb: WriteData,
@@ -94,14 +89,21 @@ enum GlobalMessage {
             usize, // Worker reference count
         )>,
     },
+    #[cfg(test)]
+    InspectPendingRaftCmd {
+        cb: OnComplete<HashMap<u64, usize>>,
+    },
 }
 
+#[derive(Debug)]
 enum RegionMessage {
     Apply {
         wb: WriteData,
         ctx: Context,
         cb: OnComplete<storage::Result<()>>,
     },
+    #[cfg(test)]
+    InspectPendingRaftCmd { cb: mpsc::Sender<(u64, usize)> },
 }
 
 pub struct Global<E, S> {
@@ -203,8 +205,14 @@ impl Handle {
     }
 
     #[cfg(test)]
-    pub fn inspect(&self) -> fut![(usize, usize)] {
+    pub fn inspect_worker(&self) -> fut![(usize, usize)] {
         self.msg(|cb| GlobalMessage::InspectWorkerStatus { cb })
+            .map(|x| x.unwrap())
+    }
+
+    #[cfg(test)]
+    pub fn inspect_inflight(&self) -> fut![HashMap<u64, usize>] {
+        self.msg(|cb| GlobalMessage::InspectPendingRaftCmd { cb })
             .map(|x| x.unwrap())
     }
 }
@@ -286,6 +294,22 @@ impl<E: Engine, S: Spawner> Global<E, S> {
                         self.regions.len(),
                     ));
                 }
+                #[cfg(test)]
+                GlobalMessage::InspectPendingRaftCmd { cb } => {
+                    let (tx, mut rx) = mpsc::channel(self.regions.len());
+                    for v in self.regions.values() {
+                        let msg = RegionMessage::InspectPendingRaftCmd { cb: tx.clone() };
+                        // Don't wait: we may get stuck when there are some failpoints.
+                        assert!(v.tx.try_send(msg).is_ok());
+                    }
+                    S::spawn(async move {
+                        let mut h = HashMap::new();
+                        while let Some((rid, cnt)) = rx.recv().await {
+                            h.insert(rid, cnt);
+                        }
+                        cb.send(h).unwrap();
+                    })
+                }
             }
         }
     }
@@ -347,25 +371,24 @@ impl<E: Engine, S: Spawner> Region<E, S> {
                         .acquire_owned()
                         .await
                         .expect("semaphore closed");
-                    #[cfg(test)]
-                    let rid = self.region_id;
-                    #[cfg(test)]
-                    {
-                        *PENDING_RAFT_REQUEST_HINT
-                            .entry(rid)
-                            .or_insert(0)
-                            .value_mut() += 1;
-                    }
                     let fut = self
                         .engine
                         .async_write(&ctx, wb, WriteEvent::BASIC_EVENT, None);
 
                     S::spawn(async move {
                         let _ = cb.send(wait_write(fut).await);
-                        #[cfg(test)]
-                        PENDING_RAFT_REQUEST_HINT.entry(rid).and_modify(|x| *x -= 1);
                         drop(q)
                     });
+                }
+                #[cfg(test)]
+                RegionMessage::InspectPendingRaftCmd { cb } => {
+                    cb.send((
+                        self.region_id,
+                        self.cfg.max_inflight_raft_message
+                            - self.quota.as_ref().available_permits(),
+                    ))
+                    .await
+                    .unwrap();
                 }
             }
         }
@@ -374,8 +397,7 @@ impl<E: Engine, S: Spawner> Region<E, S> {
 
 #[cfg(test)]
 mod test {
-
-    use std::{convert::identity, iter::IntoIterator, sync::atomic::AtomicUsize, time::Duration};
+    use std::{convert::identity, iter::IntoIterator, time::Duration};
 
     use engine_rocks::RocksEngineIterator;
     use engine_traits::{Iterator, ALL_CFS, CF_DEFAULT, CF_WRITE};
@@ -383,14 +405,11 @@ mod test {
     use kvproto::kvrpcpb::Context;
     use tempfile::TempDir;
     use tikv_kv::{Engine, Modify, RocksEngine, SnapContext, Snapshot, WriteData, WriteEvent};
-    use tokio::{
-        runtime::{Builder, Runtime},
-        sync::oneshot,
-    };
+    use tokio::runtime::{Builder, Runtime};
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::{Config, Global, Handle as GlobalHandle};
-    use crate::{import::raft_applier::PENDING_RAFT_REQUEST_HINT, storage::TestEngineBuilder};
+    use crate::storage::TestEngineBuilder;
 
     struct Suite {
         handle: GlobalHandle,
@@ -579,7 +598,7 @@ mod test {
             ..Default::default()
         });
 
-        let b1 = (1..10)
+        let b1 = (1..6)
             .map(|_| {
                 suite.batch(1, move |t| {
                     t("al-kīmiyā", "following the light of the moon and stars, the guide of the sun and winds.");
@@ -598,9 +617,9 @@ mod test {
             .collect::<Vec<_>>();
         fail::cfg("rockskv_write_modifies", "sleep(5000)").unwrap();
         let fut = suite.send_to_applier(b1.into_iter().chain(b2));
-        std::thread::sleep(Duration::from_secs(1));
-        assert_eq!(*PENDING_RAFT_REQUEST_HINT.get(&1).unwrap().value(), 3usize);
-        assert_eq!(*PENDING_RAFT_REQUEST_HINT.get(&2).unwrap().value(), 2usize);
+        let pending_requests = suite.wait(suite.handle.inspect_inflight());
+        assert_eq!(*pending_requests.get(&1).unwrap(), 3usize);
+        assert_eq!(*pending_requests.get(&2).unwrap(), 2usize);
         fail::cfg("rockskv_write_modifies", "off").unwrap();
         suite.wait(fut);
 
@@ -613,8 +632,6 @@ mod test {
             region_writer_max_idle_time: Duration::from_millis(100),
             ..Default::default()
         });
-        let load = |x: &AtomicUsize| x.load(std::sync::atomic::Ordering::SeqCst);
-
         let b1 = suite.batch(1, |t| {
             t("where is the sun", "it is in the clean sky");
             t("where are the words", "it is in some language model");
@@ -638,12 +655,12 @@ mod test {
                 "then we can check there should be only one running worker.",
             );
         });
-        assert_eq!(suite.wait(suite.handle.inspect()), (0, 0));
+        assert_eq!(suite.wait(suite.handle.inspect_worker()), (0, 0));
         fail::cfg("rockskv_async_write", "sleep(5000)").unwrap();
         let fut = suite.send_to_applier(std::iter::once(b1));
-        assert_eq!(suite.wait(suite.handle.inspect()), (1, 1));
+        assert_eq!(suite.wait(suite.handle.inspect_worker()), (1, 1));
         let fut2 = suite.send_to_applier(std::iter::once(b2));
-        assert_eq!(suite.wait(suite.handle.inspect()), (2, 2));
+        assert_eq!(suite.wait(suite.handle.inspect_worker()), (2, 2));
 
         fail::cfg("rockskv_async_write", "off").unwrap();
         suite.wait(async move {
@@ -651,9 +668,9 @@ mod test {
             fut2.await;
         });
         std::thread::sleep(Duration::from_millis(500));
-        assert_eq!(suite.wait(suite.handle.inspect()), (0, 2));
+        assert_eq!(suite.wait(suite.handle.inspect_worker()), (0, 2));
 
         suite.wait(suite.handle.gc_hint());
-        assert_eq!(suite.wait(suite.handle.inspect()), (0, 0));
+        assert_eq!(suite.wait(suite.handle.inspect_worker()), (0, 0));
     }
 }
