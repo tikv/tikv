@@ -46,7 +46,7 @@ use grpcio::{
 };
 use kvproto::{
     raft_serverpb::{
-        RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
+        Done, RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
         TabletSnapshotPreview, TabletSnapshotRequest, TabletSnapshotResponse,
     },
     tikvpb::TikvClient,
@@ -342,11 +342,11 @@ async fn accept_missing(
     // Now receive other files.
     loop {
         let chunk = match stream.next().await {
-            None => {
+            Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
+            Some(Ok(req)) if req.has_done() => {
                 File::open(path)?.sync_data()?;
                 return Ok(received_bytes);
             }
-            Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
             res => return Err(protocol_error("chunk", res)),
         };
         if chunk.file_name.is_empty() {
@@ -578,6 +578,13 @@ async fn send_snap_files(
     head.mut_head().set_message(msg);
     let missing = find_missing(&path, head, &mut sender, receiver, &limiter).await?;
     let total_sent = send_missing(&path, missing, &mut sender, &limiter).await?;
+    // In gRPC, stream in serverside can finish without error (when the connection
+    // is closed). So we need to use an explicit `Done` to indicate all messages
+    // are sent. In V1, we have checksum and meta list, so this is not a
+    // problem.
+    let mut req = TabletSnapshotRequest::default();
+    req.set_done(Done::default());
+    sender.send((req, WriteFlags::default())).await?;
     SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
         .send
         .inc_by(total_sent);

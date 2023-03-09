@@ -2733,7 +2733,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/busyjay/kvproto.git?branch=introduce-incr-snap#38fedcfadacf2b10603a318bc778ad7335cb9c65"
+source = "git+https://github.com/busyjay/kvproto.git?branch=introduce-incr-snap#dc57e06de54251c5a614e6510c34e7f5548cbf57"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
