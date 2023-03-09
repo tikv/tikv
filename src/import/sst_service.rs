@@ -281,6 +281,15 @@ impl<E: Engine> ImportSstService<E> {
         }
         threads.spawn(Self::tick(importer.clone()));
         let handle = raft_applier::Global::spawn_tokio(engine.clone(), threads.handle());
+        let applier = handle.clone();
+        threads.spawn(async move {
+            loop {
+                sleep(Duration::from_secs(300)).await;
+                if !handle.gc_hint().await {
+                    return;
+                }
+            }
+        });
 
         ImportSstService {
             cfg,
@@ -291,7 +300,7 @@ impl<E: Engine> ImportSstService<E> {
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
-            applier: handle,
+            applier,
         }
     }
 

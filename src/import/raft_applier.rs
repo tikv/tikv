@@ -227,6 +227,7 @@ impl RegionHandle {
         if let Err(err) = self.tx.send(RegionMessage::Apply { wb, ctx, cb }).await {
             let (cb, ctx) = match err.0 {
                 RegionMessage::Apply { cb, ctx, .. } => (cb, ctx),
+                #[cfg(test)]
                 _ => unreachable!(),
             };
 
@@ -300,7 +301,7 @@ impl<E: Engine, S: Spawner> Global<E, S> {
                     for v in self.regions.values() {
                         let msg = RegionMessage::InspectPendingRaftCmd { cb: tx.clone() };
                         // Don't wait: we may get stuck when there are some failpoints.
-                        assert!(v.tx.try_send(msg).is_ok());
+                        v.tx.try_send(msg).unwrap();
                     }
                     S::spawn(async move {
                         let mut h = HashMap::new();
