@@ -517,7 +517,9 @@ impl<E: Engine> ImportSstService<E> {
 
             let is_last_task = tasks.peek().is_none();
             for w in collector.drain_pending_writes(is_last_task) {
-                APPLIER_ENGINE_REQUEST.with_label_values(&["read"]).inc();
+                // Record the start of a task would greatly help us to inspect pending
+                // tasks.
+                APPLIER_EVENT.with_label_values(&["begin_req"]).inc();
                 inflight_futures
                     .push_back(handle.write(w, context.clone()).map_err(transfer_error));
                 if inflight_futures.len() >= REQUEST_WRITE_CONCURRENCY {

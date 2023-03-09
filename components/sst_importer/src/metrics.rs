@@ -55,12 +55,12 @@ lazy_static! {
     pub static ref IMPORTER_DOWNLOAD_BYTES: Histogram = register_histogram!(
         "tikv_import_download_bytes",
         "Bucketed histogram of importer download bytes",
-        exponential_buckets(1024.0, 2.0, 20).unwrap()
+        exponential_buckets(16.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref IMPORTER_APPLY_BYTES: Histogram = register_histogram!(
         "tikv_import_apply_bytes",
         "Bucketed histogram of importer apply bytes",
-        exponential_buckets(1024.0, 2.0, 20).unwrap()
+        exponential_buckets(16.0, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IMPORTER_INGEST_DURATION: HistogramVec = register_histogram_vec!(
@@ -120,9 +120,15 @@ lazy_static! {
         "tikv_import_active_raft_applier",
         "The number of active region applier"
     ).unwrap();
-    pub static ref APPLIER_ENGINE_REQUEST: IntCounterVec = register_int_counter_vec!(
+    pub static ref APPLIER_EVENT: IntCounterVec = register_int_counter_vec!(
+        "tikv_import_applier_event",
+        "The events of applier event.",
+        &["type"]
+    ).unwrap();
+    pub static ref APPLIER_ENGINE_REQUEST: HistogramVec = register_histogram_vec!(
         "tikv_import_engine_request",
         "The request lifetime track of requesting the RaftKv.",
-        &["type"]
+        &["type"],
+        exponential_buckets(0.01, 4.0, 8).unwrap()
     ).unwrap();
 }

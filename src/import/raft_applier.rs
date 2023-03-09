@@ -8,9 +8,11 @@ use std::{
 
 use futures::{Future, FutureExt, Stream, StreamExt};
 use kvproto::kvrpcpb::Context;
-use sst_importer::metrics::{ACTIVE_RAFT_APPLIER, APPLIER_ENGINE_REQUEST};
+use sst_importer::metrics::{
+    ACTIVE_RAFT_APPLIER, APPLIER_ENGINE_REQUEST, APPLIER_EVENT, IMPORTER_APPLY_BYTES,
+};
 use tikv_kv::{Engine, WriteData, WriteEvent};
-use tikv_util::fut;
+use tikv_util::{fut, time::Instant};
 use tokio::sync::{
     mpsc::{self, error::TrySendError},
     oneshot, Semaphore,
@@ -70,6 +72,7 @@ enum GlobalMessage {
         wb: WriteData,
         ctx: Context,
         cb: OnComplete<storage::Result<()>>,
+        start: Instant,
     },
     Clear {
         cb: OnComplete<storage::Result<()>>,
@@ -100,6 +103,7 @@ enum RegionMessage {
         wb: WriteData,
         ctx: Context,
         cb: OnComplete<storage::Result<()>>,
+        start: Instant,
     },
     #[cfg(test)]
     InspectPendingRaftCmd { cb: mpsc::Sender<(u64, usize)> },
@@ -147,9 +151,14 @@ impl Handle {
 
         let msg_tx = self.tx.clone();
         let msg = msg(tx);
-        let msg = msg_tx.try_send(msg).err().map(|x| match x {
-            TrySendError::Full(x) => x,
-            TrySendError::Closed(x) => x,
+        let msg = msg_tx.try_send(msg).err().map(|x| {
+            APPLIER_EVENT
+                .with_label_values(&["global-channel-full"])
+                .inc();
+            match x {
+                TrySendError::Full(x) => x,
+                TrySendError::Closed(x) => x,
+            }
         });
         async move {
             if let Some(msg) = msg {
@@ -171,9 +180,14 @@ impl Handle {
         let msg_tx = self.tx.clone();
         let msg = msg(tx);
 
-        let msg = msg_tx.try_send(msg).err().map(|x| match x {
-            TrySendError::Full(x) => x,
-            TrySendError::Closed(x) => x,
+        let msg = msg_tx.try_send(msg).err().map(|x| {
+            APPLIER_EVENT
+                .with_label_values(&["global-channel-full"])
+                .inc();
+            match x {
+                TrySendError::Full(x) => x,
+                TrySendError::Closed(x) => x,
+            }
         });
         async move {
             if let Some(msg) = msg {
@@ -184,7 +198,13 @@ impl Handle {
     }
 
     pub fn write(&self, wb: WriteData, cx: Context) -> fut![storage::Result<()>] {
-        self.try_msg(|cb| GlobalMessage::Apply { wb, ctx: cx, cb })
+        let start = Instant::now_coarse();
+        self.try_msg(move |cb| GlobalMessage::Apply {
+            wb,
+            ctx: cx,
+            cb,
+            start,
+        })
     }
 
     pub fn clear(&self) -> fut![storage::Result<()>] {
@@ -222,8 +242,13 @@ impl RegionHandle {
         wb: WriteData,
         ctx: Context,
         cb: OnComplete<storage::Result<()>>,
+        start: Instant,
     ) {
-        if let Err(err) = self.tx.send(RegionMessage::Apply { wb, ctx, cb }).await {
+        if let Err(err) = self
+            .tx
+            .send(RegionMessage::Apply { wb, ctx, cb, start })
+            .await
+        {
             let (cb, ctx) = match err.0 {
                 RegionMessage::Apply { cb, ctx, .. } => (cb, ctx),
                 #[cfg(test)]
@@ -271,8 +296,8 @@ impl<E: Engine, S: Spawner> Global<E, S> {
     pub async fn main_loop(mut self) {
         while let Some(msg) = self.incoming.recv().await {
             match msg {
-                GlobalMessage::Apply { wb, ctx, cb } => {
-                    self.forward_write(wb, ctx, cb).await;
+                GlobalMessage::Apply { wb, ctx, cb, start } => {
+                    self.forward_write(wb, ctx, cb, start).await;
                 }
                 GlobalMessage::Clear { cb } => {
                     self.regions.clear();
@@ -323,6 +348,7 @@ impl<E: Engine, S: Spawner> Global<E, S> {
         wb: WriteData,
         ctx: Context,
         cb: OnComplete<storage::Result<()>>,
+        start: Instant,
     ) {
         let rid = ctx.get_region_id();
         let eng = &self.engine;
@@ -337,7 +363,7 @@ impl<E: Engine, S: Spawner> Global<E, S> {
                 }
             })
             .or_insert_with(|| Region::<E, S>::spawn(Rc::clone(eng), *cfg, rid));
-        hnd.forward_write(wb, ctx, cb).await;
+        hnd.forward_write(wb, ctx, cb, start).await;
     }
 }
 
@@ -368,20 +394,29 @@ impl<E: Engine, S: Spawner> Region<E, S> {
             tokio::time::timeout(self.cfg.region_writer_max_idle_time, self.incoming.recv()).await
         {
             match msg {
-                RegionMessage::Apply { wb, cb, ctx } => {
+                RegionMessage::Apply { wb, cb, ctx, start } => {
                     let q = Arc::clone(&self.quota)
                         .acquire_owned()
                         .await
                         .expect("semaphore closed");
+                    let write_size = wb.size();
                     let fut = self
                         .engine
                         .async_write(&ctx, wb, WriteEvent::BASIC_EVENT, None);
-                    APPLIER_ENGINE_REQUEST.with_label_values(&["request"]).inc();
+
+                    IMPORTER_APPLY_BYTES.observe(write_size as _);
+                    APPLIER_ENGINE_REQUEST
+                        .with_label_values(&["request"])
+                        .observe(start.saturating_elapsed_secs());
+                    let start = Instant::now();
 
                     S::spawn(async move {
                         let _ = cb.send(wait_write(fut).await);
-                        APPLIER_ENGINE_REQUEST.with_label_values(&["done"]).inc();
-                        drop(q)
+                        drop(q);
+
+                        APPLIER_ENGINE_REQUEST
+                            .with_label_values(&["done"])
+                            .observe(start.saturating_elapsed_secs());
                     });
                 }
                 #[cfg(test)]
