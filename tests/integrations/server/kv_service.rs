@@ -34,6 +34,7 @@ use raftstore::{
 use resource_metering::CollectorRegHandle;
 use tempfile::Builder;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::{
     config::QuotaConfig,
     coprocessor::REQ_TYPE_DAG,
@@ -415,11 +416,12 @@ fn test_mvcc_rollback_and_cleanup() {
     assert_eq!(scan_lock_resp.locks.len(), 0);
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_resolve_lock_gc_and_delete() {
     use kvproto::kvrpcpb::*;
 
-    let (cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;

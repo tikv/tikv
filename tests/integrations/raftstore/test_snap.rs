@@ -508,7 +508,7 @@ fn test_inspected_snapshot() {
 #[test]
 fn test_gen_during_heavy_recv() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(5 * 1024 * 1024);
+    cluster.cfg.server.snap_io_max_bytes_per_sec = ReadableSize(5 * 1024 * 1024);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
 
     let pd_client = Arc::clone(&cluster.pd_client);
