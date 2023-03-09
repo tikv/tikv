@@ -33,6 +33,7 @@ use std::{
 };
 
 use collections::HashMap;
+use crc64fast::Digest;
 use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
 use file_system::{IoType, OpenOptions, WithIoType};
 use futures::{
@@ -46,7 +47,7 @@ use grpcio::{
 };
 use kvproto::{
     raft_serverpb::{
-        Done, RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
+        RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
         TabletSnapshotPreview, TabletSnapshotRequest, TabletSnapshotResponse,
     },
     tikvpb::TikvClient,
@@ -261,7 +262,7 @@ async fn cleanup_cache(
             res => return Err(protocol_error("preview", res)),
         };
         let mut buffer = Vec::with_capacity(PREVIEW_CHUNK_LEN);
-        for meta in preview.take_meta().into_vec() {
+        for meta in preview.take_metas().into_vec() {
             if is_sst(&meta.file_name) && let Some(p) = exists.remove(&meta.file_name) {
                 if is_sst_match_preview(&meta, &p, &mut buffer, limiter).await? {
                     reused += meta.file_size;
@@ -290,8 +291,10 @@ async fn accept_one_file(
     mut chunk: TabletSnapshotFileChunk,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
     limiter: &Limiter,
+    digest: &mut Digest,
 ) -> Result<u64> {
     let name = chunk.file_name;
+    digest.write(name.as_bytes());
     let mut f = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -307,6 +310,7 @@ async fn accept_one_file(
             ));
         }
         limiter.consume(chunk_len).await;
+        digest.write(&chunk.data);
         f.write_all(&chunk.data)?;
         if exp_size == file_size {
             f.sync_data()?;
@@ -328,6 +332,7 @@ async fn accept_missing(
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
     limiter: &Limiter,
 ) -> Result<u64> {
+    let mut digest = Digest::default();
     let mut received_bytes: u64 = 0;
     for name in missing_ssts {
         let chunk = match stream.next().await {
@@ -337,13 +342,19 @@ async fn accept_missing(
         if chunk.file_name != name {
             return Err(protocol_error(&name, &chunk.file_name));
         }
-        received_bytes += accept_one_file(path, chunk, stream, limiter).await?;
+        received_bytes += accept_one_file(path, chunk, stream, limiter, &mut digest).await?;
     }
     // Now receive other files.
     loop {
         let chunk = match stream.next().await {
             Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
-            Some(Ok(req)) if req.has_done() => {
+            Some(Ok(req)) if req.has_end() => {
+                let checksum = req.get_end().get_checksum();
+                if checksum != digest.sum64() {
+                    return Err(Error::Other(
+                        format!("checksum mismatch {} {}", checksum, digest.sum64()).into(),
+                    ));
+                }
                 File::open(path)?.sync_data()?;
                 return Ok(received_bytes);
             }
@@ -352,7 +363,7 @@ async fn accept_missing(
         if chunk.file_name.is_empty() {
             return Err(protocol_error("file_name", &chunk.file_name));
         }
-        received_bytes += accept_one_file(path, chunk, stream, limiter).await?;
+        received_bytes += accept_one_file(path, chunk, stream, limiter, &mut digest).await?;
     }
 }
 
@@ -445,7 +456,7 @@ async fn build_one_preview(
             f.seek(SeekFrom::End(-(to_read as i64)))?;
             read_to(&mut f, &mut meta.trailing_chunk, to_read, limiter).await?;
         }
-        preview.mut_meta().push(meta);
+        preview.mut_metas().push(meta);
     }
     let mut req = TabletSnapshotRequest::default();
     req.set_preview(preview);
@@ -525,11 +536,13 @@ async fn send_missing(
     missing: Vec<(String, u64)>,
     sender: &mut (impl Sink<(TabletSnapshotRequest, WriteFlags), Error = Error> + Unpin),
     limiter: &Limiter,
-) -> Result<u64> {
+) -> Result<(u64, u64)> {
     let mut total_sent = 0;
+    let mut digest = Digest::default();
     for (name, mut file_size) in missing {
         let mut chunk = TabletSnapshotFileChunk::default();
         chunk.file_name = name;
+        digest.write(chunk.file_name.as_bytes());
         chunk.file_size = file_size;
         total_sent += file_size;
         if file_size == 0 {
@@ -545,6 +558,7 @@ async fn send_missing(
         loop {
             let to_read = cmp::min(FILE_CHUNK_LEN as u64, file_size) as usize;
             read_to(&mut f, &mut chunk.data, to_read, limiter).await?;
+            digest.write(&chunk.data);
             let mut req = TabletSnapshotRequest::default();
             req.set_chunk(chunk);
             sender
@@ -557,7 +571,7 @@ async fn send_missing(
             file_size -= to_read as u64;
         }
     }
-    Ok(total_sent)
+    Ok((total_sent, digest.sum64()))
 }
 
 async fn send_snap_files(
@@ -577,13 +591,13 @@ async fn send_snap_files(
     let mut head = TabletSnapshotRequest::default();
     head.mut_head().set_message(msg);
     let missing = find_missing(&path, head, &mut sender, receiver, &limiter).await?;
-    let total_sent = send_missing(&path, missing, &mut sender, &limiter).await?;
+    let (total_sent, checksum) = send_missing(&path, missing, &mut sender, &limiter).await?;
     // In gRPC, stream in serverside can finish without error (when the connection
     // is closed). So we need to use an explicit `Done` to indicate all messages
     // are sent. In V1, we have checksum and meta list, so this is not a
     // problem.
     let mut req = TabletSnapshotRequest::default();
-    req.set_done(Done::default());
+    req.mut_end().set_checksum(checksum);
     sender.send((req, WriteFlags::default())).await?;
     SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
         .send
