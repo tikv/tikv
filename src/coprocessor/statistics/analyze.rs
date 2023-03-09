@@ -17,12 +17,12 @@ use tidb_query_common::storage::{
 use tidb_query_datatype::{
     codec::{
         batch::LazyBatchColumn,
-        data_type::{ChunkRef, ChunkedVecBytes, VectorValue},
+        data_type::{ChunkRef, VectorValue},
         datum::{
             encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG,
             UINT_FLAG,
         },
-        table, datum_codec::{DatumFlagAndPayloadEncoder, EvaluableDatumEncoder},
+        table, datum_codec::EvaluableDatumEncoder,
     },
     def::Collation,
     expr::{EvalConfig, EvalContext},
@@ -405,7 +405,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         if self.columns_info[i].as_accessor().is_string_like() {
                             if let LazyBatchColumn::Decoded(VectorValue::Bytes(ref vec)) = columns_slice[i] {
                                 sort_key_shortcut = true;
-                                match vec.get_option_ref(logical_index) {
+                                match vec.get_option_ref(*logical_row) {
                                     Some(val) => {
                                         match_template_collator! {
                                             TT, match self.columns_info[i].as_accessor().collation()? {
@@ -468,7 +468,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         &self.column_groups,
                     );
                     collector.mut_base().collect_column(&column_vals, &collation_key_vals, &self.columns_info);
-                    if pcik {
+                    if pick {
                         collector.push_sample(&column_vals)
                     }
                 }
@@ -716,6 +716,7 @@ struct ReservoirRowSampleCollector {
     base: BaseRowSampleCollector,
     samples: BinaryHeap<Reverse<(i64, Vec<Vec<u8>>)>>,
     max_sample_size: usize,
+    cur_rng: i64,
 }
 
 impl ReservoirRowSampleCollector {
@@ -727,7 +728,8 @@ impl ReservoirRowSampleCollector {
         ReservoirRowSampleCollector {
             base: BaseRowSampleCollector::new(max_fm_sketch_size, col_and_group_len),
             samples: BinaryHeap::new(),
-            max_sample_size,
+            max_sample_size: max_sample_size,
+            cur_rng: 0,
         }
     }
 }
@@ -748,6 +750,7 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
             need_push = true;
         } else if self.samples.peek().unwrap().0.0 < cur_rng {
             need_push = true;
+            self.cur_rng = cur_rng;
             let (_, evicted) = self.samples.pop().unwrap().0;
             self.base.memory_usage -= evicted.iter().map(|x| x.capacity()).sum::<usize>();
         }
@@ -758,7 +761,7 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
         let sample = data.to_vec();
         self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
         self.base.report_memory_usage(false);
-        self.samples.push(Reverse((cur_rng, sample)));
+        self.samples.push(Reverse((self.cur_rng, sample)));
     }
 
     fn to_proto(&mut self) -> tipb::RowSampleCollector {
