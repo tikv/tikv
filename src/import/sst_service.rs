@@ -39,7 +39,7 @@ use tikv_util::{
 use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
-use super::make_rpc_error;
+use super::{make_rpc_error, LocalTablets};
 use crate::{
     import::duplicate_detect::DuplicateDetector,
     server::CONFIG_ROCKSDB_GAUGE,
@@ -47,6 +47,19 @@ use crate::{
 };
 
 const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
+/// The extra bytes required by the wire encoding.
+/// Generally, a field (and a embedded message) would introduce 2 extra
+/// bytes. In detail, they are:
+/// - 2 bytes for the request type (Tag+Value).
+/// - 2 bytes for every string or bytes field (Tag+Length), they are:
+/// .  + the key field
+/// .  + the value field
+/// .  + the CF field (None for CF_DEFAULT)
+/// - 2 bytes for the embedded message field `PutRequest` (Tag+Length).
+/// In fact, the length field is encoded by varint, which may grow when the
+/// content length is greater than 128, however when the length is greater than
+/// 128, the extra 1~4 bytes can be ignored.
+const WIRE_EXTRA_BYTES: usize = 10;
 
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
@@ -73,7 +86,7 @@ async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> sto
 #[derive(Clone)]
 pub struct ImportSstService<E: Engine> {
     cfg: Config,
-    tablet_registry: E::Local,
+    tablets: LocalTablets<E::Local>,
     engine: E,
     threads: Arc<Runtime>,
     // For now, PiTR cannot be executed in the tokio runtime because it is synchronous and may
@@ -104,6 +117,20 @@ struct RequestCollector {
 }
 
 impl RequestCollector {
+    fn record_size_of_message(&mut self, size: usize) {
+        // We make a raft command entry when we unpacked size grows to 7/8 of the max
+        // raft entry size.
+        //
+        // Which means, if we don't add the extra bytes, when the amplification by the
+        // extra bytes is greater than 8/7 (i.e. the average size of entry is
+        // less than 70B), we may encounter the "raft entry is too large" error.
+        self.unpacked_size += size + WIRE_EXTRA_BYTES;
+    }
+
+    fn release_message_of_size(&mut self, size: usize) {
+        self.unpacked_size -= size + WIRE_EXTRA_BYTES;
+    }
+
     fn new(max_raft_req_size: usize) -> Self {
         Self {
             max_raft_req_size,
@@ -162,19 +189,19 @@ impl RequestCollector {
                     .map(|(_, old_ts)| *old_ts < ts.into_inner())
                     .unwrap_or(true)
                 {
-                    self.unpacked_size += m.size();
+                    self.record_size_of_message(m.size());
                     if let Some((v, _)) = self
                         .write_reqs
                         .insert(encoded_key.to_owned(), (m, ts.into_inner()))
                     {
-                        self.unpacked_size -= v.size();
+                        self.release_message_of_size(v.size())
                     }
                 }
             }
             CF_DEFAULT => {
-                self.unpacked_size += m.size();
+                self.record_size_of_message(m.size());
                 if let Some(v) = self.default_reqs.insert(k.as_encoded().clone(), m) {
-                    self.unpacked_size -= v.size();
+                    self.release_message_of_size(v.size());
                 }
             }
             _ => unreachable!(),
@@ -193,7 +220,7 @@ impl RequestCollector {
             self.write_reqs.drain().map(|(_, (m, _))| m).collect()
         };
         for r in &res {
-            self.unpacked_size -= r.size();
+            self.release_message_of_size(r.size());
         }
         res
     }
@@ -238,7 +265,7 @@ impl<E: Engine> ImportSstService<E> {
         cfg: Config,
         raft_entry_max_size: ReadableSize,
         engine: E,
-        tablet_registry: E::Local,
+        tablets: LocalTablets<E::Local>,
         importer: Arc<SstImporter>,
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
@@ -266,12 +293,14 @@ impl<E: Engine> ImportSstService<E> {
             .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        importer.start_switch_mode_check(threads.handle(), tablet_registry.clone());
+        if let LocalTablets::Singleton(tablet) = &tablets {
+            importer.start_switch_mode_check(threads.handle(), tablet.clone());
+        }
         threads.spawn(Self::tick(importer.clone()));
 
         ImportSstService {
             cfg,
-            tablet_registry,
+            tablets,
             threads: Arc::new(threads),
             block_threads: Arc::new(block_threads),
             engine,
@@ -323,14 +352,20 @@ impl<E: Engine> ImportSstService<E> {
         }
     }
 
-    fn check_write_stall(&self) -> Option<errorpb::Error> {
+    fn check_write_stall(&self, region_id: u64) -> Option<errorpb::Error> {
+        let tablet = match self.tablets.get(region_id) {
+            Some(tablet) => tablet,
+            None => {
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message(format!("region {} not found", region_id));
+                errorpb.mut_region_not_found().set_region_id(region_id);
+                return Some(errorpb);
+            }
+        };
         if self.importer.get_mode() == SwitchMode::Normal
-            && self
-                .tablet_registry
-                .ingest_maybe_slowdown_writes(CF_WRITE)
-                .expect("cf")
+            && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
         {
-            match self.tablet_registry.get_sst_key_ranges(CF_WRITE, 0) {
+            match tablet.get_sst_key_ranges(CF_WRITE, 0) {
                 Ok(l0_sst_ranges) => {
                     warn!(
                         "sst ingest is too slow";
@@ -507,7 +542,7 @@ macro_rules! impl_write {
             sink: ClientStreamingSink<$resp_ty>,
         ) {
             let import = self.importer.clone();
-            let tablet_registry = self.tablet_registry.clone();
+            let tablets = self.tablets.clone();
             let (rx, buf_driver) =
                 create_stream_with_buffer(stream, self.cfg.stream_channel_window);
             let mut rx = rx.map_err(Error::from);
@@ -524,8 +559,17 @@ macro_rules! impl_write {
                         },
                         _ => return Err(Error::InvalidChunk),
                     };
+                    let region_id = meta.get_region_id();
+                    let tablet = match tablets.get(region_id) {
+                        Some(t) => t,
+                        None => {
+                            return Err(Error::Engine(
+                                format!("region {} not found", region_id).into(),
+                            ));
+                        }
+                    };
 
-                    let writer = match import.$writer_fn(&tablet_registry, meta) {
+                    let writer = match import.$writer_fn(&*tablet, meta) {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
@@ -574,13 +618,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
             }
 
-            match req.get_mode() {
-                SwitchMode::Normal => self
-                    .importer
-                    .enter_normal_mode(self.tablet_registry.clone(), mf),
-                SwitchMode::Import => self
-                    .importer
-                    .enter_import_mode(self.tablet_registry.clone(), mf),
+            if let LocalTablets::Singleton(tablet) = &self.tablets {
+                match req.get_mode() {
+                    SwitchMode::Normal => self.importer.enter_normal_mode(tablet.clone(), mf),
+                    SwitchMode::Import => self.importer.enter_import_mode(tablet.clone(), mf),
+                }
+            } else if req.get_mode() != SwitchMode::Normal {
+                Err(sst_importer::Error::Engine(
+                    "partitioned-raft-kv doesn't support import mode".into(),
+                ))
+            } else {
+                Ok(false)
             }
         };
         match res {
@@ -715,7 +763,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let tablet_registry = self.tablet_registry.clone();
+        let region_id = req.get_sst().get_region_id();
+        let tablets = self.tablets.clone();
         let start = Instant::now();
 
         let handle_task = async move {
@@ -734,6 +783,19 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
+            let tablet = match tablets.get(region_id) {
+                Some(tablet) => tablet,
+                None => {
+                    let error = sst_importer::Error::Engine(box_err!(
+                        "region {} not found, maybe it's not a replica of this store",
+                        region_id
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                }
+            };
+
             let res = importer.download_ext::<E::Local>(
                 req.get_sst(),
                 req.get_storage_backend(),
@@ -741,7 +803,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 req.get_rewrite_rule(),
                 cipher,
                 limiter,
-                tablet_registry,
+                tablet.into_owned(),
                 DownloadExt::default()
                     .cache_key(req.get_storage_cache_id())
                     .req_type(req.get_request_type()),
@@ -775,7 +837,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let timer = Instant::now_coarse();
 
         let mut resp = IngestResponse::default();
-        if let Some(errorpb) = self.check_write_stall() {
+        let region_id = req.get_context().get_region_id();
+        if let Some(errorpb) = self.check_write_stall(region_id) {
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
@@ -817,7 +880,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let timer = Instant::now_coarse();
 
         let mut resp = IngestResponse::default();
-        if let Some(errorpb) = self.check_write_stall() {
+        if let Some(errorpb) = self.check_write_stall(req.get_context().get_region_id()) {
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
@@ -865,7 +928,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "compact";
         let timer = Instant::now_coarse();
-        let tablet_registry = self.tablet_registry.clone();
+        let tablets = self.tablets.clone();
 
         let handle_task = async move {
             let (start, end) = if !req.has_range() {
@@ -882,7 +945,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 Some(req.get_output_level())
             };
 
-            let res = tablet_registry.compact_files_in_range(start, end, output_level);
+            let region_id = req.get_context().get_region_id();
+            let tablet = match tablets.get(region_id) {
+                Some(tablet) => tablet,
+                None => {
+                    let e = Error::Engine(format!("region {} not found", region_id).into());
+                    crate::send_rpc_response!(Err(e), sink, label, timer);
+                    return;
+                }
+            };
+
+            let res = tablet.compact_files_in_range(start, end, output_level);
             match res {
                 Ok(_) => info!(
                     "compact files in range";
@@ -1066,6 +1139,8 @@ mod test {
     use std::collections::HashMap;
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
+    use kvproto::raft_cmdpb::Request;
+    use protobuf::Message;
     use tikv_kv::Modify;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
@@ -1248,5 +1323,25 @@ mod test {
         });
         assert_eq!(reqs, reqs_result);
         assert!(request_collector.is_empty());
+    }
+
+    #[test]
+    fn test_collector_size() {
+        let mut request_collector = RequestCollector::new(1024);
+
+        for i in 0..100u64 {
+            request_collector.accept(CF_DEFAULT, default_req(&i.to_ne_bytes(), b"egg", i));
+        }
+
+        let pws = request_collector.pending_writes;
+        for w in pws {
+            let req_size = w
+                .modifies
+                .into_iter()
+                .map(Request::from)
+                .map(|x| x.compute_size())
+                .sum::<u32>();
+            assert!(req_size < 1024, "{}", req_size);
+        }
     }
 }

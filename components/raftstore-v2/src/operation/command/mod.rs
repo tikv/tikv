@@ -300,13 +300,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             committed_time: Instant::now(),
         };
         assert!(
-            self.apply_scheduler().is_some(),
-            "apply_scheduler should be something. region_id {}",
-            self.region_id()
+            self.apply_scheduler().is_some() || ctx.router.is_shutdown(),
+            "{} apply_scheduler should not be None",
+            SlogFormat(&self.logger)
         );
-        self.apply_scheduler()
-            .unwrap()
-            .send(ApplyTask::CommittedEntries(apply));
+        if let Some(scheduler) = self.apply_scheduler() {
+            scheduler.send(ApplyTask::CommittedEntries(apply));
+        }
     }
 
     #[inline]
@@ -365,6 +365,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .add_bucket_flow(&apply_res.bucket_stat);
         self.update_split_flow_control(&apply_res.metrics);
         self.update_stat(&apply_res.metrics);
+        ctx.store_stat.engine_total_bytes_written += apply_res.metrics.written_bytes;
+        ctx.store_stat.engine_total_keys_written += apply_res.metrics.written_keys;
 
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);
