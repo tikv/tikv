@@ -606,7 +606,7 @@ impl LockWaitQueues {
     pub(super) fn update_lock_wait(
         &self,
         lock_info: Vec<kvrpcpb::LockInfo>,
-    ) -> UpdateLockWaitResult {
+    ) -> Vec<UpdateWaiterEvent> {
         let mut update_wait_for_events = vec![];
         for lock_info in lock_info {
             let key = Key::from_raw(lock_info.get_key());
@@ -631,7 +631,7 @@ impl LockWaitQueues {
                 }
             }
         }
-        UpdateLockWaitResult(update_wait_for_events)
+        update_wait_for_events
     }
 
     /// Gets the count of entries currently waiting in queues.
@@ -668,16 +668,6 @@ impl LockWaitQueues {
                 .start_ts,
             start_ts.into()
         );
-    }
-}
-
-// The result should be updated in the lock manager.
-#[must_use]
-pub struct UpdateLockWaitResult(Vec<UpdateWaiterEvent>);
-
-impl From<UpdateLockWaitResult> for Vec<UpdateWaiterEvent> {
-    fn from(result: UpdateLockWaitResult) -> Self {
-        result.0
     }
 }
 
@@ -1268,8 +1258,7 @@ mod tests {
         let lock_info = vec![lock_info];
 
         b.iter(|| {
-            let res = queues.update_lock_wait(lock_info.clone());
-            lock_mgr.update_waiter(res.into());
+            lock_mgr.update_waiter(lock_info.clone());
         });
     }
 
@@ -1291,9 +1280,6 @@ mod tests {
         lock_info.set_lock_for_update_ts(10);
         let lock_info = vec![lock_info];
 
-        b.iter(|| {
-            let res = queues.update_lock_wait(lock_info.clone());
-            lock_mgr.update_waiter(res.into())
-        });
+        b.iter(|| lock_mgr.update_waiter(lock_info.clone()));
     }
 }

@@ -945,14 +945,12 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         // If there are not too many new locks, do not spawn the task to the high
         // priority pool since it may consume more CPU.
         if new_acquired_locks.len() < 30 {
-            let res = self.inner.lock_mgr.update_lock_wait(new_acquired_locks);
-            self.inner.lock_mgr.update_waiter(res.into())
+            self.inner.lock_mgr.update_waiter(new_acquired_locks);
         } else {
             let lock_mgr = self.inner.lock_mgr.clone();
             self.get_sched_pool()
                 .spawn(group_name, CommandPri::High, async move {
-                    let res = lock_mgr.update_lock_wait(new_acquired_locks);
-                    lock_mgr.update_waiter(res.into())
+                    lock_mgr.update_waiter(new_acquired_locks);
                 })
                 .unwrap();
         }

@@ -34,9 +34,7 @@ pub use self::{
 use self::{
     deadlock::{Detector, RoleChangeNotifier},
     lock_wait_context::PessimisticLockKeyCallback,
-    lock_waiting_queue::{
-        DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues, UpdateLockWaitResult,
-    },
+    lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
     waiter_manager::{Callback, Waiter, WaiterManager},
 };
 use super::txn::commands::WriteResultLockInfo;
@@ -300,8 +298,9 @@ impl LockManagerTrait for LockManager {
         }
     }
 
-    fn update_waiter(&self, updated_items: Vec<UpdateWaiterEvent>) {
-        self.waiter_mgr_scheduler.update_waiter(updated_items);
+    fn update_waiter(&self, lock_info: Vec<kvrpcpb::LockInfo>) {
+        let res = self.lock_wait_queues.update_lock_wait(lock_info);
+        self.waiter_mgr_scheduler.update_waiter(res);
     }
 
     fn remove_lock_wait(&self, token: LockWaitToken) {
@@ -348,10 +347,6 @@ impl LockManagerTrait for LockManager {
             conflicting_commit_ts,
             wake_up_delay_duration_ms,
         )
-    }
-
-    fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
-        self.lock_wait_queues.update_lock_wait(lock_info)
     }
 
     fn queues_are_empty(&self) -> bool {
@@ -483,7 +478,7 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
         diag_ctx: DiagnosticContext,
     );
 
-    fn update_waiter(&self, updated_items: Vec<UpdateWaiterEvent>);
+    fn update_waiter(&self, lock_info: Vec<kvrpcpb::LockInfo>);
 
     /// Remove a waiter specified by token.
     fn remove_lock_wait(&self, token: LockWaitToken);
@@ -516,8 +511,6 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
         conflicting_commit_ts: TimeStamp,
         wake_up_delay_duration_ms: u64,
     ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)>;
-
-    fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult;
 
     fn queues_are_empty(&self) -> bool;
 
@@ -623,7 +616,9 @@ impl LockManagerTrait for MockLockManager {
             .insert(token, (wait_info, cancel_callback));
     }
 
-    fn update_waiter(&self, _updated_items: Vec<UpdateWaiterEvent>) {}
+    fn update_waiter(&self, lock_info: Vec<kvrpcpb::LockInfo>) {
+        self.lock_wait_queues.update_lock_wait(lock_info);
+    }
 
     fn remove_lock_wait(&self, _token: LockWaitToken) {}
 
@@ -661,10 +656,6 @@ impl LockManagerTrait for MockLockManager {
             conflicting_commit_ts,
             wake_up_delay_duration_ms,
         )
-    }
-
-    fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
-        self.lock_wait_queues.update_lock_wait(lock_info)
     }
 
     fn queues_are_empty(&self) -> bool {
@@ -794,7 +785,9 @@ pub mod proxy_test {
                 .unwrap();
         }
 
-        fn update_waiter(&self, _updated_items: Vec<UpdateWaiterEvent>) {}
+        fn update_waiter(&self, lock_info: Vec<kvrpcpb::LockInfo>) {
+            self.lock_wait_queues.update_lock_wait(lock_info);
+        }
 
         fn remove_lock_wait(&self, token: LockWaitToken) {
             self.tx.lock().send(Msg::RemoveLockWait { token }).unwrap();
@@ -842,10 +835,6 @@ pub mod proxy_test {
                 conflicting_commit_ts,
                 wake_up_delay_duration_ms,
             )
-        }
-
-        fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) -> UpdateLockWaitResult {
-            self.lock_wait_queues.update_lock_wait(lock_info)
         }
 
         fn queues_are_empty(&self) -> bool {
