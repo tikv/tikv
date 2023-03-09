@@ -705,6 +705,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         info!(
             "using config";
             "config" => serde_json::to_string(&config).unwrap(),
+            "proxy_config" => serde_json::to_string(proxy_config).unwrap(),
         );
         if config.panic_when_unexpected_key_or_data {
             info!("panic-when-unexpected-key-or-data is on");

@@ -4790,6 +4790,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "raftstore-proxy-main"
+version = "0.0.1"
+dependencies = [
+ "engine_store_ffi",
+ "mock-engine-store",
+ "proxy_server",
+]
+
+[[package]]
 name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [

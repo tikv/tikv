@@ -127,7 +127,7 @@ fn test_default_no_config_item() {
 
 #[test]
 fn test_cmdline_overwrite() {
-    let args = vec!["test_cmdline_overwrite1", "--unips-enabled", "true"];
+    let args = vec!["test_cmdline_overwrite1", "--unips-enabled", "1"];
     let matches = App::new("RaftStore Proxy")
         .arg(
             Arg::with_name("unips-enabled")

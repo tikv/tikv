@@ -307,6 +307,7 @@ members = [
   "proxy_ffi",
   "proxy_tests",
   "raftstore-proxy",
+  "raftstore-proxy-main",
   "tests",
 ]
 default-members = ["raftstore-proxy"]

@@ -81,9 +81,11 @@ impl ElementaryEngine for PSElementEngine {
     #[allow(unused_variables)]
     #[allow(unreachable_code)]
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<RocksEngineIterator> {
-        let r = self.rocks.iterator_opt(cf, opts);
-        panic!("iterator_opt should not be called in PS engine");
-        r
+        // Note that though PSEngine overrides scan.
+        // However, it can still be triggered in `delete_all_in_range`.
+        // The whole strategy works like magic for now.
+        // Maybe we should impl our own RocksEngineIterator instead.
+        self.rocks.iterator_opt(cf, opts)
     }
 
     fn element_wb(&self) -> Box<dyn ElementaryWriteBatch> {

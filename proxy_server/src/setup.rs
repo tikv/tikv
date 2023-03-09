@@ -34,6 +34,7 @@ pub fn overwrite_config_with_cmd_args(
     matches: &ArgMatches<'_>,
 ) {
     info!("arg matches is {:?}", matches);
+    println!("arg matches is {:?}", matches);
     if let Some(level) = matches.value_of("log-level") {
         config.log.level = logger::get_level_by_string(level).unwrap().into();
         config.log_level = slog::Level::Info.into();
@@ -145,9 +146,9 @@ pub fn overwrite_config_with_cmd_args(
     );
 
     if let Some(unips_enabled_str) = matches.value_of("unips-enabled") {
-        let enabled = unips_enabled_str.parse().unwrap_or_else(|e| {
+        let enabled: u64 = unips_enabled_str.parse().unwrap_or_else(|e| {
             fatal!("invalid unips-enabled: {}", e);
         });
-        proxy_config.engine_store.enable_unips = enabled;
+        proxy_config.engine_store.enable_unips = enabled == 1;
     }
 }
