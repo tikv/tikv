@@ -320,38 +320,6 @@ impl LockManagerTrait for LockManager {
     fn lock_wait_queues(&self) -> LockWaitQueues {
         self.lock_wait_queues.clone()
     }
-
-    fn push_lock_wait(&self, lock_wait_entry: Box<LockWaitEntry>, current_lock: kvrpcpb::LockInfo) {
-        self.lock_wait_queues
-            .push_lock_wait(lock_wait_entry, current_lock)
-    }
-
-    fn remove_by_token(
-        &self,
-        key: &Key,
-        lock_wait_token: LockWaitToken,
-    ) -> Option<Box<LockWaitEntry>> {
-        self.lock_wait_queues.remove_by_token(key, lock_wait_token)
-    }
-
-    fn pop_for_waking_up(
-        &self,
-        key: &Key,
-        conflicting_start_ts: TimeStamp,
-        conflicting_commit_ts: TimeStamp,
-        wake_up_delay_duration_ms: u64,
-    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
-        self.lock_wait_queues.pop_for_waking_up(
-            key,
-            conflicting_start_ts,
-            conflicting_commit_ts,
-            wake_up_delay_duration_ms,
-        )
-    }
-
-    fn queues_are_empty(&self) -> bool {
-        self.lock_wait_queues.is_empty()
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -492,17 +460,22 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
 
     fn dump_wait_for_entries(&self, cb: waiter_manager::Callback);
 
-    // TODO: it's temporary during refactoring. Remove it
     fn lock_wait_queues(&self) -> LockWaitQueues;
 
     // following functions delegate to LockWaitQueues
-    fn push_lock_wait(&self, lock_wait_entry: Box<LockWaitEntry>, current_lock: kvrpcpb::LockInfo);
+    fn push_lock_wait(&self, lock_wait_entry: Box<LockWaitEntry>, current_lock: kvrpcpb::LockInfo) {
+        self.lock_wait_queues()
+            .push_lock_wait(lock_wait_entry, current_lock)
+    }
 
     fn remove_by_token(
         &self,
         key: &Key,
         lock_wait_token: LockWaitToken,
-    ) -> Option<Box<LockWaitEntry>>;
+    ) -> Option<Box<LockWaitEntry>> {
+        self.lock_wait_queues()
+            .remove_by_token(key, lock_wait_token)
+    }
 
     fn pop_for_waking_up(
         &self,
@@ -510,9 +483,18 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
         conflicting_start_ts: TimeStamp,
         conflicting_commit_ts: TimeStamp,
         wake_up_delay_duration_ms: u64,
-    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)>;
+    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
+        self.lock_wait_queues().pop_for_waking_up(
+            key,
+            conflicting_start_ts,
+            conflicting_commit_ts,
+            wake_up_delay_duration_ms,
+        )
+    }
 
-    fn queues_are_empty(&self) -> bool;
+    fn queues_are_empty(&self) -> bool {
+        self.lock_wait_queues().is_empty()
+    }
 
     // The lock manager decides how to handle the released locks, and returns 3
     // lists as actions to take a result
@@ -628,38 +610,6 @@ impl LockManagerTrait for MockLockManager {
 
     fn lock_wait_queues(&self) -> LockWaitQueues {
         self.lock_wait_queues.clone()
-    }
-
-    fn push_lock_wait(&self, lock_wait_entry: Box<LockWaitEntry>, current_lock: kvrpcpb::LockInfo) {
-        self.lock_wait_queues
-            .push_lock_wait(lock_wait_entry, current_lock)
-    }
-
-    fn remove_by_token(
-        &self,
-        key: &Key,
-        lock_wait_token: LockWaitToken,
-    ) -> Option<Box<LockWaitEntry>> {
-        self.lock_wait_queues.remove_by_token(key, lock_wait_token)
-    }
-
-    fn pop_for_waking_up(
-        &self,
-        key: &Key,
-        conflicting_start_ts: TimeStamp,
-        conflicting_commit_ts: TimeStamp,
-        wake_up_delay_duration_ms: u64,
-    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
-        self.lock_wait_queues.pop_for_waking_up(
-            key,
-            conflicting_start_ts,
-            conflicting_commit_ts,
-            wake_up_delay_duration_ms,
-        )
-    }
-
-    fn queues_are_empty(&self) -> bool {
-        self.lock_wait_queues.is_empty()
     }
 }
 
@@ -803,42 +753,6 @@ pub mod proxy_test {
 
         fn lock_wait_queues(&self) -> LockWaitQueues {
             self.lock_wait_queues.clone()
-        }
-
-        fn push_lock_wait(
-            &self,
-            lock_wait_entry: Box<LockWaitEntry>,
-            current_lock: kvrpcpb::LockInfo,
-        ) {
-            self.lock_wait_queues
-                .push_lock_wait(lock_wait_entry, current_lock)
-        }
-
-        fn remove_by_token(
-            &self,
-            key: &Key,
-            lock_wait_token: LockWaitToken,
-        ) -> Option<Box<LockWaitEntry>> {
-            self.lock_wait_queues.remove_by_token(key, lock_wait_token)
-        }
-
-        fn pop_for_waking_up(
-            &self,
-            key: &Key,
-            conflicting_start_ts: TimeStamp,
-            conflicting_commit_ts: TimeStamp,
-            wake_up_delay_duration_ms: u64,
-        ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
-            self.lock_wait_queues.pop_for_waking_up(
-                key,
-                conflicting_start_ts,
-                conflicting_commit_ts,
-                wake_up_delay_duration_ms,
-            )
-        }
-
-        fn queues_are_empty(&self) -> bool {
-            self.lock_wait_queues.is_empty()
         }
     }
 }
