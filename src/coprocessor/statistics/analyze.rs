@@ -22,7 +22,8 @@ use tidb_query_datatype::{
             encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG,
             UINT_FLAG,
         },
-        table, datum_codec::EvaluableDatumEncoder,
+        datum_codec::EvaluableDatumEncoder,
+        table,
     },
     def::Collation,
     expr::{EvalConfig, EvalContext},
@@ -403,7 +404,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         collation_key_vals[i].clear();
                         let mut sort_key_shortcut = false;
                         if self.columns_info[i].as_accessor().is_string_like() {
-                            if let LazyBatchColumn::Decoded(VectorValue::Bytes(ref vec)) = columns_slice[i] {
+                            if let LazyBatchColumn::Decoded(VectorValue::Bytes(ref vec)) =
+                                columns_slice[i]
+                            {
                                 sort_key_shortcut = true;
                                 match vec.get_option_ref(*logical_row) {
                                     Some(val) => {
@@ -428,7 +431,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                                     &self.columns_info[i],
                                     &mut ctx,
                                     &mut column_vals[i],
-                                )?; 
+                                )?;
                                 read_size += column_vals[i].len();
                             } else {
                                 read_size += collation_key_vals[i].len();
@@ -467,7 +470,11 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         &self.columns_info,
                         &self.column_groups,
                     );
-                    collector.mut_base().collect_column(&column_vals, &collation_key_vals, &self.columns_info);
+                    collector.mut_base().collect_column(
+                        &column_vals,
+                        &collation_key_vals,
+                        &self.columns_info,
+                    );
                     if pick {
                         collector.push_sample(&column_vals)
                     }
@@ -683,7 +690,7 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
 
     fn pick_sample(&mut self) -> bool {
         let cur_rng = self.base.rng.gen_range(0.0, 1.0);
-        return cur_rng >= self.sample_rate
+        return cur_rng >= self.sample_rate;
     }
 
     fn push_sample(&mut self, data: &[Vec<u8>]) {
@@ -728,7 +735,7 @@ impl ReservoirRowSampleCollector {
         ReservoirRowSampleCollector {
             base: BaseRowSampleCollector::new(max_fm_sketch_size, col_and_group_len),
             samples: BinaryHeap::new(),
-            max_sample_size: max_sample_size,
+            max_sample_size,
             cur_rng: 0,
         }
     }
@@ -1207,7 +1214,6 @@ impl AnalyzeMixedResult {
 mod tests {
     use ::std::collections::HashMap;
     use tidb_query_datatype::codec::{datum, datum::Datum};
-
 
     use super::*;
 
