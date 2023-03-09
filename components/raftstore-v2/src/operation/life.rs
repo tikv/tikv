@@ -262,6 +262,30 @@ impl Store {
                     forward_destroy_source_peer(ctx, &msg);
                     return;
                 }
+                if extra_msg.get_type() == ExtraMessageType::MsgAvailabilityRequest {
+                    let mut resp = RaftMessage::default();
+                    resp.set_region_id(extra_msg.get_availability_context().get_from_region_id());
+                    resp.set_region_epoch(
+                        extra_msg
+                            .get_availability_context()
+                            .get_from_region_epoch()
+                            .clone(),
+                    );
+                    resp.set_from_peer(msg.get_to_peer().clone());
+                    resp.set_to_peer(msg.get_from_peer().clone());
+                    resp.mut_extra_msg()
+                        .set_type(ExtraMessageType::MsgAvailabilityResponse);
+                    resp.mut_extra_msg()
+                        .mut_availability_context()
+                        .set_unavailable(true);
+                    resp.mut_extra_msg()
+                        .mut_availability_context()
+                        .set_from_region_id(msg.get_region_id());
+                    resp.mut_extra_msg()
+                        .mut_availability_context()
+                        .set_from_region_epoch(msg.get_region_epoch().clone());
+                    let _ = ctx.trans.send(resp);
+                }
             }
             ctx.raft_metrics.message_dropped.region_tombstone_peer.inc();
             return;
@@ -384,6 +408,25 @@ where
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn on_availability_request<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        from_region_id: u64,
+        from_peer: &metapb::Peer,
+    ) {
+        let mut msg = RaftMessage::default();
+        msg.set_region_id(from_region_id);
+        msg.set_from_peer(self.peer().clone());
+        msg.set_to_peer(from_peer.clone());
+        msg.mut_extra_msg()
+            .set_type(ExtraMessageType::MsgAvailabilityResponse);
+        let report = msg.mut_extra_msg().mut_availability_context();
+        report.set_from_region_id(self.region_id());
+        report.set_from_region_epoch(self.region().get_region_epoch().clone());
+        report.set_trimmed(!self.storage().has_dirty_data());
+        let _ = ctx.trans.send(msg);
+    }
+
     pub fn maybe_schedule_gc_peer_tick(&mut self) {
         let region_state = self.storage().region_state();
         if !region_state.get_removed_records().is_empty()
@@ -403,7 +446,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             let tombstone_msg = self.tombstone_message_for_same_region(peer.clone());
             self.add_message(tombstone_msg);
-            self.set_has_ready();
             true
         } else {
             false
@@ -426,7 +468,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             cmp::Ordering::Less => {
                 if let Some(msg) = build_peer_destroyed_report(msg) {
                     self.add_message(msg);
-                    self.set_has_ready();
                 }
             }
             // No matter it's greater or equal, the current peer must be destroyed.

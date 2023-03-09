@@ -27,15 +27,18 @@
 //! Start the tick (`Peer::on_check_merge`) to periodically check the
 //! eligibility of merge.
 
-use std::mem;
+use std::{mem, time::Duration};
 
+use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};
 use kvproto::{
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, CmdType, PrepareMergeRequest, PutRequest,
         RaftCmdRequest, Request,
     },
-    raft_serverpb::{MergeState, PeerState, RegionLocalState},
+    raft_serverpb::{
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RegionLocalState,
+    },
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use protobuf::Message;
@@ -46,7 +49,7 @@ use raftstore::{
     Error, Result,
 };
 use slog::{debug, info};
-use tikv_util::{box_err, log::SlogFormat, store::region_on_same_stores};
+use tikv_util::{box_err, log::SlogFormat, store::region_on_same_stores, time::Instant};
 
 use crate::{
     batch::StoreContext,
@@ -56,6 +59,8 @@ use crate::{
     router::CmdResChannel,
 };
 
+const TRIM_CHECK_TIMEOUT: Duration = Duration::from_secs(1);
+
 #[derive(Clone)]
 pub struct PreProposeContext {
     pub min_matched: u64,
@@ -63,6 +68,15 @@ pub struct PreProposeContext {
 }
 
 pub enum PrepareStatus {
+    WaitForTrimStatus {
+        start_time: Instant,
+        // Source peers that we are not sure if trimmed.
+        pending_source: HashSet<u64>,
+        // Target peers that we are not sure if trimmed.
+        pending_target: HashSet<u64>,
+        ctx: PreProposeContext,
+        req: Option<RaftCmdRequest>,
+    },
     /// When a fence <idx, cmd> is present, we (1) delay the PrepareMerge
     /// command `cmd` until all writes before `idx` are applied (2) reject all
     /// in-coming write proposals.
@@ -107,10 +121,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             store_ctx,
             req.get_admin_request().get_prepare_merge(),
         )?;
+        // We need to check three things in order:
+        // (1) `check_logs_before_prepare_merge`
+        // (2) `check_trim_status`
+        // (3) `check_pessimistic_locks`
+        // Check 2 and 3 are async, they yield by returning error.
         let pre_propose = if let Some(r) = self.already_checked_pessimistic_locks()? {
             r
+        } else if let Some(r) = self.already_checked_trim_status()? {
+            self.check_pessimistic_locks(r, &mut req)?
         } else {
             let r = self.check_logs_before_prepare_merge(store_ctx)?;
+            let r = self.check_trim_status(r, &mut req)?;
             self.check_pessimistic_locks(r, &mut req)?
         };
         req.mut_admin_request()
@@ -276,6 +298,141 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         })
     }
 
+    fn check_trim_status(
+        &mut self,
+        ctx: PreProposeContext,
+        req: &mut RaftCmdRequest,
+    ) -> Result<PreProposeContext> {
+        if self.storage().has_dirty_data() {
+            return Err(box_err!(
+                "source peer {} not trimmed, skip merging.",
+                self.peer_id()
+            ));
+        }
+        let target = req.get_admin_request().get_prepare_merge().get_target();
+        let mut pending_source = HashSet::default();
+        let peers = self.region().get_peers().to_owned();
+        for p in peers {
+            if p.get_id() == self.peer_id() {
+                continue;
+            }
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(self.region_id());
+            msg.set_from_peer(self.peer().clone());
+            msg.set_to_peer(p.clone());
+            msg.set_region_epoch(self.region().get_region_epoch().clone());
+            msg.mut_extra_msg()
+                .set_type(ExtraMessageType::MsgAvailabilityRequest);
+            msg.mut_extra_msg()
+                .mut_availability_context()
+                .set_from_region_id(self.region_id());
+            self.add_message(msg);
+            pending_source.insert(p.get_id());
+        }
+        let mut pending_target = HashSet::default();
+        for p in target.get_peers() {
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(target.get_id());
+            msg.set_from_peer(self.peer().clone());
+            msg.set_to_peer(p.clone());
+            msg.set_region_epoch(target.get_region_epoch().clone());
+            msg.mut_extra_msg()
+                .set_type(ExtraMessageType::MsgAvailabilityRequest);
+            msg.mut_extra_msg()
+                .mut_availability_context()
+                .set_from_region_id(self.region_id());
+            self.add_message(msg);
+            pending_target.insert(p.get_id());
+        }
+        self.merge_context_mut().prepare_status = Some(PrepareStatus::WaitForTrimStatus {
+            start_time: Instant::now_coarse(),
+            pending_source,
+            pending_target,
+            ctx,
+            req: Some(mem::take(req)),
+        });
+        Err(Error::PendingPrepareMerge)
+    }
+
+    pub fn merge_on_availability_response<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        from_peer: u64,
+        resp: &ExtraMessage,
+    ) {
+        let region_id = self.region_id();
+        let region_epoch = self.region().get_region_epoch().clone();
+        if self.merge_context().is_some()
+            && let Some(PrepareStatus::WaitForTrimStatus { pending_source, pending_target, req, .. }) = self
+                .merge_context_mut()
+                .prepare_status
+                .as_mut()
+            && req.is_some()
+        {
+            assert!(resp.has_availability_context());
+            if resp.get_availability_context().get_unavailable() {
+                self.take_merge_context();
+                return;
+            }
+            let from_region = resp.get_availability_context().get_from_region_id();
+            let from_epoch = resp.get_availability_context().get_from_region_epoch();
+            let trimmed = resp.get_availability_context().get_trimmed();
+            let target = req.as_ref().unwrap().get_admin_request().get_prepare_merge().get_target();
+            if  from_region == region_id && util::is_region_epoch_equal(from_epoch, &region_epoch)
+            {
+                if !trimmed {
+                    self.take_merge_context();
+                    return;
+                } else {
+                    pending_source.remove(&from_peer);
+                }
+            } else if from_region == target.get_id() && util::is_region_epoch_equal(from_epoch, target.get_region_epoch())
+            {
+                if !trimmed {
+                    self.take_merge_context();
+                    return;
+                } else {
+                    pending_target.remove(&from_peer);
+                }
+            }
+            if pending_source.is_empty() && pending_target.is_empty() {
+                let (ch, _) = CmdResChannel::pair();
+                let req = req.take().unwrap();
+                self.on_admin_command(store_ctx, req, ch);
+            }
+        }
+    }
+
+    fn already_checked_trim_status(&mut self) -> Result<Option<PreProposeContext>> {
+        match self
+            .merge_context()
+            .as_ref()
+            .and_then(|c| c.prepare_status.as_ref())
+        {
+            Some(PrepareStatus::WaitForTrimStatus {
+                pending_source,
+                pending_target,
+                ctx,
+                ..
+            }) => {
+                if pending_source.is_empty() && pending_target.is_empty() {
+                    Ok(Some(ctx.clone()))
+                } else {
+                    info!(
+                        self.logger,
+                        "reject PrepareMerge because trim status check is not complete";
+                    );
+                    Err(Error::PendingPrepareMerge)
+                }
+            }
+            Some(PrepareStatus::Applied(state)) => Err(box_err!(
+                "another merge is in-progress, merge_state: {:?}.",
+                state
+            )),
+            _ => unreachable!(),
+        }
+    }
+
     fn check_pessimistic_locks(
         &mut self,
         ctx: PreProposeContext,
@@ -336,7 +493,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "another merge is in-progress, merge_state: {:?}.",
                 state
             )),
-            None => Ok(None),
+            _ => unreachable!(),
         }
     }
 
@@ -347,6 +504,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         applied_index: u64,
     ) {
+        if self.merge_context().is_none() {
+            return;
+        }
+        // Check if there's a stale trim check. Ideally this should be implemented as a
+        // tick. But this is simpler.
+        if let Some(PrepareStatus::WaitForTrimStatus {
+            start_time, req, ..
+        }) = self
+            .merge_context()
+            .as_ref()
+            .and_then(|c| c.prepare_status.as_ref())
+            && req.is_some()
+            && start_time.saturating_elapsed() > TRIM_CHECK_TIMEOUT
+        {
+            self.take_merge_context();
+        }
+        // Check the fence.
         if let Some(req) = self
             .merge_context_mut()
             .maybe_take_pending_prepare(applied_index)

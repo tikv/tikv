@@ -213,6 +213,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.on_gc_peer_request(ctx, &msg);
                     return;
                 }
+                ExtraMessageType::MsgAvailabilityRequest => {
+                    self.on_availability_request(
+                        ctx,
+                        msg.get_extra_msg()
+                            .get_availability_context()
+                            .get_from_region_id(),
+                        msg.get_from_peer(),
+                    );
+                }
+                ExtraMessageType::MsgAvailabilityResponse => {
+                    self.merge_on_availability_response(
+                        ctx,
+                        msg.get_from_peer().get_id(),
+                        msg.get_extra_msg(),
+                    );
+                }
                 _ => (),
             }
         }
