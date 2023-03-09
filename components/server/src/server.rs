@@ -886,8 +886,8 @@ where
             .unwrap()
             .to_owned();
 
-        let bps = i64::try_from(self.config.server.snap_max_write_bytes_per_sec.0)
-            .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));
+        let bps = i64::try_from(self.config.server.snap_io_max_bytes_per_sec.0)
+            .unwrap_or_else(|_| fatal!("snap_io_max_bytes_per_sec > i64::max_value"));
 
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(bps)

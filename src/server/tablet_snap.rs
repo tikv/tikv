@@ -72,7 +72,7 @@ use crate::tikv_util::{sys::thread::ThreadBuildWrapper, time::Limiter};
 const PREVIEW_CHUNK_LEN: usize = ReadableSize::kb(1).0 as usize;
 const PREVIEW_BATCH_SIZE: usize = 256;
 const FILE_CHUNK_LEN: usize = ReadableSize::mb(1).0 as usize;
-const CACHE_LINE: u64 = ReadableSize::mb(4).0;
+const USE_CACHE_THRESHOLD: u64 = ReadableSize::mb(4).0;
 
 fn is_sst(file_name: &str) -> bool {
     file_name.ends_with(".sst")
@@ -479,7 +479,7 @@ async fn find_missing(
             other_files.push((name, file_size));
         }
     }
-    if sst_sizes < CACHE_LINE {
+    if sst_sizes < USE_CACHE_THRESHOLD {
         sender
             .send((head, WriteFlags::default().buffer_hint(true)))
             .await?;
@@ -674,8 +674,8 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
     ) -> Self {
         let config = cfg.value().clone();
         let cfg_tracker = cfg.tracker("tablet-sender".to_owned());
-        let limit = i64::try_from(config.snap_max_write_bytes_per_sec.0)
-            .unwrap_or_else(|_| panic!("snap_max_write_bytes_per_sec > i64::max_value"));
+        let limit = i64::try_from(config.snap_io_max_bytes_per_sec.0)
+            .unwrap_or_else(|_| panic!("snap_io_max_bytes_per_sec > i64::max_value"));
         let limiter = Limiter::new(if limit > 0 {
             limit as f64
         } else {
@@ -706,8 +706,8 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
 
     fn refresh_cfg(&mut self) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
-            let limit = if incoming.snap_max_write_bytes_per_sec.0 > 0 {
-                incoming.snap_max_write_bytes_per_sec.0 as f64
+            let limit = if incoming.snap_io_max_bytes_per_sec.0 > 0 {
+                incoming.snap_io_max_bytes_per_sec.0 as f64
             } else {
                 f64::INFINITY
             };

@@ -376,8 +376,8 @@ impl<R: RaftExtension + 'static> Runner<R> {
 
     fn refresh_cfg(&mut self) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
-            let limit = if incoming.snap_max_write_bytes_per_sec.0 > 0 {
-                incoming.snap_max_write_bytes_per_sec.0 as f64
+            let limit = if incoming.snap_io_max_bytes_per_sec.0 > 0 {
+                incoming.snap_io_max_bytes_per_sec.0 as f64
             } else {
                 f64::INFINITY
             };
