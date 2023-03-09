@@ -603,7 +603,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
         self.storage_mut().set_has_dirty_data(true);
-        let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
+
+        fail_point!("before_cluster_shutdown1");
+        let mailbox = {
+            match store_ctx.router.mailbox(self.region_id()) {
+                Some(mailbox) => mailbox,
+                None => {
+                    // None means the node is shutdown concurrently and thus the
+                    // mailboxes in router have been cleared
+                    assert!(
+                        store_ctx.router.is_shutdown(),
+                        "{} router should have been closed",
+                        SlogFormat(&self.logger)
+                    );
+                    return;
+                }
+            }
+        };
         let tablet_index = res.tablet_index;
         let _ = store_ctx
             .schedulers
@@ -641,16 +657,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             match store_ctx.router.force_send(new_region_id, split_init) {
                 Ok(_) => {}
                 Err(SendError(PeerMsg::SplitInit(msg))) => {
-                    store_ctx
+                    fail_point!("before_cluster_shutdown2", |_| {});
+                    if let Err(e) = store_ctx
                         .router
                         .force_send_control(StoreMsg::SplitInit(msg))
-                        .unwrap_or_else(|e| {
-                            slog_panic!(
-                                self.logger,
-                                "fails to send split peer intialization msg to store";
-                                "error" => ?e,
-                            )
-                        });
+                    {
+                        if store_ctx.router.is_shutdown() {
+                            return;
+                        }
+                        slog_panic!(
+                            self.logger,
+                            "fails to send split peer intialization msg to store";
+                            "error" => ?e,
+                        );
+                    }
                 }
                 _ => unreachable!(),
             }
@@ -731,7 +751,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             } else {
                 // None means the node is shutdown concurrently and thus the
                 // mailboxes in router have been cleared
-                assert!(store_ctx.router.is_shutdown());
+                assert!(
+                    store_ctx.router.is_shutdown(),
+                    "{} router should have been closed",
+                    SlogFormat(&self.logger)
+                );
                 return;
             }
         }
