@@ -356,7 +356,12 @@ async fn accept_missing(
                     ));
                 }
                 File::open(path)?.sync_data()?;
-                return Ok(received_bytes);
+                let res = stream.next().await;
+                return if res.is_none() {
+                    Ok(received_bytes)
+                } else {
+                    Err(protocol_error("None", res))
+                };
             }
             res => return Err(protocol_error("chunk", res)),
         };
