@@ -8,6 +8,7 @@ use std::{
     cmp,
     cmp::{Ord, Ordering as CmpOrdering},
     collections::VecDeque,
+    convert::TryInto,
     fmt::{self, Debug, Formatter},
     io::BufRead,
     mem,
@@ -687,6 +688,7 @@ where
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
             let apply_res = mem::take(&mut self.apply_res);
+            info!("notify apply"; "apply_res" => ?apply_res);
             self.notifier.notify(apply_res);
         }
 
@@ -1662,13 +1664,19 @@ where
         );
 
         let requests = req.get_requests();
+        let flag_data = req.get_header().get_flag_data();
+        let start_ts = if flag_data.len() == 8 {
+            u64::from_le_bytes(flag_data.try_into().unwrap())
+        } else {
+            0
+        };
 
         let mut ranges = vec![];
         let mut ssts = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
             match cmd_type {
-                CmdType::Put => self.handle_put(ctx, req),
+                CmdType::Put => self.handle_put(ctx, req, start_ts),
                 CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::DeleteRange => {
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
@@ -1726,9 +1734,26 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+    fn handle_put(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        req: &Request,
+        start_ts: u64,
+    ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.put.inc();
-        let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
+        let (key, value, cf) = (
+            req.get_put().get_key(),
+            req.get_put().get_value(),
+            req.get_put().get_cf(),
+        );
+
+        info!("handle put";
+            "cf" => ?cf,
+            "start_ts" => ?start_ts,
+            "key" => log_wrappers::hex_encode_upper(key),
+            "value" => log_wrappers::hex_encode_upper(value),
+            "index" => ctx.exec_log_index);
+
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
         if let Some(s) = self.buckets.as_mut() {
