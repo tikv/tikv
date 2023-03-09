@@ -116,4 +116,13 @@ lazy_static! {
         "The events of caching. event = {add, remove, out-of-quota, hit}",
         &["type"]
     ).unwrap();
+    pub static ref ACTIVE_RAFT_APPLIER: IntGauge = register_int_gauge!(
+        "tikv_import_active_raft_applier",
+        "The number of active region applier"
+    ).unwrap();
+    pub static ref APPLIER_ENGINE_REQUEST: IntCounterVec = register_int_counter_vec!(
+        "tikv_import_engine_request",
+        "The request lifetime track of requesting the RaftKv.",
+        &["type"]
+    ).unwrap();
 }

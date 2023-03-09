@@ -8,6 +8,7 @@ use std::{
 
 use futures::{Future, FutureExt, Stream, StreamExt};
 use kvproto::kvrpcpb::Context;
+use sst_importer::metrics::{ACTIVE_RAFT_APPLIER, APPLIER_ENGINE_REQUEST};
 use tikv_kv::{Engine, WriteData, WriteEvent};
 use tikv_util::fut;
 use tokio::sync::{
@@ -363,6 +364,8 @@ impl<E: Engine, S: Spawner> Region<E, S> {
     }
 
     async fn main_loop(mut self) {
+        ACTIVE_RAFT_APPLIER.inc();
+        defer! {{ ACTIVE_RAFT_APPLIER.dec(); }}
         while let Ok(Some(msg)) =
             tokio::time::timeout(self.cfg.region_writer_max_idle_time, self.incoming.recv()).await
         {
@@ -375,9 +378,11 @@ impl<E: Engine, S: Spawner> Region<E, S> {
                     let fut = self
                         .engine
                         .async_write(&ctx, wb, WriteEvent::BASIC_EVENT, None);
+                    APPLIER_ENGINE_REQUEST.with_label_values(&["request"]).inc();
 
                     S::spawn(async move {
                         let _ = cb.send(wait_write(fut).await);
+                        APPLIER_ENGINE_REQUEST.with_label_values(&["done"]).inc();
                         drop(q)
                     });
                 }

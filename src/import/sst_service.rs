@@ -286,6 +286,7 @@ impl<E: Engine> ImportSstService<E> {
             loop {
                 sleep(Duration::from_secs(300)).await;
                 if !handle.gc_hint().await {
+                    info!("sst_importer: applier GC loop exits");
                     return;
                 }
             }
