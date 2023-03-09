@@ -418,7 +418,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         assert!(
             res.compact_index < self.compact_log_context().last_applying_index,
-            "{}, {}",
+            "{}: {}, {}",
+            SlogFormat(&self.logger),
             res.compact_index,
             self.compact_log_context().last_applying_index
         );

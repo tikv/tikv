@@ -36,12 +36,12 @@
 //!                            \
 //!                    propose CommitMerge ---------------> append CommitMerge
 //!                     apply CommitMerge                    apply CommitMerge
-//!                            /|                                   /|
-//!           +---------------+ |                     +------------+ |
-//!          /  `CatchUpLogs`   |                    / `CatchUpLogs` |
-//!         /                   |                   /                |
-//!    destroy self        (complete)         append logs         (pause)
-//!                                                |                 .
+//!                        on apply res                             /|
+//!                            /|                     +------------+ |
+//!           +---------------+ |                    / `CatchUpLogs` |
+//!          /  `CatchUpLogs`   |                   /                |
+//!         /              (complete)         append logs         (pause)
+//!    destroy self                                |                 .
 //!                                        apply PrepareMerge        .
 //!                                                |                 .
 //!                                                +-----------> (continue)
@@ -70,6 +70,9 @@ use raftstore::{
 };
 use slog::{debug, error, info};
 use tikv_util::{
+    box_err,
+    config::ReadableDuration,
+    log::SlogFormat,
     slog_panic,
     store::{find_peer, region_on_same_stores},
     time::Instant,
@@ -87,6 +90,8 @@ use crate::{
 #[derive(Debug)]
 pub struct CommitMergeResult {
     pub index: u64,
+    // Only used to respond `CatchUpLogs` to source peer.
+    prepare_merge_index: u64,
     source_path: PathBuf,
     region: Region,
     source: Region,
@@ -179,16 +184,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         match store_ctx.router.force_send(target_id, msg) {
             Ok(_) => (),
             Err(SendError(PeerMsg::AskCommitMerge(msg))) => {
-                store_ctx
+                if let Err(e) = store_ctx
                     .router
                     .force_send_control(StoreMsg::AskCommitMerge(msg))
-                    .unwrap_or_else(|e| {
-                        slog_panic!(
-                            self.logger,
-                            "fails to send `AskCommitMerge` msg to store";
-                            "error" => ?e,
-                        )
-                    });
+                {
+                    if store_ctx.router.is_shutdown() {
+                        return;
+                    }
+                    slog_panic!(
+                        self.logger,
+                        "fails to send `AskCommitMerge` msg to store";
+                        "error" => ?e,
+                    );
+                }
             }
             _ => unreachable!(),
         }
@@ -252,7 +260,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         } else if expected_epoch == region.get_region_epoch() {
             assert!(
                 util::is_sibling_regions(source_region, region),
-                "{:?}, {:?}",
+                "{}: {:?}, {:?}",
+                SlogFormat(&self.logger),
                 source_region,
                 region
             );
@@ -302,24 +311,28 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let merge = req.get_commit_merge();
         let source_region = merge.get_source();
         let source_path = merge_source_path(reg, source_region.get_id(), merge.get_commit());
-        // Even if source_path exists, we still need to send it to acknowledge that we
-        // have committed the merge, so that the source peer can destroy itself.
-        let (tx, rx) = oneshot::channel();
+        let mut source_safe_ts = 0;
         let now = Instant::now_coarse();
-        self.res_reporter().redirect_catch_up_logs(CatchUpLogs {
-            target_region_id: self.region_id(),
-            merge: merge.clone(),
-            tx,
-        });
-        // TODO: what if shutdown?
-        let source_safe_ts = rx.await.unwrap_or_else(|_| {
-            if source_path.exists() {
-                // Source is probably already destroyed.
-                0
-            } else {
-                slog_panic!(self.logger, "source peer is missing");
+        if !source_path.exists() {
+            let (tx, rx) = oneshot::channel();
+            self.res_reporter().redirect_catch_up_logs(CatchUpLogs {
+                target_region_id: self.region_id(),
+                merge: merge.clone(),
+                tx,
+            });
+            match rx.await {
+                Ok(ts) => {
+                    source_safe_ts = ts;
+                }
+                Err(_) => {
+                    if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                        return Err(box_err!("{} shutdown", SlogFormat(&self.logger)));
+                    } else {
+                        slog_panic!(self.logger, "source peer is missing");
+                    }
+                }
             }
-        });
+        }
         let wait_time = now.saturating_elapsed();
 
         info!(
@@ -355,7 +368,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let path = reg.tablet_path(self.region_id(), index);
         if path.exists() {
-            // Redo merge.
+            // Redo merge. Source tablet is flushed before creating this path. The fact that
+            // we need to replay `CommitMerge` means `self.tablet().flush_cfs()` has not
+            // completed. So it's safe to delete it without losing any writes.
             std::fs::remove_dir_all(&path).unwrap();
         }
         // Avoid seqno jump back between self.tablet and the newly created tablet.
@@ -380,10 +395,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             self.logger,
             "applied CommitMerge";
             "source_region" => ?source_region,
-            "wait_ms" => wait_time.as_millis(),
-            "open_ms" => open_time.saturating_sub(wait_time).as_millis(),
-            "merge_ms" => flush_time.saturating_sub(open_time).as_millis(),
-            "flush_ms" => merge_time.saturating_sub(flush_time).as_millis(),
+            "wait" => %ReadableDuration(wait_time),
+            "open" => %ReadableDuration(open_time.saturating_sub(wait_time)),
+            "merge" => %ReadableDuration(flush_time.saturating_sub(open_time)),
+            "flush" => %ReadableDuration(merge_time.saturating_sub(flush_time)),
         );
 
         self.set_tablet(tablet.clone());
@@ -399,6 +414,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             AdminResponse::default(),
             AdminCmdResult::CommitMerge(CommitMergeResult {
                 index,
+                prepare_merge_index: merge.get_commit(),
                 source_path,
                 region,
                 source: source_region.to_owned(),
@@ -577,14 +593,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_commit_merge<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        res: CommitMergeResult,
+        mut res: CommitMergeResult,
     ) {
         let tablet: EK = match res.tablet.downcast() {
             Ok(t) => *t,
             Err(t) => unreachable!("tablet type should be the same: {:?}", t),
         };
+        let acquired_source_safe_ts_before = res.source_safe_ts > 0;
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
+
+            if let Some(p) = meta.region_read_progress.get(&res.source.get_id()) {
+                res.source_safe_ts = p.safe_ts();
+            }
 
             assert!(
                 res.source.get_end_key() == res.region.get_end_key()
@@ -617,6 +638,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 &self.logger,
             );
         }
+
+        // We could only have gotten safe ts by sending `CatchUpLogs` earlier. If we
+        // haven't, need to do it now to acknowledge that we have committed the
+        // merge, so that the source peer can destroy itself. Note that the timing is
+        // deliberately delayed after reading `store_ctx.meta` to get the source safe ts
+        // before its meta gets cleaned up.
+        if !acquired_source_safe_ts_before {
+            let (tx, _) = oneshot::channel();
+            let mut merge = CommitMergeRequest::default();
+            merge.set_source(res.source.clone());
+            merge.set_commit(res.prepare_merge_index);
+            let _ = store_ctx.router.force_send(
+                res.source.get_id(),
+                PeerMsg::CatchUpLogs(CatchUpLogs {
+                    target_region_id: self.region_id(),
+                    merge,
+                    tx,
+                }),
+            );
+        }
+
         if let Some(tablet) = self.set_tablet(tablet) {
             self.record_tombstone_tablet(store_ctx, tablet, res.index);
         }

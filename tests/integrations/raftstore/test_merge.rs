@@ -20,8 +20,91 @@ use txn_types::{Key, PessimisticLock};
 
 /// Test if merge is working as expected in a general condition.
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_base_merge() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.cfg.rocksdb.titan.enabled = true;
+    configure_for_merge(&mut cluster.cfg);
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    for i in 0..3 {
+        must_get_equal(&cluster.get_engine(i + 1), b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(i + 1), b"k3", b"v3");
+    }
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+    assert_eq!(region.get_id(), right.get_id());
+    assert_eq!(left.get_end_key(), right.get_start_key());
+    assert_eq!(right.get_start_key(), b"k2");
+    let get = new_request(
+        right.get_id(),
+        right.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k1")],
+        false,
+    );
+    debug!("requesting {:?}", get);
+    let resp = cluster
+        .call_command_on_leader(get, Duration::from_secs(5))
+        .unwrap();
+    assert!(resp.get_header().has_error(), "{:?}", resp);
+    assert!(
+        resp.get_header().get_error().has_key_not_in_region(),
+        "{:?}",
+        resp
+    );
+
+    pd_client.must_merge(left.get_id(), right.get_id());
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    assert_eq!(region.get_id(), right.get_id());
+    assert_eq!(region.get_start_key(), left.get_start_key());
+    assert_eq!(region.get_end_key(), right.get_end_key());
+    let origin_epoch = left.get_region_epoch();
+    let new_epoch = region.get_region_epoch();
+    // PrepareMerge + CommitMerge, so it should be 2.
+    assert_eq!(new_epoch.get_version(), origin_epoch.get_version() + 2);
+    assert_eq!(new_epoch.get_conf_ver(), origin_epoch.get_conf_ver());
+    let get = new_request(
+        region.get_id(),
+        new_epoch.to_owned(),
+        vec![new_get_cmd(b"k1")],
+        false,
+    );
+    debug!("requesting {:?}", get);
+    let resp = cluster
+        .call_command_on_leader(get, Duration::from_secs(5))
+        .unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
+
+    let version = left.get_region_epoch().get_version();
+    let conf_ver = left.get_region_epoch().get_conf_ver();
+    'outer: for i in 1..4 {
+        let mut state = RegionLocalState::default();
+        for _ in 0..3 {
+            state = cluster.region_local_state(left.get_id(), i);
+            if state.get_state() == PeerState::Tombstone {
+                let epoch = state.get_region().get_region_epoch();
+                assert_eq!(epoch.get_version(), version + 1);
+                assert_eq!(epoch.get_conf_ver(), conf_ver + 1);
+                continue 'outer;
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+        panic!("store {} is still not merged: {:?}", i, state);
+    }
+
+    cluster.must_put(b"k4", b"v4");
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_base_merge_v2() {
     let mut cluster = new_cluster(0, 3);
     // TODO: v2 doesn't support titan yet.
     // cluster.cfg.rocksdb.titan.enabled = true;
@@ -269,8 +352,7 @@ fn test_node_merge_prerequisites_check() {
 fn test_node_check_merged_message() {
     let mut cluster = new_cluster(0, 4);
     configure_for_merge(&mut cluster.cfg);
-    ignore_merge_target_integrity(&mut cluster.cfg);
-    cluster.pd_client.ignore_merge_target_integrity();
+    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -334,8 +416,7 @@ fn test_node_merge_slow_split() {
     fn imp(is_right_derive: bool) {
         let mut cluster = new_cluster(0, 3);
         configure_for_merge(&mut cluster.cfg);
-        ignore_merge_target_integrity(&mut cluster.cfg);
-        cluster.pd_client.ignore_merge_target_integrity();
+        ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
         let pd_client = Arc::clone(&cluster.pd_client);
         pd_client.disable_default_operator();
         cluster.cfg.raft_store.right_derive_when_split = is_right_derive;
@@ -404,8 +485,7 @@ fn test_node_merge_slow_split() {
 fn test_node_merge_dist_isolation() {
     let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
-    ignore_merge_target_integrity(&mut cluster.cfg);
-    cluster.pd_client.ignore_merge_target_integrity();
+    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -482,8 +562,7 @@ fn test_node_merge_dist_isolation() {
 fn test_node_merge_brain_split() {
     let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
-    ignore_merge_target_integrity(&mut cluster.cfg);
-    cluster.pd_client.ignore_merge_target_integrity();
+    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
 
@@ -839,8 +918,7 @@ fn test_merge_with_slow_promote() {
 fn test_merge_isolated_store_with_no_target_peer() {
     let mut cluster = new_cluster(0, 4);
     configure_for_merge(&mut cluster.cfg);
-    ignore_merge_target_integrity(&mut cluster.cfg);
-    cluster.pd_client.ignore_merge_target_integrity();
+    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
     cluster.cfg.raft_store.right_derive_when_split = true;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -1448,8 +1526,7 @@ fn test_merge_pessimistic_locks_repeated_merge() {
 fn test_node_merge_long_isolated() {
     let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
-    ignore_merge_target_integrity(&mut cluster.cfg);
-    cluster.pd_client.ignore_merge_target_integrity();
+    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
