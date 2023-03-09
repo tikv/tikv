@@ -93,7 +93,6 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     failover_time: Option<Instant>,
     // We holds the config before, even it is useless for now,
     // however probably it would be useful in the future.
-    #[allow(dead_code)]
     config: BackupStreamConfig,
     checkpoint_mgr: CheckpointManager,
 }
@@ -923,9 +922,10 @@ where
 
     fn min_ts_worker(&self) -> future![()] {
         let sched = self.scheduler.clone();
+        let interval = self.config.min_ts_interval.0;
         async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                tokio::time::sleep(interval).await;
                 try_send!(
                     sched,
                     Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve)
