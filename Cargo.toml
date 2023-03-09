@@ -187,11 +187,11 @@ hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks", "testexport"] }
 reqwest = { version = "0.11", features = ["blocking"] }
+server = { path = "components/server" }
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }
 tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
-server = { path = "components/server" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
@@ -405,12 +405,12 @@ debug = false
 opt-level = 1
 
 [profile.dev.package.tests]
-debug = 1
-opt-level = 1
+opt-level = 0
+debug = true
 
 [profile.dev]
 opt-level = 0
-debug = 0
+debug = true
 codegen-units = 4
 lto = false
 incremental = true
@@ -436,7 +436,7 @@ codegen-units = 4
 
 [profile.test]
 opt-level = 0
-debug = 0
+debug = true
 codegen-units = 16
 lto = false
 incremental = true

@@ -1144,11 +1144,16 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerV2<ER> {
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
-        unimplemented!()
+        self.get(DbType::Kv, cf, &key)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get", e))
     }
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
-        unimplemented!()
+        self.region_size(region, cfs)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::region_size", e))
+            .into_iter()
+            .map(|(cf, size)| (cf.to_owned(), size))
+            .collect()
     }
 
     fn get_region_info(&self, region: u64) -> RegionInfo {
