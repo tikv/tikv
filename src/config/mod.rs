@@ -2597,10 +2597,17 @@ impl BackupStreamConfig {
             );
             self.num_threads = default_cfg.num_threads;
         }
-        if self.max_flush_interval < ReadableDuration::secs(1) {
+        if self.max_flush_interval < ReadableDuration::secs(10) {
             return Err(format!(
-                "the max_flush_interval is too small, it is {}, and should be greater than 1s.",
+                "the max_flush_interval is too small, it is {}, and should be greater than 10s.",
                 self.max_flush_interval
+            )
+            .into());
+        }
+        if self.min_ts_interval < ReadableDuration::secs(1) {
+            return Err(format!(
+                "the min_ts_interval is too small, it is {}, and should be greater than 1s.",
+                self.min_ts_interval
             )
             .into());
         }

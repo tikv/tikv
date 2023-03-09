@@ -42,7 +42,8 @@ pub struct CheckpointManager {
 impl std::fmt::Debug for CheckpointManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CheckpointManager")
-            .field("items", &self.checkpoint_ts)
+            .field("checkpoints", &self.checkpoint_ts)
+            .field("resolved-ts", &self.resolved_ts)
             .finish()
     }
 }
