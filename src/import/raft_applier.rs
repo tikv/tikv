@@ -19,9 +19,7 @@ use tokio::sync::{
 use crate::storage;
 
 const MAX_INFLIGHT_RAFT_MESSAGE: usize = 8;
-// Given we are fully asynchronous, smaller buffer size can better back-pressure
-// the producer.
-const BUFFER_SIZE: usize = 8;
+const BUFFER_SIZE: usize = 1024;
 const REGION_WRITER_MAX_IDLE_TIME: Duration = Duration::from_secs(30);
 const DEFAULT_CONFIG: Config = Config {
     max_inflight_raft_message: MAX_INFLIGHT_RAFT_MESSAGE,

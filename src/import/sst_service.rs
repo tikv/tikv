@@ -45,7 +45,14 @@ use crate::{
     storage::{self, errors::extract_region_error_from_error},
 };
 
-const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
+/// The concurrency of sending raft request for every `apply` requests.
+/// This value `4` would mainly influence the speed of applying a huge file:
+/// when we downloading the files into disk, loading all of them into memory may
+/// lead to OOM. This would be able to back-pressure them.
+/// (only log files greater than 16 * 7M = 112M would be throttled by this.)
+/// NOTE: Perhaps add a memory quota for download to disk mode and get rid of
+/// this value?
+const REQUEST_WRITE_CONCURRENCY: usize = 16;
 /// The extra bytes required by the wire encoding.
 /// Generally, a field (and a embedded message) would introduce 2 extra
 /// bytes. In detail, they are:
@@ -509,13 +516,18 @@ impl<E: Engine> ImportSstService<E> {
             }
 
             let is_last_task = tasks.peek().is_none();
-            inflight_futures.extend(
-                collector
-                    .drain_pending_writes(is_last_task)
-                    .map(|w| handle.write(w, context.clone()).map_err(transfer_error)),
-            );
-            if inflight_futures.len() >= MAX_INFLIGHT_RAFT_MSGS {
-                inflight_futures.pop_front().unwrap().await?;
+            for w in collector.drain_pending_writes(is_last_task) {
+                APPLIER_ENGINE_REQUEST.with_label_values(&["read"]).inc();
+                inflight_futures
+                    .push_back(handle.write(w, context.clone()).map_err(transfer_error));
+                if inflight_futures.len() >= REQUEST_WRITE_CONCURRENCY {
+                    // Wait all pending requests, because the request may not be sent when the
+                    // buffer is full.
+                    // TODO: Maybe make `write` returns a stream like what `Engine::async_write`
+                    // did? So we can back-pressure here when the channel is full hence we have
+                    // max safe concurrency.
+                    futures::future::try_join_all(inflight_futures.drain(..)).await?;
+                }
             }
         }
         assert!(collector.is_empty());
