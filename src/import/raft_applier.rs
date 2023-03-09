@@ -20,7 +20,7 @@ lazy_static! {
         dashmap::DashMap::new();
 }
 
-const MAX_INFLIGHT_RAFT_MESSAGE: usize = 64;
+const MAX_INFLIGHT_RAFT_MESSAGE: usize = 8;
 const MAX_PENDING_RAFT_MESSAGE: usize = 1024;
 const REGION_WRITER_MAX_IDLE_TIME: Duration = Duration::from_secs(30);
 const DEFAULT_CONFIG: Config = Config {
@@ -325,7 +325,7 @@ impl<E: Engine, S: Spawner> Region<E, S> {
 #[cfg(test)]
 mod test {
 
-    use std::{iter::IntoIterator, time::Duration};
+    use std::{convert::identity, iter::IntoIterator, time::Duration};
 
     use engine_rocks::RocksEngineIterator;
     use engine_traits::{Iterator, ALL_CFS, CF_DEFAULT, CF_WRITE};
@@ -356,7 +356,7 @@ mod test {
         }
 
         fn batch<'a, 'b, 'this: 'a + 'b>(
-            &'this mut self,
+            &mut self,
             region_id: u64,
             f: impl FnOnce(&mut dyn FnMut(&'a str, &'b str)) + 'this,
         ) -> (WriteData, Context) {
@@ -460,7 +460,7 @@ mod test {
             i1.next().unwrap();
             i2.next().unwrap();
         }
-        check_eq(i1.valid().unwrap(), i2.valid().unwrap(), "length", |x| x)?;
+        check_eq(i1.valid().unwrap(), i2.valid().unwrap(), "length", identity)?;
         Ok(())
     }
 
@@ -537,7 +537,7 @@ mod test {
                 suite.batch(2, move |t| {
                     t(
                         "sole key to this mystery",
-                        "fib this n = if n < 1 then n else this n",
+                        "fib this n = if n < 2 then n else this (n-1) + this (n-2)",
                     );
                 })
             })
@@ -547,6 +547,7 @@ mod test {
         std::thread::sleep(Duration::from_secs(1));
         assert_eq!(*PENDING_RAFT_REQUEST_HINT.get(&1).unwrap().value(), 3usize);
         assert_eq!(*PENDING_RAFT_REQUEST_HINT.get(&2).unwrap().value(), 2usize);
+        fail::cfg("rockskv_write_modifies", "off").unwrap();
         suite.wait(fut);
 
         suite.check("inflight_max");
