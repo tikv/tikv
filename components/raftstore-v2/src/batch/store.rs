@@ -621,7 +621,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let tablet_gc_scheduler = workers.tablet_gc.start_with_timer(
             "tablet-gc-worker",
-            tablet_gc::Runner::new(tablet_registry.clone(), self.logger.clone()),
+            tablet_gc::Runner::new(
+                tablet_registry.clone(),
+                sst_importer.clone(),
+                self.logger.clone(),
+            ),
         );
 
         let schedulers = Schedulers {

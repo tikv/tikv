@@ -4205,18 +4205,21 @@ mod tests {
                         &shared,
                         None,
                         ApiVersion::V1,
+                        None,
                         EngineType::RaftKv,
                     ),
                 ),
                 (
                     CF_LOCK,
-                    cfg_rocksdb.lockcf.build_opt(&shared, EngineType::RaftKv),
+                    cfg_rocksdb
+                        .lockcf
+                        .build_opt(&shared, None, EngineType::RaftKv),
                 ),
                 (
                     CF_WRITE,
                     cfg_rocksdb
                         .writecf
-                        .build_opt(&shared, None, EngineType::RaftKv),
+                        .build_opt(&shared, None, None, EngineType::RaftKv),
                 ),
                 (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&shared)),
             ];
