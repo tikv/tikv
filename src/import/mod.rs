@@ -15,8 +15,9 @@
 mod duplicate_detect;
 mod sst_service;
 
-use std::fmt::Debug;
+use std::{borrow::Cow, fmt::Debug};
 
+use engine_traits::TabletRegistry;
 use grpcio::{RpcStatus, RpcStatusCode};
 pub use sst_importer::{Config, Error, Result, SstImporter, TxnSstWriter};
 
@@ -47,4 +48,27 @@ macro_rules! send_rpc_response {
         };
         let _ = res.map_err(|e| warn!("send rpc response"; "err" => %e)).await;
     }};
+}
+
+#[derive(Clone)]
+pub enum LocalTablets<EK> {
+    Singleton(EK),
+    Registry(TabletRegistry<EK>),
+}
+
+impl<EK: Clone> LocalTablets<EK> {
+    /// Get the tablet of the given region.
+    ///
+    /// If `None` is returned, the region may not exist or may not initialized.
+    /// If there are multiple versions of tablet, the latest one is returned
+    /// with best effort.
+    fn get(&self, region_id: u64) -> Option<Cow<'_, EK>> {
+        match self {
+            LocalTablets::Singleton(tablet) => Some(Cow::Borrowed(tablet)),
+            LocalTablets::Registry(registry) => {
+                let mut cached = registry.get(region_id)?;
+                cached.latest().cloned().map(Cow::Owned)
+            }
+        }
+    }
 }
