@@ -13,7 +13,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use engine_traits::KvEngine;
 use kvproto::{
-    kvrpcpb::{self, LockInfo},
+    kvrpcpb::{self, CommandPri, LockInfo},
     metapb::RegionEpoch,
 };
 use parking_lot::Mutex;
@@ -42,7 +42,7 @@ use crate::{
     server::{resolve::StoreAddrResolver, Error, Result},
     storage::{
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
-        txn::{commands::ReleasedLocks, Error as TxnError},
+        txn::{commands::ReleasedLocks, sched_pool::SchedPool, Error as TxnError},
         DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
     },
 };
@@ -547,6 +547,30 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
                 acc
             },
         ))
+    }
+
+    fn update_newly_acquired_locks(
+        &self,
+        group_name: &str,
+        new_acquired_locks: Vec<kvrpcpb::LockInfo>,
+        sched_pool: &SchedPool,
+    ) {
+        if new_acquired_locks.is_empty() || self.queues_are_empty() {
+            return;
+        }
+
+        // If there are not too many new locks, do not spawn the task to the high
+        // priority pool since it may consume more CPU.
+        if new_acquired_locks.len() < 30 {
+            self.update_waiter(new_acquired_locks);
+        } else {
+            let self_clone = self.clone();
+            sched_pool
+                .spawn(group_name, CommandPri::High, async move {
+                    self_clone.update_waiter(new_acquired_locks);
+                })
+                .unwrap();
+        }
     }
 }
 

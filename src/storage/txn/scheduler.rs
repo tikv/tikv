@@ -818,7 +818,11 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        self.on_acquired_locks_finished(group_name, new_acquired_locks);
+        self.inner.lock_mgr.update_newly_acquired_locks(
+            group_name,
+            new_acquired_locks,
+            self.get_sched_pool(),
+        );
 
         if do_wake_up {
             let woken_up_resumable_lock_requests = tctx.woken_up_resumable_lock_requests;
@@ -931,29 +935,6 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
                 },
             )
             .unwrap_or_default()
-    }
-
-    fn on_acquired_locks_finished(
-        &self,
-        group_name: &str,
-        new_acquired_locks: Vec<kvrpcpb::LockInfo>,
-    ) {
-        if new_acquired_locks.is_empty() || self.inner.lock_mgr.queues_are_empty() {
-            return;
-        }
-
-        // If there are not too many new locks, do not spawn the task to the high
-        // priority pool since it may consume more CPU.
-        if new_acquired_locks.len() < 30 {
-            self.inner.lock_mgr.update_waiter(new_acquired_locks);
-        } else {
-            let lock_mgr = self.inner.lock_mgr.clone();
-            self.get_sched_pool()
-                .spawn(group_name, CommandPri::High, async move {
-                    lock_mgr.update_waiter(new_acquired_locks);
-                })
-                .unwrap();
-        }
     }
 
     fn wake_up_legacy_pessimistic_locks(
