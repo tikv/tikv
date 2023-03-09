@@ -6,11 +6,14 @@ use std::{
     collections::HashMap, error::Error, marker::PhantomData, rc::Rc, sync::Arc, time::Duration,
 };
 
-use futures::{Future, Stream, StreamExt};
+use futures::{Future, FutureExt, Stream, StreamExt};
 use kvproto::kvrpcpb::Context;
 use tikv_kv::{Engine, WriteData, WriteEvent};
 use tikv_util::fut;
-use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::sync::{
+    mpsc::{self, error::TrySendError},
+    oneshot, Semaphore,
+};
 
 use crate::storage;
 
@@ -21,18 +24,18 @@ lazy_static! {
 }
 
 const MAX_INFLIGHT_RAFT_MESSAGE: usize = 8;
-const MAX_PENDING_RAFT_MESSAGE: usize = 1024;
+// Given we are fully asynchronous, smaller buffer size can better back-pressure
+// the producer.
+const BUFFER_SIZE: usize = 8;
 const REGION_WRITER_MAX_IDLE_TIME: Duration = Duration::from_secs(30);
 const DEFAULT_CONFIG: Config = Config {
     max_inflight_raft_message: MAX_INFLIGHT_RAFT_MESSAGE,
-    max_pending_raft_message: MAX_PENDING_RAFT_MESSAGE,
     region_writer_max_idle_time: REGION_WRITER_MAX_IDLE_TIME,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Config {
     max_inflight_raft_message: usize,
-    max_pending_raft_message: usize,
     region_writer_max_idle_time: Duration,
 }
 
@@ -83,6 +86,13 @@ enum GlobalMessage {
     },
     MaybeGc {
         cb: OnComplete<()>,
+    },
+    #[cfg(test)]
+    InspectWorkerStatus {
+        cb: OnComplete<(
+            usize, // Running worker
+            usize, // Worker reference count
+        )>,
     },
 }
 
@@ -136,22 +146,40 @@ impl Handle {
 
         let msg_tx = self.tx.clone();
         let msg = msg(tx);
+        let msg = msg_tx.try_send(msg).err().map(|x| match x {
+            TrySendError::Full(x) => x,
+            TrySendError::Closed(x) => x,
+        });
         async move {
-            msg_tx
-                .send(msg)
-                .await
-                .map_err(|err| -> E { box_err!("failed to send: {}", err) })?;
+            if let Some(msg) = msg {
+                msg_tx
+                    .send(msg)
+                    .await
+                    .map_err(|err| -> E { box_err!("failed to send: {}", err) })?;
+            }
             rx.await
                 .map_err(|err| -> E { box_err!("failed to send: {}", err) })?
         }
     }
 
-    fn msg(&self, msg: impl FnOnce(OnComplete<()>) -> GlobalMessage) -> fut![bool] {
+    fn msg<T>(&self, msg: impl FnOnce(OnComplete<T>) -> GlobalMessage) -> fut![Option<T>]
+    where
+        T: Send + 'static,
+    {
         let (tx, rx) = oneshot::channel();
         let msg_tx = self.tx.clone();
         let msg = msg(tx);
 
-        async move { msg_tx.send(msg).await.is_ok() && rx.await.is_ok() }
+        let msg = msg_tx.try_send(msg).err().map(|x| match x {
+            TrySendError::Full(x) => x,
+            TrySendError::Closed(x) => x,
+        });
+        async move {
+            if let Some(msg) = msg {
+                msg_tx.send(msg).await.ok()?;
+            }
+            rx.await.ok()
+        }
     }
 
     pub fn write(&self, wb: WriteData, cx: Context) -> fut![storage::Result<()>] {
@@ -165,11 +193,19 @@ impl Handle {
     #[allow(dead_code)]
     pub fn gc_hint(&self) -> fut![bool] {
         self.msg(|cb| GlobalMessage::MaybeGc { cb })
+            .map(|x| x.is_some())
     }
 
     #[allow(dead_code)]
     pub fn update_config(&self, cfg: Config) -> fut![bool] {
         self.msg(move |cb| GlobalMessage::UpdateConfig { cfg, cb })
+            .map(|x| x.is_some())
+    }
+
+    #[cfg(test)]
+    pub fn inspect(&self) -> fut![(usize, usize)] {
+        self.msg(|cb| GlobalMessage::InspectWorkerStatus { cb })
+            .map(|x| x.unwrap())
     }
 }
 
@@ -181,7 +217,11 @@ impl RegionHandle {
         cb: OnComplete<storage::Result<()>>,
     ) {
         if let Err(err) = self.tx.send(RegionMessage::Apply { wb, ctx, cb }).await {
-            let RegionMessage::Apply { cb, ctx, .. } = err.0;
+            let (cb, ctx) = match err.0 {
+                RegionMessage::Apply { cb, ctx, .. } => (cb, ctx),
+                _ => unreachable!(),
+            };
+
             // Or the receiver may gone, that was ok.
             let _ = cb.send(Err(box_err!(
                 "failed to send message into region writer (ctx = {:?})",
@@ -208,7 +248,7 @@ impl<E: Engine> Global<E, TokioLocalSpawner> {
 
 impl<E: Engine, S: Spawner> Global<E, S> {
     pub fn create(engine: E) -> (Self, Handle) {
-        let (tx, rx) = mpsc::channel(MAX_PENDING_RAFT_MESSAGE);
+        let (tx, rx) = mpsc::channel(BUFFER_SIZE);
         let this = Self {
             incoming: rx,
             engine: Rc::new(engine),
@@ -238,6 +278,13 @@ impl<E: Engine, S: Spawner> Global<E, S> {
                 GlobalMessage::MaybeGc { cb } => {
                     self.gc();
                     let _ = cb.send(());
+                }
+                #[cfg(test)]
+                GlobalMessage::InspectWorkerStatus { cb } => {
+                    let _ = cb.send((
+                        self.regions.values().filter(|x| !x.tx.is_closed()).count(),
+                        self.regions.len(),
+                    ));
                 }
             }
         }
@@ -272,7 +319,10 @@ impl<E: Engine, S: Spawner> Global<E, S> {
 
 impl<E: Engine, S: Spawner> Region<E, S> {
     fn spawn(engine: Rc<E>, cfg: Config, region_id: u64) -> RegionHandle {
-        let (tx, rx) = mpsc::channel(cfg.max_pending_raft_message);
+        // NOTE: When the queuing request is 2x the max inflight message count, it may
+        // stall all requests (for every region). Should we make the channel buffer
+        // longer?
+        let (tx, rx) = mpsc::channel(cfg.max_inflight_raft_message);
         let quota = Arc::new(Semaphore::new(cfg.max_inflight_raft_message));
         let handle = RegionHandle { tx };
         let this = Self {
@@ -325,7 +375,7 @@ impl<E: Engine, S: Spawner> Region<E, S> {
 #[cfg(test)]
 mod test {
 
-    use std::{convert::identity, iter::IntoIterator, time::Duration};
+    use std::{convert::identity, iter::IntoIterator, sync::atomic::AtomicUsize, time::Duration};
 
     use engine_rocks::RocksEngineIterator;
     use engine_traits::{Iterator, ALL_CFS, CF_DEFAULT, CF_WRITE};
@@ -333,7 +383,10 @@ mod test {
     use kvproto::kvrpcpb::Context;
     use tempfile::TempDir;
     use tikv_kv::{Engine, Modify, RocksEngine, SnapContext, Snapshot, WriteData, WriteEvent};
-    use tokio::runtime::{Builder, Runtime};
+    use tokio::{
+        runtime::{Builder, Runtime},
+        sync::oneshot,
+    };
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::{Config, Global, Handle as GlobalHandle};
@@ -517,7 +570,8 @@ mod test {
     }
 
     #[test]
-    // Clippy doesn't know about the romantic lazy evaluation ;)
+    // Clippy doesn't know about the romantic relationship between lazy evaluation and
+    // side-effective ;)
     #[allow(clippy::needless_collect)]
     fn test_inflight_max() {
         let mut suite = create_applier(Config {
@@ -551,5 +605,55 @@ mod test {
         suite.wait(fut);
 
         suite.check("inflight_max");
+    }
+
+    #[test]
+    fn test_gc() {
+        let mut suite = create_applier(Config {
+            region_writer_max_idle_time: Duration::from_millis(100),
+            ..Default::default()
+        });
+        let load = |x: &AtomicUsize| x.load(std::sync::atomic::Ordering::SeqCst);
+
+        let b1 = suite.batch(1, |t| {
+            t("where is the sun", "it is in the clean sky");
+            t("where are the words", "it is in some language model");
+            t(
+                "where is the language model",
+                "I dunno, these sentences are generated by a human.",
+            );
+        });
+        let b2 = suite.batch(2, |t| {
+            t("...and this case needs two batches", "why?");
+            t(
+                "It is by... tradition.",
+                "If a case is TOO short, who will believe it is effective?",
+            );
+            t(
+                "Perhaps we should make the `RocksEngine` be able to distinguish requests.",
+                "So...",
+            );
+            t(
+                "We can block `b2` but not for `b1`",
+                "then we can check there should be only one running worker.",
+            );
+        });
+        assert_eq!(suite.wait(suite.handle.inspect()), (0, 0));
+        fail::cfg("rockskv_async_write", "sleep(5000)").unwrap();
+        let fut = suite.send_to_applier(std::iter::once(b1));
+        assert_eq!(suite.wait(suite.handle.inspect()), (1, 1));
+        let fut2 = suite.send_to_applier(std::iter::once(b2));
+        assert_eq!(suite.wait(suite.handle.inspect()), (2, 2));
+
+        fail::cfg("rockskv_async_write", "off").unwrap();
+        suite.wait(async move {
+            fut.await;
+            fut2.await;
+        });
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(suite.wait(suite.handle.inspect()), (0, 2));
+
+        suite.wait(suite.handle.gc_hint());
+        assert_eq!(suite.wait(suite.handle.inspect()), (0, 0));
     }
 }
