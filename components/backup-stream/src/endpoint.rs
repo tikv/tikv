@@ -1069,7 +1069,7 @@ impl fmt::Debug for RegionCheckpointOperation {
 
             Self::Subscribe(_) => f.debug_tuple("Subscription").finish(),
             Self::Resolved { checkpoints, .. } => {
-                f.debug_tuple("Resolve").field(checkpoints).finish()
+                f.debug_tuple("Resolved").field(checkpoints).finish()
             }
             Self::PrepareMinTsForResolve => f.debug_tuple("PrepareMinTsForResolve").finish(),
             Self::Resolve { min_ts, .. } => {
