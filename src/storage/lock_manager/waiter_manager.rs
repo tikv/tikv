@@ -32,7 +32,7 @@ use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*
 use crate::storage::{
     lock_manager::{
         CancellationCallback, DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken,
-        UpdateWaitForEvent, WaitTimeout,
+        UpdateWaiterEvent, WaitTimeout,
     },
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp},
     txn::Error as TxnError,
@@ -122,8 +122,8 @@ pub enum Task {
     RemoveLockWait {
         token: LockWaitToken,
     },
-    UpdateWaitFor {
-        events: Vec<UpdateWaitForEvent>,
+    UpdateWaiter {
+        events: Vec<UpdateWaiterEvent>,
     },
     Dump {
         cb: Callback,
@@ -169,7 +169,7 @@ impl Display for Task {
             Task::RemoveLockWait { token } => {
                 write!(f, "waking up txns waiting for token {:?}", token)
             }
-            Task::UpdateWaitFor { events } => {
+            Task::UpdateWaiter { events } => {
                 write!(f, "updating wait info {:?}", events)
             }
             Task::Dump { .. } => write!(f, "dump"),
@@ -342,7 +342,7 @@ impl WaitTable {
 
     fn update_waiter(
         &mut self,
-        update_event: &UpdateWaitForEvent,
+        update_event: &UpdateWaiterEvent,
     ) -> Option<(KeyLockWaitInfo, DiagnosticContext)> {
         let waiter = self.waiter_pool.get_mut(&update_event.token)?;
 
@@ -436,11 +436,11 @@ impl Scheduler {
         self.notify_scheduler(Task::RemoveLockWait { token });
     }
 
-    pub fn update_wait_for(&self, events: Vec<UpdateWaitForEvent>) {
+    pub fn update_waiter(&self, events: Vec<UpdateWaiterEvent>) {
         if events.is_empty() {
             return;
         }
-        self.notify_scheduler(Task::UpdateWaitFor { events });
+        self.notify_scheduler(Task::UpdateWaiter { events });
     }
 
     pub fn dump_wait_table(&self, cb: Callback) -> bool {
@@ -538,7 +538,7 @@ impl WaiterManager {
             .clean_up_wait_for(start_ts, wait_info);
     }
 
-    fn handle_update_wait_for(&mut self, events: Vec<UpdateWaitForEvent>) {
+    fn update_waiter(&mut self, events: Vec<UpdateWaiterEvent>) {
         let mut wait_table = self.wait_table.borrow_mut();
         for event in events {
             let previous_wait_info = wait_table.update_waiter(&event);
@@ -621,8 +621,8 @@ impl FutureRunnable<Task> for WaiterManager {
                 self.handle_remove_lock_wait(token);
                 TASK_COUNTER_METRICS.wake_up.inc();
             }
-            Task::UpdateWaitFor { events } => {
-                self.handle_update_wait_for(events);
+            Task::UpdateWaiter { events } => {
+                self.update_waiter(events);
                 TASK_COUNTER_METRICS.update_wait_for.inc();
             }
             Task::Dump { cb } => {

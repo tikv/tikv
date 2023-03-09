@@ -37,7 +37,6 @@ use self::{
     lock_waiting_queue::{
         DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues, UpdateLockWaitResult,
     },
-    // DiagnosticContext, KeyLockWaitInfo, LockWaitToken, UpdateWaitForEvent, WaitTimeout,
     waiter_manager::{Callback, Waiter, WaiterManager},
 };
 use super::txn::commands::WriteResultLockInfo;
@@ -301,8 +300,8 @@ impl LockManagerTrait for LockManager {
         }
     }
 
-    fn update_wait_for(&self, updated_items: Vec<UpdateWaitForEvent>) {
-        self.waiter_mgr_scheduler.update_wait_for(updated_items);
+    fn update_waiter(&self, updated_items: Vec<UpdateWaiterEvent>) {
+        self.waiter_mgr_scheduler.update_waiter(updated_items);
     }
 
     fn remove_lock_wait(&self, token: LockWaitToken) {
@@ -441,8 +440,9 @@ impl LockWaitToken {
     }
 }
 
+// info needed to update the waiter in Waiter Manager
 #[derive(Debug)]
-pub struct UpdateWaitForEvent {
+pub struct UpdateWaiterEvent {
     pub token: LockWaitToken,
     pub start_ts: TimeStamp,
     pub is_first_lock: bool,
@@ -483,7 +483,7 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
         diag_ctx: DiagnosticContext,
     );
 
-    fn update_wait_for(&self, updated_items: Vec<UpdateWaitForEvent>);
+    fn update_waiter(&self, updated_items: Vec<UpdateWaiterEvent>);
 
     /// Remove a waiter specified by token.
     fn remove_lock_wait(&self, token: LockWaitToken);
@@ -623,7 +623,7 @@ impl LockManagerTrait for MockLockManager {
             .insert(token, (wait_info, cancel_callback));
     }
 
-    fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
+    fn update_waiter(&self, _updated_items: Vec<UpdateWaiterEvent>) {}
 
     fn remove_lock_wait(&self, _token: LockWaitToken) {}
 
@@ -794,7 +794,7 @@ pub mod proxy_test {
                 .unwrap();
         }
 
-        fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
+        fn update_waiter(&self, _updated_items: Vec<UpdateWaiterEvent>) {}
 
         fn remove_lock_wait(&self, token: LockWaitToken) {
             self.tx.lock().send(Msg::RemoveLockWait { token }).unwrap();

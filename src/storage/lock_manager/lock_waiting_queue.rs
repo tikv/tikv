@@ -76,7 +76,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     lock_manager::{
         lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
-        KeyLockWaitInfo, LockDigest, LockWaitToken, UpdateWaitForEvent,
+        KeyLockWaitInfo, LockDigest, LockWaitToken, UpdateWaiterEvent,
     },
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
@@ -614,7 +614,7 @@ impl LockWaitQueues {
                 key_state.current_lock = lock_info;
                 update_wait_for_events.reserve(key_state.queue.len());
                 for (&token, entry) in key_state.queue.iter() {
-                    let event = UpdateWaitForEvent {
+                    let event = UpdateWaiterEvent {
                         token,
                         start_ts: entry.parameters.start_ts,
                         is_first_lock: entry.parameters.is_first_lock,
@@ -673,9 +673,9 @@ impl LockWaitQueues {
 
 // The result should be updated in the lock manager.
 #[must_use]
-pub struct UpdateLockWaitResult(Vec<UpdateWaitForEvent>);
+pub struct UpdateLockWaitResult(Vec<UpdateWaiterEvent>);
 
-impl From<UpdateLockWaitResult> for Vec<UpdateWaitForEvent> {
+impl From<UpdateLockWaitResult> for Vec<UpdateWaiterEvent> {
     fn from(result: UpdateLockWaitResult) -> Self {
         result.0
     }
@@ -1269,7 +1269,7 @@ mod tests {
 
         b.iter(|| {
             let res = queues.update_lock_wait(lock_info.clone());
-            lock_mgr.update_wait_for(res.into());
+            lock_mgr.update_waiter(res.into());
         });
     }
 
@@ -1293,7 +1293,7 @@ mod tests {
 
         b.iter(|| {
             let res = queues.update_lock_wait(lock_info.clone());
-            lock_mgr.update_wait_for(res.into())
+            lock_mgr.update_waiter(res.into())
         });
     }
 }
