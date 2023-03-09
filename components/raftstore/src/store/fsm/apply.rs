@@ -3242,6 +3242,11 @@ where
         ctx: &mut ApplyContext<EK>,
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        fail_point!(
+            "before_exec_batch_switch_witness",
+            self.id() == 2,
+            |_| unimplemented!()
+        );
         assert!(request.has_switch_witnesses());
         let switches = request
             .get_switch_witnesses()
