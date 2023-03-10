@@ -151,6 +151,8 @@ const SYSTEM_BUSY_THRESHOLD: f64 = 0.80;
 const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
 // pace of cpu quota adjustment
 const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
+// the max wait time for the about to shutdown hook.
+const ABOUT_TO_SHUTDOWN_WAIT_TIME_FOR_EACH_SERVICE: Duration = Duration::from_secs(60);
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
@@ -1066,7 +1068,7 @@ where
                     .clone(),
                 Arc::clone(&self.security_mgr),
             );
-            backup_stream_worker.start(backup_stream_endpoint);
+            backup_stream_worker.start_with_lifetime_hooks(backup_stream_endpoint);
             self.to_stop.push(backup_stream_worker);
             Some(backup_stream_scheduler)
         } else {
@@ -1717,7 +1719,10 @@ where
         }
     }
 
-    fn stop(self) {
+    fn stop(mut self) {
+        self.to_stop
+            .iter_mut()
+            .for_each(|s| s.as_mut().about_to_stop());
         tikv_util::thread_group::mark_shutdown();
         let mut servers = self.servers.unwrap();
         servers
@@ -2004,6 +2009,7 @@ fn get_lock_dir() -> String {
 /// a list of these in `TiKV`, rather than storing each component individually.
 pub(crate) trait Stop {
     fn stop(self: Box<Self>);
+    fn about_to_stop(self: &mut Self) {}
 }
 
 impl<R> Stop for StatusServer<R>
@@ -2024,6 +2030,13 @@ impl Stop for Worker {
 impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     fn stop(self: Box<Self>) {
         self.stop_worker();
+    }
+
+    fn about_to_stop(self: &mut Self) {
+        if self.need_execute_lifetime_hooks() {
+            self.scheduler()
+                .about_to_stop(ABOUT_TO_SHUTDOWN_WAIT_TIME_FOR_EACH_SERVICE);
+        }
     }
 }
 
