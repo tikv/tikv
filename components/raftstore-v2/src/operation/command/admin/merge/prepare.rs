@@ -344,7 +344,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.add_message(msg);
             pending_target.insert(p.get_id());
         }
-        self.merge_context_mut().prepare_status = Some(PrepareStatus::WaitForTrimStatus {
+        let status = &mut self.merge_context_mut().prepare_status;
+        // Shouldn't enter this call if trim check is already underway.
+        assert!(status.is_none());
+        *status = Some(PrepareStatus::WaitForTrimStatus {
             start_time: Instant::now_coarse(),
             pending_source,
             pending_target,
@@ -370,17 +373,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             && req.is_some()
         {
             assert!(resp.has_availability_context());
-            if resp.get_availability_context().get_unavailable() {
-                self.take_merge_context();
-                return;
-            }
             let from_region = resp.get_availability_context().get_from_region_id();
             let from_epoch = resp.get_availability_context().get_from_region_epoch();
+            let unavailable = resp.get_availability_context().get_unavailable();
             let trimmed = resp.get_availability_context().get_trimmed();
             let target = req.as_ref().unwrap().get_admin_request().get_prepare_merge().get_target();
             if  from_region == region_id && util::is_region_epoch_equal(from_epoch, &region_epoch)
             {
-                if !trimmed {
+                if unavailable {
+                    info!(
+                        self.logger,
+                        "cancel merge because source peer is unavailable";
+                        "region_id" => from_region,
+                        "peer_id" => from_peer,
+                    );
+                    self.take_merge_context();
+                    return;
+                } else if !trimmed {
+                    info!(
+                        self.logger,
+                        "cancel merge because source peer is not trimmed";
+                        "region_id" => from_region,
+                        "peer_id" => from_peer,
+                    );
                     self.take_merge_context();
                     return;
                 } else {
@@ -388,7 +403,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             } else if from_region == target.get_id() && util::is_region_epoch_equal(from_epoch, target.get_region_epoch())
             {
-                if !trimmed {
+                if unavailable {
+                    info!(
+                        self.logger,
+                        "cancel merge because target peer is unavailable";
+                        "region_id" => from_region,
+                        "peer_id" => from_peer,
+                    );
+                    self.take_merge_context();
+                    return;
+                } else if !trimmed {
+                    info!(
+                        self.logger,
+                        "cancel merge because target peer is not trimmed";
+                        "region_id" => from_region,
+                        "peer_id" => from_peer,
+                    );
                     self.take_merge_context();
                     return;
                 } else {
@@ -425,11 +455,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     Err(Error::PendingPrepareMerge)
                 }
             }
+            // Shouldn't reach here after calling `already_checked_pessimistic_locks` first.
+            Some(PrepareStatus::WaitForFence { .. }) => unreachable!(),
             Some(PrepareStatus::Applied(state)) => Err(box_err!(
                 "another merge is in-progress, merge_state: {:?}.",
                 state
             )),
-            _ => unreachable!(),
+            None => Ok(None),
         }
     }
 
@@ -493,7 +525,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "another merge is in-progress, merge_state: {:?}.",
                 state
             )),
-            _ => unreachable!(),
+            _ => Ok(None),
         }
     }
 
