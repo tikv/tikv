@@ -251,7 +251,7 @@ impl SubscriptionTracer {
                     let contains = rs.contains(&region_id);
                     if !contains {
                         crate::metrics::LOST_LEADER_REGION.inc();
-                    }    
+                    }
                     contains.then(|| ResolveResult::resolve(sub, min_ts))
                 }
                 SubscribeState::Pending(r) => {warn!("pending region, skip resolving"; utils::slog_region(r)); None},
