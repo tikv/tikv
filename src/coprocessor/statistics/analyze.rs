@@ -690,7 +690,7 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
 
     fn pick_sample(&mut self) -> bool {
         let cur_rng = self.base.rng.gen_range(0.0, 1.0);
-        return cur_rng >= self.sample_rate;
+        cur_rng >= self.sample_rate
     }
 
     fn push_sample(&mut self, data: &[Vec<u8>]) {
