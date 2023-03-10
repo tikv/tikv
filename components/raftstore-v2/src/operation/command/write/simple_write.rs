@@ -544,7 +544,7 @@ mod tests {
             .collect();
         encoder.ingest(exp.clone());
         let bin = encoder.encode();
-        let req_encoder = SimpleWriteReqEncoder::new(header.clone(), bin, 0, false);
+        let req_encoder = SimpleWriteReqEncoder::new(header, bin, 0, false);
         let (bytes, _) = req_encoder.encode();
         let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
         let write = decoder.next().unwrap();
