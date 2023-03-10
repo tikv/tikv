@@ -11,6 +11,10 @@ use tikv_util::{box_err, codec};
 
 use crate::{Error, PdFuture, Result};
 
+/// The etcd INF end key.
+/// Unlike TiKV, they have chosen the slice `[0u8]` as the infinity.
+const INF: [u8; 1] = [0u8];
+
 /// A Get request to the meta storage.
 #[repr(transparent)]
 #[derive(Clone, Debug)]
@@ -35,7 +39,10 @@ impl Get {
     /// Enhance the query, make it be able to query the prefix of keys.
     /// The prefix is the key passed to the method [`of`](Get::of).
     pub fn prefixed(mut self) -> Self {
-        let next = codec::next_prefix_of(self.inner.key.clone());
+        let mut next = codec::next_prefix_of(self.inner.key.clone());
+        if next.is_empty() {
+            next = INF.to_vec();
+        }
         self.inner.set_range_end(next);
         self
     }
@@ -105,7 +112,10 @@ impl Watch {
 
     /// Enhance the request to allow it watch keys with the same prefix.
     pub fn prefixed(mut self) -> Self {
-        let next = codec::next_prefix_of(self.inner.key.clone());
+        let mut next = codec::next_prefix_of(self.inner.key.clone());
+        if next.is_empty() {
+            next = INF.to_vec();
+        }
         self.inner.set_range_end(next);
         self
     }
