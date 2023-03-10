@@ -673,14 +673,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     fn report_persist_log_duration<T>(
         &self,
         ctx: &mut StoreContext<EK, ER, T>,
-        from: u64,
-        to: u64,
+        old_index: u64,
+        new_index: u64,
     ) {
-        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || from >= to {
+        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || old_index >= new_index {
             return;
         }
         let now = Instant::now();
-        for i in from + 1..to {
+        for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
                     for tracker in trackers {
@@ -694,12 +694,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn report_commit_log_duration<T>(&self, ctx: &mut StoreContext<EK, ER, T>, from: u64, to: u64) {
-        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || from >= to {
+    fn report_commit_log_duration<T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        old_index: u64,
+        new_index: u64,
+    ) {
+        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || old_index >= new_index {
             return;
         }
         let now = Instant::now();
-        for i in from + 1..to {
+        for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
                     let commit_persisted = i <= self.persisted_index();

@@ -899,6 +899,13 @@ where
     /// the request index for retrying.
     pub request_index: u64,
 
+    /// It's used to identify the situation where the region worker is
+    /// generating and sending snapshots when the newly elected leader by Raft
+    /// applies the switch witness cmd which commited before the election. This
+    /// flag will prevent immediate data clearing and will be cleared after
+    /// the successful transfer of leadership.
+    pub delay_clean_data: bool,
+
     /// When the witness becomes non-witness, it need to actively request a
     /// snapshot from the leader, In order to avoid log lag, we need to reject
     /// the leader's `MsgAppend` request unless the `term` of the `last index`
@@ -1133,6 +1140,7 @@ where
             pending_remove: false,
             wait_data,
             request_index: last_index,
+            delay_clean_data: false,
             should_reject_msgappend: false,
             should_wake_up: false,
             force_leader: None,
@@ -2323,6 +2331,10 @@ where
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
                     self.clear_in_memory_pessimistic_locks();
+                    if self.peer.is_witness && self.delay_clean_data {
+                        let _ = self.get_store().clear_data();
+                        self.delay_clean_data = false;
+                    }
                 }
                 _ => {}
             }
@@ -2614,6 +2626,7 @@ where
                     ctx.apply_router
                         .schedule_task(self.region_id, ApplyTask::Recover(self.region_id));
                     self.wait_data = false;
+                    self.should_reject_msgappend = false;
                     return false;
                 }
             }
@@ -5730,6 +5743,7 @@ fn is_request_urgent(req: &RaftCmdRequest) -> bool {
             | AdminCmdType::PrepareMerge
             | AdminCmdType::CommitMerge
             | AdminCmdType::RollbackMerge
+            | AdminCmdType::BatchSwitchWitness
     )
 }
 
@@ -5828,6 +5842,7 @@ mod tests {
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
+            AdminCmdType::BatchSwitchWitness,
         ];
         for tp in AdminCmdType::values() {
             let mut req = RaftCmdRequest::default();

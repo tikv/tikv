@@ -706,6 +706,24 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         }
     }
 
+    fn tablet_snapshot(
+        &mut self,
+        ctx: RpcContext<'_>,
+        stream: RequestStream<TabletSnapshotRequest>,
+        sink: DuplexSink<TabletSnapshotResponse>,
+    ) {
+        let task = SnapTask::RecvTablet { stream, sink };
+        if let Err(e) = self.snap_scheduler.schedule(task) {
+            let err_msg = format!("{}", e);
+            let sink = match e.into_inner() {
+                SnapTask::Recv { sink, .. } => sink,
+                _ => unreachable!(),
+            };
+            let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);
+            ctx.spawn(sink.fail(status).map(|_| ()));
+        }
+    }
+
     #[allow(clippy::collapsible_else_if)]
     fn split_region(
         &mut self,
