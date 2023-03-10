@@ -2733,7 +2733,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0561adc3754362675cc08b5203d8b6444e645395"
+source = "git+https://github.com/pingcap/kvproto.git#60b33e619c70d8abe151f086a19a82895965f28f"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2862,7 +2862,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b2cd42588ac62e40e297fea56a2286c0c389aade"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2881,7 +2881,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b2cd42588ac62e40e297fea56a2286c0c389aade"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3579,9 +3579,9 @@ checksum = "77af24da69f9d9341038eba93a073b1fdaaa1b788221b00a69bce9e762cb32de"
 
 [[package]]
 name = "openssl-src"
-version = "111.20.0+1.1.1o"
+version = "111.25.0+1.1.1t"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92892c4f87d56e376e469ace79f1128fdaded07646ddf73aa0be4706ff712dec"
+checksum = "3173cd3626c43e3854b1b727422a276e568d9ec5fe8cec197822cf52cfb743d6"
 dependencies = [
  "cc",
 ]
@@ -4384,6 +4384,7 @@ dependencies = [
  "slog",
  "slog-global",
  "smallvec",
+ "sst_importer",
  "tempfile",
  "test_pd",
  "test_util",
@@ -4798,7 +4799,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b2cd42588ac62e40e297fea56a2286c0c389aade"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -6700,7 +6701,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#614f3ffd42ddc84b78ff59d65f105f2099a6f1b1"
+source = "git+https://github.com/pingcap/tipb.git#955fbdc879517f16b7a2f5967f143b92a6ab03dd"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7491,7 +7492,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#bcf431a2619c06ab7fa0c72073a0c775646c484f"
+source = "git+https://github.com/tikv/yatp.git?branch=master#7ed25299d60a5338bea4ac0ed7470887ab74a010"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",

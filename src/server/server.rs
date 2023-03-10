@@ -32,6 +32,7 @@ use super::{
     resolve::StoreAddrResolver,
     service::*,
     snap::{Runner as SnapHandler, Task as SnapTask},
+    tablet_snap::SnapCacheBuilder,
     transport::ServerTransport,
     Config, Error, Result,
 };
@@ -251,6 +252,7 @@ where
         &mut self,
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
+        snap_cache_builder: impl SnapCacheBuilder + Clone + 'static,
     ) -> Result<()> {
         match self.snap_mgr.clone() {
             Either::Left(mgr) => {
@@ -267,6 +269,7 @@ where
                 let snap_runner = TabletRunner::new(
                     self.env.clone(),
                     mgr,
+                    snap_cache_builder,
                     self.raft_router.clone(),
                     security_mgr,
                     cfg,
@@ -458,7 +461,7 @@ mod tests {
     use crate::{
         config::CoprReadPoolConfig,
         coprocessor::{self, readpool_impl},
-        server::{raftkv::RaftRouterWrap, TestRaftStoreRouter},
+        server::{raftkv::RaftRouterWrap, tablet_snap::NoSnapshotCache, TestRaftStoreRouter},
         storage::{lock_manager::MockLockManager, TestEngineBuilder, TestStorageBuilderApiV1},
     };
 
@@ -589,7 +592,7 @@ mod tests {
         .unwrap();
 
         server.build_and_bind().unwrap();
-        server.start(cfg, security_mgr).unwrap();
+        server.start(cfg, security_mgr, NoSnapshotCache).unwrap();
 
         let mut trans = server.transport();
         router.report_unreachable(0, 0).unwrap();

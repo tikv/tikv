@@ -524,7 +524,12 @@ where
             panic!("{} unexpected state: {:?}", self.tag, *snap_state);
         }
 
-        if *tried_cnt >= MAX_SNAP_TRY_CNT {
+        let max_snap_try_cnt = (|| {
+            fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
+            MAX_SNAP_TRY_CNT
+        })();
+
+        if *tried_cnt >= max_snap_try_cnt {
             let cnt = *tried_cnt;
             *tried_cnt = 0;
             return Err(raft::Error::Store(box_err!(

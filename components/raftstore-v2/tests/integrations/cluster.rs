@@ -23,6 +23,7 @@ use engine_test::{
 use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
+    kvrpcpb::ApiVersion,
     metapb::{self, RegionEpoch, Store},
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request},
     raft_serverpb::RaftMessage,
@@ -44,6 +45,7 @@ use raftstore_v2::{
 };
 use resource_metering::CollectorRegHandle;
 use slog::{debug, o, Logger};
+use sst_importer::SstImporter;
 use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::{
@@ -297,6 +299,15 @@ impl RunningState {
         let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap()).unwrap();
         let coprocessor_host =
             CoprocessorHost::new(router.store_router().clone(), cop_cfg.value().clone());
+        let importer = Arc::new(
+            SstImporter::new(
+                &Default::default(),
+                path.join("importer"),
+                None,
+                ApiVersion::V1,
+            )
+            .unwrap(),
+        );
 
         let background = Worker::new("background");
         let pd_worker = LazyWorker::new("pd-worker");
@@ -318,6 +329,7 @@ impl RunningState {
                 CollectorRegHandle::new_for_test(),
                 background.clone(),
                 pd_worker,
+                importer,
             )
             .unwrap();
 
@@ -503,8 +515,8 @@ impl Cluster {
         Cluster::with_configs(count, config, None)
     }
 
-    pub fn with_cop_cfg(coprocessor_cfg: CopConfig) -> Cluster {
-        Cluster::with_configs(1, None, Some(coprocessor_cfg))
+    pub fn with_cop_cfg(config: Option<Config>, coprocessor_cfg: CopConfig) -> Cluster {
+        Cluster::with_configs(1, config, Some(coprocessor_cfg))
     }
 
     pub fn with_configs(count: usize, config: Option<Config>, cop_cfg: Option<CopConfig>) -> Self {

@@ -20,7 +20,7 @@ use tikv_util::{sys::thread::StdThreadBuildWrapper, time::Limiter};
 use super::singleton_flow_controller::{
     FlowChecker, FlowControlFactorStore, Msg, RATIO_SCALE_FACTOR, TICK_DURATION,
 };
-use crate::storage::config::FlowControlConfig;
+use crate::storage::{config::FlowControlConfig, metrics::*};
 
 pub struct TabletFlowFactorStore<EK> {
     registry: TabletRegistry<EK>,
@@ -156,15 +156,12 @@ impl FlowInfoDispatcher {
 
                     let msg = flow_info_receiver.recv_deadline(deadline);
                     match msg.clone() {
-                        Ok(FlowInfo::L0(_cf, _, region_id, suffix))
-                        | Ok(FlowInfo::L0Intra(_cf, _, region_id, suffix))
-                        | Ok(FlowInfo::Flush(_cf, _, region_id, suffix))
-                        | Ok(FlowInfo::Compaction(_cf, region_id, suffix)) => {
+                        Ok(FlowInfo::L0(_cf, _, region_id))
+                        | Ok(FlowInfo::L0Intra(_cf, _, region_id))
+                        | Ok(FlowInfo::Flush(_cf, _, region_id))
+                        | Ok(FlowInfo::Compaction(_cf, region_id)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             if let Some(checker) = checkers.get_mut(&region_id) {
-                                if checker.tablet_suffix() != suffix {
-                                    continue;
-                                }
                                 checker.on_flow_info_msg(enabled, msg);
                             }
                         }
@@ -175,10 +172,14 @@ impl FlowInfoDispatcher {
                                 checker.on_flow_info_msg(enabled, msg);
                             }
                         }
-                        Ok(FlowInfo::Created(region_id, suffix)) => {
+                        Ok(FlowInfo::Created(region_id)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             match checkers.entry(region_id) {
-                                HashMapEntry::Occupied(e) => e.into_mut(),
+                                HashMapEntry::Occupied(e) => {
+                                    let val = e.into_mut();
+                                    val.inc();
+                                    val
+                                }
                                 HashMapEntry::Vacant(e) => {
                                     let engine = TabletFlowFactorStore::new(registry.clone());
                                     let mut v = limiters.as_ref().write().unwrap();
@@ -193,7 +194,6 @@ impl FlowInfoDispatcher {
                                     ));
                                     e.insert(FlowChecker::new_with_region_id(
                                         region_id,
-                                        suffix,
                                         &config,
                                         engine,
                                         limiter.1.clone(),
@@ -202,12 +202,14 @@ impl FlowInfoDispatcher {
                                 }
                             };
                         }
-                        Ok(FlowInfo::Destroyed(region_id, suffix)) => {
+                        Ok(FlowInfo::Destroyed(region_id)) => {
                             let mut remove_limiter = false;
                             {
                                 let mut checkers = flow_checkers.as_ref().write().unwrap();
-                                if let Some(checker) = checkers.get_mut(&region_id) {
-                                    if checker.tablet_suffix() == suffix {
+                                if let Some(checker) = checkers.get(&region_id) {
+                                    // if the previous value is 1, then the updated reference count
+                                    // will be 0
+                                    if checker.dec() == 1 {
                                         checkers.remove(&region_id);
                                         remove_limiter = true;
                                     }
@@ -219,8 +221,22 @@ impl FlowInfoDispatcher {
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
+                            let mut total_rate = 0.0;
+                            let mut cf_throttle_flags = HashMap::default();
                             for checker in (*checkers).values_mut() {
-                                checker.update_statistics();
+                                let (rate, tablet_cf_throttle_flags) = checker.update_statistics();
+                                total_rate += rate;
+                                for (key, val) in tablet_cf_throttle_flags {
+                                    if let Some(value) = cf_throttle_flags.get_mut(key) {
+                                        *value += val;
+                                    } else {
+                                        cf_throttle_flags.insert(key, val);
+                                    }
+                                }
+                            }
+                            SCHED_WRITE_FLOW_GAUGE.set(total_rate as i64);
+                            for (cf, val) in cf_throttle_flags {
+                                SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(val);
                             }
                             deadline = std::time::Instant::now() + TICK_DURATION;
                         }
@@ -353,25 +369,65 @@ mod tests {
         let tablet_suffix = 5_u64;
         let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
         reg.load(tablet_context, false).unwrap();
-        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
         test_flow_controller_basic_impl(&flow_controller, region_id);
-        tx.send(FlowInfo::Destroyed(region_id, tablet_suffix))
+        tx.send(FlowInfo::Destroyed(region_id)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+    }
+
+    #[test]
+    fn test_tablet_flow_controller_life_cycle() {
+        const WAIT_TICK: Duration = Duration::from_millis(100);
+        let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
+        let region_id = 5_u64;
+        let tablet_suffix = 5_u64;
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        reg.load(tablet_context, false).unwrap();
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        for _ in 0..30 {
+            std::thread::sleep(WAIT_TICK);
+            flow_controller.set_speed_limit(region_id, 1000.0);
+            if !flow_controller.is_unlimited(region_id) {
+                break;
+            }
+        }
+        tx.send(FlowInfo::Destroyed(region_id)).unwrap();
+        for _ in 0..30 {
+            std::thread::sleep(WAIT_TICK);
+            if flow_controller.is_unlimited(region_id) {
+                break;
+            }
+        }
+        // the region's limiter is removed so it's unlimited
+        assert!(flow_controller.is_unlimited(region_id));
+
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        for _ in 0..30 {
+            std::thread::sleep(WAIT_TICK);
+            flow_controller.set_speed_limit(region_id, 1000.0);
+            if !flow_controller.is_unlimited(region_id) {
+                break;
+            }
+        }
+        tx.send(FlowInfo::Destroyed(region_id)).unwrap();
+        std::thread::sleep(TICK_DURATION);
+        // the region's limiter should not be removed as the reference count is still 1
+        assert!(!flow_controller.is_unlimited(region_id));
+        tx.send(FlowInfo::Destroyed(region_id)).unwrap();
+        for _ in 0..30 {
+            std::thread::sleep(WAIT_TICK);
+            if flow_controller.is_unlimited(region_id) {
+                break;
+            }
+        }
+        // the region's limiter is removed so it's unlimited
+        assert!(flow_controller.is_unlimited(region_id));
+        // no-op it should not crash
+        tx.send(FlowInfo::Destroyed(region_id)).unwrap();
     }
 
     #[test]
@@ -382,16 +438,10 @@ mod tests {
         let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
         let mut cached = reg.load(tablet_context, false).unwrap();
         let stub = cached.latest().unwrap().clone();
-        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, region_id, tablet_suffix);
+        test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, region_id);
     }
 
     #[test]
@@ -402,16 +452,10 @@ mod tests {
         let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
         let mut cached = reg.load(tablet_context, false).unwrap();
         let stub = cached.latest().unwrap().clone();
-        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        test_flow_controller_l0_impl(&flow_controller, &stub, &tx, region_id, tablet_suffix);
+        test_flow_controller_l0_impl(&flow_controller, &stub, &tx, region_id);
     }
 
     #[test]
@@ -422,22 +466,10 @@ mod tests {
         let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
         let mut cached = reg.load(tablet_context, false).unwrap();
         let stub = cached.latest().unwrap().clone();
-        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
 
-        test_flow_controller_pending_compaction_bytes_impl(
-            &flow_controller,
-            &stub,
-            &tx,
-            region_id,
-            tablet_suffix,
-        );
+        test_flow_controller_pending_compaction_bytes_impl(&flow_controller, &stub, &tx, region_id);
     }
 }

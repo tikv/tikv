@@ -240,7 +240,7 @@ impl Simulator for NodeCluster {
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
-                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();
@@ -268,7 +268,7 @@ impl Simulator for NodeCluster {
         {
             let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             let snap_mgr = SnapManagerBuilder::default()
-                .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+                .max_write_bytes_per_sec(cfg.server.snap_io_max_bytes_per_sec.0 as i64)
                 .max_total_size(cfg.server.snap_max_total_size.0)
                 .encryption_key_manager(key_manager)
                 .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
@@ -348,7 +348,7 @@ impl Simulator for NodeCluster {
         );
 
         let region_split_size = cfg.coprocessor.region_split_size();
-        let enable_region_bucket = cfg.coprocessor.enable_region_bucket;
+        let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg

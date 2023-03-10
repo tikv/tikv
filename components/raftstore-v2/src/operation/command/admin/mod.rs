@@ -2,6 +2,7 @@
 
 mod compact_log;
 mod conf_change;
+mod merge;
 mod split;
 mod transfer_leader;
 
@@ -10,8 +11,13 @@ use compact_log::CompactLogResult;
 use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
+use merge::prepare::PrepareMergeResult;
+pub use merge::MergeContext;
 use protobuf::Message;
-use raftstore::store::{cmd_resp, fsm::apply, msg::ErrorCallback};
+use raftstore::{
+    store::{cmd_resp, fsm::apply, msg::ErrorCallback},
+    Error,
+};
 use slog::info;
 use split::SplitResult;
 pub use split::{
@@ -32,6 +38,7 @@ pub enum AdminCmdResult {
     TransferLeader(u64),
     CompactLog(CompactLogResult),
     UpdateGcPeers(UpdateGcPeersResult),
+    PrepareMerge(PrepareMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -93,6 +100,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             conflict.delay_channel(ch);
             return;
         }
+        if self.proposal_control().has_pending_prepare_merge()
+            && cmd_type != AdminCmdType::PrepareMerge
+            || self.proposal_control().is_merging() && cmd_type != AdminCmdType::RollbackMerge
+        {
+            let resp = cmd_resp::new_error(Error::ProposalInMergingMode(self.region_id()));
+            ch.report_error(resp);
+            return;
+        }
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_writes(ctx);
         let res = if apply::is_conf_change_cmd(&req) {
@@ -124,6 +139,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     let data = req.write_to_bytes().unwrap();
                     self.propose(ctx, data)
                 }
+                AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 _ => unimplemented!(),
             }
         };
