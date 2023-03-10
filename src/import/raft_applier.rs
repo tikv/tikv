@@ -64,6 +64,13 @@ async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> sto
     }
 }
 
+fn extract_unsent_message<T>(x: TrySendError<T>) -> T {
+    match x {
+        TrySendError::Full(x) => x,
+        TrySendError::Closed(x) => x,
+    }
+}
+
 type OnComplete<T> = oneshot::Sender<T>;
 
 #[derive(Debug)]
@@ -155,10 +162,7 @@ impl Handle {
             APPLIER_EVENT
                 .with_label_values(&["global-channel-full"])
                 .inc();
-            match x {
-                TrySendError::Full(x) => x,
-                TrySendError::Closed(x) => x,
-            }
+            extract_unsent_message(x)
         });
         async move {
             if let Some(msg) = msg {
@@ -184,10 +188,7 @@ impl Handle {
             APPLIER_EVENT
                 .with_label_values(&["global-channel-full"])
                 .inc();
-            match x {
-                TrySendError::Full(x) => x,
-                TrySendError::Closed(x) => x,
-            }
+            extract_unsent_message(x)
         });
         async move {
             if let Some(msg) = msg {
@@ -244,22 +245,36 @@ impl RegionHandle {
         cb: OnComplete<storage::Result<()>>,
         start: Instant,
     ) {
-        if let Err(err) = self
+        let remained = self
             .tx
-            .send(RegionMessage::Apply { wb, ctx, cb, start })
-            .await
-        {
-            let (cb, ctx) = match err.0 {
-                RegionMessage::Apply { cb, ctx, .. } => (cb, ctx),
-                #[cfg(test)]
-                _ => unreachable!(),
-            };
+            .try_send(RegionMessage::Apply { wb, ctx, cb, start })
+            .err()
+            .map(extract_unsent_message);
 
-            // Or the receiver may gone, that was ok.
-            let _ = cb.send(Err(box_err!(
-                "failed to send message into region writer (ctx = {:?})",
-                ctx
-            )));
+        let forward_to = move |tx: mpsc::Sender<RegionMessage>, message| async move {
+            if let Err(err) = tx.send(message).await {
+                let (cb, ctx) = match err.0 {
+                    RegionMessage::Apply { cb, ctx, .. } => (cb, ctx),
+                    #[cfg(test)]
+                    _ => unreachable!(),
+                };
+
+                // Or the receiver may gone, that was ok.
+                let _ = cb.send(Err(box_err!(
+                    "failed to send message into region writer (ctx = {:?})",
+                    ctx
+                )));
+            }
+        };
+        match remained {
+            None => return,
+            Some(x) => {
+                let msg_tx = self.tx.clone();
+                APPLIER_EVENT
+                    .with_label_values(&["region-channel-full"])
+                    .inc();
+                forward_to(msg_tx, x).await;
+            }
         }
     }
 }
@@ -363,7 +378,7 @@ impl<E: Engine, S: Spawner> Global<E, S> {
                 }
             })
             .or_insert_with(|| Region::<E, S>::spawn(Rc::clone(eng), *cfg, rid));
-        hnd.forward_write(wb, ctx, cb, start).await;
+        hnd.forward_write::<S>(wb, ctx, cb, start).await;
     }
 }
 
@@ -395,6 +410,11 @@ impl<E: Engine, S: Spawner> Region<E, S> {
         {
             match msg {
                 RegionMessage::Apply { wb, cb, ctx, start } => {
+                    APPLIER_ENGINE_REQUEST
+                        .with_label_values(&["queuing"])
+                        .observe(start.saturating_elapsed_secs());
+                    let start = Instant::now();
+
                     let q = Arc::clone(&self.quota)
                         .acquire_owned()
                         .await
@@ -406,7 +426,7 @@ impl<E: Engine, S: Spawner> Region<E, S> {
 
                     IMPORTER_APPLY_BYTES.observe(write_size as _);
                     APPLIER_ENGINE_REQUEST
-                        .with_label_values(&["request"])
+                        .with_label_values(&["get_permit"])
                         .observe(start.saturating_elapsed_secs());
                     let start = Instant::now();
 
@@ -415,7 +435,7 @@ impl<E: Engine, S: Spawner> Region<E, S> {
                         drop(q);
 
                         APPLIER_ENGINE_REQUEST
-                            .with_label_values(&["done"])
+                            .with_label_values(&["apply"])
                             .observe(start.saturating_elapsed_secs());
                     });
                 }
