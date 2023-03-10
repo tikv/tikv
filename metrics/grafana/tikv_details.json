@@ -31976,7 +31976,14 @@
               "intervalFactor": 1,
               "legendFormat": "swap",
               "refId": "B"
-            }
+            },
+            {
+              "exemplar": true,
+              "expr": "avg(raft_engine_recycled_file_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"})",
+              "intervalFactor": 1,
+              "legendFormat": "recycle",
+              "refId": "C"
+            },
           ],
           "thresholds": [],
           "timeFrom": null,
