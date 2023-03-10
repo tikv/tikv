@@ -618,18 +618,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn finish_destroy<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         info!(self.logger, "peer destroyed");
         let region_id = self.region_id();
-        ctx.router.close(region_id);
         {
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.remove_region(region_id);
             meta.readers.remove(&region_id);
             ctx.tablet_registry.remove(region_id);
         }
+        // Remove tablet first, otherwise in extreme cases, a new peer can be created
+        // and race on tablet record removal and creation.
+        ctx.router.close(region_id);
         if let Some(msg) = self.destroy_progress_mut().finish() {
             // The message will be dispatched to store fsm, which will create a
             // new peer. Ignore error as it's just a best effort.
             let _ = ctx.router.send_raft_message(msg);
         }
+        self.pending_reads_mut().clear_all(Some(region_id));
         self.clear_apply_scheduler();
     }
 }

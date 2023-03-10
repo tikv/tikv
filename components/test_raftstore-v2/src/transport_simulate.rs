@@ -11,6 +11,7 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
+use raft::SnapshotStatus;
 use raftstore::{
     router::handle_send_error,
     store::{cmd_resp, RegionSnapshot, Transport},
@@ -40,6 +41,10 @@ impl<C> SimulateTransport<C> {
 
     pub fn add_filter(&mut self, filter: Box<dyn Filter>) {
         self.filters.wl().push(filter);
+    }
+
+    pub fn filters(&self) -> &Arc<RwLock<Vec<Box<dyn Filter>>>> {
+        &self.filters
     }
 }
 
@@ -102,6 +107,14 @@ pub trait RaftStoreRouter {
     fn send_peer_msg(&self, region_id: u64, msg: PeerMsg) -> Result<()>;
 
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
+
+    /// Reports the sending snapshot status to the peer of the Region.
+    fn report_snapshot_status(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    ) -> RaftStoreResult<()>;
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter for RaftRouter<EK, ER> {
@@ -115,6 +128,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter for RaftRouter<EK, ER> {
         self.send_raft_message(Box::new(msg))
             .map_err(|e| handle_send_error(region_id, e))
     }
+
+    fn report_snapshot_status(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    ) -> RaftStoreResult<()> {
+        self.send_peer_msg(region_id, PeerMsg::SnapshotSent { to_peer_id, status })
+    }
 }
 
 impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
@@ -124,5 +146,15 @@ impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
 
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
+    }
+
+    fn report_snapshot_status(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    ) -> RaftStoreResult<()> {
+        self.ch
+            .report_snapshot_status(region_id, to_peer_id, status)
     }
 }

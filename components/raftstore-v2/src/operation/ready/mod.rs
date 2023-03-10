@@ -340,6 +340,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let msg_type = msg.get_message().get_msg_type();
         let to_peer_id = msg.get_to_peer().get_id();
         let to_store_id = msg.get_to_peer().get_store_id();
+        if msg_type == MessageType::MsgSnapshot {
+            let index = msg.get_message().get_snapshot().get_metadata().get_index();
+            self.update_last_sent_snapshot_index(index);
+        }
 
         trace!(
             self.logger,
@@ -669,14 +673,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     fn report_persist_log_duration<T>(
         &self,
         ctx: &mut StoreContext<EK, ER, T>,
-        from: u64,
-        to: u64,
+        old_index: u64,
+        new_index: u64,
     ) {
-        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || from >= to {
+        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || old_index >= new_index {
             return;
         }
         let now = Instant::now();
-        for i in from + 1..to {
+        for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
                     for tracker in trackers {
@@ -690,12 +694,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn report_commit_log_duration<T>(&self, ctx: &mut StoreContext<EK, ER, T>, from: u64, to: u64) {
-        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || from >= to {
+    fn report_commit_log_duration<T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        old_index: u64,
+        new_index: u64,
+    ) {
+        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || old_index >= new_index {
             return;
         }
         let now = Instant::now();
-        for i in from + 1..to {
+        for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
                     let commit_persisted = i <= self.persisted_index();
@@ -775,6 +784,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // current term to apply the read. So broadcast eagerly to avoid unexpected
                     // latency.
                     self.raft_group_mut().skip_bcast_commit(false);
+                    self.update_last_sent_snapshot_index(
+                        self.raft_group().raft.raft_log.last_index(),
+                    );
 
                     self.txn_context().on_became_leader(
                         ctx,
@@ -798,6 +810,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.storage_mut().cancel_generating_snap(None);
                     self.txn_context()
                         .on_became_follower(self.term(), self.region());
+                    self.update_merge_progress_on_became_follower();
                 }
                 _ => {}
             }

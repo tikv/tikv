@@ -1109,7 +1109,7 @@ mod tests {
 
     #[test]
     fn test_config_validate() {
-        let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
+        let split_size = coprocessor::config::SPLIT_SIZE;
         let mut cfg = Config::new();
         cfg.validate(split_size, false, ReadableSize(0)).unwrap();
         assert_eq!(

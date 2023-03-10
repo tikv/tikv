@@ -22,7 +22,7 @@ use tikv_util::{
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
-    yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder},
+    yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
 };
 use tracker::TrackedFuture;
 use yatp::{
@@ -418,11 +418,13 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     reporter: R,
     engine: E,
     resource_ctl: Option<Arc<ResourceController>>,
+    cleanup_method: CleanupMethod,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
     let raftkv = Arc::new(Mutex::new(engine));
     let builder = YatpPoolBuilder::new(ReporterTicker { reporter })
         .name_prefix(&unified_read_pool_name)
+        .cleanup_method(cleanup_method)
         .stack_size(config.stack_size.0 as usize)
         .thread_count(
             config.min_thread_count,
@@ -765,7 +767,8 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
+        let pool =
+            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -806,7 +809,8 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
+        let pool =
+            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -855,7 +859,8 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
+        let pool =
+            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();

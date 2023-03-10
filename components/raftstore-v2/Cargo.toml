@@ -56,6 +56,7 @@ resource_control = { workspace = true }
 resource_metering = { workspace = true }
 slog = "2.3"
 smallvec = "1.4"
+sst_importer = { workspace = true }
 thiserror = "1.0"
 tikv_util = { workspace = true }
 time = "0.1"
