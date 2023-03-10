@@ -13,10 +13,7 @@ use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
-use raftstore::{
-    router::RaftStoreRouter,
-    store::{CheckLeaderTask, SnapManager},
-};
+use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
 use security::SecurityManager;
 use tikv_util::{
     config::VersionTrack,
@@ -35,6 +32,7 @@ use super::{
     resolve::StoreAddrResolver,
     service::*,
     snap::{Runner as SnapHandler, Task as SnapTask},
+    tablet_snap::SnapCacheBuilder,
     transport::ServerTransport,
     Config, Error, Result,
 };
@@ -42,7 +40,7 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2,
     read_pool::ReadPool,
-    server::{gc_worker::GcWorker, Proxy},
+    server::{gc_worker::GcWorker, tablet_snap::TabletRunner, Proxy},
     storage::{lock_manager::LockManager, Engine, Storage},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
@@ -58,8 +56,7 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver + 'static, E: Engine>
-{
+pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -68,10 +65,10 @@ pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver +
     grpc_mem_quota: ResourceQuota,
     local_addr: SocketAddr,
     // Transport.
-    trans: ServerTransport<T, S, E::Local>,
-    raft_router: T,
+    trans: ServerTransport<E::RaftExtension, S>,
+    raft_router: E::RaftExtension,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager,
+    snap_mgr: Either<SnapManager, TabletSnapManager>,
     snap_worker: LazyWorker<SnapTask>,
 
     // Currently load statistics is done in the thread.
@@ -83,8 +80,11 @@ pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver +
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: Engine>
-    Server<T, S, E>
+impl<S, E> Server<S, E>
+where
+    S: StoreAddrResolver + 'static,
+    E: Engine,
+    E::RaftExtension: Unpin,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new<L: LockManager, F: KvFormat>(
@@ -94,10 +94,9 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         storage: Storage<E, L, F>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
-        raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager,
-        gc_worker: GcWorker<E, T>,
+        snap_mgr: Either<SnapManager, TabletSnapManager>,
+        gc_worker: GcWorker<E>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
@@ -124,6 +123,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
 
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
+        let raft_ext = storage.get_engine().raft_extension();
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
@@ -132,7 +132,6 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             gc_worker,
             copr,
             copr_v2,
-            raft_router.clone(),
             lazy_worker.scheduler(),
             check_leader_scheduler,
             Arc::clone(&grpc_thread_load),
@@ -170,7 +169,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             Arc::clone(cfg),
             security_mgr.clone(),
             resolver,
-            raft_router.clone(),
+            raft_ext.clone(),
             lazy_worker.scheduler(),
             grpc_thread_load.clone(),
         );
@@ -185,7 +184,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             grpc_mem_quota: mem_quota,
             local_addr: addr,
             trans,
-            raft_router,
+            raft_router: raft_ext,
             snap_mgr,
             snap_worker: lazy_worker,
             stats_pool,
@@ -207,7 +206,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         self.snap_worker.scheduler()
     }
 
-    pub fn transport(&self) -> ServerTransport<T, S, E::Local> {
+    pub fn transport(&self) -> ServerTransport<E::RaftExtension, S> {
         self.trans.clone()
     }
 
@@ -253,15 +252,31 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         &mut self,
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
+        snap_cache_builder: impl SnapCacheBuilder + Clone + 'static,
     ) -> Result<()> {
-        let snap_runner = SnapHandler::new(
-            Arc::clone(&self.env),
-            self.snap_mgr.clone(),
-            self.raft_router.clone(),
-            security_mgr,
-            Arc::clone(&cfg),
-        );
-        self.snap_worker.start(snap_runner);
+        match self.snap_mgr.clone() {
+            Either::Left(mgr) => {
+                let snap_runner = SnapHandler::new(
+                    self.env.clone(),
+                    mgr,
+                    self.raft_router.clone(),
+                    security_mgr,
+                    cfg,
+                );
+                self.snap_worker.start(snap_runner);
+            }
+            Either::Right(mgr) => {
+                let snap_runner = TabletRunner::new(
+                    self.env.clone(),
+                    mgr,
+                    snap_cache_builder,
+                    self.raft_router.clone(),
+                    security_mgr,
+                    cfg,
+                );
+                self.snap_worker.start(snap_runner);
+            }
+        }
 
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         info!("listening on addr"; "addr" => &self.local_addr);
@@ -340,21 +355,20 @@ pub mod test_router {
     use std::sync::mpsc::*;
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::{store::*, Result as RaftStoreResult};
+    use raftstore::{router::RaftStoreRouter, store::*, Result as RaftStoreResult};
 
     use super::*;
 
     #[derive(Clone)]
     pub struct TestRaftStoreRouter {
-        tx: Sender<usize>,
+        tx: Sender<Either<PeerMsg<RocksEngine>, StoreMsg<RocksEngine>>>,
         significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
     }
 
     impl TestRaftStoreRouter {
         pub fn new(
-            tx: Sender<usize>,
+            tx: Sender<Either<PeerMsg<RocksEngine>, StoreMsg<RocksEngine>>>,
             significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
         ) -> TestRaftStoreRouter {
             TestRaftStoreRouter {
@@ -365,25 +379,26 @@ pub mod test_router {
     }
 
     impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
+        fn send(&self, msg: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
+            let _ = self.tx.send(Either::Right(msg));
             Ok(())
         }
     }
 
-    impl<S: Snapshot> ProposalRouter<S> for TestRaftStoreRouter {
+    impl ProposalRouter<RocksSnapshot> for TestRaftStoreRouter {
         fn send(
             &self,
-            _: RaftCommand<S>,
-        ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<S>>> {
-            let _ = self.tx.send(1);
+            cmd: RaftCommand<RocksSnapshot>,
+        ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<RocksSnapshot>>>
+        {
+            let _ = self.tx.send(Either::Left(PeerMsg::RaftCommand(cmd)));
             Ok(())
         }
     }
 
-    impl<EK: KvEngine> CasualRouter<EK> for TestRaftStoreRouter {
-        fn send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
+    impl CasualRouter<RocksEngine> for TestRaftStoreRouter {
+        fn send(&self, _: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+            let _ = self.tx.send(Either::Left(PeerMsg::CasualMessage(msg)));
             Ok(())
         }
     }
@@ -400,13 +415,18 @@ pub mod test_router {
     }
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
+        fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+            let _ = self
+                .tx
+                .send(Either::Left(PeerMsg::RaftMessage(InspectedRaftMessage {
+                    heap_size: 0,
+                    msg,
+                })));
             Ok(())
         }
 
-        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {
-            let _ = self.tx.send(1);
+        fn broadcast_normal(&self, mut f: impl FnMut() -> PeerMsg<RocksEngine>) {
+            let _ = self.tx.send(Either::Left(f()));
         }
     }
 }
@@ -423,11 +443,12 @@ mod tests {
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::{
         coprocessor::region_info_accessor::MockRegionInfoProvider,
+        router::RaftStoreRouter,
         store::{transport::Transport, *},
     };
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
-    use tikv_util::quota_limiter::QuotaLimiter;
+    use tikv_util::{config::ReadableDuration, quota_limiter::QuotaLimiter};
     use tokio::runtime::Builder as TokioBuilder;
 
     use super::{
@@ -440,8 +461,8 @@ mod tests {
     use crate::{
         config::CoprReadPoolConfig,
         coprocessor::{self, readpool_impl},
-        server::TestRaftStoreRouter,
-        storage::{lock_manager::DummyLockManager, TestStorageBuilderApiV1},
+        server::{raftkv::RaftRouterWrap, tablet_snap::NoSnapshotCache, TestRaftStoreRouter},
+        storage::{lock_manager::MockLockManager, TestEngineBuilder, TestStorageBuilderApiV1},
     };
 
     #[derive(Clone)]
@@ -487,16 +508,24 @@ mod tests {
         let mock_store_id = 5;
         let cfg = Config {
             addr: "127.0.0.1:0".to_owned(),
+            raft_client_max_backoff: ReadableDuration::millis(100),
+            raft_client_initial_reconnect_backoff: ReadableDuration::millis(100),
             ..Default::default()
         };
-
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
-            .build()
-            .unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
+        let engine = TestEngineBuilder::new()
+            .build()
+            .unwrap()
+            .with_raft_extension(RaftRouterWrap::new(router.clone()));
+
+        let storage =
+            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+                .build()
+                .unwrap();
+
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
@@ -507,7 +536,6 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
-            router.clone(),
             tx,
             Default::default(),
             Default::default(),
@@ -549,12 +577,11 @@ mod tests {
             storage,
             copr,
             copr_v2,
-            router.clone(),
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            SnapManager::new(""),
+            Either::Left(SnapManager::new("")),
             gc_worker,
             check_leader_scheduler,
             env,
@@ -565,7 +592,7 @@ mod tests {
         .unwrap();
 
         server.build_and_bind().unwrap();
-        server.start(cfg, security_mgr).unwrap();
+        server.start(cfg, security_mgr, NoSnapshotCache).unwrap();
 
         let mut trans = server.transport();
         router.report_unreachable(0, 0).unwrap();

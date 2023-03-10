@@ -1,20 +1,27 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{sync::mpsc, time::Duration};
 
 use collections::HashSet;
-use crossbeam::channel::unbounded;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use engine_test::{kv::KvTestEngine, new_temp_engine, raft::RaftTestEngine};
 use engine_traits::{Engines, Mutable, Peekable, RaftEngineReadOnly, WriteBatchExt};
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::{
+    raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
+    raft_serverpb::{RaftApplyState, RaftMessage, RegionLocalState},
+    resource_manager::{GroupMode, GroupRawResourceSettings, ResourceGroup},
+};
+use resource_control::ResourceGroupManager;
 use tempfile::Builder;
 
 use super::*;
 use crate::{
-    store::{peer_storage::tests::new_entry, Config, Transport},
+    store::{
+        async_io::write_router::tests::TestContext, local_metrics::RaftMetrics,
+        peer_storage::tests::new_entry, Config, Transport, WriteRouter,
+    },
     Result,
 };
-
 type TestKvWriteBatch = <KvTestEngine as WriteBatchExt>::WriteBatch;
 type TestRaftLogBatch = <RaftTestEngine as RaftEngine>::LogBatch;
 
@@ -122,7 +129,7 @@ fn must_wait_same_notifies(
     }
     let timer = Instant::now();
     loop {
-        match notify_rx.recv() {
+        match notify_rx.recv_timeout(Duration::from_secs(3)) {
             Ok((region_id, n)) => {
                 if let Some(n2) = notify_map.get(&region_id) {
                     if n == *n2 {
@@ -167,7 +174,9 @@ fn delete_kv(wb: Option<&mut TestKvWriteBatch>, key: &[u8]) {
 
 /// Simulate kv puts on raft engine.
 fn put_raft_kv(wb: Option<&mut TestRaftLogBatch>, key: u64) {
-    wb.unwrap().append(key, vec![new_entry(key, key)]).unwrap();
+    wb.unwrap()
+        .append(key, None, vec![new_entry(key, key)])
+        .unwrap();
 }
 
 fn delete_raft_kv(engine: &RaftTestEngine, wb: Option<&mut TestRaftLogBatch>, key: u64) {
@@ -194,7 +203,7 @@ struct TestWorker {
 
 impl TestWorker {
     fn new(cfg: &Config, engines: &Engines<KvTestEngine, RaftTestEngine>) -> Self {
-        let (_, task_rx) = unbounded();
+        let (_, task_rx) = resource_control::channel::unbounded(None);
         let (msg_tx, msg_rx) = unbounded();
         let trans = TestTransport { tx: msg_tx };
         let (notify_tx, notify_rx) = unbounded();
@@ -220,15 +229,24 @@ struct TestWriters {
     writers: StoreWriters<KvTestEngine, RaftTestEngine>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
+    ctx: TestContext,
 }
 
 impl TestWriters {
-    fn new(cfg: &Config, engines: &Engines<KvTestEngine, RaftTestEngine>) -> Self {
+    fn new(
+        cfg: Config,
+        engines: &Engines<KvTestEngine, RaftTestEngine>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
+    ) -> Self {
         let (msg_tx, msg_rx) = unbounded();
         let trans = TestTransport { tx: msg_tx };
         let (notify_tx, notify_rx) = unbounded();
         let notifier = TestNotifier { tx: notify_tx };
-        let mut writers = StoreWriters::default();
+        let mut writers = StoreWriters::new(
+            resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("test".into(), false)),
+        );
         writers
             .spawn(
                 1,
@@ -240,13 +258,21 @@ impl TestWriters {
             )
             .unwrap();
         Self {
-            writers,
             msg_rx,
             notify_rx,
+            ctx: TestContext {
+                config: cfg,
+                raft_metrics: RaftMetrics::new(true),
+                senders: writers.senders(),
+            },
+            writers,
         }
     }
 
-    fn write_sender(&self, id: usize) -> Sender<WriteMsg<KvTestEngine, RaftTestEngine>> {
+    fn write_sender(
+        &self,
+        id: usize,
+    ) -> resource_control::channel::Sender<WriteMsg<KvTestEngine, RaftTestEngine>> {
         self.writers.senders()[id].clone()
     }
 }
@@ -273,7 +299,7 @@ fn test_worker() {
     task_1.raft_state = Some(new_raft_state(5, 123, 6, 8));
     task_1.messages.append(&mut vec![RaftMessage::default()]);
 
-    t.worker.batch.add_write_task(task_1);
+    t.worker.batch.add_write_task(&engines.raft, task_1);
 
     let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_2, 2, 15);
     init_write_batch(&engines, &mut task_2);
@@ -287,23 +313,20 @@ fn test_worker() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.worker.batch.add_write_task(task_2);
+    t.worker.batch.add_write_task(&engines.raft, task_2);
 
     let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 11);
     init_write_batch(&engines, &mut task_3);
     put_kv(task_3.extra_write.v1_mut(), b"kv_k3", b"kv_v3");
     put_raft_kv(task_3.raft_wb.as_mut(), 37);
     delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), 17);
-    task_3
-        .entries
-        .append(&mut vec![new_entry(6, 6), new_entry(7, 7)]);
-    task_3.cut_logs = Some((8, 9));
+    task_3.set_append(Some(9), vec![new_entry(6, 6), new_entry(7, 7)]);
     task_3.raft_state = Some(new_raft_state(7, 124, 6, 7));
     task_3
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.worker.batch.add_write_task(task_3);
+    t.worker.batch.add_write_task(&engines.raft, task_3);
 
     t.worker.write_to_db(true);
 
@@ -338,6 +361,121 @@ fn test_worker() {
 }
 
 #[test]
+fn test_worker_split_raft_wb() {
+    let path = Builder::new().prefix("async-io-worker").tempdir().unwrap();
+    let engines = new_temp_engine(&path);
+    let mut t = TestWorker::new(&Config::default(), &engines);
+
+    let mut run_test = |region_1: u64, region_2: u64, split: (bool, bool)| {
+        let raft_key_1 = 17 + region_1;
+        let raft_key_2 = 27 + region_1;
+        let raft_key_3 = 37 + region_1;
+        let mut expected_wbs = 1;
+
+        let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
+        task_1.raft_wb = Some(engines.raft.log_batch(0));
+        let mut apply_state_1 = RaftApplyState::default();
+        apply_state_1.set_applied_index(10);
+        let lb = task_1.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+        lb.put_apply_state(region_1, 10, &apply_state_1).unwrap();
+        put_raft_kv(task_1.raft_wb.as_mut(), raft_key_1);
+        task_1.entries.append(&mut vec![
+            new_entry(5, 5),
+            new_entry(6, 5),
+            new_entry(7, 5),
+            new_entry(8, 5),
+        ]);
+        task_1.raft_state = Some(new_raft_state(5, 123, 6, 8));
+        t.worker.batch.add_write_task(&engines.raft, task_1);
+
+        let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_2, 2, 15);
+        task_2.raft_wb = Some(engines.raft.log_batch(0));
+        let mut apply_state_2 = RaftApplyState::default();
+        apply_state_2.set_applied_index(16);
+        let lb = task_2.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+        lb.put_apply_state(region_2, 16, &apply_state_2).unwrap();
+        put_raft_kv(task_2.raft_wb.as_mut(), raft_key_2);
+        task_2
+            .entries
+            .append(&mut vec![new_entry(20, 15), new_entry(21, 15)]);
+        task_2.raft_state = Some(new_raft_state(15, 234, 20, 21));
+        if split.0 {
+            expected_wbs += 1;
+            t.worker.batch.raft_wb_split_size = 1;
+        } else {
+            t.worker.batch.raft_wb_split_size = 0;
+        }
+        t.worker.batch.add_write_task(&engines.raft, task_2);
+
+        let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 11);
+        task_3.raft_wb = Some(engines.raft.log_batch(0));
+        let mut apply_state_3 = RaftApplyState::default();
+        apply_state_3.set_applied_index(25);
+        let lb = task_3.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+        lb.put_apply_state(region_1, 25, &apply_state_3).unwrap();
+        put_raft_kv(task_3.raft_wb.as_mut(), raft_key_3);
+        delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), raft_key_1);
+        task_3.set_append(Some(9), vec![new_entry(6, 6), new_entry(7, 7)]);
+        task_3.raft_state = Some(new_raft_state(7, 124, 6, 7));
+        if split.1 {
+            expected_wbs += 1;
+            t.worker.batch.raft_wb_split_size = 1;
+        } else {
+            t.worker.batch.raft_wb_split_size = 0;
+        }
+        t.worker.batch.add_write_task(&engines.raft, task_3);
+
+        assert_eq!(t.worker.batch.raft_wbs.len(), expected_wbs);
+        t.worker.write_to_db(true);
+        assert_eq!(t.worker.batch.raft_wbs.len(), 1);
+
+        must_have_same_notifies(vec![(region_1, (1, 11)), (region_2, (2, 15))], &t.notify_rx);
+
+        assert_eq!(test_raft_kv(&engines.raft, raft_key_1), false);
+        assert_eq!(test_raft_kv(&engines.raft, raft_key_2), true);
+        assert_eq!(test_raft_kv(&engines.raft, raft_key_3), true);
+
+        must_have_entries_and_state(
+            &engines.raft,
+            vec![
+                (
+                    region_1,
+                    vec![new_entry(5, 5), new_entry(6, 6), new_entry(7, 7)],
+                    new_raft_state(7, 124, 6, 7),
+                ),
+                (
+                    region_2,
+                    vec![new_entry(20, 15), new_entry(21, 15)],
+                    new_raft_state(15, 234, 20, 21),
+                ),
+            ],
+        );
+        assert_eq!(
+            engines.raft.get_apply_state(region_1, 25).unwrap(),
+            Some(RaftApplyState {
+                applied_index: 25,
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            engines.raft.get_apply_state(region_2, 16).unwrap(),
+            Some(RaftApplyState {
+                applied_index: 16,
+                ..Default::default()
+            })
+        );
+    };
+
+    let mut first_region = 1;
+    for a in [true, false] {
+        for b in [true, false] {
+            run_test(first_region, first_region + 1, (a, b));
+            first_region += 10;
+        }
+    }
+}
+
+#[test]
 fn test_basic_flow() {
     let region_1 = 1;
     let region_2 = 2;
@@ -346,7 +484,7 @@ fn test_basic_flow() {
     let engines = new_temp_engine(&path);
     let mut cfg = Config::default();
     cfg.store_io_pool_size = 2;
-    let mut t = TestWriters::new(&cfg, &engines);
+    let mut t = TestWriters::new(cfg, &engines, None);
 
     let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
     init_write_batch(&engines, &mut task_1);
@@ -360,7 +498,9 @@ fn test_basic_flow() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(0).send(WriteMsg::WriteTask(task_1)).unwrap();
+    t.write_sender(0)
+        .send(WriteMsg::WriteTask(task_1), 0)
+        .unwrap();
 
     let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(2, 2, 20);
     init_write_batch(&engines, &mut task_2);
@@ -374,7 +514,9 @@ fn test_basic_flow() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(1).send(WriteMsg::WriteTask(task_2)).unwrap();
+    t.write_sender(1)
+        .send(WriteMsg::WriteTask(task_2), 0)
+        .unwrap();
 
     let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 15);
     init_write_batch(&engines, &mut task_3);
@@ -382,14 +524,15 @@ fn test_basic_flow() {
     delete_kv(task_3.extra_write.v1_mut(), b"kv_k1");
     put_raft_kv(task_3.raft_wb.as_mut(), 37);
     delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), 17);
-    task_3.entries.append(&mut vec![new_entry(6, 6)]);
-    task_3.cut_logs = Some((7, 8));
+    task_3.set_append(Some(8), vec![new_entry(6, 6)]);
     task_3.raft_state = Some(new_raft_state(6, 345, 6, 6));
     task_3
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(0).send(WriteMsg::WriteTask(task_3)).unwrap();
+    t.write_sender(0)
+        .send(WriteMsg::WriteTask(task_3), 0)
+        .unwrap();
 
     must_wait_same_notifies(vec![(region_1, (1, 15)), (region_2, (2, 20))], &t.notify_rx);
 
@@ -419,7 +562,6 @@ fn test_basic_flow() {
     );
 
     must_have_same_count_msg(6, &t.msg_rx);
-
     t.writers.shutdown();
 }
 
@@ -435,20 +577,20 @@ fn test_basic_flow_with_states() {
     let engines = new_temp_engine(&path);
     let mut cfg = Config::default();
     cfg.store_io_pool_size = 2;
-    let mut t = TestWriters::new(&cfg, &engines);
+    let mut t = TestWriters::new(cfg, &engines, None);
 
     let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
     task_1.raft_wb = Some(engines.raft.log_batch(0));
     let mut apply_state_1 = RaftApplyState::default();
     apply_state_1.applied_index = 2;
-    let mut extra_state = ExtraStates::new(apply_state_1);
     let mut region_state_1 = RegionLocalState::default();
     region_state_1
         .mut_region()
         .mut_region_epoch()
         .set_version(3);
-    extra_state.region_state = Some(region_state_1.clone());
-    task_1.extra_write.set_v2(extra_state);
+    let lb = task_1.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+    lb.put_apply_state(region_1, 2, &apply_state_1).unwrap();
+    lb.put_region_state(region_1, 2, &region_state_1).unwrap();
     put_raft_kv(task_1.raft_wb.as_mut(), 17);
     task_1
         .entries
@@ -458,14 +600,16 @@ fn test_basic_flow_with_states() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(0).send(WriteMsg::WriteTask(task_1)).unwrap();
+    t.write_sender(0)
+        .send(WriteMsg::WriteTask(task_1), 0)
+        .unwrap();
 
     let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(2, 2, 20);
     task_2.raft_wb = Some(engines.raft.log_batch(0));
     let mut apply_state_2 = RaftApplyState::default();
     apply_state_2.applied_index = 30;
-    let extra_state = ExtraStates::new(apply_state_2.clone());
-    task_2.extra_write.set_v2(extra_state);
+    let lb = task_2.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+    lb.put_apply_state(2, 30, &apply_state_2).unwrap();
     put_raft_kv(task_2.raft_wb.as_mut(), 27);
     task_2
         .entries
@@ -475,24 +619,27 @@ fn test_basic_flow_with_states() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(1).send(WriteMsg::WriteTask(task_2)).unwrap();
+    t.write_sender(1)
+        .send(WriteMsg::WriteTask(task_2), 0)
+        .unwrap();
 
     let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 15);
     task_3.raft_wb = Some(engines.raft.log_batch(0));
     let mut apply_state_3 = RaftApplyState::default();
     apply_state_3.applied_index = 5;
-    let extra_state = ExtraStates::new(apply_state_3.clone());
-    task_3.extra_write.set_v2(extra_state);
+    let lb = task_3.extra_write.ensure_v2(|| engines.raft.log_batch(0));
+    lb.put_apply_state(region_1, 5, &apply_state_3).unwrap();
     put_raft_kv(task_3.raft_wb.as_mut(), 37);
     delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), 17);
-    task_3.entries.append(&mut vec![new_entry(6, 6)]);
-    task_3.cut_logs = Some((7, 8));
+    task_3.set_append(Some(8), vec![new_entry(6, 6)]);
     task_3.raft_state = Some(new_raft_state(6, 345, 6, 6));
     task_3
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.write_sender(0).send(WriteMsg::WriteTask(task_3)).unwrap();
+    t.write_sender(0)
+        .send(WriteMsg::WriteTask(task_3), 0)
+        .unwrap();
 
     must_wait_same_notifies(vec![(region_1, (1, 15)), (region_2, (2, 20))], &t.notify_rx);
 
@@ -516,20 +663,105 @@ fn test_basic_flow_with_states() {
         ],
     );
     assert_eq!(
-        engines.raft.get_apply_state(region_1).unwrap().unwrap(),
+        engines.raft.get_apply_state(region_1, 5).unwrap().unwrap(),
         apply_state_3
     );
     assert_eq!(
-        engines.raft.get_apply_state(region_2).unwrap().unwrap(),
+        engines.raft.get_apply_state(region_2, 30).unwrap().unwrap(),
         apply_state_2
     );
     assert_eq!(
-        engines.raft.get_region_state(region_1).unwrap().unwrap(),
+        engines.raft.get_region_state(region_1, 2).unwrap().unwrap(),
         region_state_1
     );
-    assert_eq!(engines.raft.get_region_state(region_2).unwrap(), None);
+    assert_eq!(engines.raft.get_region_state(region_2, 1).unwrap(), None);
 
     must_have_same_count_msg(6, &t.msg_rx);
 
     t.writers.shutdown();
+}
+
+#[test]
+fn test_resource_group() {
+    let region_1 = 1;
+    let region_2 = 2;
+
+    let resource_manager = Arc::new(ResourceGroupManager::default());
+    let get_group = |name: &str, read_tokens: u64, write_tokens: u64| -> ResourceGroup {
+        let mut group = ResourceGroup::new();
+        group.set_name(name.to_string());
+        group.set_mode(GroupMode::RawMode);
+        let mut resource_setting = GroupRawResourceSettings::new();
+        resource_setting
+            .mut_cpu()
+            .mut_settings()
+            .set_fill_rate(read_tokens);
+        resource_setting
+            .mut_io_write()
+            .mut_settings()
+            .set_fill_rate(write_tokens);
+        group.set_raw_resource_settings(resource_setting);
+        group
+    };
+    resource_manager.add_resource_group(get_group("group1", 10, 10));
+    resource_manager.add_resource_group(get_group("group2", 100, 100));
+
+    let path = Builder::new().prefix("async-io-basic").tempdir().unwrap();
+    let engines = new_temp_engine(&path);
+    let mut cfg = Config::default();
+    cfg.store_io_pool_size = 1;
+
+    let mut t = TestWriters::new(cfg, &engines, Some(resource_manager));
+
+    let (tx, rx) = mpsc::sync_channel(0);
+    t.write_sender(0).send(WriteMsg::Pause(rx), 0).unwrap();
+
+    let mut r = WriteRouter::new("1".to_string());
+    let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
+    init_write_batch(&engines, &mut task_1);
+    put_raft_kv(task_1.raft_wb.as_mut(), 17);
+    let entries = vec![new_entry(5, 5), new_entry(6, 5), new_entry(7, 5)];
+    let mut entries = entries
+        .into_iter()
+        .map(|mut e| {
+            let mut req = RaftCmdRequest::default();
+            let mut header = RaftRequestHeader::default();
+            header.set_resource_group_name("group1".to_owned());
+            req.set_header(header);
+            e.set_data(req.write_to_bytes().unwrap().into());
+            e
+        })
+        .collect();
+    task_1.entries.append(&mut entries);
+    task_1.raft_state = Some(new_raft_state(5, 234, 6, 7));
+    task_1
+        .messages
+        .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
+    r.send_write_msg(&mut t.ctx, None, WriteMsg::WriteTask(task_1));
+
+    let mut r = WriteRouter::new("2".to_string());
+    let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_2, 2, 20);
+    init_write_batch(&engines, &mut task_2);
+    put_raft_kv(task_2.raft_wb.as_mut(), 27);
+    let entries = vec![new_entry(50, 12), new_entry(51, 13)];
+    let mut entries = entries
+        .into_iter()
+        .map(|mut e| {
+            let mut req = RaftCmdRequest::default();
+            let mut header = RaftRequestHeader::default();
+            header.set_resource_group_name("group2".to_owned());
+            req.set_header(header);
+            e.set_data(req.write_to_bytes().unwrap().into());
+            e
+        })
+        .collect();
+    task_2.entries.append(&mut entries);
+    task_2.raft_state = Some(new_raft_state(13, 567, 49, 51));
+    task_2
+        .messages
+        .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
+    r.send_write_msg(&mut t.ctx, None, WriteMsg::WriteTask(task_2));
+
+    tx.send(()).unwrap();
+    must_wait_same_notifies(vec![(region_1, (1, 10)), (region_2, (2, 20))], &t.notify_rx);
 }

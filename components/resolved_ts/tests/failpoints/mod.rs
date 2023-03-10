@@ -22,7 +22,7 @@ fn test_check_leader_timeout() {
     mutation.set_op(Op::Put);
     mutation.key = k.to_vec();
     mutation.value = v.to_vec();
-    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts);
+    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
     suite
         .cluster
         .must_transfer_leader(region.id, new_peer(1, 1));
@@ -78,7 +78,7 @@ fn test_report_min_resolved_ts() {
     mutation.set_op(Op::Put);
     mutation.key = k.to_vec();
     mutation.value = v.to_vec();
-    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts);
+    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
 
     // Commit
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
@@ -112,7 +112,7 @@ fn test_report_min_resolved_ts_disable() {
     mutation.set_op(Op::Put);
     mutation.key = k.to_vec();
     mutation.value = v.to_vec();
-    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts);
+    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
 
     // Commit
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();

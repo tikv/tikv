@@ -222,7 +222,7 @@ impl S3Storage {
         key.to_owned()
     }
 
-    fn get_range(&self, name: &str, range: Option<String>) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get_range(&self, name: &str, range: Option<String>) -> cloud::blob::BlobStream<'_> {
         let key = self.maybe_prefix_key(name);
         let bucket = self.config.bucket.bucket.clone();
         debug!("read file from s3 storage"; "key" => %key);
@@ -595,11 +595,11 @@ impl BlobStorage for S3Storage {
         })
     }
 
-    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get(&self, name: &str) -> cloud::blob::BlobStream<'_> {
         self.get_range(name, None)
     }
 
-    fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get_part(&self, name: &str, off: u64, len: u64) -> cloud::blob::BlobStream<'_> {
         // inclusive, bytes=0-499 -> [0, 499]
         self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
     }

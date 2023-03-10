@@ -33,7 +33,10 @@ make_auto_flush_static_metric! {
         commit_merge,
         rollback_merge,
         compact,
-        transfer_leader
+        transfer_leader,
+        prepare_flashback,
+        finish_flashback,
+        batch_switch_witness : "batch-switch-witness",
     }
 
     pub label_enum AdminCmdStatus {
@@ -46,6 +49,7 @@ make_auto_flush_static_metric! {
         stale,
         decode,
         epoch,
+        cancel,
     }
 
     pub label_enum RegionHashType {
@@ -78,15 +82,10 @@ make_auto_flush_static_metric! {
         fetch_unused,
     }
 
-
-    pub label_enum RaftEventDurationType {
-        compact_check,
-        pd_store_heartbeat,
-        snap_gc,
-        compact_lock_cf,
-        consistency_check,
-        cleanup_import_sst,
-        raft_engine_purge,
+    pub label_enum WarmUpEntryCacheType {
+        started,
+        timeout,
+        finished,
     }
 
     pub label_enum CompactionGuardAction {
@@ -96,13 +95,14 @@ make_auto_flush_static_metric! {
         skip_partition,
     }
 
-    pub struct RaftEventDuration : LocalHistogram {
-        "type" => RaftEventDurationType
-    }
-
     pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
+
+    pub struct WarmUpEntryCacheCounter : LocalIntCounter {
+        "type" => WarmUpEntryCacheType
+    }
+
     pub struct SnapCf : LocalHistogram {
         "type" => CfNames,
     }
@@ -170,6 +170,7 @@ make_static_metric! {
     pub label_enum RaftDroppedMessage {
         mismatch_store_id,
         mismatch_region_epoch,
+        mismatch_witness_snapshot,
         stale_msg,
         region_overlap,
         region_no_peer,
@@ -177,6 +178,8 @@ make_static_metric! {
         region_nonexistent,
         applying_snap,
         disk_full,
+        non_witness,
+        recovery,
     }
 
     pub label_enum ProposalType {
@@ -202,7 +205,22 @@ make_static_metric! {
         region_not_initialized,
         is_applying_snapshot,
         force_leader,
-        flashback,
+        witness,
+        flashback_in_progress,
+        flashback_not_prepared,
+        non_witness,
+    }
+
+    pub label_enum RaftEventDurationType {
+        compact_check,
+        pd_store_heartbeat,
+        snap_gc,
+        compact_lock_cf,
+        consistency_check,
+        cleanup_import_sst,
+        raft_engine_purge,
+        peer_msg,
+        store_msg,
     }
 
     pub label_enum RaftLogGcSkippedReason {
@@ -264,6 +282,10 @@ make_static_metric! {
 
     pub struct RaftInvalidProposalCounterVec : LocalIntCounter {
         "type" => RaftInvalidProposal
+    }
+
+    pub struct RaftEventDurationVec : LocalHistogram {
+        "type" => RaftEventDurationType
     }
 
     pub struct RaftLogGcSkippedCounterVec: LocalIntCounter {
@@ -613,6 +635,15 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 21).unwrap()  // 500us ~ 8.7m
         ).unwrap();
 
+    pub static ref WARM_UP_ENTRY_CACHE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_prefill_entry_cache_total",
+            "Total number of prefill entry cache.",
+            &["type"]
+        ).unwrap();
+    pub static ref WARM_UP_ENTRY_CACHE_COUNTER: WarmUpEntryCacheCounter =
+        auto_flush_from!(WARM_UP_ENTRY_CACHE_COUNTER_VEC, WarmUpEntryCacheCounter);
+
     pub static ref LEADER_MISSING: IntGauge =
         register_int_gauge!(
             "tikv_raftstore_leader_missing",
@@ -640,8 +671,13 @@ lazy_static! {
             &["type"],
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
-    pub static ref RAFT_EVENT_DURATION: RaftEventDuration =
-        auto_flush_from!(RAFT_EVENT_DURATION_VEC, RaftEventDuration);
+
+    pub static ref PEER_MSG_LEN: Histogram =
+        register_histogram!(
+            "tikv_raftstore_peer_msg_len",
+            "Length of peer msg.",
+            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1000s
+        ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(
@@ -743,6 +779,76 @@ lazy_static! {
 
     pub static ref STORE_SLOW_SCORE_GAUGE: Gauge =
     register_gauge!("tikv_raftstore_slow_score", "Slow score of the store.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend", "Slow trend changing rate").unwrap();
+
+    pub static ref STORE_SLOW_TREND_L0_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l0", "Slow trend L0 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l1", "Slow trend L1 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l2", "Slow trend L2 window avg value.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_L0_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l0_l1", "Slow trend changing rate: L0/L1.").unwrap();
+    pub static ref STORE_SLOW_TREND_L1_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l1_l2", "Slow trend changing rate: L1/L2.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l1_margin_error", "Slow trend: L1 margin error range").unwrap();
+    pub static ref STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_l2_margin_error", "Slow trend: L2 margin error range").unwrap();
+
+    pub static ref STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_margin_error_gap",
+        "Slow trend: the gap between margin window time and current sampling time",
+        &["window"]
+    ).unwrap();
+
+    pub static ref STORE_SLOW_TREND_MISC_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_misc",
+        "Slow trend uncatelogued gauge(s)",
+        &["type"]
+    ).unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_VALUE_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_value", "Store slow trend result meantime value").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result", "Store slow trend result changing rate").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_L0_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l0", "Slow trend result L0 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l1", "Slow trend result L1 window avg value.").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l2", "Slow trend result L2 window avg value.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_L0_L1_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l0_l1", "Slow trend result changing rate: L0/L1.").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L1_L2_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l1_l2", "Slow trend result changing rate: L1/L2.").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_L1_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l1_margin_error", "Slow trend result: L1 margin error range").unwrap();
+    pub static ref STORE_SLOW_TREND_RESULT_L2_MARGIN_ERROR_GAUGE: Gauge =
+    register_gauge!("tikv_raftstore_slow_trend_result_l2_margin_error", "Slow trend result: L2 margin error range").unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_result_margin_error_gap",
+        "Slow trend result: the gap between margin window time and current sampling time",
+        &["window"]
+    ).unwrap();
+
+    pub static ref STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC: IntGaugeVec =
+    register_int_gauge_vec!(
+        "tikv_raftstore_slow_trend_result_misc",
+        "Slow trend result uncatelogued gauge(s)",
+        &["type"]
+    ).unwrap();
 
     pub static ref RAFT_LOG_GC_SKIPPED_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_raft_log_gc_skipped",

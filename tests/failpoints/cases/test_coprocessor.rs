@@ -138,10 +138,10 @@ fn test_snapshot_failed() {
 #[test]
 fn test_snapshot_failed_2() {
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &[]);
+    let (store, endpoint) = init_with_data(&product, &[]);
     let req = DagSelect::from(&product).build();
 
-    fail::cfg("rockskv_async_snapshot_not_leader", "return()").unwrap();
+    store.get_engine().trigger_not_leader();
     let resp = handle_request(&endpoint, req);
 
     assert!(resp.get_region_error().has_not_leader());
@@ -251,6 +251,26 @@ fn test_paging_scan() {
             assert_ge!(res_end_key, end_key.get_start());
             assert_le!(res_end_key, end_key.get_end());
         }
+
+        // test limit with early return
+        let req = DagSelect::from(&product)
+            .paging_size(2)
+            .limit(1)
+            .desc(desc)
+            .build();
+        let resp = handle_request(&endpoint, req);
+        assert!(resp.range.is_none());
+        assert!(resp.range.is_none());
+
+        let agg_req = DagSelect::from(&product)
+            .count(&product["count"])
+            .group_by(&[&product["name"]])
+            .output_offsets(Some(vec![0, 1]))
+            .desc(desc)
+            .paging_size(2)
+            .build();
+        let resp = handle_request(&endpoint, agg_req);
+        assert!(resp.range.is_some());
     }
 }
 
@@ -271,113 +291,73 @@ fn test_paging_scan_multi_ranges() {
     fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
 
     // test multi ranges with gap
-    for desc in [true] {
-        let paging_size = 3;
-        let mut exp = [data[0], data[1], data[3], data[4]];
-        if desc {
-            exp.reverse();
+    for desc in [true, false] {
+        for paging_size in [3, 5] {
+            let mut exp = [data[0], data[1], data[3], data[4]];
+            if desc {
+                exp.reverse();
+            }
+
+            let builder = DagSelect::from(&product)
+                .paging_size(paging_size)
+                .desc(desc);
+            let mut range1 = builder.key_ranges[0].clone();
+            range1.set_end(product.get_record_range_one(data[1].0).get_end().into());
+            let mut range2 = builder.key_ranges[0].clone();
+            range2.set_start(product.get_record_range_one(data[3].0).get_start().into());
+            let key_ranges = vec![range1.clone(), range2.clone()];
+
+            let req = builder.key_ranges(key_ranges).build();
+            let resp = handle_request(&endpoint, req);
+            let mut select_resp = SelectResponse::default();
+            select_resp.merge_from_bytes(resp.get_data()).unwrap();
+
+            let mut row_count = 0;
+            let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
+            for (row, (id, name, cnt)) in spliter.zip(exp) {
+                let name_datum = name.unwrap().as_bytes().into();
+                let expected_encoded = datum::encode_value(
+                    &mut EvalContext::default(),
+                    &[Datum::I64(id), name_datum, Datum::I64(cnt)],
+                )
+                .unwrap();
+                let result_encoded =
+                    datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+                assert_eq!(result_encoded, &*expected_encoded);
+                row_count += 1;
+            }
+            let exp_len = if paging_size <= 4 {
+                paging_size
+            } else {
+                exp.len() as u64
+            };
+            assert_eq!(row_count, exp_len);
+
+            let res_range = resp.get_range();
+
+            let (res_start_key, res_end_key) = match desc {
+                true => (res_range.get_end(), res_range.get_start()),
+                false => (res_range.get_start(), res_range.get_end()),
+            };
+            if paging_size != 5 {
+                let start_key = match desc {
+                    true => range2.get_end(),
+                    false => range1.get_start(),
+                };
+                let end_id = match desc {
+                    true => data[1].0,
+                    false => data[3].0,
+                };
+                let end_key = product.get_record_range_one(end_id);
+                assert_eq!(res_start_key, start_key);
+                assert_ge!(res_end_key, end_key.get_start());
+                assert_le!(res_end_key, end_key.get_end());
+            } else {
+                // drained.
+                assert!(res_start_key.is_empty());
+                assert!(res_end_key.is_empty());
+            }
         }
-
-        let builder = DagSelect::from(&product)
-            .paging_size(paging_size)
-            .desc(desc);
-        let mut range1 = builder.key_ranges[0].clone();
-        range1.set_end(product.get_record_range_one(data[1].0).get_end().into());
-        let mut range2 = builder.key_ranges[0].clone();
-        range2.set_start(product.get_record_range_one(data[3].0).get_start().into());
-        let key_ranges = vec![range1.clone(), range2.clone()];
-
-        let req = builder.key_ranges(key_ranges).build();
-        let resp = handle_request(&endpoint, req);
-        let mut select_resp = SelectResponse::default();
-        select_resp.merge_from_bytes(resp.get_data()).unwrap();
-
-        let mut row_count = 0;
-        let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
-        for (row, (id, name, cnt)) in spliter.zip(exp) {
-            let name_datum = name.unwrap().as_bytes().into();
-            let expected_encoded = datum::encode_value(
-                &mut EvalContext::default(),
-                &[Datum::I64(id), name_datum, Datum::I64(cnt)],
-            )
-            .unwrap();
-            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
-            assert_eq!(result_encoded, &*expected_encoded);
-            row_count += 1;
-        }
-        assert_eq!(row_count, paging_size);
-
-        let res_range = resp.get_range();
-        let (res_start_key, res_end_key) = match desc {
-            true => (res_range.get_end(), res_range.get_start()),
-            false => (res_range.get_start(), res_range.get_end()),
-        };
-        let start_key = match desc {
-            true => range2.get_end(),
-            false => range1.get_start(),
-        };
-        let end_id = match desc {
-            true => data[1].0,
-            false => data[3].0,
-        };
-        let end_key = product.get_record_range_one(end_id);
-        assert_eq!(res_start_key, start_key);
-        assert_ge!(res_end_key, end_key.get_start());
-        assert_le!(res_end_key, end_key.get_end());
-    }
-
-    // test drained
-    for desc in [false, true] {
-        let paging_size = 5;
-        let mut exp = [data[0], data[1], data[3], data[4]];
-        if desc {
-            exp.reverse();
-        }
-
-        let builder = DagSelect::from(&product)
-            .paging_size(paging_size)
-            .desc(desc);
-        let mut range1 = builder.key_ranges[0].clone();
-        range1.set_end(product.get_record_range_one(data[1].0).get_end().into());
-        let mut range2 = builder.key_ranges[0].clone();
-        range2.set_start(product.get_record_range_one(data[3].0).get_start().into());
-        let key_ranges = vec![range1.clone(), range2.clone()];
-
-        let req = builder.key_ranges(key_ranges).build();
-        let resp = handle_request(&endpoint, req);
-        let mut select_resp = SelectResponse::default();
-        select_resp.merge_from_bytes(resp.get_data()).unwrap();
-
-        let mut row_count = 0;
-        let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
-        for (row, (id, name, cnt)) in spliter.zip(exp) {
-            let name_datum = name.unwrap().as_bytes().into();
-            let expected_encoded = datum::encode_value(
-                &mut EvalContext::default(),
-                &[Datum::I64(id), name_datum, Datum::I64(cnt)],
-            )
-            .unwrap();
-            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
-            assert_eq!(result_encoded, &*expected_encoded);
-            row_count += 1;
-        }
-        assert_eq!(row_count, exp.len());
-
-        let res_range = resp.get_range();
-        let (res_start_key, res_end_key) = match desc {
-            true => (res_range.get_end(), res_range.get_start()),
-            false => (res_range.get_start(), res_range.get_end()),
-        };
-        let start_key = match desc {
-            true => range2.get_end(),
-            false => range1.get_start(),
-        };
-        let end_key = match desc {
-            true => product.get_record_range_one(i64::MIN),
-            false => product.get_record_range_one(i64::MAX),
-        };
-        assert_eq!(res_start_key, start_key);
-        assert_eq!(res_end_key, end_key.get_start(), "{}", desc);
     }
 }
 

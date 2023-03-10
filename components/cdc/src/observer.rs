@@ -272,6 +272,8 @@ mod tests {
                 leader_id: 2,
                 prev_lead_transferee: raft::INVALID_ID,
                 vote: raft::INVALID_ID,
+                initialized: true,
+                peer_id: raft::INVALID_ID,
             },
         );
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
@@ -299,6 +301,8 @@ mod tests {
                 leader_id: raft::INVALID_ID,
                 prev_lead_transferee: 3,
                 vote: 3,
+                initialized: true,
+                peer_id: raft::INVALID_ID,
             },
         );
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {

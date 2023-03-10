@@ -16,7 +16,9 @@
 //! Please read the engine_trait crate docs before hacking.
 
 #![cfg_attr(test, feature(test))]
-#![feature(generic_associated_types)]
+#![feature(let_chains)]
+#![feature(option_get_or_insert_default)]
+#![feature(path_file_prefix)]
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
@@ -28,6 +30,8 @@ mod cf_names;
 pub use crate::cf_names::*;
 mod cf_options;
 pub use crate::cf_options::*;
+mod checkpoint;
+pub use crate::checkpoint::*;
 mod compact;
 pub use crate::compact::*;
 mod db_options;
@@ -103,7 +107,10 @@ pub mod file_system;
 
 mod raft_engine;
 
-pub use rocksdb::{set_perf_flags, set_perf_level, PerfContext, PerfFlag, PerfFlags, PerfLevel};
+pub use rocksdb::{
+    set_perf_flags, set_perf_level, PerfContext, PerfFlag, PerfFlags, PerfLevel,
+    Statistics as RocksStatistics,
+};
 
 pub mod flow_control_factors;
 pub use flow_control_factors::*;

@@ -13,7 +13,7 @@ use kvproto::{
     metapb::{self, Peer},
     pdpb::QueryKind,
 };
-use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
+use pd_client::{BucketMeta, BucketStat};
 use rand::Rng;
 use resource_metering::RawRecords;
 use tikv_util::{
@@ -361,7 +361,7 @@ impl RegionInfo {
             if n == 0 || self.key_ranges.len() < self.sample_num {
                 self.key_ranges.push(key_range);
             } else {
-                let j = rand::thread_rng().gen_range(0..n) as usize;
+                let j = rand::thread_rng().gen_range(0..n);
                 if j < self.sample_num {
                     self.key_ranges[j] = key_range;
                 }
@@ -451,30 +451,22 @@ impl ReadStats {
         region_info.flow.add(write);
         region_info.flow.add(data);
         if let Some(buckets) = buckets {
-            let bucket_stat = self.region_buckets.entry(region_id).or_insert_with(|| {
-                let stats = new_bucket_stats(buckets);
-                BucketStat::new(buckets.clone(), stats)
-            });
-            if bucket_stat.meta < *buckets {
-                let stats = new_bucket_stats(buckets);
-                let mut new = BucketStat::new(buckets.clone(), stats);
-                merge_bucket_stats(
-                    &new.meta.keys,
-                    &mut new.stats,
-                    &bucket_stat.meta.keys,
-                    &bucket_stat.stats,
-                );
-                *bucket_stat = new;
-            }
+            let bucket_stat = self
+                .region_buckets
+                .entry(region_id)
+                .and_modify(|current| {
+                    if current.meta < *buckets {
+                        let mut new = BucketStat::from_meta(buckets.clone());
+                        std::mem::swap(current, &mut new);
+                        current.merge(&new);
+                    }
+                })
+                .or_insert_with(|| BucketStat::from_meta(buckets.clone()));
             let mut delta = metapb::BucketStats::default();
             delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
             delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
-            let start = start.unwrap_or_default();
-            let end = end.unwrap_or_default();
-            merge_bucket_stats(
-                &bucket_stat.meta.keys,
-                &mut bucket_stat.stats,
-                &[start, end],
+            bucket_stat.add_flows(
+                &[start.unwrap_or_default(), end.unwrap_or_default()],
                 &delta,
             );
         }

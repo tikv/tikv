@@ -1070,7 +1070,7 @@ mod tests {
     #[test]
     fn test_checked_add_and_sub_duration() {
         /// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
-        const MAX_TIME_IN_SECS: i64 = MAX_HOUR_PART as i64 * SECS_PER_HOUR as i64
+        const MAX_TIME_IN_SECS: i64 = MAX_HOUR_PART as i64 * SECS_PER_HOUR
             + MAX_MINUTE_PART as i64 * SECS_PER_MINUTE
             + MAX_SECOND_PART as i64;
 
@@ -1110,7 +1110,7 @@ mod tests {
             // UNSPECIFIED_FSP
             (
                 8385959,
-                UNSPECIFIED_FSP as i8,
+                UNSPECIFIED_FSP,
                 Ok(Duration::parse(&mut EvalContext::default(), "838:59:59", 0).unwrap()),
                 false,
             ),

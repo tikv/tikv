@@ -443,7 +443,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[engine_traits::CF_DEFAULT, engine_traits::CF_WRITE])
+            .cfs([engine_traits::CF_DEFAULT, engine_traits::CF_WRITE])
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
@@ -480,7 +480,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[
+            .cfs([
                 engine_traits::CF_DEFAULT,
                 engine_traits::CF_LOCK,
                 engine_traits::CF_WRITE,

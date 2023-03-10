@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path, time::Duration};
+use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path, sync::Arc};
 
+use dashmap::DashMap;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -11,10 +12,11 @@ use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
 
 use super::{
+    checkpoint_cache::CheckpointCache,
     keys::{self, KeyValue, MetaKey},
     store::{
-        CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore, PutOption,
-        Snapshot, Subscription, Transaction, WithRevision,
+        CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot,
+        Subscription, Transaction, WithRevision,
     },
 };
 use crate::{
@@ -26,6 +28,7 @@ use crate::{
 #[derive(Clone)]
 pub struct MetadataClient<Store> {
     store_id: u64,
+    caches: Arc<DashMap<String, CheckpointCache>>,
     pub(crate) meta_store: Store,
 }
 
@@ -239,6 +242,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
     pub fn new(store: Store, store_id: u64) -> Self {
         Self {
             meta_store: store,
+            caches: Arc::default(),
             store_id,
         }
     }
@@ -353,6 +357,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_fetch"]).observe(now.saturating_elapsed().as_secs_f64())
         }
+        fail::fail_point!("failed_to_get_tasks", |_| {
+            Err(Error::MalformedMetadata(
+                "faild to connect etcd client".to_string(),
+            ))
+        });
         let snap = self.meta_store.snapshot().await?;
         let kvs = snap.get(Keys::Prefix(MetaKey::tasks())).await?;
 
@@ -546,7 +555,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
             ))
             .await?;
 
-        let mut result = Vec::with_capacity(all.len() as usize + 1);
+        let mut result = Vec::with_capacity(all.len() + 1);
         if !prev.kvs.is_empty() {
             let kv = &mut prev.kvs[0];
             if kv.value() > start_key.as_slice() {
@@ -671,37 +680,6 @@ impl<Store: MetaStore> MetadataClient<Store> {
             .await
     }
 
-    /// upload a region-level checkpoint.
-    pub async fn upload_region_checkpoint(
-        &self,
-        task_name: &str,
-        checkpoints: &[(Region, TimeStamp)],
-    ) -> Result<()> {
-        let txn = checkpoints
-            .iter()
-            .fold(Transaction::default(), |txn, (region, cp)| {
-                txn.put_opt(
-                    KeyValue(
-                        MetaKey::next_bakcup_ts_of_region(task_name, region),
-                        (*cp).into_inner().to_be_bytes().to_vec(),
-                    ),
-                    PutOption {
-                        ttl: Duration::from_secs(600),
-                    },
-                )
-            });
-        self.meta_store.txn(txn).await
-    }
-
-    pub async fn clear_region_checkpoint(&self, task_name: &str, regions: &[Region]) -> Result<()> {
-        let txn = regions.iter().fold(Transaction::default(), |txn, region| {
-            txn.delete(Keys::Key(MetaKey::next_bakcup_ts_of_region(
-                task_name, region,
-            )))
-        });
-        self.meta_store.txn(txn).await
-    }
-
     pub async fn global_checkpoint_of(&self, task: &str) -> Result<Option<Checkpoint>> {
         let cps = self.checkpoints_of(task).await?;
         let mut min_checkpoint = None;
@@ -724,21 +702,41 @@ impl<Store: MetaStore> MetadataClient<Store> {
         Ok(min_checkpoint)
     }
 
+    fn cached_checkpoint(&self, task: &str) -> Option<Checkpoint> {
+        self.caches
+            .get(task)
+            .and_then(|x| x.value().get())
+            .map(|x| Checkpoint {
+                provider: CheckpointProvider::Global,
+                ts: x,
+            })
+    }
+
+    fn update_cache(&self, task: &str, checkpoint: TimeStamp) {
+        let mut c = self.caches.entry(task.to_owned()).or_default();
+        c.value_mut().update(checkpoint);
+    }
+
     pub async fn get_region_checkpoint(&self, task: &str, region: &Region) -> Result<Checkpoint> {
+        if let Some(c) = self.cached_checkpoint(task) {
+            return Ok(c);
+        }
         let key = MetaKey::next_bakcup_ts_of_region(task, region);
         let s = self.meta_store.snapshot().await?;
         let r = s.get(Keys::Key(key.clone())).await?;
-        match r.len() {
+        let cp = match r.len() {
             0 => {
                 let global_cp = self.global_checkpoint_of(task).await?;
                 let cp = match global_cp {
                     None => self.get_task_start_ts_checkpoint(task).await?,
                     Some(cp) => cp,
                 };
-                Ok(cp)
+                cp
             }
-            _ => Ok(Checkpoint::from_kv(&r[0])?),
-        }
+            _ => Checkpoint::from_kv(&r[0])?,
+        };
+        self.update_cache(task, cp.ts);
+        Ok(cp)
     }
 }
 

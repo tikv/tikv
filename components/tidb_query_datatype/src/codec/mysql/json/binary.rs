@@ -5,9 +5,29 @@ use std::convert::TryInto;
 use codec::number::NumberCodec;
 
 use super::{constants::*, JsonRef, JsonType, ERR_CONVERT_FAILED};
-use crate::codec::Result;
+use crate::codec::{mysql::json::path_expr::ArrayIndex, Result};
 
 impl<'a> JsonRef<'a> {
+    /// Gets the index from the ArrayIndex
+    ///
+    /// If the idx is greater than the count and is from right, it will return
+    /// `None`
+    ///
+    /// See `jsonPathArrayIndex.getIndexFromStart()` in TiDB
+    /// `types/json_path_expr.go`
+    pub fn array_get_index(&self, idx: ArrayIndex) -> Option<usize> {
+        match idx {
+            ArrayIndex::Left(idx) => Some(idx as usize),
+            ArrayIndex::Right(idx) => {
+                if self.get_elem_count() < 1 + (idx as usize) {
+                    None
+                } else {
+                    Some(self.get_elem_count() - 1 - (idx as usize))
+                }
+            }
+        }
+    }
+
     /// Gets the ith element in JsonRef
     ///
     /// See `arrayGetElem()` in TiDB `json/binary.go`
@@ -17,7 +37,7 @@ impl<'a> JsonRef<'a> {
 
     /// Return the `i`th key in current Object json
     ///
-    /// See `arrayGetElem()` in TiDB `json/binary.go`
+    /// See `objectGetKey()` in TiDB `types/json_binary.go`
     pub fn object_get_key(&self, i: usize) -> &'a [u8] {
         let key_off_start = HEADER_LEN + i * KEY_ENTRY_LEN;
         let key_off = NumberCodec::decode_u32_le(&self.value()[key_off_start..]) as usize;
@@ -28,7 +48,7 @@ impl<'a> JsonRef<'a> {
 
     /// Returns the JsonRef of `i`th value in current Object json
     ///
-    /// See `arrayGetElem()` in TiDB `json/binary.go`
+    /// See `objectGetVal()` in TiDB `types/json_binary.go`
     pub fn object_get_val(&self, i: usize) -> Result<JsonRef<'a>> {
         let ele_count = self.get_elem_count();
         let val_entry_off = HEADER_LEN + ele_count * KEY_ENTRY_LEN + i * VALUE_ENTRY_LEN;
@@ -62,7 +82,7 @@ impl<'a> JsonRef<'a> {
     pub fn val_entry_get(&self, val_entry_off: usize) -> Result<JsonRef<'a>> {
         let val_type: JsonType = self.value()[val_entry_off].try_into()?;
         let val_offset =
-            NumberCodec::decode_u32_le(&self.value()[val_entry_off + TYPE_LEN as usize..]) as usize;
+            NumberCodec::decode_u32_le(&self.value()[val_entry_off + TYPE_LEN..]) as usize;
         Ok(match val_type {
             JsonType::Literal => {
                 let offset = val_entry_off + TYPE_LEN;

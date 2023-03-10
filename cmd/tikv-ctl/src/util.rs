@@ -2,6 +2,7 @@
 
 use std::{borrow::ToOwned, error::Error, str, str::FromStr, u64};
 
+use kvproto::kvrpcpb::KeyRange;
 use server::setup::initial_logger;
 use tikv::config::TikvConfig;
 
@@ -62,8 +63,27 @@ pub fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     tikv_util::logger::exit_process_gracefully(-1);
 }
 
+// Check if region's `key_range` intersects with `key_range_limit`.
+pub fn check_intersect_of_range(key_range: &KeyRange, key_range_limit: &KeyRange) -> bool {
+    if !key_range.get_end_key().is_empty()
+        && !key_range_limit.get_start_key().is_empty()
+        && key_range.get_end_key() <= key_range_limit.get_start_key()
+    {
+        return false;
+    }
+    if !key_range_limit.get_end_key().is_empty()
+        && !key_range.get_start_key().is_empty()
+        && key_range_limit.get_end_key() < key_range.get_start_key()
+    {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
+    use raftstore::store::util::build_key_range;
+
     use super::*;
 
     #[test]
@@ -72,5 +92,43 @@ mod tests {
         assert_eq!(from_hex("74").unwrap(), result);
         assert_eq!(from_hex("0x74").unwrap(), result);
         assert_eq!(from_hex("0X74").unwrap(), result);
+    }
+
+    #[test]
+    fn test_included_region_in_range() {
+        // To avoid unfolding the code when `make format` is called
+        fn range(start: &[u8], end: &[u8]) -> KeyRange {
+            build_key_range(start, end, false)
+        }
+        let mut region = range(&[0x02], &[0x05]);
+        // region absolutely in range
+        assert!(check_intersect_of_range(&region, &range(&[0x02], &[0x05])));
+        assert!(check_intersect_of_range(&region, &range(&[0x01], &[])));
+        assert!(check_intersect_of_range(&region, &range(&[0x02], &[])));
+        assert!(check_intersect_of_range(&region, &range(&[], &[])));
+        assert!(check_intersect_of_range(&region, &range(&[0x02], &[0x06])));
+        assert!(check_intersect_of_range(&region, &range(&[0x01], &[0x05])));
+        assert!(check_intersect_of_range(&region, &range(&[], &[0x05])));
+        // region intersects with range
+        assert!(check_intersect_of_range(&region, &range(&[0x04], &[0x05])));
+        assert!(check_intersect_of_range(&region, &range(&[0x04], &[])));
+        assert!(check_intersect_of_range(&region, &range(&[0x01], &[0x03])));
+        assert!(check_intersect_of_range(&region, &range(&[], &[0x03])));
+        assert!(check_intersect_of_range(&region, &range(&[], &[0x02]))); // region is left-closed and right-open interval
+        // range absolutely in region also need to return true
+        assert!(check_intersect_of_range(&region, &range(&[0x03], &[0x04])));
+        // region not intersects with range
+        assert!(!check_intersect_of_range(&region, &range(&[0x05], &[]))); // region is left-closed and right-open interval
+        assert!(!check_intersect_of_range(&region, &range(&[0x06], &[])));
+        assert!(!check_intersect_of_range(&region, &range(&[], &[0x01])));
+        // check last region
+        region = range(&[0x02], &[]);
+        assert!(check_intersect_of_range(&region, &range(&[0x02], &[0x05])));
+        assert!(check_intersect_of_range(&region, &range(&[0x02], &[])));
+        assert!(check_intersect_of_range(&region, &range(&[0x01], &[0x05])));
+        assert!(check_intersect_of_range(&region, &range(&[], &[0x05])));
+        assert!(check_intersect_of_range(&region, &range(&[], &[0x02])));
+        assert!(check_intersect_of_range(&region, &range(&[], &[])));
+        assert!(!check_intersect_of_range(&region, &range(&[], &[0x01])));
     }
 }

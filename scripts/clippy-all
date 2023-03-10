@@ -15,7 +15,7 @@ if [[ -n "$SHELL_DEBUG" ]] ; then
     set -x
 fi
 
-./scripts/clippy --all-targets
+./scripts/clippy --all-targets --features "testexport failpoints"
 
 # for pkg in "components/cdc" "components/backup" "cmd" "tests"; do
 #     cd $pkg

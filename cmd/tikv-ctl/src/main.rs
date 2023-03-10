@@ -59,7 +59,7 @@ fn main() {
 
     // Initialize configuration and security manager.
     let cfg_path = opt.config.as_ref();
-    let cfg = cfg_path.map_or_else(
+    let mut cfg = cfg_path.map_or_else(
         || {
             let mut cfg = TikvConfig::default();
             cfg.log.level = tikv_util::logger::get_level_by_string("warn")
@@ -68,7 +68,7 @@ fn main() {
             cfg
         },
         |path| {
-            let s = fs::read_to_string(&path).unwrap();
+            let s = fs::read_to_string(path).unwrap();
             toml::from_str(&s).unwrap()
         },
     );
@@ -169,7 +169,7 @@ fn main() {
                 .unwrap();
 
             let iv = Iv::from_slice(&file_info.iv).unwrap();
-            let f = File::open(&infile).unwrap();
+            let f = File::open(infile).unwrap();
             let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
 
             io::copy(&mut reader, &mut outf).unwrap();
@@ -249,9 +249,8 @@ fn main() {
                 .exit();
             }
 
-            let skip_paranoid_checks = opt.skip_paranoid_checks;
-            let debug_executor =
-                new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
+            cfg.rocksdb.paranoid_checks = Some(!opt.skip_paranoid_checks);
+            let debug_executor = new_debug_executor(&cfg, data_dir, host, Arc::clone(&mgr));
 
             match cmd {
                 Cmd::Print { cf, key } => {
@@ -272,9 +271,20 @@ fn main() {
                     RaftCmd::Region {
                         regions,
                         skip_tombstone,
+                        start,
+                        end,
+                        limit,
                         ..
                     } => {
-                        debug_executor.dump_region_info(regions, skip_tombstone);
+                        let start_key = from_hex(&start).unwrap();
+                        let end_key = from_hex(&end).unwrap();
+                        debug_executor.dump_region_info(
+                            regions,
+                            &start_key,
+                            &end_key,
+                            limit,
+                            skip_tombstone,
+                        );
                     }
                 },
                 Cmd::Size { region, cf } => {
@@ -333,7 +343,7 @@ fn main() {
                     let to_data_dir = to_data_dir.as_deref();
                     let to_host = to_host.as_deref();
                     let to_config = to_config.map_or_else(TikvConfig::default, |path| {
-                        let s = fs::read_to_string(&path).unwrap();
+                        let s = fs::read_to_string(path).unwrap();
                         toml::from_str(&s).unwrap()
                     });
                     debug_executor.diff_region(region, to_host, to_data_dir, &to_config, mgr);
@@ -632,7 +642,7 @@ fn compact_whole_cluster(
             .name(format!("compact-{}", addr))
             .spawn_wrapper(move || {
                 tikv_alloc::add_thread_memory_accessor();
-                let debug_executor = new_debug_executor(&cfg, None, false, Some(&addr), mgr);
+                let debug_executor = new_debug_executor(&cfg, None, Some(&addr), mgr);
                 for cf in cfs {
                     debug_executor.compact(
                         Some(&addr),
@@ -671,20 +681,21 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
     list
 }
 
-fn run_ldb_command(args: Vec<String>, cfg: &TikvConfig) {
+fn build_rocks_opts(cfg: &TikvConfig) -> engine_rocks::RocksDbOptions {
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
     let env = get_env(key_manager, None /* io_rate_limiter */).unwrap();
-    let mut opts = cfg.rocksdb.build_opt();
-    opts.set_env(env);
+    let resource = cfg.rocksdb.build_resources(env);
+    cfg.rocksdb.build_opt(&resource, cfg.storage.engine)
+}
 
-    engine_rocks::raw::run_ldb_tool(&args, &opts);
+fn run_ldb_command(args: Vec<String>, cfg: &TikvConfig) {
+    engine_rocks::raw::run_ldb_tool(&args, &build_rocks_opts(cfg));
 }
 
 fn run_sst_dump_command(args: Vec<String>, cfg: &TikvConfig) {
-    let opts = cfg.rocksdb.build_opt();
-    engine_rocks::raw::run_sst_dump_tool(&args, &opts);
+    engine_rocks::raw::run_sst_dump_tool(&args, &build_rocks_opts(cfg));
 }
 
 fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TikvConfig) {
@@ -703,7 +714,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
 
     let stderr = BufferRedirect::stderr().unwrap();
     let stdout = BufferRedirect::stdout().unwrap();
-    let opts = cfg.rocksdb.build_opt();
+    let opts = build_rocks_opts(cfg);
 
     match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)) {
         Ok(code) => {

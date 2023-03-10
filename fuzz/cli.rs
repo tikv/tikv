@@ -31,7 +31,7 @@ lazy_static! {
     static ref FUZZ_ROOT: PathBuf = WORKSPACE_ROOT.join("fuzz");
     static ref FUZZ_TARGETS: Vec<String> = {
         let source = FUZZ_ROOT.join("targets/mod.rs");
-        let targets_rs = fs::read_to_string(&source).unwrap();
+        let targets_rs = fs::read_to_string(source).unwrap();
         let match_fuzz_fs = regex::Regex::new(r"pub fn fuzz_(\w+)\(").unwrap();
         let target_names = match_fuzz_fs
             .captures_iter(&targets_rs)
@@ -110,7 +110,7 @@ fn write_fuzz_target_source_file(fuzzer: Fuzzer, target: &str) -> Result<()> {
         template_file_path.display()
     ))?;
 
-    let target_file_path = fuzzer.directory().join(&format!("src/bin/{}.rs", target));
+    let target_file_path = fuzzer.directory().join(format!("src/bin/{}.rs", target));
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -159,7 +159,7 @@ fn get_seed_dir(target: &str) -> PathBuf {
 /// Create corpus dir for fuzz target
 fn create_corpus_dir(base: impl AsRef<Path>, target: &str) -> Result<PathBuf> {
     let base = base.as_ref();
-    let corpus_dir = base.join(&format!("corpus-{}", target));
+    let corpus_dir = base.join(format!("corpus-{}", target));
     fs::create_dir_all(&corpus_dir).context(format!(
         "unable to create corpus dir for {}{}",
         base.display(),
@@ -192,13 +192,13 @@ fn run_afl(target: &str) -> Result<()> {
     let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
 
     pre_check(
-        Command::new("cargo").args(&["afl", "--version"]),
+        Command::new("cargo").args(["afl", "--version"]),
         "cargo install afl",
     )?;
 
     // 1. cargo afl build (in fuzzer-afl directory)
     let fuzzer_build = Command::new("cargo")
-        .args(&["afl", "build", "--bin", target])
+        .args(["afl", "build", "--bin", target])
         .current_dir(fuzzer.directory())
         .spawn()
         .context(format!("Failed to build {}", fuzzer))?
@@ -218,7 +218,7 @@ fn run_afl(target: &str) -> Result<()> {
     // ```
     let instrumented_bin = WORKSPACE_ROOT.join("target/debug").join(target);
     let fuzzer_bin = Command::new("cargo")
-        .args(&["afl", "fuzz"])
+        .args(["afl", "fuzz"])
         .arg("-i")
         .arg(&seed_dir)
         .arg("-o")
@@ -244,7 +244,7 @@ fn run_afl(target: &str) -> Result<()> {
 /// Run one target fuzz test using Honggfuzz
 fn run_honggfuzz(target: &str) -> Result<()> {
     pre_check(
-        Command::new("cargo").args(&["hfuzz", "version"]),
+        Command::new("cargo").args(["hfuzz", "version"]),
         "cargo install honggfuzz --version 0.5.45",
     )?;
 
@@ -262,7 +262,7 @@ fn run_honggfuzz(target: &str) -> Result<()> {
     );
 
     let fuzzer_bin = Command::new("cargo")
-        .args(&["hfuzz", "run", target])
+        .args(["hfuzz", "run", target])
         .env("RUSTFLAGS", &rust_flags)
         .env("HFUZZ_RUN_ARGS", &hfuzz_args)
         .current_dir(fuzzer.directory())
@@ -321,7 +321,7 @@ fn run_libfuzzer(target: &str) -> Result<()> {
     asan_options.push_str(" detect_odr_violation=0");
 
     let fuzzer_bin = Command::new("cargo")
-        .args(&["run", "--target", target_platform, "--bin", target, "--"])
+        .args(["run", "--target", target_platform, "--bin", target, "--"])
         .arg(&corpus_dir)
         .arg(&seed_dir)
         .env("RUSTFLAGS", &rust_flags)

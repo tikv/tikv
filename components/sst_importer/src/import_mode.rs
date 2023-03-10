@@ -9,10 +9,10 @@ use std::{
 };
 
 use engine_traits::{CfOptions, DbOptions, KvEngine};
-use futures::executor::ThreadPool;
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tokio::runtime::Handle;
 
 use super::{Config, Result};
 
@@ -88,7 +88,7 @@ impl ImportModeSwitcher {
         ImportModeSwitcher { inner, is_import }
     }
 
-    pub fn start<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
+    pub fn start<E: KvEngine>(&self, executor: &Handle, db: E) {
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -117,7 +117,7 @@ impl ImportModeSwitcher {
                 }
             }
         };
-        executor.spawn_ok(timer_loop);
+        executor.spawn(timer_loop);
     }
 
     pub fn enter_normal_mode<E: KvEngine>(&self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
@@ -243,7 +243,6 @@ mod tests {
     use std::thread;
 
     use engine_traits::{KvEngine, CF_DEFAULT};
-    use futures::executor::ThreadPoolBuilder;
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::config::ReadableDuration;
@@ -306,14 +305,13 @@ mod tests {
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let cfg = Config::default();
-        let threads = ThreadPoolBuilder::new()
-            .pool_size(cfg.num_threads)
-            .name_prefix("sst-importer")
-            .create()
+        let threads = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(&threads, db.clone());
+        switcher.start(threads.handle(), db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         assert!(switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -344,19 +342,20 @@ mod tests {
             import_mode_timeout: ReadableDuration::millis(300),
             ..Config::default()
         };
-        let threads = ThreadPoolBuilder::new()
-            .pool_size(cfg.num_threads)
-            .name_prefix("sst-importer")
-            .create()
+
+        let threads = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(&threads, db.clone());
+        switcher.start(threads.handle(), db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(&db, mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
 
         thread::sleep(Duration::from_secs(1));
+        threads.block_on(tokio::task::yield_now());
 
         check_import_options(&db, &normal_db_options, &normal_cf_options);
     }

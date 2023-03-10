@@ -1,14 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::Unpin;
-
 use async_trait::async_trait;
-use futures_io::AsyncRead;
 use tokio::io;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 use super::ExternalStorage;
-use crate::UnpinReader;
+use crate::{ExternalData, UnpinReader};
 
 /// A storage saves files into void.
 /// It is mainly for test use.
@@ -44,11 +41,11 @@ impl ExternalStorage for NoopStorage {
         Ok(())
     }
 
-    fn read(&self, _name: &str) -> Box<dyn AsyncRead + Unpin> {
+    fn read(&self, _name: &str) -> ExternalData<'_> {
         Box::new(io::empty().compat())
     }
 
-    fn read_part(&self, _name: &str, _off: u64, _len: u64) -> Box<dyn AsyncRead + Unpin> {
+    fn read_part(&self, _name: &str, _off: u64, _len: u64) -> ExternalData<'_> {
         Box::new(io::empty().compat())
     }
 }

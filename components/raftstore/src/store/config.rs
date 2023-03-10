@@ -68,6 +68,9 @@ pub struct Config {
     pub raft_log_compact_sync_interval: ReadableDuration,
     // Interval to gc unnecessary raft log.
     pub raft_log_gc_tick_interval: ReadableDuration,
+    // Interval to request voter_replicated_index for gc unnecessary raft log,
+    // if the leader has not initiated gc for a long time.
+    pub request_voter_replicated_index_interval: ReadableDuration,
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
     // When entry count exceed this value, gc will be forced trigger.
@@ -203,7 +206,6 @@ pub struct Config {
     pub store_batch_system: BatchSystemConfig,
 
     /// If it is 0, it means io tasks are handled in store threads.
-    #[online_config(skip)]
     pub store_io_pool_size: usize,
 
     #[online_config(skip)]
@@ -218,6 +220,14 @@ pub struct Config {
     pub dev_assert: bool,
     #[online_config(hidden)]
     pub apply_yield_duration: ReadableDuration,
+    /// yield the fsm when apply flushed data size exceeds this threshold.
+    /// the yield is check after commit, so the actual handled messages can be
+    /// bigger than the configed value.
+    // NOTE: the default value is much smaller than the default max raft batch msg size(0.2
+    // * raft_entry_max_size), this is intentional because in the common case, a raft entry
+    // is unlikely to exceed this threshold, but in case when raftstore is the bottleneck,
+    // we still allow big raft batch for better throughput.
+    pub apply_yield_write_size: ReadableSize,
 
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
@@ -281,6 +291,11 @@ pub struct Config {
     // Interval to inspect the latency of raftstore for slow store detection.
     pub inspect_interval: ReadableDuration,
 
+    // The unsensitive(increase it to reduce sensitiveness) of the cause-trend detection
+    pub slow_trend_unsensitive_cause: f64,
+    // The unsensitive(increase it to reduce sensitiveness) of the result-trend detection
+    pub slow_trend_unsensitive_result: f64,
+
     // Interval to report min resolved ts, if it is zero, it means disabled.
     pub report_min_resolved_ts_interval: ReadableDuration,
 
@@ -299,10 +314,26 @@ pub struct Config {
     #[doc(hidden)]
     pub long_uncommitted_base_threshold: ReadableDuration,
 
+    /// Max duration for the entry cache to be warmed up.
+    /// Set it to 0 to disable warmup.
+    pub max_entry_cache_warmup_duration: ReadableDuration,
+
     #[doc(hidden)]
     pub max_snapshot_file_raw_size: ReadableSize,
 
     pub unreachable_backoff: ReadableDuration,
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    // Interval to check peers availability info.
+    pub check_peers_availability_interval: ReadableDuration,
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    // Interval to check if need to request snapshot.
+    pub check_request_snapshot_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -321,6 +352,7 @@ impl Default for Config {
             raft_entry_max_size: ReadableSize::mb(8),
             raft_log_compact_sync_interval: ReadableDuration::secs(2),
             raft_log_gc_tick_interval: ReadableDuration::secs(3),
+            request_voter_replicated_index_interval: ReadableDuration::minutes(5),
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
@@ -376,6 +408,7 @@ impl Default for Config {
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
+            apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
             evict_cache_on_memory_ratio: 0.0,
             cmd_batch: true,
@@ -395,18 +428,27 @@ impl Default for Config {
             /// the log commit duration is less than 1s. Feel free to adjust
             /// this config :)
             long_uncommitted_base_threshold: ReadableDuration::secs(20),
+            max_entry_cache_warmup_duration: ReadableDuration::secs(1),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(500),
+            // The param `slow_trend_unsensitive_cause == 2.0` can yield good results,
+            // make it `10.0` to reduce a bit sensitiveness because SpikeFilter is disabled
+            slow_trend_unsensitive_cause: 10.0,
+            slow_trend_unsensitive_result: 0.5,
             report_min_resolved_ts_interval: ReadableDuration::secs(1),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
+            // TODO: make its value reasonable
+            check_peers_availability_interval: ReadableDuration::secs(30),
+            // TODO: make its value reasonable
+            check_request_snapshot_interval: ReadableDuration::minutes(1),
         }
     }
 }
@@ -414,6 +456,24 @@ impl Default for Config {
 impl Config {
     pub fn new() -> Config {
         Config::default()
+    }
+
+    pub fn new_raft_config(&self, peer_id: u64, applied_index: u64) -> raft::Config {
+        raft::Config {
+            id: peer_id,
+            election_tick: self.raft_election_timeout_ticks,
+            heartbeat_tick: self.raft_heartbeat_ticks,
+            min_election_tick: self.raft_min_election_timeout_ticks,
+            max_election_tick: self.raft_max_election_timeout_ticks,
+            max_size_per_msg: self.raft_max_size_per_msg.0,
+            max_inflight_msgs: self.raft_max_inflight_msgs,
+            applied: applied_index,
+            check_quorum: true,
+            skip_bcast_commit: true,
+            pre_vote: self.prevote,
+            max_committed_size_per_ready: ReadableSize::mb(16).0,
+            ..Default::default()
+        }
     }
 
     pub fn raft_store_max_leader_lease(&self) -> TimeDuration {
@@ -442,6 +502,11 @@ impl Config {
 
     pub fn raft_log_gc_size_limit(&self) -> ReadableSize {
         self.raft_log_gc_size_limit.unwrap()
+    }
+
+    #[inline]
+    pub fn warmup_entry_cache_enabled(&self) -> bool {
+        self.max_entry_cache_warmup_duration.0 != Duration::from_secs(0)
     }
 
     pub fn region_split_check_diff(&self) -> ReadableSize {
@@ -530,7 +595,7 @@ impl Config {
 
         let election_timeout =
             self.raft_base_tick_interval.as_millis() * self.raft_election_timeout_ticks as u64;
-        let lease = self.raft_store_max_leader_lease.as_millis() as u64;
+        let lease = self.raft_store_max_leader_lease.as_millis();
         if election_timeout < lease {
             return Err(box_err!(
                 "election timeout {} ms is less than lease {} ms",
@@ -539,7 +604,7 @@ impl Config {
             ));
         }
 
-        let tick = self.raft_base_tick_interval.as_millis() as u64;
+        let tick = self.raft_base_tick_interval.as_millis();
         if lease > election_timeout - tick {
             return Err(box_err!(
                 "lease {} ms should not be greater than election timeout {} ms - 1 tick({} ms)",
@@ -553,7 +618,7 @@ impl Config {
             return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
         }
 
-        let stale_state_check = self.peer_stale_state_check_interval.as_millis() as u64;
+        let stale_state_check = self.peer_stale_state_check_interval.as_millis();
         if stale_state_check < election_timeout * 2 {
             return Err(box_err!(
                 "peer stale state check interval {} ms is less than election timeout x 2 {} ms",
@@ -568,7 +633,7 @@ impl Config {
             ));
         }
 
-        let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis() as u64;
+        let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis();
         if abnormal_leader_missing < stale_state_check {
             return Err(box_err!(
                 "abnormal leader missing {} ms is less than peer stale state check interval {} ms",
@@ -577,7 +642,7 @@ impl Config {
             ));
         }
 
-        let max_leader_missing = self.max_leader_missing_duration.as_millis() as u64;
+        let max_leader_missing = self.max_leader_missing_duration.as_millis();
         if max_leader_missing < abnormal_leader_missing {
             return Err(box_err!(
                 "max leader missing {} ms is less than abnormal leader missing {} ms",
@@ -603,7 +668,7 @@ impl Config {
         // prevent mistakenly inputting too large values, the max limit is made
         // according to the cpu quota * 10. Notice 10 is only an estimate, not an
         // empirical value.
-        let limit = SysQuota::cpu_cores_quota() as usize * 10;
+        let limit = (SysQuota::cpu_cores_quota() * 10.0) as usize;
         if self.apply_batch_system.pool_size == 0 || self.apply_batch_system.pool_size > limit {
             return Err(box_err!(
                 "apply-pool-size should be greater than 0 and less than or equal to: {}",
@@ -769,6 +834,9 @@ impl Config {
             .with_label_values(&["raft_log_gc_tick_interval"])
             .set(self.raft_log_gc_tick_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["request_voter_replicated_index_interval"])
+            .set(self.request_voter_replicated_index_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_threshold"])
             .set(self.raft_log_gc_threshold as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -881,6 +949,9 @@ impl Config {
             .with_label_values(&["local_read_batch_size"])
             .set(self.local_read_batch_size as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_yield_write_size"])
+            .set(self.apply_yield_write_size.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_max_batch_size"])
             .set(self.apply_batch_system.max_batch_size() as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -986,8 +1057,25 @@ impl ConfigManager for RaftstoreConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.config
-                .update(move |cfg: &mut Config| cfg.update(change))?;
+            self.config.update(move |cfg: &mut Config| {
+                // Currently, it's forbidden to modify the write mode either from `async` to
+                // `sync` or from `sync` to `async`.
+                if let Some(ConfigValue::Usize(resized_io_size)) = change.get("store_io_pool_size")
+                {
+                    if cfg.store_io_pool_size == 0 && *resized_io_size > 0 {
+                        return Err(
+                            "SYNC mode, not allowed to resize the size of store-io-pool-size"
+                                .into(),
+                        );
+                    } else if cfg.store_io_pool_size > 0 && *resized_io_size == 0 {
+                        return Err(
+                            "ASYNC mode, not allowed to be set to SYNC mode by resizing store-io-pool-size to 0"
+                                .into(),
+                        );
+                    }
+                }
+                cfg.update(change)
+            })?;
         }
         if let Some(ConfigValue::Module(raft_batch_system_change)) =
             change.get("store_batch_system")
@@ -998,6 +1086,12 @@ impl ConfigManager for RaftstoreConfigManager {
             change.get("apply_batch_system")
         {
             self.schedule_config_change(RaftStoreBatchComponent::Apply, apply_batch_system_change);
+        }
+        if let Some(ConfigValue::Usize(resized_io_size)) = change.get("store_io_pool_size") {
+            let resize_io_task = RefreshConfigTask::ScaleWriters(*resized_io_size);
+            if let Err(e) = self.scheduler.schedule(resize_io_task) {
+                error!("raftstore configuration manager schedule to resize store-io-pool-size work task failed"; "err"=> ?e);
+            }
         }
         info!(
             "raftstore config changed";
@@ -1015,7 +1109,7 @@ mod tests {
 
     #[test]
     fn test_config_validate() {
-        let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
+        let split_size = coprocessor::config::SPLIT_SIZE;
         let mut cfg = Config::new();
         cfg.validate(split_size, false, ReadableSize(0)).unwrap();
         assert_eq!(

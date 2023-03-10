@@ -56,6 +56,10 @@ make_static_metric! {
         channel_full,
         cache_miss,
         safe_ts,
+        witness,
+        flashback_not_prepared,
+        flashback_in_progress,
+        wait_data,
     }
 
     pub struct LocalReadRejectCounter : LocalIntCounter {
@@ -185,12 +189,6 @@ lazy_static! {
     pub static ref RAFT_LOG_GC_SEEK_OPERATIONS: IntCounter = register_int_counter!(
         "tikv_raftstore_raft_log_gc_seek_operations_count",
         "Total number of seek operations from raft log gc."
-    )
-    .unwrap();
-    pub static ref RAFT_LOG_GC_DELETED_KEYS_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_raftstore_raft_log_gc_deleted_keys",
-        "Bucket of number of deleted keys from raft log gc.",
-        exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref RAFT_LOG_GC_FAILED: IntCounter = register_int_counter!(

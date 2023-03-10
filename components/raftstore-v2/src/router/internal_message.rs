@@ -1,17 +1,26 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::raft_serverpb::RegionLocalState;
+use pd_client::{BucketMeta, BucketStat};
+use raftstore::store::fsm::ApplyMetrics;
 
-use crate::operation::CommittedEntries;
+use crate::operation::{AdminCmdResult, CommittedEntries, DataTrace, GenSnapTask};
 
 #[derive(Debug)]
 pub enum ApplyTask {
     CommittedEntries(CommittedEntries),
+    Snapshot(GenSnapTask),
+    /// Writes that doesn't care consistency.
+    UnsafeWrite(Box<[u8]>),
+    ManualFlush,
+    RefreshBucketStat(std::sync::Arc<BucketMeta>),
 }
 
 #[derive(Debug, Default)]
 pub struct ApplyRes {
     pub applied_index: u64,
     pub applied_term: u64,
-    pub region_state: Option<RegionLocalState>,
+    pub admin_result: Box<[AdminCmdResult]>,
+    pub modifications: DataTrace,
+    pub metrics: ApplyMetrics,
+    pub bucket_stat: Option<BucketStat>,
 }

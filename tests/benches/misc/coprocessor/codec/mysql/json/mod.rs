@@ -18,7 +18,7 @@ fn download_and_extract_file(url: &str) -> io::Result<String> {
         .stderr(Stdio::null())
         .spawn()?;
     let mut tar_child = Command::new("tar")
-        .args(&["xzf", "-", "--to-stdout"])
+        .args(["xzf", "-", "--to-stdout"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

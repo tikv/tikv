@@ -12,7 +12,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::KvEngine;
 use grpcio::Environment;
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
@@ -23,21 +23,23 @@ use raftstore::{
     store::{
         fsm::StoreMeta,
         util::{self, RegionReadProgress, RegionReadProgressRegistry},
-        RegionSnapshot,
     },
 };
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
-use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
+use tikv_util::{
+    warn,
+    worker::{Runnable, RunnableWithTimer, Scheduler},
+};
+use tokio::sync::Notify;
 use txn_types::{Key, TimeStamp};
 
 use crate::{
-    advance::AdvanceTsWorker,
+    advance::{AdvanceTsWorker, LeadershipResolver},
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
     resolver::Resolver,
     scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
-    sinker::{CmdSinker, SinkCmd},
 };
 
 enum ResolverStatus {
@@ -86,6 +88,10 @@ impl ObserveRegion {
                 cancelled: Arc::new(AtomicBool::new(false)),
             },
         }
+    }
+
+    fn read_progress(&self) -> &RegionReadProgress {
+        self.resolver.read_progress.as_ref().unwrap()
     }
 
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> std::result::Result<(), String> {
@@ -191,7 +197,9 @@ impl ObserveRegion {
                                     .resolver
                                     .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
                                 // One pc command do not contains any lock, so just skip it
-                                ChangeRow::OnePc { .. } => {}
+                                ChangeRow::OnePc { .. } => {
+                                    self.resolver.update_tracked_index(*index);
+                                }
                                 ChangeRow::IngestSsT => {
                                     self.resolver.update_tracked_index(*index);
                                 }
@@ -258,65 +266,67 @@ impl ObserveRegion {
     }
 }
 
-pub struct Endpoint<T, E: KvEngine, C> {
+pub struct Endpoint<T, E: KvEngine> {
     store_id: Option<u64>,
     cfg: ResolvedTsConfig,
-    cfg_version: usize,
+    advance_notify: Arc<Notify>,
     store_meta: Arc<Mutex<StoreMeta>>,
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
-    scheduler: Scheduler<Task<E::Snapshot>>,
-    sinker: C,
-    advance_worker: AdvanceTsWorker<E>,
+    scheduler: Scheduler<Task>,
+    advance_worker: AdvanceTsWorker,
     _phantom: PhantomData<(T, E)>,
 }
 
-impl<T, E, C> Endpoint<T, E, C>
+impl<T, E> Endpoint<T, E>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
-    C: CmdSinker<E::Snapshot>,
 {
     pub fn new(
         cfg: &ResolvedTsConfig,
-        scheduler: Scheduler<Task<E::Snapshot>>,
+        scheduler: Scheduler<Task>,
         raft_router: T,
         store_meta: Arc<Mutex<StoreMeta>>,
         pd_client: Arc<dyn PdClient>,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        sinker: C,
     ) -> Self {
         let (region_read_progress, store_id) = {
             let meta = store_meta.lock().unwrap();
             (meta.region_read_progress.clone(), meta.store_id)
         };
         let advance_worker = AdvanceTsWorker::new(
-            pd_client,
+            cfg.advance_ts_interval.0,
+            pd_client.clone(),
             scheduler.clone(),
-            store_meta.clone(),
-            region_read_progress.clone(),
             concurrency_manager,
-            env,
-            security_mgr,
         );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
+        let store_resolver_gc_interval = Duration::from_secs(60);
+        let leader_resolver = LeadershipResolver::new(
+            store_id.unwrap(),
+            pd_client.clone(),
+            env,
+            security_mgr,
+            region_read_progress.clone(),
+            store_resolver_gc_interval,
+        );
         let ep = Self {
             store_id,
             cfg: cfg.clone(),
-            cfg_version: 0,
+            advance_notify: Arc::new(Notify::new()),
             scheduler,
             store_meta,
             region_read_progress,
             advance_worker,
             scanner_pool,
-            sinker,
             regions: HashMap::default(),
             _phantom: PhantomData::default(),
         };
-        ep.register_advance_event(ep.cfg_version);
+        ep.handle_advance_resolved_ts(leader_resolver);
         ep
     }
 
@@ -343,6 +353,9 @@ where
             ResolverStatus::Pending { ref cancelled, .. } => cancelled.clone(),
             ResolverStatus::Ready => panic!("resolved ts illeagal created observe region"),
         };
+        observe_region
+            .read_progress()
+            .update_advance_resolved_ts_notify(self.advance_notify.clone());
         self.regions.insert(region_id, observe_region);
 
         let scan_task = self.build_scan_task(region, observe_handle, cancelled);
@@ -488,70 +501,48 @@ where
         }
     }
 
-    // Try to advance resolved ts.
+    // Update advanced resolved ts.
     // Must ensure all regions are leaders at the point of ts.
-    fn advance_resolved_ts(&mut self, regions: Vec<u64>, ts: TimeStamp) {
+    fn handle_resolved_ts_advanced(&mut self, regions: Vec<u64>, ts: TimeStamp) {
         if regions.is_empty() {
             return;
         }
-
-        let mut min_ts = TimeStamp::max();
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let resolved_ts = observe_region.resolver.resolve(ts);
-                    if resolved_ts < min_ts {
-                        min_ts = resolved_ts;
-                    }
+                    let _ = observe_region.resolver.resolve(ts);
                 }
             }
         }
-        self.sinker.sink_resolved_ts(regions, ts);
     }
 
     // Tracking or untracking locks with incoming commands that corresponding
     // observe id is valid.
     #[allow(clippy::drop_ref)]
-    fn handle_change_log(
-        &mut self,
-        cmd_batch: Vec<CmdBatch>,
-        snapshot: Option<RegionSnapshot<E::Snapshot>>,
-    ) {
+    fn handle_change_log(&mut self, cmd_batch: Vec<CmdBatch>) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
-        let logs = cmd_batch
-            .into_iter()
-            .filter_map(|batch| {
-                if !batch.is_empty() {
-                    if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
-                        let observe_id = batch.rts_id;
-                        let region_id = observe_region.meta.id;
-                        if observe_region.handle.id == observe_id {
-                            let logs = ChangeLog::encode_change_log(region_id, batch);
-                            if let Err(e) = observe_region.track_change_log(&logs) {
-                                drop(observe_region);
-                                self.re_register_region(region_id, observe_id, e)
-                            }
-                            return Some(SinkCmd {
-                                region_id,
-                                observe_id,
-                                logs,
-                            });
-                        } else {
-                            debug!("resolved ts CmdBatch discarded";
-                                "region_id" => batch.region_id,
-                                "observe_id" => ?batch.rts_id,
-                                "current" => ?observe_region.handle.id,
-                            );
-                        }
+        for batch in cmd_batch {
+            if batch.is_empty() {
+                continue;
+            }
+            if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
+                let observe_id = batch.rts_id;
+                let region_id = observe_region.meta.id;
+                if observe_region.handle.id == observe_id {
+                    let logs = ChangeLog::encode_change_log(region_id, batch);
+                    if let Err(e) = observe_region.track_change_log(&logs) {
+                        drop(observe_region);
+                        self.re_register_region(region_id, observe_id, e);
                     }
+                } else {
+                    debug!("resolved ts CmdBatch discarded";
+                        "region_id" => batch.region_id,
+                        "observe_id" => ?batch.rts_id,
+                        "current" => ?observe_region.handle.id,
+                    );
                 }
-                None
-            })
-            .collect();
-        match snapshot {
-            Some(snap) => self.sinker.sink_cmd_with_old_value(logs, snap),
-            None => self.sinker.sink_cmd(logs),
+            }
         }
     }
 
@@ -574,36 +565,28 @@ where
         }
     }
 
-    fn register_advance_event(&self, cfg_version: usize) {
-        // Ignore advance event that registered with previous `advance_ts_interval`
-        // config
-        if self.cfg_version != cfg_version {
-            return;
-        }
+    fn handle_advance_resolved_ts(&self, leader_resolver: LeadershipResolver) {
         let regions = self.regions.keys().into_iter().copied().collect();
-        self.advance_worker.advance_ts_for_regions(regions);
-        self.advance_worker
-            .register_next_event(self.cfg.advance_ts_interval.0, self.cfg_version);
+        self.advance_worker.advance_ts_for_regions(
+            regions,
+            leader_resolver,
+            self.cfg.advance_ts_interval.0,
+            self.advance_notify.clone(),
+        );
     }
 
     fn handle_change_config(&mut self, change: ConfigChange) {
         let prev = format!("{:?}", self.cfg);
-        let prev_advance_ts_interval = self.cfg.advance_ts_interval;
         if let Err(e) = self.cfg.update(change) {
-            error!("update resolved-ts config unexpectly failed"; "err" => ?e);
-            return;
+            warn!("resolved-ts config fails"; "error" => ?e);
+        } else {
+            self.advance_notify.notify_waiters();
+            info!(
+                "resolved-ts config changed";
+                "prev" => prev,
+                "current" => ?self.cfg,
+            );
         }
-        if self.cfg.advance_ts_interval != prev_advance_ts_interval {
-            // Increase the `cfg_version` to reject advance event that registered before
-            self.cfg_version += 1;
-            // Advance `resolved-ts` immediately after `advance_ts_interval` changed
-            self.register_advance_event(self.cfg_version);
-        }
-        info!(
-            "resolved-ts config changed";
-            "prev" => prev,
-            "current" => ?self.cfg,
-        );
     }
 
     fn get_or_init_store_id(&mut self) -> Option<u64> {
@@ -615,7 +598,7 @@ where
     }
 }
 
-pub enum Task<S: Snapshot> {
+pub enum Task {
     RegionUpdated(Region),
     RegionDestroyed(Region),
     RegisterRegion {
@@ -629,16 +612,15 @@ pub enum Task<S: Snapshot> {
         observe_id: ObserveId,
         cause: String,
     },
-    RegisterAdvanceEvent {
-        cfg_version: usize,
-    },
     AdvanceResolvedTs {
+        leader_resolver: LeadershipResolver,
+    },
+    ResolvedTsAdvanced {
         regions: Vec<u64>,
         ts: TimeStamp,
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
-        snapshot: Option<RegionSnapshot<S>>,
     },
     ScanLocks {
         region_id: u64,
@@ -651,7 +633,7 @@ pub enum Task<S: Snapshot> {
     },
 }
 
-impl<S: Snapshot> fmt::Debug for Task<S> {
+impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("ResolvedTsTask");
         match self {
@@ -681,7 +663,7 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("observe_id", &observe_id)
                 .field("cause", &cause)
                 .finish(),
-            Task::AdvanceResolvedTs {
+            Task::ResolvedTsAdvanced {
                 ref regions,
                 ref ts,
             } => de
@@ -701,9 +683,7 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("observe_id", &observe_id)
                 .field("apply_index", &apply_index)
                 .finish(),
-            Task::RegisterAdvanceEvent { .. } => {
-                de.field("name", &"register_advance_event").finish()
-            }
+            Task::AdvanceResolvedTs { .. } => de.field("name", &"advance_resolved_ts").finish(),
             Task::ChangeConfig { ref change } => de
                 .field("name", &"change_config")
                 .field("change", &change)
@@ -712,21 +692,20 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
     }
 }
 
-impl<S: Snapshot> fmt::Display for Task<S> {
+impl fmt::Display for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl<T, E, C> Runnable for Endpoint<T, E, C>
+impl<T, E> Runnable for Endpoint<T, E>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
-    C: CmdSinker<E::Snapshot>,
 {
-    type Task = Task<E::Snapshot>;
+    type Task = Task;
 
-    fn run(&mut self, task: Task<E::Snapshot>) {
+    fn run(&mut self, task: Task) {
         debug!("run resolved-ts task"; "task" => ?task);
         match task {
             Task::RegionDestroyed(region) => self.region_destroyed(region),
@@ -738,32 +717,33 @@ where
                 observe_id,
                 cause,
             } => self.re_register_region(region_id, observe_id, cause),
-            Task::AdvanceResolvedTs { regions, ts } => self.advance_resolved_ts(regions, ts),
-            Task::ChangeLog {
-                cmd_batch,
-                snapshot,
-            } => self.handle_change_log(cmd_batch, snapshot),
+            Task::AdvanceResolvedTs { leader_resolver } => {
+                self.handle_advance_resolved_ts(leader_resolver)
+            }
+            Task::ResolvedTsAdvanced { regions, ts } => {
+                self.handle_resolved_ts_advanced(regions, ts)
+            }
+            Task::ChangeLog { cmd_batch } => self.handle_change_log(cmd_batch),
             Task::ScanLocks {
                 region_id,
                 observe_id,
                 entries,
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
-            Task::RegisterAdvanceEvent { cfg_version } => self.register_advance_event(cfg_version),
             Task::ChangeConfig { change } => self.handle_change_config(change),
         }
     }
 }
 
-pub struct ResolvedTsConfigManager<S: Snapshot>(Scheduler<Task<S>>);
+pub struct ResolvedTsConfigManager(Scheduler<Task>);
 
-impl<S: Snapshot> ResolvedTsConfigManager<S> {
-    pub fn new(scheduler: Scheduler<Task<S>>) -> ResolvedTsConfigManager<S> {
+impl ResolvedTsConfigManager {
+    pub fn new(scheduler: Scheduler<Task>) -> ResolvedTsConfigManager {
         ResolvedTsConfigManager(scheduler)
     }
 }
 
-impl<S: Snapshot> ConfigManager for ResolvedTsConfigManager<S> {
+impl ConfigManager for ResolvedTsConfigManager {
     fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
         if let Err(e) = self.0.schedule(Task::ChangeConfig { change }) {
             error!("failed to schedule ChangeConfig task"; "err" => ?e);
@@ -774,11 +754,10 @@ impl<S: Snapshot> ConfigManager for ResolvedTsConfigManager<S> {
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-impl<T, E, C> RunnableWithTimer for Endpoint<T, E, C>
+impl<T, E> RunnableWithTimer for Endpoint<T, E>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
-    C: CmdSinker<E::Snapshot>,
 {
     fn on_timeout(&mut self) {
         let store_id = self.get_or_init_store_id();
@@ -786,8 +765,7 @@ where
         let (mut oldest_leader_ts, mut oldest_leader_region) = (u64::MAX, 0);
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
-                let (peers, leader_info) = read_progress.dump_leader_info();
-                let leader_store_id = crate::util::find_store_id(&peers, leader_info.peer_id);
+                let (leader_info, leader_store_id) = read_progress.dump_leader_info();
                 let ts = leader_info.get_read_state().get_safe_ts();
                 if ts == 0 {
                     zero_ts_count += 1;

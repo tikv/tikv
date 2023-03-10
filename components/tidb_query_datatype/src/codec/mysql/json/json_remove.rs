@@ -7,10 +7,9 @@ impl<'a> JsonRef<'a> {
     /// All path expressions cannot contain * or ** wildcard.
     /// If any error occurs, the input won't be changed.
     pub fn remove(&self, path_expr_list: &[PathExpression]) -> Result<Json> {
-        if path_expr_list
-            .iter()
-            .any(|expr| expr.legs.is_empty() || expr.contains_any_asterisk())
-        {
+        if path_expr_list.iter().any(|expr| {
+            expr.legs.is_empty() || expr.contains_any_asterisk() || expr.contains_any_range()
+        }) {
             return Err(box_err!("Invalid path expression"));
         }
 

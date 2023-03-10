@@ -47,7 +47,7 @@ use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
 
 use crate::{
     channel::CdcEvent,
-    delegate::{post_init_downstream, Delegate, DownstreamId, DownstreamState},
+    delegate::{post_init_downstream, Delegate, DownstreamId, DownstreamState, ObservedRange},
     endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors},
@@ -79,6 +79,7 @@ pub(crate) struct Initializer<E> {
     pub(crate) sched: Scheduler<Task>,
     pub(crate) sink: crate::channel::Sink,
 
+    pub(crate) observed_range: ObservedRange,
     pub(crate) region_id: u64,
     pub(crate) region_epoch: RegionEpoch,
     pub(crate) observe_id: ObserveId,
@@ -96,6 +97,8 @@ pub(crate) struct Initializer<E> {
     pub(crate) ts_filter_ratio: f64,
 
     pub(crate) kv_api: ChangeDataRequestKvApi,
+
+    pub(crate) filter_loop: bool,
 }
 
 impl<E: KvEngine> Initializer<E> {
@@ -204,10 +207,12 @@ impl<E: KvEngine> Initializer<E> {
         let region_id = region.get_id();
         let observe_id = self.observe_id;
         let kv_api = self.kv_api;
+        self.observed_range.update_region_key_range(&region);
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id,
+            "all_key_covered" => ?self.observed_range.all_key_covered,
             "start_key" => log_wrappers::Value::key(snap.lower_bound().unwrap_or_default()),
             "end_key" => log_wrappers::Value::key(snap.upper_bound().unwrap_or_default()));
 
@@ -425,8 +430,13 @@ impl<E: KvEngine> Initializer<E> {
 
     async fn sink_scan_events(&mut self, entries: Vec<Option<KvEntry>>, done: bool) -> Result<()> {
         let mut barrier = None;
-        let mut events =
-            Delegate::convert_to_grpc_events(self.region_id, self.request_id, entries)?;
+        let mut events = Delegate::convert_to_grpc_events(
+            self.region_id,
+            self.request_id,
+            entries,
+            self.filter_loop,
+            &self.observed_range,
+        )?;
         if done {
             let (cb, fut) = tikv_util::future::paired_future_callback();
             events.push(CdcEvent::Barrier(Some(cb)));
@@ -558,13 +568,17 @@ mod tests {
     use engine_rocks::RocksEngine;
     use engine_traits::{MiscExt, CF_WRITE};
     use futures::{executor::block_on, StreamExt};
-    use kvproto::{cdcpb::Event_oneof_event, errorpb::Error as ErrorHeader};
+    use kvproto::{
+        cdcpb::{EventLogType, Event_oneof_event},
+        errorpb::Error as ErrorHeader,
+    };
     use raftstore::{coprocessor::ObserveHandle, store::RegionSnapshot};
     use test_raftstore::MockRaftStoreRouter;
     use tikv::storage::{
         kv::Engine,
         txn::tests::{
             must_acquire_pessimistic_lock, must_commit, must_prewrite_delete, must_prewrite_put,
+            must_prewrite_put_with_txn_soucre,
         },
         TestEngineBuilder,
     };
@@ -601,6 +615,7 @@ mod tests {
         buffer: usize,
         engine: Option<RocksEngine>,
         kv_api: ChangeDataRequestKvApi,
+        filter_loop: bool,
     ) -> (
         LazyWorker<Task>,
         Runtime,
@@ -630,7 +645,7 @@ mod tests {
             }),
             sched: receiver_worker.scheduler(),
             sink,
-
+            observed_range: ObservedRange::default(),
             region_id: 1,
             region_epoch: RegionEpoch::default(),
             observe_id: ObserveId::new(),
@@ -645,6 +660,7 @@ mod tests {
             build_resolver: true,
             ts_filter_ratio: 1.0, // always enable it.
             kv_api,
+            filter_loop,
         };
 
         (receiver_worker, pool, initializer, rx, drain)
@@ -656,6 +672,12 @@ mod tests {
 
         let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Arc<[u8]>>>::new();
 
+        // Only observe ["", "b\0x90"]
+        let observed_range = ObservedRange::new(
+            Key::from_raw(&[]).into_encoded(),
+            Key::from_raw(&[b'k', 90]).into_encoded(),
+        )
+        .unwrap();
         let mut total_bytes = 0;
         // Pessimistic locks should not be tracked
         for i in 0..10 {
@@ -686,7 +708,9 @@ mod tests {
             buffer,
             engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
+            false,
         );
+        initializer.observed_range = observed_range.clone();
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -700,7 +724,14 @@ mod tests {
         // To not block test by barrier.
         pool.spawn(async move {
             let mut d = drain.drain();
-            while d.next().await.is_some() {}
+            while let Some((e, _)) = d.next().await {
+                if let CdcEvent::Event(e) = e {
+                    for e in e.get_entries().get_entries() {
+                        let key = Key::from_raw(&e.key).into_encoded();
+                        assert!(observed_range.contains_encoded_key(&key), "{:?}", e);
+                    }
+                }
+            }
         });
 
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
@@ -754,6 +785,53 @@ mod tests {
         worker.stop();
     }
 
+    #[test]
+    fn test_initializer_filter_loop() {
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
+
+        let mut total_bytes = 0;
+
+        for i in 10..100 {
+            let (k, v) = (&[b'k', i], &[b'v', i]);
+            total_bytes += k.len();
+            total_bytes += v.len();
+            let ts = TimeStamp::new(i as _);
+            must_prewrite_put_with_txn_soucre(&mut engine, k, v, k, ts, 1);
+        }
+
+        let snap = engine.snapshot(Default::default()).unwrap();
+        // Buffer must be large enough to unblock async incremental scan.
+        let buffer = 1000;
+        let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
+            total_bytes,
+            buffer,
+            engine.kv_engine(),
+            ChangeDataRequestKvApi::TiDb,
+            true,
+        );
+        let th = pool.spawn(async move {
+            initializer
+                .async_incremental_scan(snap, Region::default())
+                .await
+                .unwrap();
+        });
+        let mut drain = drain.drain();
+        while let Some((event, _)) = block_on(drain.next()) {
+            let event = match event {
+                CdcEvent::Event(x) if x.event.is_some() => x.event.unwrap(),
+                _ => continue,
+            };
+            let entries = match event {
+                Event_oneof_event::Entries(mut x) => x.take_entries().into_vec(),
+                _ => continue,
+            };
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].get_type(), EventLogType::Initialized);
+        }
+        block_on(th).unwrap();
+        worker.stop();
+    }
+
     // Test `hint_min_ts` works fine with `ExtraOp::ReadOldValue`.
     // Whether `DeltaScanner` emits correct old values or not is already tested by
     // another case `test_old_value_with_hint_min_ts`, so here we only care about
@@ -782,6 +860,7 @@ mod tests {
                     1000,
                     engine.kv_engine(),
                     ChangeDataRequestKvApi::TiDb,
+                    false,
                 );
                 initializer.checkpoint_ts = checkpoint_ts.into();
                 let mut drain = drain.drain();
@@ -840,8 +919,13 @@ mod tests {
     fn test_initializer_deregister_downstream() {
         let total_bytes = 1;
         let buffer = 1;
-        let (mut worker, _pool, mut initializer, rx, _drain) =
-            mock_initializer(total_bytes, buffer, None, ChangeDataRequestKvApi::TiDb);
+        let (mut worker, _pool, mut initializer, rx, _drain) = mock_initializer(
+            total_bytes,
+            buffer,
+            None,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+        );
 
         // Errors reported by region should deregister region.
         initializer.build_resolver = false;
@@ -891,7 +975,7 @@ mod tests {
         let total_bytes = 1;
         let buffer = 1;
         let (mut worker, pool, mut initializer, _rx, _drain) =
-            mock_initializer(total_bytes, buffer, None, kv_api);
+            mock_initializer(total_bytes, buffer, None, kv_api, false);
 
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         let raft_router = MockRaftStoreRouter::new();

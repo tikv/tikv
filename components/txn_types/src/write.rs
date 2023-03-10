@@ -28,6 +28,9 @@ const FLAG_ROLLBACK: u8 = b'R';
 const FLAG_OVERLAPPED_ROLLBACK: u8 = b'R';
 
 const GC_FENCE_PREFIX: u8 = b'F';
+const LAST_CHANGE_PREFIX: u8 = b'l';
+
+const TXN_SOURCE_PREFIX: u8 = b'S';
 
 /// The short value for rollback records which are protected from being
 /// collapsed.
@@ -150,6 +153,14 @@ pub struct Write {
     /// * `Some(ts)`: A commit record that has been rewritten due to overlapping
     ///   rollback, and it's next version's `commit_ts` is `ts`
     pub gc_fence: Option<TimeStamp>,
+
+    /// The commit TS of the latest PUT/DELETE record
+    pub last_change_ts: TimeStamp,
+    /// The number of versions that need skipping from this record
+    /// to find the latest PUT/DELETE record
+    pub versions_to_last_change: u64,
+    /// The source of this txn.
+    pub txn_source: u64,
 }
 
 impl std::fmt::Debug for Write {
@@ -169,6 +180,9 @@ impl std::fmt::Debug for Write {
             )
             .field("has_overlapped_rollback", &self.has_overlapped_rollback)
             .field("gc_fence", &self.gc_fence)
+            .field("last_change_ts", &self.last_change_ts)
+            .field("versions_to_last_change", &self.versions_to_last_change)
+            .field("txn_source", &self.txn_source)
             .finish()
     }
 }
@@ -183,6 +197,9 @@ impl Write {
             short_value,
             has_overlapped_rollback: false,
             gc_fence: None,
+            last_change_ts: TimeStamp::zero(),
+            versions_to_last_change: 0,
+            txn_source: 0,
         }
     }
 
@@ -200,6 +217,9 @@ impl Write {
             short_value,
             has_overlapped_rollback: false,
             gc_fence: None,
+            last_change_ts: TimeStamp::zero(),
+            versions_to_last_change: 0,
+            txn_source: 0,
         }
     }
 
@@ -212,6 +232,24 @@ impl Write {
     ) -> Self {
         self.has_overlapped_rollback = has_overlapped_rollback;
         self.gc_fence = gc_fence;
+        self
+    }
+
+    #[must_use]
+    pub fn set_last_change(
+        mut self,
+        last_change_ts: TimeStamp,
+        versions_to_last_change: u64,
+    ) -> Self {
+        self.last_change_ts = last_change_ts;
+        self.versions_to_last_change = versions_to_last_change;
+        self
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn set_txn_source(mut self, source: u64) -> Self {
+        self.txn_source = source;
         self
     }
 
@@ -231,6 +269,28 @@ impl Write {
             short_value: self.short_value.as_deref(),
             has_overlapped_rollback: self.has_overlapped_rollback,
             gc_fence: self.gc_fence,
+            last_change_ts: self.last_change_ts,
+            versions_to_last_change: self.versions_to_last_change,
+            txn_source: self.txn_source,
+        }
+    }
+
+    /// Returns the new `last_change_ts` and `versions_to_last_change` according
+    /// to this write record.
+    pub fn next_last_change_info(&self, commit_ts: TimeStamp) -> (TimeStamp, u64) {
+        match self.write_type {
+            WriteType::Put | WriteType::Delete => (commit_ts, 1),
+            WriteType::Lock | WriteType::Rollback => {
+                // If neither `last_change_ts` nor `versions_to_last_change` exists, do not
+                // set `last_change_ts` to indicate we don't know where is the last change.
+                // This should not happen if data is written in new version TiKV. If we hope to
+                // support data from old TiKV, consider iterating to the last change to find it.
+                if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
+                    (self.last_change_ts, self.versions_to_last_change + 1)
+                } else {
+                    (TimeStamp::zero(), 0)
+                }
+            }
         }
     }
 }
@@ -255,6 +315,17 @@ pub struct WriteRef<'a> {
     ///
     /// See [`Write::gc_fence`] for more detail.
     pub gc_fence: Option<TimeStamp>,
+
+    /// The commit TS of the last PUT/DELETE record before this write record.
+    /// It only exists if this is a LOCK/ROLLBACK record.
+    pub last_change_ts: TimeStamp,
+    /// The number of versions that need skipping from this record
+    /// to find the latest PUT/DELETE record.
+    /// If versions_to_last_change > 0 but last_change_ts == 0, the key does not
+    /// have a PUT/DELETE record before this write record.
+    pub versions_to_last_change: u64,
+    /// The source of this txn.
+    pub txn_source: u64,
 }
 
 impl WriteRef<'_> {
@@ -272,6 +343,9 @@ impl WriteRef<'_> {
         let mut short_value = None;
         let mut has_overlapped_rollback = false;
         let mut gc_fence = None;
+        let mut last_change_ts = TimeStamp::zero();
+        let mut versions_to_last_change = 0;
+        let mut txn_source = 0;
 
         while !b.is_empty() {
             match b
@@ -296,6 +370,13 @@ impl WriteRef<'_> {
                     has_overlapped_rollback = true;
                 }
                 GC_FENCE_PREFIX => gc_fence = Some(number::decode_u64(&mut b)?.into()),
+                LAST_CHANGE_PREFIX => {
+                    last_change_ts = number::decode_u64(&mut b)?.into();
+                    versions_to_last_change = number::decode_var_u64(&mut b)?;
+                }
+                TXN_SOURCE_PREFIX => {
+                    txn_source = number::decode_var_u64(&mut b)?;
+                }
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
                     // and stop parsing if meets an unknown byte.
@@ -310,6 +391,9 @@ impl WriteRef<'_> {
             short_value,
             has_overlapped_rollback,
             gc_fence,
+            last_change_ts,
+            versions_to_last_change,
+            txn_source,
         })
     }
 
@@ -329,6 +413,15 @@ impl WriteRef<'_> {
             b.push(GC_FENCE_PREFIX);
             b.encode_u64(ts.into_inner()).unwrap();
         }
+        if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
+            b.push(LAST_CHANGE_PREFIX);
+            b.encode_u64(self.last_change_ts.into_inner()).unwrap();
+            b.encode_var_u64(self.versions_to_last_change).unwrap();
+        }
+        if self.txn_source != 0 {
+            b.push(TXN_SOURCE_PREFIX);
+            b.encode_var_u64(self.txn_source).unwrap();
+        }
         b
     }
 
@@ -340,6 +433,12 @@ impl WriteRef<'_> {
         }
         if self.gc_fence.is_some() {
             size += 1 + size_of::<u64>();
+        }
+        if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
+            size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
+        }
+        if self.txn_source != 0 {
+            size += 1 + MAX_VAR_U64_LEN;
         }
         size
     }
@@ -389,6 +488,8 @@ impl WriteRef<'_> {
             self.short_value.map(|v| v.to_owned()),
         )
         .set_overlapped_rollback(self.has_overlapped_rollback, self.gc_fence)
+        .set_last_change(self.last_change_ts, self.versions_to_last_change)
+        .set_txn_source(self.txn_source)
     }
 }
 
@@ -447,6 +548,9 @@ mod tests {
                 .set_overlapped_rollback(true, Some(2345678.into())),
             Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
                 .set_overlapped_rollback(true, Some(421397468076048385.into())),
+            Write::new(WriteType::Lock, 456.into(), None).set_last_change(345.into(), 11),
+            Write::new(WriteType::Lock, 456.into(), None).set_last_change(0.into(), 11),
+            Write::new(WriteType::Lock, 456.into(), None).set_txn_source(1),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.as_ref().to_bytes();

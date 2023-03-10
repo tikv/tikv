@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::{dispatch_api_version, KvFormat, RawValue};
+use api_version::{dispatch_api_version, keyspace::KvPair, ApiV1, KvFormat, RawValue};
 use backup::Task;
 use collections::HashMap;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
@@ -73,7 +73,7 @@ impl TestSuite {
     pub fn new(count: usize, sst_max_size: u64, api_version: ApiVersion) -> TestSuite {
         let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
-        configure_for_lease_read(&mut cluster, Some(100), None);
+        configure_for_lease_read(&mut cluster.cfg, Some(100), None);
         cluster.run();
 
         let mut endpoints = HashMap::default();
@@ -256,7 +256,7 @@ impl TestSuite {
         let mut batch = Vec::with_capacity(1024);
         let mut keys = Vec::with_capacity(1024);
         // Write 50 times to include more different ts.
-        let batch_size = cmp::min(cmp::max(key_count / 50, 1), 1024);
+        let batch_size = (key_count / 50).clamp(1, 1024);
         for _ in 0..versions {
             let mut j = 0;
             while j < key_count {
@@ -354,7 +354,7 @@ impl TestSuite {
             Default::default(),
             false,
         );
-        let mut scanner = RangesScanner::new(RangesScannerOptions {
+        let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
             storage: TikvStorage::new(snap_store, false),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
             scan_backward_in_range: false,
@@ -362,8 +362,9 @@ impl TestSuite {
             is_scanned_range_aware: false,
         });
         let digest = crc64fast::Digest::new();
-        while let Some((k, v)) = block_on(scanner.next()).unwrap() {
-            checksum = checksum_crc64_xor(checksum, digest.clone(), &k, &v);
+        while let Some(row) = block_on(scanner.next()).unwrap() {
+            let (k, v) = row.kv();
+            checksum = checksum_crc64_xor(checksum, digest.clone(), k, v);
             total_kvs += 1;
             total_bytes += (k.len() + v.len()) as u64;
         }

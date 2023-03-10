@@ -16,6 +16,8 @@ fn test_check_pending_admin() {
 
     cluster.run();
 
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
     // write a key to let leader stuck.
     cluster.must_put(b"k", b"v");
     must_get_equal(&cluster.get_engine(1), b"k", b"v");

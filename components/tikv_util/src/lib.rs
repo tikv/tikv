@@ -4,6 +4,7 @@
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
 #![feature(vec_into_raw_parts)]
+#![feature(let_chains)]
 
 #[cfg(test)]
 extern crate test;
@@ -60,6 +61,7 @@ pub mod thread_group;
 pub mod time;
 pub mod timer;
 pub mod topn;
+pub mod trend;
 pub mod worker;
 pub mod yatp_pool;
 
@@ -91,7 +93,7 @@ pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
 
 pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
     let file = panic_mark_file_path(data_dir);
-    File::create(&file).unwrap();
+    File::create(file).unwrap();
 }
 
 // Copied from file_system to avoid cyclic dependency

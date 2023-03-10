@@ -7,7 +7,7 @@ use tokio::{io as async_io, process::Command};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
 
-use crate::{ExternalStorage, UnpinReader};
+use crate::{ExternalData, ExternalStorage, UnpinReader};
 
 /// Convert `hdfs:///path` to `/path`
 fn try_convert_to_path(url: &Url) -> &str {
@@ -101,7 +101,7 @@ impl ExternalStorage for HdfsStorage {
         }
         cmd_with_args.extend([&cmd_path, "dfs", "-put", "-", path]);
         info!("calling hdfs"; "cmd" => ?cmd_with_args);
-        let mut hdfs_cmd = Command::new(&cmd_with_args[0])
+        let mut hdfs_cmd = Command::new(cmd_with_args[0])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -131,16 +131,11 @@ impl ExternalStorage for HdfsStorage {
         }
     }
 
-    fn read(&self, _name: &str) -> Box<dyn futures::AsyncRead + Unpin + '_> {
+    fn read(&self, _name: &str) -> ExternalData<'_> {
         unimplemented!("currently only HDFS export is implemented")
     }
 
-    fn read_part(
-        &self,
-        _name: &str,
-        _off: u64,
-        _len: u64,
-    ) -> Box<dyn futures::AsyncRead + Unpin + '_> {
+    fn read_part(&self, _name: &str, _off: u64, _len: u64) -> ExternalData<'_> {
         unimplemented!("currently only HDFS export is implemented")
     }
 }

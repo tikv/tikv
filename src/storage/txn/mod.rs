@@ -24,15 +24,15 @@ pub use self::{
         cleanup::cleanup,
         commit::commit,
         flashback_to_version::{
-            flashback_to_version, flashback_to_version_read_lock, flashback_to_version_read_write,
-            FLASHBACK_BATCH_SIZE,
+            flashback_to_version_read_lock, flashback_to_version_read_write,
+            flashback_to_version_write, rollback_locks, FLASHBACK_BATCH_SIZE,
         },
         gc::gc,
         prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
     },
     commands::{Command, RESOLVE_LOCK_BATCH_SIZE},
     latch::{Latches, Lock},
-    scheduler::Scheduler,
+    scheduler::TxnScheduler,
     store::{
         EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
         TxnEntryScanner, TxnEntryStore,
@@ -40,11 +40,12 @@ pub use self::{
 };
 use crate::storage::{
     mvcc::Error as MvccError,
-    types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
+    types::{MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
 
 /// Process result of a command.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum ProcessResult {
     Res,
@@ -73,7 +74,7 @@ pub enum ProcessResult {
         err: StorageError,
     },
     PessimisticLockRes {
-        res: StorageResult<PessimisticLockRes>,
+        res: StorageResult<PessimisticLockResults>,
     },
     SecondaryLocksStatus {
         status: SecondaryLocksStatus,
@@ -140,6 +141,9 @@ pub enum ErrorInner {
         start_ts: {start_ts}, region_id: {region_id}"
     )]
     MaxTimestampNotSynced { region_id: u64, start_ts: TimeStamp },
+
+    #[error("region {0} not prepared the flashback")]
+    FlashbackNotPrepared(u64),
 }
 
 impl ErrorInner {
@@ -173,6 +177,9 @@ impl ErrorInner {
                 region_id,
                 start_ts,
             }),
+            ErrorInner::FlashbackNotPrepared(region_id) => {
+                Some(ErrorInner::FlashbackNotPrepared(region_id))
+            }
             ErrorInner::Other(_) | ErrorInner::ProtoBuf(_) | ErrorInner::Io(_) => None,
         }
     }
@@ -223,6 +230,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::MaxTimestampNotSynced { .. } => {
                 error_code::storage::MAX_TIMESTAMP_NOT_SYNCED
             }
+            ErrorInner::FlashbackNotPrepared(_) => error_code::storage::FLASHBACK_NOT_PREPARED,
         }
     }
 }

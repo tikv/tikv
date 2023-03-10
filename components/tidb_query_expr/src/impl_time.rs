@@ -256,7 +256,7 @@ pub fn add_string_and_duration(
         return match arg0.checked_add(*arg1) {
             Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
             None => ctx
-                .handle_overflow_err(Error::overflow("DURATION", &format!("{} + {}", arg0, arg1)))
+                .handle_overflow_err(Error::overflow("DURATION", format!("{} + {}", arg0, arg1)))
                 .map(|_| Ok(writer.write(None)))?,
         };
     };
@@ -264,7 +264,7 @@ pub fn add_string_and_duration(
         return match arg0.checked_add(ctx, *arg1) {
             Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
             None => ctx
-                .handle_overflow_err(Error::overflow("DATETIME", &format!("{} + {}", arg0, arg1)))
+                .handle_overflow_err(Error::overflow("DATETIME", format!("{} + {}", arg0, arg1)))
                 .map(|_| Ok(writer.write(None)))?,
         };
     };
@@ -286,7 +286,7 @@ pub fn sub_string_and_duration(
         return match arg0.checked_sub(*arg1) {
             Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
             None => ctx
-                .handle_overflow_err(Error::overflow("DURATION", &format!("{} - {}", arg0, arg1)))
+                .handle_overflow_err(Error::overflow("DURATION", format!("{} - {}", arg0, arg1)))
                 .map(|_| Ok(writer.write(None)))?,
         };
     };
@@ -294,7 +294,7 @@ pub fn sub_string_and_duration(
         return match arg0.checked_sub(ctx, *arg1) {
             Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
             None => ctx
-                .handle_overflow_err(Error::overflow("DATETIME", &format!("{} - {}", arg0, arg1)))
+                .handle_overflow_err(Error::overflow("DATETIME", format!("{} - {}", arg0, arg1)))
                 .map(|_| Ok(writer.write(None)))?,
         };
     };

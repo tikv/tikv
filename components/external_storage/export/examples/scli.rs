@@ -6,9 +6,15 @@ use std::{
     path::Path,
 };
 
+#[cfg(feature = "cloud-azure")]
+use external_storage_export::make_azblob_backend;
+#[cfg(feature = "cloud-gcp")]
+use external_storage_export::make_gcs_backend;
+#[cfg(feature = "cloud-aws")]
+use external_storage_export::make_s3_backend;
 use external_storage_export::{
-    create_storage, make_azblob_backend, make_cloud_backend, make_gcs_backend, make_hdfs_backend,
-    make_local_backend, make_noop_backend, make_s3_backend, ExternalStorage, UnpinReader,
+    create_storage, make_cloud_backend, make_hdfs_backend, make_local_backend, make_noop_backend,
+    ExternalStorage, UnpinReader,
 };
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
@@ -144,7 +150,10 @@ fn create_s3_storage(opt: &Opt) -> Result<StorageBackend> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    Ok(make_s3_backend(config))
+    #[cfg(feature = "cloud-aws")]
+    return Ok(make_s3_backend(config));
+    #[cfg(not(feature = "cloud-aws"))]
+    return Err(Error::new(ErrorKind::Other, "missing feature"));
 }
 
 fn create_gcs_storage(opt: &Opt) -> Result<StorageBackend> {
@@ -164,7 +173,10 @@ fn create_gcs_storage(opt: &Opt) -> Result<StorageBackend> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    Ok(make_gcs_backend(config))
+    #[cfg(feature = "cloud-gcp")]
+    return Ok(make_gcs_backend(config));
+    #[cfg(not(feature = "cloud-gcp"))]
+    return Err(Error::new(ErrorKind::Other, "missing feature"));
 }
 
 fn create_azure_storage(opt: &Opt) -> Result<StorageBackend> {
@@ -200,7 +212,10 @@ fn create_azure_storage(opt: &Opt) -> Result<StorageBackend> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    Ok(make_azblob_backend(config))
+    #[cfg(feature = "cloud-azure")]
+    return Ok(make_azblob_backend(config));
+    #[cfg(not(feature = "cloud-azure"))]
+    return Err(Error::new(ErrorKind::Other, "missing feature"));
 }
 
 fn process() -> Result<()> {

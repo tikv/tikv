@@ -138,7 +138,7 @@ fn test_stale_learner_restart() {
 #[test]
 fn test_stale_peer_destroy_when_apply_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -301,9 +301,9 @@ fn test_destroy_clean_up_logs_with_unfinished_log_gc() {
     // Disable default max peer number check.
     pd_client.disable_default_operator();
     cluster.run();
-    // Simulate raft log gc are pending in queue.
+    // Simulate raft log gc tasks are lost during shutdown.
     let fp = "worker_gc_raft_log";
-    fail::cfg(fp, "return(0)").unwrap();
+    fail::cfg(fp, "return").unwrap();
 
     let state = cluster.truncated_state(1, 3);
     for i in 0..30 {

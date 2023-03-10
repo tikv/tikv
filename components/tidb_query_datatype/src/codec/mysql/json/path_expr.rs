@@ -25,31 +25,225 @@
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1, "2"]]
 // ```
 
-use std::{iter::Peekable, str::CharIndices};
+use nom::{
+    branch::alt,
+    bytes::complete::tag,
+    character::{
+        complete,
+        complete::{char, none_of, satisfy, space0, space1},
+    },
+    combinator::{map, map_opt},
+    multi::{many0, many1},
+    sequence::{delimited, pair, tuple},
+    IResult,
+};
 
 use super::json_unquote::unquote_string;
-use crate::codec::{Error, Result};
+use crate::codec::Result;
 
-pub const PATH_EXPR_ASTERISK: &str = "*";
+fn lift_error_to_failure<E>(err: nom::Err<E>) -> nom::Err<E> {
+    if let nom::Err::Error(err) = err {
+        nom::Err::Failure(err)
+    } else {
+        err
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum ArrayIndex {
+    Left(u32),  // `Left` represents an array index start from left
+    Right(u32), // `Right` represents an array index start from right
+}
+
+fn array_index_left(input: &str) -> IResult<&str, ArrayIndex> {
+    let (input, index) = complete::u32(input)?;
+    Ok((input, ArrayIndex::Left(index)))
+}
+
+fn array_index_last(input: &str) -> IResult<&str, ArrayIndex> {
+    let (input, _) = tag("last")(input)?;
+
+    Ok((input, ArrayIndex::Right(0)))
+}
+
+fn array_index_right(input: &str) -> IResult<&str, ArrayIndex> {
+    let (input, _) = tag("last")(input)?;
+    let (input, _) = space0(input)?;
+    let (input, _) = char('-')(input)?;
+    let (input, _) = space0(input)?;
+
+    let (input, index) = complete::u32(input)?;
+    Ok((input, ArrayIndex::Right(index)))
+}
+
+fn array_index(input: &str) -> IResult<&str, ArraySelection> {
+    map(
+        alt((array_index_left, array_index_right, array_index_last)),
+        |index| ArraySelection::Index(index),
+    )(input)
+}
+
+fn array_asterisk(input: &str) -> IResult<&str, ArraySelection> {
+    map(char('*'), |_| ArraySelection::Asterisk)(input)
+}
+
+fn array_range(input: &str) -> IResult<&str, ArraySelection> {
+    let (input, start) = array_index(input)?;
+    let (input, _) = space1(input)?;
+    let (input, _) = tag("to")(input)?;
+    let (before_last_index, _) = space1(input)?;
+    let (input, end) = array_index(before_last_index)?;
+
+    match (start, end) {
+        (ArraySelection::Index(start), ArraySelection::Index(end)) => {
+            // specially check the position
+            let allowed = match (start, end) {
+                (ArrayIndex::Left(start), ArrayIndex::Left(end)) => start <= end,
+                (ArrayIndex::Right(start), ArrayIndex::Right(end)) => start >= end,
+                (..) => true,
+            };
+            if !allowed {
+                // TODO: use a customized error kind, as the ErrorKind::Verify is designed
+                // to be used in `verify` combinator
+                return Err(nom::Err::Failure(nom::error::make_error(
+                    before_last_index,
+                    nom::error::ErrorKind::Verify,
+                )));
+            }
+            Ok((input, ArraySelection::Range(start, end)))
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ArraySelection {
+    Asterisk,                      // `Asterisk` select all element from array.
+    Index(ArrayIndex),             // `Index` select one element from array.
+    Range(ArrayIndex, ArrayIndex), // `Range` selects a closed-interval from array.
+}
+
+fn path_leg_array_selection(input: &str) -> IResult<&str, PathLeg> {
+    let (input, _) = char('[')(input)?;
+    let (input, _) = space0(input)?;
+    let (input, leg) = map(
+        alt((array_asterisk, array_range, array_index)),
+        |array_selection| PathLeg::ArraySelection(array_selection),
+    )(input)
+    .map_err(lift_error_to_failure)?;
+    let (input, _) = space0(input)?;
+    let (input, _) = char(']')(input).map_err(lift_error_to_failure)?;
+
+    Ok((input, leg))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum KeySelection {
+    Asterisk,
+    Key(String),
+}
+
+fn key_selection_asterisk(input: &str) -> IResult<&str, KeySelection> {
+    map(char('*'), |_| KeySelection::Asterisk)(input)
+}
+
+fn key_selection_key(input: &str) -> IResult<&str, KeySelection> {
+    let key_with_quote = map_opt(
+        delimited(char('"'), many1(none_of("\"")), char('"')),
+        |key: Vec<_>| {
+            let key: String = key.into_iter().collect();
+            let key = unquote_string(&key).ok()?;
+            for ch in key.chars() {
+                if ch.is_control() {
+                    return None;
+                }
+            }
+            Some(KeySelection::Key(key))
+        },
+    );
+
+    let take_key_until_end = many1(satisfy(|ch| {
+        !(ch.is_whitespace() || ch == '.' || ch == '[' || ch == '*')
+    }));
+    let key_without_quote = map_opt(take_key_until_end, |key: Vec<_>| {
+        for (i, c) in key.iter().enumerate() {
+            if i == 0 && c.is_ascii_digit() {
+                return None;
+            }
+            if !c.is_ascii_alphanumeric() && *c != '_' && *c != '$' && c.is_ascii() {
+                return None;
+            }
+        }
+
+        Some(KeySelection::Key(key.into_iter().collect()))
+    });
+
+    alt((key_with_quote, key_without_quote))(input)
+}
+
+fn path_leg_key(input: &str) -> IResult<&str, PathLeg> {
+    let (input, _) = char('.')(input)?;
+    let (input, _) = space0(input)?;
+
+    map(
+        alt((key_selection_key, key_selection_asterisk)),
+        |key_selection| PathLeg::Key(key_selection),
+    )(input)
+    .map_err(lift_error_to_failure)
+}
+
+fn path_leg_double_asterisk(input: &str) -> IResult<&str, PathLeg> {
+    map(pair(char('*'), char('*')), |_| PathLeg::DoubleAsterisk)(input)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PathLeg {
     /// `Key` indicates the path leg  with '.key'.
-    Key(String),
-    /// `Index` indicates the path leg with form 'number'.
-    Index(i32),
+    Key(KeySelection),
+    /// `ArraySelection` indicates the path leg with form '[...]'.
+    ArraySelection(ArraySelection),
     /// `DoubleAsterisk` indicates the path leg with form '**'.
     DoubleAsterisk,
 }
-
-// ArrayIndexAsterisk is for parsing '*' into a number.
-// we need this number represent "all".
-pub const PATH_EXPR_ARRAY_INDEX_ASTERISK: i32 = -1;
 
 pub type PathExpressionFlag = u8;
 
 pub const PATH_EXPRESSION_CONTAINS_ASTERISK: PathExpressionFlag = 0x01;
 pub const PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK: PathExpressionFlag = 0x02;
+pub const PATH_EXPRESSION_CONTAINS_RANGE: PathExpressionFlag = 0x04;
+
+fn path_expression(input: &str) -> IResult<&str, PathExpression> {
+    let mut flags = PathExpressionFlag::default();
+    let (input, (_, _, legs)) = tuple((
+        space0,
+        char('$'),
+        many0(delimited(
+            space0,
+            alt((
+                path_leg_key,
+                path_leg_array_selection,
+                path_leg_double_asterisk,
+            )),
+            space0,
+        )),
+    ))(input)?;
+
+    for leg in legs.iter() {
+        match leg {
+            PathLeg::DoubleAsterisk => flags |= PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+            PathLeg::Key(KeySelection::Asterisk) => flags |= PATH_EXPRESSION_CONTAINS_ASTERISK,
+            PathLeg::ArraySelection(ArraySelection::Asterisk) => {
+                flags |= PATH_EXPRESSION_CONTAINS_ASTERISK
+            }
+            PathLeg::ArraySelection(ArraySelection::Range(..)) => {
+                flags |= PATH_EXPRESSION_CONTAINS_RANGE
+            }
+            _ => {}
+        }
+    }
+
+    Ok((input, PathExpression { legs, flags }))
+}
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct PathExpression {
@@ -62,6 +256,10 @@ impl PathExpression {
         (self.flags
             & (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK))
             != 0
+    }
+
+    pub fn contains_any_range(&self) -> bool {
+        (self.flags & PATH_EXPRESSION_CONTAINS_RANGE) != 0
     }
 }
 
@@ -76,324 +274,37 @@ macro_rules! box_json_path_err {
     }};
 }
 
-struct PathExpressionTokenizer<'a> {
-    input: &'a str,
-
-    char_iterator: Peekable<CharIndices<'a>>,
-}
-
-struct Position {
-    start: usize,
-    end: usize,
-}
-
-/// PathExpressionToken represents a section in path expression and its position
-enum PathExpressionToken {
-    Leg((PathLeg, Position)),
-    /// Represents the beginning "$" in the expression
-    Start(Position),
-}
-
-impl<'a> Iterator for PathExpressionTokenizer<'a> {
-    type Item = Result<PathExpressionToken>;
-
-    /// Next will try to parse the next path leg and return
-    /// If it returns None, it means the input is over.
-    /// If it returns Some(Err(..)), it means the format is error.
-    /// If it returns Some(Ok(..)), it represents the next token.
-    fn next(&mut self) -> Option<Result<PathExpressionToken>> {
-        self.trim_white_spaces();
-        // Trim all spaces at first
-        if self.reached_end() {
-            return None;
-        };
-
-        let (start, ch) = *self.char_iterator.peek().unwrap();
-        match ch {
-            '$' => {
-                self.char_iterator.next();
-                Some(Ok(PathExpressionToken::Start(Position {
-                    start,
-                    end: self.current_index(),
-                })))
-            }
-            '.' => Some(self.next_key()),
-            '[' => Some(self.next_index()),
-            '*' => Some(self.next_double_asterisk()),
-            _ => Some(Err(box_json_path_err!(self.current_index()))),
-        }
-    }
-}
-
-impl<'a> PathExpressionTokenizer<'a> {
-    fn new(input: &'a str) -> PathExpressionTokenizer<'a> {
-        PathExpressionTokenizer {
-            input,
-            char_iterator: input.char_indices().peekable(),
-        }
-    }
-
-    /// Returns the current index on the slice
-    fn current_index(&mut self) -> usize {
-        match self.char_iterator.peek() {
-            Some((start, _)) => *start,
-            None => self.input.len(),
-        }
-    }
-
-    /// `trim_while_spaces` removes following spaces
-    fn trim_white_spaces(&mut self) {
-        while self
-            .char_iterator
-            .next_if(|(_, ch)| ch.is_whitespace())
-            .is_some()
-        {}
-    }
-
-    /// Returns whether the input has reached the end
-    fn reached_end(&mut self) -> bool {
-        return self.char_iterator.peek().is_none();
-    }
-
-    fn next_key(&mut self) -> Result<PathExpressionToken> {
-        let (start, _) = self.char_iterator.next().unwrap();
-
-        self.trim_white_spaces();
-        if self.reached_end() {
-            return Err(box_json_path_err!(self.current_index()));
-        }
-
-        match *self.char_iterator.peek().unwrap() {
-            (_, '*') => {
-                self.char_iterator.next().unwrap();
-
-                Ok(PathExpressionToken::Leg((
-                    PathLeg::Key(PATH_EXPR_ASTERISK.to_string()),
-                    Position {
-                        start,
-                        end: self.current_index(),
-                    },
-                )))
-            }
-            (mut key_start, '"') => {
-                // Skip this '"' character
-                key_start += 1;
-                self.char_iterator.next().unwrap();
-
-                // Next until the next '"' character
-                while self.char_iterator.next_if(|(_, ch)| *ch != '"').is_some() {}
-
-                // Now, it's a '"' or the end
-                if self.char_iterator.peek().is_none() {
-                    return Err(box_json_path_err!(self.current_index()));
-                }
-
-                // `key_end` is the index of '"'
-                let key_end = self.current_index();
-                self.char_iterator.next().unwrap();
-
-                let key = unquote_string(unsafe { self.input.get_unchecked(key_start..key_end) })?;
-                for ch in key.chars() {
-                    // According to JSON standard, a string cannot
-                    // contain any ASCII control characters
-                    if ch.is_control() {
-                        // TODO: add the concrete error location
-                        // after unquote, we lost the map between
-                        // the character and input position.
-                        return Err(box_json_path_err!(key_start));
-                    }
-                }
-
-                Ok(PathExpressionToken::Leg((
-                    PathLeg::Key(key),
-                    Position {
-                        start,
-                        end: self.current_index(),
-                    },
-                )))
-            }
-            (key_start, _) => {
-                // We have to also check the current value
-                while self
-                    .char_iterator
-                    .next_if(|(_, ch)| {
-                        !(ch.is_whitespace() || *ch == '.' || *ch == '[' || *ch == '*')
-                    })
-                    .is_some()
-                {}
-
-                // Now it reaches the end or a whitespace/./[/*
-                let key_end = self.current_index();
-
-                // The start character is not available
-                if key_end == key_start {
-                    return Err(box_json_path_err!(key_start));
-                }
-
-                let key = unsafe { self.input.get_unchecked(key_start..key_end) }.to_string();
-
-                // It's not quoted, we'll have to validate whether it's an available ECMEScript
-                // identifier
-                for (i, c) in key.char_indices() {
-                    if i == 0 && c.is_ascii_digit() {
-                        return Err(box_json_path_err!(key_start + i));
-                    }
-                    if !c.is_ascii_alphanumeric() && c != '_' && c != '$' && c.is_ascii() {
-                        return Err(box_json_path_err!(key_start + i));
-                    }
-                }
-
-                Ok(PathExpressionToken::Leg((
-                    PathLeg::Key(key),
-                    Position {
-                        start,
-                        end: key_end,
-                    },
-                )))
-            }
-        }
-    }
-
-    fn next_index(&mut self) -> Result<PathExpressionToken> {
-        let (start, _) = self.char_iterator.next().unwrap();
-
-        self.trim_white_spaces();
-        if self.reached_end() {
-            return Err(box_json_path_err!(self.current_index()));
-        }
-
-        return match self.char_iterator.next().unwrap() {
-            (_, '*') => {
-                // Then it's a glob array index
-                self.trim_white_spaces();
-                if self.reached_end() {
-                    return Err(box_json_path_err!(self.current_index()));
-                }
-
-                if self.char_iterator.next_if(|(_, ch)| *ch == ']').is_none() {
-                    return Err(box_json_path_err!(self.current_index()));
-                }
-
-                Ok(PathExpressionToken::Leg((
-                    PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK),
-                    Position {
-                        start,
-                        end: self.current_index(),
-                    },
-                )))
-            }
-            (number_start, '0'..='9') => {
-                // Then it's a number array index
-                while self
-                    .char_iterator
-                    .next_if(|(_, ch)| ch.is_ascii_digit())
-                    .is_some()
-                {}
-                let number_end = self.current_index();
-
-                self.trim_white_spaces();
-                // now, it reaches the end of input, or reaches a non-digit character
-                match self.char_iterator.peek() {
-                    Some((_, ']')) => {}
-                    Some((pos, _)) => {
-                        return Err(box_json_path_err!(pos));
-                    }
-                    None => {
-                        return Err(box_json_path_err!(self.current_index()));
-                    }
-                }
-                self.char_iterator.next().unwrap();
-
-                let index = self.input[number_start..number_end]
-                    .parse::<i32>()
-                    .map_err(|_| -> Error { box_json_path_err!(number_end) })?;
-                Ok(PathExpressionToken::Leg((
-                    PathLeg::Index(index),
-                    Position {
-                        start,
-                        end: self.current_index(),
-                    },
-                )))
-            }
-            (pos, _) => Err(box_json_path_err!(pos)),
-        };
-    }
-
-    fn next_double_asterisk(&mut self) -> Result<PathExpressionToken> {
-        let (start, _) = self.char_iterator.next().unwrap();
-
-        match self.char_iterator.next() {
-            Some((end, '*')) => {
-                // Three or more asterisks are not allowed
-                if let Some((pos, '*')) = self.char_iterator.peek() {
-                    return Err(box_json_path_err!(pos));
-                }
-
-                Ok(PathExpressionToken::Leg((
-                    PathLeg::DoubleAsterisk,
-                    Position { start, end },
-                )))
-            }
-            Some((pos, _)) => Err(box_json_path_err!(pos)),
-            None => Err(box_json_path_err!(self.current_index())),
-        }
-    }
-}
-
 /// Parses a JSON path expression. Returns a `PathExpression`
 /// object which can be used in `JSON_EXTRACT`, `JSON_SET` and so on.
-pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
-    let mut legs = Vec::new();
-    let tokenizer = PathExpressionTokenizer::new(path_expr);
-    let mut flags = PathExpressionFlag::default();
-
-    let mut started = false;
-    let mut last_position = Position { start: 0, end: 0 };
-    for (index, token) in tokenizer.enumerate() {
-        let token = token?;
-
-        match token {
-            PathExpressionToken::Leg((leg, position)) => {
-                if !started {
-                    return Err(box_json_path_err!(position.start));
+///
+/// See `parseJSONPathExpr` in TiDB `types/json_path_expr.go`.
+pub fn parse_json_path_expr(path_expr_input: &str) -> Result<PathExpression> {
+    let (left_input, path_expr) = match path_expression(path_expr_input) {
+        Ok(ret) => ret,
+        Err(err) => {
+            let input = match err {
+                nom::Err::Error(err) => err.input,
+                nom::Err::Failure(err) => err.input,
+                _ => {
+                    unreachable!()
                 }
+            };
 
-                match &leg {
-                    PathLeg::Key(key) => {
-                        if key == PATH_EXPR_ASTERISK {
-                            flags |= PATH_EXPRESSION_CONTAINS_ASTERISK
-                        }
-                    }
-                    PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK) => {
-                        flags |= PATH_EXPRESSION_CONTAINS_ASTERISK
-                    }
-                    PathLeg::DoubleAsterisk => flags |= PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-                    _ => {}
-                }
-
-                legs.push(leg.clone());
-                last_position = position;
-            }
-            PathExpressionToken::Start(position) => {
-                started = true;
-
-                if index != 0 {
-                    return Err(box_json_path_err!(position.start));
-                }
-            }
+            return Err(box_json_path_err!(path_expr_input.len() - input.len()));
         }
+    };
+
+    // Some extra input is left
+    if !left_input.is_empty() {
+        return Err(box_json_path_err!(path_expr_input.len() - left_input.len()));
     }
 
-    // There is no available token
-    if !started {
-        return Err(box_json_path_err!(path_expr.len()));
-    }
     // The last one cannot be the double asterisk
-    if !legs.is_empty() && legs.last().unwrap() == &PathLeg::DoubleAsterisk {
-        return Err(box_json_path_err!(last_position.end));
+    if !path_expr.legs.is_empty() && path_expr.legs.last().unwrap() == &PathLeg::DoubleAsterisk {
+        return Err(box_json_path_err!(path_expr_input.len() - 1));
     }
 
-    Ok(PathExpression { legs, flags })
+    Ok(path_expr)
 }
 
 #[cfg(test)]
@@ -429,7 +340,7 @@ mod tests {
                 "$.a",
                 None,
                 Some(PathExpression {
-                    legs: vec![PathLeg::Key(String::from("a"))],
+                    legs: vec![PathLeg::Key(KeySelection::Key(String::from("a")))],
                     flags: PathExpressionFlag::default(),
                 }),
             ),
@@ -438,8 +349,8 @@ mod tests {
                 None,
                 Some(PathExpression {
                     legs: vec![
-                        PathLeg::Key(String::from("a")),
-                        PathLeg::Key(String::from("$")),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::Key(KeySelection::Key(String::from("$"))),
                     ],
                     flags: PathExpressionFlag::default(),
                 }),
@@ -448,7 +359,7 @@ mod tests {
                 "$.\"hello world\"",
                 None,
                 Some(PathExpression {
-                    legs: vec![PathLeg::Key(String::from("hello world"))],
+                    legs: vec![PathLeg::Key(KeySelection::Key(String::from("hello world")))],
                     flags: PathExpressionFlag::default(),
                 }),
             ),
@@ -456,7 +367,7 @@ mod tests {
                 "$.  \"你好 世界\"  ",
                 None,
                 Some(PathExpression {
-                    legs: vec![PathLeg::Key(String::from("你好 世界"))],
+                    legs: vec![PathLeg::Key(KeySelection::Key(String::from("你好 世界")))],
                     flags: PathExpressionFlag::default(),
                 }),
             ),
@@ -464,7 +375,7 @@ mod tests {
                 "$.   ❤️  ",
                 None,
                 Some(PathExpression {
-                    legs: vec![PathLeg::Key(String::from("❤️"))],
+                    legs: vec![PathLeg::Key(KeySelection::Key(String::from("❤️")))],
                     flags: PathExpressionFlag::default(),
                 }),
             ),
@@ -472,7 +383,7 @@ mod tests {
                 "$.   你好  ",
                 None,
                 Some(PathExpression {
-                    legs: vec![PathLeg::Key(String::from("你好"))],
+                    legs: vec![PathLeg::Key(KeySelection::Key(String::from("你好")))],
                     flags: PathExpressionFlag::default(),
                 }),
             ),
@@ -480,7 +391,9 @@ mod tests {
                 "$[    0    ]",
                 None,
                 Some(PathExpression {
-                    legs: vec![PathLeg::Index(0)],
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Index(
+                        ArrayIndex::Left(0),
+                    ))],
                     flags: PathExpressionFlag::default(),
                 }),
             ),
@@ -488,7 +401,10 @@ mod tests {
                 "$**.a",
                 None,
                 Some(PathExpression {
-                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("a"))],
+                    legs: vec![
+                        PathLeg::DoubleAsterisk,
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                    ],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }),
             ),
@@ -496,7 +412,10 @@ mod tests {
                 "   $  **  . a",
                 None,
                 Some(PathExpression {
-                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("a"))],
+                    legs: vec![
+                        PathLeg::DoubleAsterisk,
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                    ],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }),
             ),
@@ -504,7 +423,69 @@ mod tests {
                 "   $  **  . $",
                 None,
                 Some(PathExpression {
-                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("$"))],
+                    legs: vec![
+                        PathLeg::DoubleAsterisk,
+                        PathLeg::Key(KeySelection::Key(String::from("$"))),
+                    ],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                }),
+            ),
+            (
+                "   $  [ 1 to 10 ]",
+                None,
+                Some(PathExpression {
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Range(
+                        ArrayIndex::Left(1),
+                        ArrayIndex::Left(10),
+                    ))],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }),
+            ),
+            (
+                "   $  [ 1 to last - 10 ]",
+                None,
+                Some(PathExpression {
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Range(
+                        ArrayIndex::Left(1),
+                        ArrayIndex::Right(10),
+                    ))],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }),
+            ),
+            (
+                "   $  [ 1 to last-10 ]",
+                None,
+                Some(PathExpression {
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Range(
+                        ArrayIndex::Left(1),
+                        ArrayIndex::Right(10),
+                    ))],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }),
+            ),
+            (
+                "   $  **  [ 1 to last ]",
+                None,
+                Some(PathExpression {
+                    legs: vec![
+                        PathLeg::DoubleAsterisk,
+                        PathLeg::ArraySelection(ArraySelection::Range(
+                            ArrayIndex::Left(1),
+                            ArrayIndex::Right(0),
+                        )),
+                    ],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK
+                        | PATH_EXPRESSION_CONTAINS_RANGE,
+                }),
+            ),
+            (
+                "   $  **  [ last ]",
+                None,
+                Some(PathExpression {
+                    legs: vec![
+                        PathLeg::DoubleAsterisk,
+                        PathLeg::ArraySelection(ArraySelection::Index(ArrayIndex::Right(0))),
+                    ],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }),
             ),
@@ -536,8 +517,7 @@ mod tests {
             ),
             (
                 "$.\"\\u33\"",
-                // TODO: pass the position in the unquote unicode error
-                Some("Invalid unicode, byte len too short"),
+                Some("Invalid JSON path expression. The error is around character position 3."),
                 None,
             ),
             (
@@ -547,7 +527,7 @@ mod tests {
             ),
             (
                 "$.\"a\\t\"",
-                Some("Invalid JSON path expression. The error is around character position 4."),
+                Some("Invalid JSON path expression. The error is around character position 3."),
                 None,
             ),
             (
@@ -556,8 +536,23 @@ mod tests {
                 None,
             ),
             (
-                "$ [ 2147483648 ]",
-                Some("Invalid JSON path expression. The error is around character position 15."),
+                "$ [ 4294967296 ]",
+                Some("Invalid JSON path expression. The error is around character position 5."),
+                None,
+            ),
+            (
+                "$ [ 1to2 ]",
+                Some("Invalid JSON path expression. The error is around character position 6."),
+                None,
+            ),
+            (
+                "$ [ 2 to 1 ]",
+                Some("Invalid JSON path expression. The error is around character position 10."),
+                None,
+            ),
+            (
+                "$ [ last - 10 to last - 20 ]",
+                Some("Invalid JSON path expression. The error is around character position 18."),
                 None,
             ),
         ];
@@ -604,6 +599,24 @@ mod tests {
             assert!(r.is_ok(), "#{} expect parse ok but got err {:?}", i, r);
             let e = r.unwrap();
             let b = e.contains_any_asterisk();
+            assert_eq!(b, expected, "#{} expect {:?} but got {:?}", i, expected, b);
+        }
+    }
+
+    #[test]
+    fn test_parse_json_path_expr_contains_any_range() {
+        let mut test_cases = vec![
+            ("$.a[0]", false),
+            ("$.a[*]", false),
+            ("$**.a[0]", false),
+            ("$.a[1 to 2]", true),
+            ("$.a[1 to last - 2]", true),
+        ];
+        for (i, (path_expr, expected)) in test_cases.drain(..).enumerate() {
+            let r = parse_json_path_expr(path_expr);
+            assert!(r.is_ok(), "#{} expect parse ok but got err {:?}", i, r);
+            let e = r.unwrap();
+            let b = e.contains_any_range();
             assert_eq!(b, expected, "#{} expect {:?} but got {:?}", i, expected, b);
         }
     }

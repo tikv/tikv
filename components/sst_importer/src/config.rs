@@ -14,6 +14,8 @@ pub struct Config {
     ///
     /// Default is 10m.
     pub import_mode_timeout: ReadableDuration,
+    /// the ratio of system memory used for import.
+    pub memory_use_ratio: f64,
 }
 
 impl Default for Config {
@@ -22,6 +24,7 @@ impl Default for Config {
             num_threads: 8,
             stream_channel_window: 128,
             import_mode_timeout: ReadableDuration::minutes(10),
+            memory_use_ratio: 0.3,
         }
     }
 }
@@ -42,6 +45,13 @@ impl Config {
                 default_cfg.stream_channel_window
             );
             self.stream_channel_window = default_cfg.stream_channel_window;
+        }
+        if self.memory_use_ratio > 0.5 || self.memory_use_ratio < 0.0 {
+            warn!(
+                "import.mem_ratio should belong to [0.0, 0.5], change it to {}",
+                default_cfg.memory_use_ratio,
+            );
+            self.memory_use_ratio = default_cfg.memory_use_ratio;
         }
         Ok(())
     }

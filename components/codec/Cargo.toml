@@ -6,14 +6,14 @@ publish = false
 
 [dependencies]
 byteorder = "1.2"
-error_code = { path = "../error_code", default-features = false }
+error_code = { workspace = true }
 libc = "0.2"
 static_assertions = { version = "1.0", features = ["nightly"] }
 thiserror = "1.0"
-tikv_alloc = { path = "../tikv_alloc" }
+tikv_alloc = { workspace = true }
 
 [dev-dependencies]
 bytes = "1.0"
-panic_hook = { path = "../panic_hook" }
+panic_hook = { workspace = true }
 protobuf = "2"
 rand = "0.8"

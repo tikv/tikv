@@ -90,7 +90,7 @@ mod linux {
 
         fn disk_stat(dev: &Self::DiskID) -> Result<Option<DiskStat>, String> {
             let path = "/proc/diskstats";
-            let lines = read_to_string(&path).map_err(|e| format!("open({}): {}", path, e))?;
+            let lines = read_to_string(path).map_err(|e| format!("open({}): {}", path, e))?;
             for line in lines.split('\n').map(|x| x.trim()) {
                 let stat = procfs::DiskStat::from_line(line)
                     .map_err(|e| format!("parse disk stat: {}", e))?;

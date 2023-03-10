@@ -12,7 +12,7 @@ use tikv::{
     read_pool::ReadPool,
     server::Config,
     storage::{
-        kv::RocksEngine, lock_manager::DummyLockManager, Engine, TestEngineBuilder,
+        kv::RocksEngine, lock_manager::MockLockManager, Engine, TestEngineBuilder,
         TestStorageBuilderApiV1,
     },
 };
@@ -79,7 +79,7 @@ pub fn init_data_with_details<E: Engine>(
     commit: bool,
     cfg: &Config,
 ) -> (Store<E>, Endpoint<E>, Arc<QuotaLimiter>) {
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
     let mut store = Store::from_storage(storage);

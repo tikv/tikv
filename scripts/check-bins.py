@@ -13,8 +13,8 @@ import sys, json, os, time, re
 WHITE_LIST = {
     "online_config", "online_config_derive", "tidb_query_codegen",
     "panic_hook", "fuzz", "fuzzer_afl", "fuzzer_honggfuzz", "fuzzer_libfuzzer",
-    "coprocessor_plugin_api", "example_plugin", "memory_trace_macros", "case_macros",
-    "tracker"
+    "coprocessor_plugin_api", "example_coprocessor_plugin", "memory_trace_macros", "case_macros",
+    "tracker", "test_raftstore_macro"
 }
 
 JEMALLOC_SYMBOL = ["je_arena_boot", " malloc"]

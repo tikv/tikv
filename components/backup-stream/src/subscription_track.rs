@@ -1,8 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use dashmap::{mapref::one::RefMut, DashMap};
+use dashmap::{
+    mapref::{entry::Entry, one::RefMut},
+    DashMap,
+};
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
 use resolved_ts::Resolver;
@@ -15,22 +18,10 @@ use crate::{debug, metrics::TRACK_REGION, utils};
 #[derive(Clone, Default, Debug)]
 pub struct SubscriptionTracer(Arc<DashMap<u64, RegionSubscription>>);
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum SubscriptionState {
-    /// When it is newly added (maybe after split or leader transfered from
-    /// other store), without any flush.
-    Fresh,
-    /// It has been flushed, and running normally.
-    Normal,
-    /// It has been moved to other store.
-    Removal,
-}
-
 pub struct RegionSubscription {
     pub meta: Region,
     pub(crate) handle: ObserveHandle,
     pub(crate) resolver: TwoPhaseResolver,
-    state: SubscriptionState,
 }
 
 impl std::fmt::Debug for RegionSubscription {
@@ -43,32 +34,17 @@ impl std::fmt::Debug for RegionSubscription {
 }
 
 impl RegionSubscription {
-    /// move self out.
-    fn take(&mut self) -> Self {
-        Self {
-            meta: self.meta.clone(),
-            handle: self.handle.clone(),
-            resolver: std::mem::replace(&mut self.resolver, TwoPhaseResolver::new(0, None)),
-            state: self.state,
-        }
-    }
-
     pub fn new(region: Region, handle: ObserveHandle, start_ts: Option<TimeStamp>) -> Self {
         let resolver = TwoPhaseResolver::new(region.get_id(), start_ts);
         Self {
             handle,
             meta: region,
             resolver,
-            state: SubscriptionState::Fresh,
         }
     }
 
     pub fn stop(&mut self) {
-        if self.state == SubscriptionState::Removal {
-            return;
-        }
         self.handle.stop_observing();
-        self.state = SubscriptionState::Removal;
     }
 
     pub fn is_observing(&self) -> bool {
@@ -81,6 +57,63 @@ impl RegionSubscription {
 
     pub fn handle(&self) -> &ObserveHandle {
         &self.handle
+    }
+}
+
+#[derive(PartialEq, Eq)]
+pub enum CheckpointType {
+    MinTs,
+    StartTsOfInitialScan,
+    StartTsOfTxn(Option<Arc<[u8]>>),
+}
+
+impl std::fmt::Debug for CheckpointType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MinTs => write!(f, "MinTs"),
+            Self::StartTsOfInitialScan => write!(f, "StartTsOfInitialScan"),
+            Self::StartTsOfTxn(arg0) => f
+                .debug_tuple("StartTsOfTxn")
+                .field(&format_args!(
+                    "{}",
+                    utils::redact(&arg0.as_ref().map(|x| x.as_ref()).unwrap_or(&[]))
+                ))
+                .finish(),
+        }
+    }
+}
+
+pub struct ResolveResult {
+    pub region: Region,
+    pub checkpoint: TimeStamp,
+    pub checkpoint_type: CheckpointType,
+}
+
+impl std::fmt::Debug for ResolveResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolveResult")
+            .field("region", &self.region.get_id())
+            .field("checkpoint", &self.checkpoint)
+            .field("checkpoint_type", &self.checkpoint_type)
+            .finish()
+    }
+}
+
+impl ResolveResult {
+    fn resolve(sub: &mut RegionSubscription, min_ts: TimeStamp) -> Self {
+        let ts = sub.resolver.resolve(min_ts);
+        let ty = if ts == min_ts {
+            CheckpointType::MinTs
+        } else if sub.resolver.in_phase_one() {
+            CheckpointType::StartTsOfInitialScan
+        } else {
+            CheckpointType::StartTsOfTxn(sub.resolver.sample_far_lock())
+        };
+        Self {
+            region: sub.meta.clone(),
+            checkpoint: ts,
+            checkpoint_type: ty,
+        }
     }
 }
 
@@ -111,22 +144,33 @@ impl SubscriptionTracer {
             region.get_id(),
             RegionSubscription::new(region.clone(), handle, start_ts),
         ) {
-            if o.state != SubscriptionState::Removal {
-                TRACK_REGION.dec();
-                warn!("register region which is already registered"; "region_id" => %region.get_id());
-            }
+            TRACK_REGION.dec();
             o.stop();
         }
     }
 
+    pub fn current_regions(&self) -> Vec<u64> {
+        self.0.iter().map(|s| *s.key()).collect()
+    }
+
     /// try advance the resolved ts with the min ts of in-memory locks.
     /// returns the regions and theirs resolved ts.
-    pub fn resolve_with(&self, min_ts: TimeStamp) -> Vec<(Region, TimeStamp)> {
+    pub fn resolve_with(
+        &self,
+        min_ts: TimeStamp,
+        regions: impl IntoIterator<Item = u64>,
+    ) -> Vec<ResolveResult> {
+        let rs = regions.into_iter().collect::<HashSet<_>>();
         self.0
             .iter_mut()
-            // Don't advance the checkpoint ts of removed region.
-            .filter(|s| s.state != SubscriptionState::Removal)
-            .map(|mut s| (s.meta.clone(), s.resolver.resolve(min_ts)))
+            .filter(|s| {
+                let contains = rs.contains(s.key());
+                if !contains {
+                    crate::metrics::LOST_LEADER_REGION.inc();
+                }
+                contains
+            })
+            .map(|mut s| ResolveResult::resolve(s.value_mut(), min_ts))
             .collect()
     }
 
@@ -150,12 +194,6 @@ impl SubscriptionTracer {
         }
     }
 
-    /// destroy subscription if the subscription is stopped.
-    pub fn destroy_stopped_region(&self, region_id: u64) {
-        self.0
-            .remove_if(&region_id, |_, sub| sub.state == SubscriptionState::Removal);
-    }
-
     /// try to mark a region no longer be tracked by this observer.
     /// returns whether success (it failed if the region hasn't been observed
     /// when calling this.)
@@ -165,35 +203,19 @@ impl SubscriptionTracer {
         if_cond: impl FnOnce(&RegionSubscription, &Region) -> bool,
     ) -> bool {
         let region_id = region.get_id();
-        let remove_result = self.0.get_mut(&region_id);
+        let remove_result = self.0.entry(region_id);
         match remove_result {
-            Some(mut o) => {
-                // If the state is 'removal', we should act as if the region subscription
-                // has been removed: the callback should not be called because somebody may
-                // use this method to check whether a key exists:
-                // ```
-                // let mut present = false;
-                // deregister_region_if(42, |..| {
-                //     present = true;
-                // });
-                // ```
-                // At that time, if we call the callback with stale value, the called may get
-                // false positive.
-                if o.state == SubscriptionState::Removal {
-                    return false;
-                }
-                if if_cond(o.value(), region) {
+            Entry::Occupied(mut x) => {
+                if if_cond(x.get(), region) {
                     TRACK_REGION.dec();
-                    o.value_mut().stop();
-                    info!("stop listen stream from store"; "observer" => ?o.value(), "region_id"=> %region_id);
+                    x.get_mut().stop();
+                    let v = x.remove();
+                    info!("stop listen stream from store"; "observer" => ?v, "region_id"=> %region_id);
                     return true;
                 }
                 false
             }
-            None => {
-                warn!("trying to deregister region not registered"; "region_id" => %region_id);
-                false
-            }
+            Entry::Vacant(_) => false,
         }
     }
 
@@ -207,7 +229,7 @@ impl SubscriptionTracer {
         let mut sub = match self.get_subscription_of(new_region.get_id()) {
             Some(sub) => sub,
             None => {
-                warn!("backup stream observer refreshing void subscription."; "new_region" => ?new_region);
+                warn!("backup stream observer refreshing void subscription."; utils::slog_region(new_region));
                 return true;
             }
         };
@@ -224,54 +246,11 @@ impl SubscriptionTracer {
         false
     }
 
-    /// Remove and collect the subscriptions have been marked as removed.
-    pub fn collect_removal_subs(&self) -> Vec<RegionSubscription> {
-        let mut result = vec![];
-        self.0.retain(|_k, v| {
-            if v.state == SubscriptionState::Removal {
-                result.push(v.take());
-                false
-            } else {
-                true
-            }
-        });
-        result
-    }
-
-    /// Collect the fresh subscriptions, and mark them as Normal.
-    pub fn collect_fresh_subs(&self) -> Vec<Region> {
-        self.0
-            .iter_mut()
-            .filter_map(|mut s| {
-                let v = s.value_mut();
-                if v.state == SubscriptionState::Fresh {
-                    v.state = SubscriptionState::Normal;
-                    Some(v.meta.clone())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    /// Remove all "Removal" entries.
-    /// Set all "Fresh" entries to "Normal".
-    pub fn update_status_for_v3(&self) {
-        self.0.retain(|_k, v| match v.state {
-            SubscriptionState::Fresh => {
-                v.state = SubscriptionState::Normal;
-                true
-            }
-            SubscriptionState::Normal => true,
-            SubscriptionState::Removal => false,
-        })
-    }
-
     /// check whether the region_id should be observed by this observer.
     pub fn is_observing(&self, region_id: u64) -> bool {
         let sub = self.0.get_mut(&region_id);
         match sub {
-            Some(mut sub) if !sub.is_observing() || sub.state == SubscriptionState::Removal => {
+            Some(mut sub) if !sub.is_observing() => {
                 sub.value_mut().stop();
                 false
             }
@@ -352,6 +331,12 @@ impl std::fmt::Debug for FutureLock {
 }
 
 impl TwoPhaseResolver {
+    /// try to get one of the key of the oldest lock in the resolver.
+    pub fn sample_far_lock(&self) -> Option<Arc<[u8]>> {
+        let (_, keys) = self.resolver.locks().first_key_value()?;
+        keys.iter().next().cloned()
+    }
+
     pub fn in_phase_one(&self) -> bool {
         self.stable_ts.is_some()
     }
@@ -442,6 +427,8 @@ impl std::fmt::Debug for TwoPhaseResolver {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use kvproto::metapb::{Region, RegionEpoch};
     use raftstore::coprocessor::ObserveHandle;
     use txn_types::TimeStamp;
@@ -527,19 +514,25 @@ mod test {
         subs.deregister_region_if(&region(5, 8, 1), |_, _| true);
         drop(region4_sub);
 
-        let mut rs = subs.resolve_with(TimeStamp::new(1000));
+        let mut rs = subs
+            .resolve_with(TimeStamp::new(1000), vec![1, 2, 3, 4])
+            .into_iter()
+            .map(|r| (r.region, r.checkpoint, r.checkpoint_type))
+            .collect::<Vec<_>>();
         rs.sort_by_key(|k| k.0.get_id());
+        use crate::subscription_track::CheckpointType::*;
         assert_eq!(
             rs,
             vec![
-                (region(1, 1, 1), TimeStamp::new(42)),
-                (region(2, 2, 1), TimeStamp::new(1000)),
-                (region(3, 4, 1), TimeStamp::new(1000)),
-                (region(4, 8, 1), TimeStamp::new(128)),
+                (region(1, 1, 1), 42.into(), StartTsOfInitialScan),
+                (region(2, 2, 1), 1000.into(), MinTs),
+                (region(3, 4, 1), 1000.into(), MinTs),
+                (
+                    region(4, 8, 1),
+                    128.into(),
+                    StartTsOfTxn(Some(Arc::from(b"Alpi".as_slice())))
+                ),
             ]
         );
-        let removal = subs.collect_removal_subs();
-        assert_eq!(removal.len(), 1);
-        assert_eq!(removal[0].meta.get_id(), 5);
     }
 }

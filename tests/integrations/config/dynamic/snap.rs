@@ -15,6 +15,7 @@ use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
+        raftkv::RaftRouterWrap,
         snap::{Runner as SnapHandler, Task as SnapTask},
     },
 };
@@ -44,7 +45,8 @@ fn start_server(
             .name_prefix(thd_name!("test-server"))
             .build(),
     );
-    let (raft_router, _) = create_raft_batch_system::<RocksEngine, RaftLogEngine>(&cfg.raft_store);
+    let (raft_router, _) =
+        create_raft_batch_system::<RocksEngine, RaftLogEngine>(&cfg.raft_store, &None);
     let mut snap_worker = Worker::new("snap-handler").lazy_build("snap-handler");
     let snap_worker_scheduler = snap_worker.scheduler();
     let server_config = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -60,7 +62,7 @@ fn start_server(
     let snap_runner = SnapHandler::new(
         Arc::clone(&env),
         snap_mgr.clone(),
-        raft_router,
+        RaftRouterWrap::new(raft_router),
         security_mgr,
         Arc::clone(&server_config),
     );
@@ -93,7 +95,7 @@ fn test_update_server_config() {
     let change = {
         let mut m = std::collections::HashMap::new();
         m.insert(
-            "server.snap-max-write-bytes-per-sec".to_owned(),
+            "server.snap-io-max-bytes-per-sec".to_owned(),
             "512MB".to_owned(),
         );
         m.insert(
@@ -104,7 +106,7 @@ fn test_update_server_config() {
     };
     cfg_controller.update(change).unwrap();
 
-    svr_cfg.snap_max_write_bytes_per_sec = ReadableSize::mb(512);
+    svr_cfg.snap_io_max_bytes_per_sec = ReadableSize::mb(512);
     svr_cfg.concurrent_send_snap_limit = 100;
     // config should be updated
     assert_eq!(snap_mgr.get_speed_limit() as u64, 536870912);

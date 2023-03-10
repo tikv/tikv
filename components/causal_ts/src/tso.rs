@@ -2,12 +2,12 @@
 
 //! ## The algorithm to make the TSO cache tolerate failure of TSO service
 //!
-//! 1. The scale of High-Available is specified by config item
-//! `causal-ts.available-interval`.
+//! 1. The expected total size (in duration) of TSO cache is specified by
+//! config item `causal-ts.alloc-ahead-buffer`.
 //!
 //! 2. Count usage of TSO on every renew interval.
 //!
-//! 3. Calculate `cache_multiplier` by `causal-ts.available-interval /
+//! 3. Calculate `cache_multiplier` by `causal-ts.alloc-ahead-buffer /
 //! causal-ts.renew-interval`.
 //!
 //! 4. Then `tso_usage x cache_multiplier` is the expected number of TSO should
@@ -67,38 +67,33 @@ pub(crate) const DEFAULT_TSO_BATCH_MAX_SIZE: u32 = 8192;
 /// of PD. The longer of the value can provide better "High-Availability"
 /// against PD failure, but more overhead of `TsoBatchList` & pressure to TSO
 /// service.
-pub(crate) const DEFAULT_TSO_BATCH_AVAILABLE_INTERVAL_MS: u64 = 3000;
+pub(crate) const DEFAULT_TSO_BATCH_ALLOC_AHEAD_BUFFER_MS: u64 = 3000;
 /// Just a limitation for safety, in case user specify a too big
-/// `available_interval`.
+/// `alloc_ahead_buffer`.
 const MAX_TSO_BATCH_LIST_CAPACITY: u32 = 1024;
 
 /// TSO range: [(physical, logical_start), (physical, logical_end))
 #[derive(Debug)]
 struct TsoBatch {
-    size: u32,
     physical: u64,
+    logical_start: u64,
     logical_end: u64, // exclusive
-    logical_start: AtomicU64,
+    // current valid logical_tso offset, alloc_offset >= logical_end means
+    // the batch is exhausted.
+    alloc_offset: AtomicU64,
 }
 
 impl TsoBatch {
     pub fn pop(&self) -> Option<(TimeStamp, bool /* is_used_up */)> {
-        let mut logical = self.logical_start.load(Ordering::Relaxed);
-        while logical < self.logical_end {
-            match self.logical_start.compare_exchange_weak(
-                logical,
-                logical + 1,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    return Some((
-                        TimeStamp::compose(self.physical, logical),
-                        logical + 1 == self.logical_end,
-                    ));
-                }
-                Err(x) => logical = x,
-            }
+        // alloc_offset might be far bigger than logical_end if the concurrency is
+        // *very* high, but it won't overflow in practice, so no need to do an
+        // extra load check here.
+        let ts = self.alloc_offset.fetch_add(1, Ordering::Relaxed);
+        if ts < self.logical_end {
+            return Some((
+                TimeStamp::compose(self.physical, ts),
+                ts + 1 == self.logical_end,
+            ));
         }
         None
     }
@@ -109,22 +104,22 @@ impl TsoBatch {
         let logical_start = logical_end.checked_sub(batch_size as u64).unwrap();
 
         Self {
-            size: batch_size,
             physical,
+            logical_start,
             logical_end,
-            logical_start: AtomicU64::new(logical_start),
+            alloc_offset: AtomicU64::new(logical_start),
         }
     }
 
     /// Number of remaining (available) TSO in the batch.
     pub fn remain(&self) -> u32 {
         self.logical_end
-            .saturating_sub(self.logical_start.load(Ordering::Relaxed)) as u32
+            .saturating_sub(self.alloc_offset.load(Ordering::Relaxed)) as u32
     }
 
     /// The original start timestamp in the batch.
     pub fn original_start(&self) -> TimeStamp {
-        TimeStamp::compose(self.physical, self.logical_end - self.size as u64)
+        TimeStamp::compose(self.physical, self.logical_start)
     }
 
     /// The excluded end timestamp after the last in batch.
@@ -326,7 +321,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         Self::new_opt(
             pd_client,
             Duration::from_millis(DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS),
-            Duration::from_millis(DEFAULT_TSO_BATCH_AVAILABLE_INTERVAL_MS),
+            Duration::from_millis(DEFAULT_TSO_BATCH_ALLOC_AHEAD_BUFFER_MS),
             DEFAULT_TSO_BATCH_MIN_SIZE,
             DEFAULT_TSO_BATCH_MAX_SIZE,
         )
@@ -334,23 +329,23 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     }
 
     #[allow(unused_mut)]
-    fn calc_cache_multiplier(mut renew_interval: Duration, available_interval: Duration) -> u32 {
+    fn calc_cache_multiplier(mut renew_interval: Duration, alloc_ahead: Duration) -> u32 {
         #[cfg(any(test, feature = "testexport"))]
         if renew_interval.is_zero() {
             // Should happen in test only.
             renew_interval = Duration::from_millis(DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS);
         }
-        available_interval.div_duration_f64(renew_interval).ceil() as u32
+        alloc_ahead.div_duration_f64(renew_interval).ceil() as u32
     }
 
     pub async fn new_opt(
         pd_client: Arc<C>,
         renew_interval: Duration,
-        available_interval: Duration,
+        alloc_ahead: Duration,
         batch_min_size: u32,
         batch_max_size: u32,
     ) -> Result<Self> {
-        let cache_multiplier = Self::calc_cache_multiplier(renew_interval, available_interval);
+        let cache_multiplier = Self::calc_cache_multiplier(renew_interval, alloc_ahead);
         let renew_parameter = RenewParameter {
             batch_min_size,
             batch_max_size,
@@ -622,9 +617,6 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
     }
 
     async fn async_flush(&self) -> Result<TimeStamp> {
-        fail::fail_point!("causal_ts_provider_flush", |_| Err(box_err!(
-            "async_flush err(failpoints)"
-        )));
         self.renew_tso_batch(true, TsoBatchRenewReason::flush)
             .await?;
         // TODO: Return the first tso by renew_tso_batch instead of async_get_ts
@@ -715,7 +707,7 @@ pub mod tests {
         for (i, (remain, usage, need_flush, expected)) in cases.into_iter().enumerate() {
             let batch_list = Arc::new(TsoBatchList {
                 inner: Default::default(),
-                tso_remain: AtomicI32::new(remain as i32),
+                tso_remain: AtomicI32::new(remain),
                 tso_usage: AtomicU32::new(usage),
                 capacity: cache_multiplier,
             });

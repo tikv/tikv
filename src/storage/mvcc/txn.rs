@@ -5,6 +5,7 @@ use std::fmt;
 
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use kvproto::kvrpcpb::LockInfo;
 use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
@@ -37,16 +38,19 @@ impl GcInfo {
 /// waiting for locks.
 #[derive(Debug, PartialEq)]
 pub struct ReleasedLock {
-    /// The hash value of the lock.
-    pub hash: u64,
+    pub start_ts: TimeStamp,
+    pub commit_ts: TimeStamp,
+    pub key: Key,
     /// Whether it is a pessimistic lock.
     pub pessimistic: bool,
 }
 
 impl ReleasedLock {
-    fn new(key: &Key, pessimistic: bool) -> Self {
+    pub fn new(start_ts: TimeStamp, commit_ts: TimeStamp, key: Key, pessimistic: bool) -> Self {
         Self {
-            hash: key.gen_hash(),
+            start_ts,
+            commit_ts,
+            key,
             pessimistic,
         }
     }
@@ -61,6 +65,11 @@ pub struct MvccTxn {
     // `writes`, so it can be further processed. The elements are tuples representing
     // (key, lock, remove_pessimistic_lock)
     pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
+    // Collects the information of locks that are acquired in this MvccTxn. Locks that already
+    // exists but updated in this MvccTxn won't be collected. The collected information will be
+    // used to update the lock waiting information and redo deadlock detection, if there are some
+    // pessimistic lock requests waiting on the keys.
+    pub(crate) new_locks: Vec<LockInfo>,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
     // readers before they are written to the engine.
@@ -81,7 +90,8 @@ impl MvccTxn {
             start_ts,
             write_size: 0,
             modifies: vec![],
-            locks_for_1pc: Vec::new(),
+            locks_for_1pc: vec![],
+            new_locks: vec![],
             concurrency_manager,
             guards: vec![],
         }
@@ -96,11 +106,24 @@ impl MvccTxn {
         std::mem::take(&mut self.guards)
     }
 
+    pub fn take_new_locks(&mut self) -> Vec<LockInfo> {
+        std::mem::take(&mut self.new_locks)
+    }
+
     pub fn write_size(&self) -> usize {
         self.write_size
     }
 
-    pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock) {
+    pub fn is_empty(&self) -> bool {
+        self.modifies.len() == 0 && self.locks_for_1pc.len() == 0
+    }
+
+    // Write a lock. If the key doesn't have lock before, `is_new` should be set.
+    pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock, is_new: bool) {
+        if is_new {
+            self.new_locks
+                .push(lock.clone().into_lock_info(key.to_raw().unwrap()));
+        }
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.modifies.push(write);
@@ -110,12 +133,27 @@ impl MvccTxn {
         self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
     }
 
-    pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock) {
+    // Write a pessimistic lock. If the key doesn't have lock before, `is_new`
+    // should be set.
+    pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock, is_new: bool) {
+        if is_new {
+            self.new_locks
+                .push(lock.to_lock().into_lock_info(key.to_raw().unwrap()));
+        }
         self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
-    pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
-        let released = ReleasedLock::new(&key, pessimistic);
+    /// Append a modify that unlocks the key. If the lock is removed due to
+    /// committing, a non-zero `commit_ts` needs to be provided; otherwise if
+    /// the lock is removed due to rolling back, `commit_ts` must be set to
+    /// zero.
+    pub(crate) fn unlock_key(
+        &mut self,
+        key: Key,
+        pessimistic: bool,
+        commit_ts: TimeStamp,
+    ) -> Option<ReleasedLock> {
+        let released = ReleasedLock::new(self.start_ts, commit_ts, key.clone(), pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
         self.modifies.push(write);
@@ -182,12 +220,13 @@ impl MvccTxn {
         }
 
         lock.rollback_ts.push(self.start_ts);
-        self.put_lock(key.clone(), &lock);
+        self.put_lock(key.clone(), &lock, false);
     }
 
     pub(crate) fn clear(&mut self) {
         self.write_size = 0;
         self.modifies.clear();
+        self.new_locks.clear();
         self.locks_for_1pc.clear();
         self.guards.clear();
     }
@@ -755,6 +794,7 @@ pub(crate) mod tests {
             need_old_value: false,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         }
     }
 

@@ -4,7 +4,6 @@
 mod profile;
 use std::{
     error::Error as StdError,
-    marker::PhantomData,
     net::SocketAddr,
     path::PathBuf,
     pin::Pin,
@@ -16,7 +15,6 @@ use std::{
 
 use async_stream::stream;
 use collections::HashMap;
-use engine_traits::KvEngine;
 use flate2::{write::GzEncoder, Compression};
 use futures::{
     compat::{Compat01As03, Stream01CompatExt},
@@ -34,6 +32,7 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, StatusCode,
 };
+use kvproto::resource_manager::ResourceGroup;
 use online_config::OnlineConfig;
 use openssl::{
     ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
@@ -45,10 +44,12 @@ pub use profile::{
     read_file, start_one_cpu_profile, start_one_heap_profile,
 };
 use prometheus::TEXT_FORMAT;
-use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
+use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
+use serde::Serialize;
 use serde_json::Value;
+use tikv_kv::RaftExtension;
 use tikv_util::{
     logger::set_log_level,
     metrics::{dump, dump_to},
@@ -82,7 +83,7 @@ struct LogLevelRequest {
     pub log_level: LogLevel,
 }
 
-pub struct StatusServer<E, R> {
+pub struct StatusServer<R> {
     thread_pool: Runtime,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
@@ -91,12 +92,11 @@ pub struct StatusServer<E, R> {
     router: R,
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
-    _snap: PhantomData<E>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
-impl<E, R> StatusServer<E, R>
+impl<R> StatusServer<R>
 where
-    E: 'static,
     R: 'static + Send,
 {
     pub fn new(
@@ -105,6 +105,7 @@ where
         security_config: Arc<SecurityConfig>,
         router: R,
         store_path: PathBuf,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -124,7 +125,7 @@ where
             router,
             security_config,
             store_path,
-            _snap: PhantomData,
+            resource_manager,
         })
     }
 
@@ -423,10 +424,9 @@ where
     }
 }
 
-impl<E, R> StatusServer<E, R>
+impl<R> StatusServer<R>
 where
-    E: KvEngine,
-    R: 'static + Send + CasualRouter<E> + Clone,
+    R: 'static + Send + RaftExtension + Clone,
 {
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
@@ -451,33 +451,18 @@ where
                 ));
             }
         };
-        let (tx, rx) = oneshot::channel();
-        match router.send(
-            id,
-            CasualMessage::AccessPeer(Box::new(move |meta| {
-                if let Err(meta) = tx.send(meta) {
-                    error!("receiver dropped, region meta: {:?}", meta)
-                }
-            })),
-        ) {
-            Ok(_) => (),
-            Err(raftstore::Error::RegionNotFound(_)) => {
+        let f = router.query_region(id);
+        let meta = match f.await {
+            Ok(meta) => meta,
+            Err(tikv_kv::Error(box tikv_kv::ErrorInner::Request(header)))
+                if header.has_region_not_found() =>
+            {
                 return not_found(format!("region({}) not found", id));
             }
             Err(err) => {
                 return Ok(make_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("channel pending or disconnect: {}", err),
-                ));
-            }
-        }
-
-        let meta = match rx.await {
-            Ok(meta) => meta,
-            Err(_) => {
-                return Ok(make_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "query cancelled",
+                    format!("query failed: {}", err),
                 ));
             }
         };
@@ -490,6 +475,22 @@ where
                     format!("fails to json: {}", err),
                 ));
             }
+        };
+
+        #[cfg(feature = "trace-tablet-lifetime")]
+        let body = {
+            let query = req.uri().query().unwrap_or("");
+            let query_pairs: HashMap<_, _> =
+                url::form_urlencoded::parse(query.as_bytes()).collect();
+
+            let mut body = body;
+            if query_pairs.contains_key("trace-tablet") {
+                for s in engine_rocks::RocksEngine::trace(id) {
+                    body.push(b'\n');
+                    body.extend_from_slice(s.as_bytes());
+                }
+            };
+            body
         };
         match Response::builder()
             .header("content-type", "application/json")
@@ -539,6 +540,7 @@ where
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
         let store_path = self.store_path.clone();
+        let resource_manager = self.resource_manager.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -546,6 +548,7 @@ where
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             let store_path = store_path.clone();
+            let resource_manager = resource_manager.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -554,6 +557,7 @@ where
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
                     let store_path = store_path.clone();
+                    let resource_manager = resource_manager.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -628,6 +632,9 @@ where
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }
+                            (Method::GET, "/resource_groups") => {
+                                Self::handle_get_all_resource_groups(resource_manager.as_ref())
+                            }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
                     }
@@ -664,6 +671,63 @@ where
             self.start_serve(server);
         }
         Ok(())
+    }
+
+    pub fn handle_get_all_resource_groups(
+        mgr: Option<&Arc<ResourceGroupManager>>,
+    ) -> hyper::Result<Response<Body>> {
+        let groups = if let Some(mgr) = mgr {
+            mgr.get_all_resource_groups()
+                .into_iter()
+                .map(into_debug_request_group)
+                .collect()
+        } else {
+            vec![]
+        };
+        let body = match serde_json::to_vec(&groups) {
+            Ok(body) => body,
+            Err(err) => {
+                return Ok(make_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("fails to json: {}", err),
+                ));
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ResouceGroupSetting {
+    name: String,
+    ru: u64,
+    burst_limit: i64,
+}
+
+fn into_debug_request_group(rg: ResourceGroup) -> ResouceGroupSetting {
+    ResouceGroupSetting {
+        name: rg.name,
+        ru: rg
+            .r_u_settings
+            .get_ref()
+            .get_r_u()
+            .get_settings()
+            .get_fill_rate(),
+        burst_limit: rg
+            .r_u_settings
+            .get_ref()
+            .get_r_u()
+            .get_settings()
+            .get_burst_limit(),
     }
 }
 
@@ -938,17 +1002,21 @@ mod tests {
     use std::{env, io::Read, path::PathBuf, sync::Arc};
 
     use collections::HashSet;
-    use engine_test::kv::KvTestEngine;
     use flate2::read::GzDecoder;
-    use futures::{executor::block_on, future::ok, prelude::*};
+    use futures::{
+        executor::block_on,
+        future::{ok, BoxFuture},
+        prelude::*,
+    };
     use http::header::{HeaderValue, ACCEPT_ENCODING};
     use hyper::{body::Buf, client::HttpConnector, Body, Client, Method, Request, StatusCode, Uri};
     use hyper_openssl::HttpsConnector;
     use online_config::OnlineConfig;
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
-    use raftstore::store::{transport::CasualRouter, CasualMessage};
+    use raftstore::store::region_meta::RegionMeta;
     use security::SecurityConfig;
     use test_util::new_security_cfg;
+    use tikv_kv::RaftExtension;
     use tikv_util::logger::get_log_level;
 
     use crate::{
@@ -959,9 +1027,9 @@ mod tests {
     #[derive(Clone)]
     struct MockRouter;
 
-    impl CasualRouter<KvTestEngine> for MockRouter {
-        fn send(&self, region_id: u64, _: CasualMessage<KvTestEngine>) -> raftstore::Result<()> {
-            Err(raftstore::Error::RegionNotFound(region_id))
+    impl RaftExtension for MockRouter {
+        fn query_region(&self, region_id: u64) -> BoxFuture<'static, tikv_kv::Result<RegionMeta>> {
+            Box::pin(async move { Err(raftstore::Error::RegionNotFound(region_id).into()) })
         }
     }
 
@@ -974,6 +1042,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1022,6 +1091,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1067,6 +1137,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1183,6 +1254,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1227,6 +1299,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1263,6 +1336,7 @@ mod tests {
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1336,6 +1410,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1366,6 +1441,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1399,6 +1475,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1454,6 +1531,7 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();

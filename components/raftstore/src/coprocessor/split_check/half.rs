@@ -140,8 +140,8 @@ mod tests {
         *,
     };
     use crate::{
-        coprocessor::{Config, CoprocessorHost},
-        store::{BucketRange, CasualMessage, SplitCheckRunner, SplitCheckTask},
+        coprocessor::{dispatcher::SchedTask, Config, CoprocessorHost},
+        store::{BucketRange, SplitCheckRunner, SplitCheckTask},
     };
 
     #[test]
@@ -267,8 +267,8 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_split_size: ReadableSize(130_u64),
-            enable_region_bucket: true,
+            region_split_size: Some(ReadableSize(130_u64)),
+            enable_region_bucket: Some(true),
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
         };
@@ -391,8 +391,8 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_split_size: ReadableSize(130_u64),
-            enable_region_bucket: true,
+            region_split_size: Some(ReadableSize(130_u64)),
+            enable_region_bucket: Some(true),
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
         };
@@ -451,15 +451,11 @@ mod tests {
         ));
 
         loop {
-            if let Ok((
-                _,
-                CasualMessage::RefreshRegionBuckets {
-                    region_epoch: _,
-                    buckets,
-                    bucket_ranges,
-                    ..
-                },
-            )) = rx.try_recv()
+            if let Ok(SchedTask::RefreshRegionBuckets {
+                buckets,
+                bucket_ranges,
+                ..
+            }) = rx.try_recv()
             {
                 assert_eq!(buckets.len(), bucket_ranges.unwrap().len());
                 assert_eq!(buckets.len(), 5);

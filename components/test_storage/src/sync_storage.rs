@@ -12,14 +12,11 @@ use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
     metapb,
 };
-use raftstore::{
-    coprocessor::{region_info_accessor::MockRegionInfoProvider, RegionInfoProvider},
-    router::RaftStoreBlackHole,
-};
+use raftstore::coprocessor::{region_info_accessor::MockRegionInfoProvider, RegionInfoProvider};
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
-        config::Config, kv::RocksEngine, lock_manager::DummyLockManager, test_util::GetConsumer,
+        config::Config, kv::RocksEngine, lock_manager::MockLockManager, test_util::GetConsumer,
         txn::commands, Engine, KvGetStatistics, PrewriteResult, Result, Storage, TestEngineBuilder,
         TestStorageBuilder, TxnStatus,
     },
@@ -87,7 +84,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
     pub fn build(mut self, store_id: u64) -> Result<SyncTestStorage<E, F>> {
         let mut builder = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
             self.engine.clone(),
-            DummyLockManager,
+            MockLockManager::new(),
         );
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
@@ -106,8 +103,8 @@ impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine, F: KvFormat> {
-    gc_worker: GcWorker<E, RaftStoreBlackHole>,
-    store: Storage<E, DummyLockManager, F>,
+    gc_worker: GcWorker<E>,
+    store: Storage<E, MockLockManager, F>,
 }
 
 /// SyncTestStorage for Api V1
@@ -117,13 +114,12 @@ pub type SyncTestStorageApiV1<E> = SyncTestStorage<E, ApiV1>;
 impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
     pub fn from_storage(
         store_id: u64,
-        storage: Storage<E, DummyLockManager, F>,
+        storage: Storage<E, MockLockManager, F>,
         config: GcConfig,
     ) -> Result<Self> {
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
-            RaftStoreBlackHole,
             tx,
             config,
             Default::default(),
@@ -145,7 +141,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             .unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E, DummyLockManager, F> {
+    pub fn get_storage(&self) -> Storage<E, MockLockManager, F> {
         self.store.clone()
     }
 

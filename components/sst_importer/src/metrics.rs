@@ -56,6 +56,11 @@ lazy_static! {
         "tikv_import_download_bytes",
         "Bucketed histogram of importer download bytes",
         exponential_buckets(1024.0, 2.0, 20).unwrap()
+    ).unwrap();
+    pub static ref IMPORTER_APPLY_BYTES: Histogram = register_histogram!(
+        "tikv_import_apply_bytes",
+        "Bucketed histogram of importer apply bytes",
+        exponential_buckets(1024.0, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IMPORTER_INGEST_DURATION: HistogramVec = register_histogram_vec!(
@@ -94,6 +99,21 @@ lazy_static! {
     pub static ref INPORTER_APPLY_COUNT: IntCounterVec = register_int_counter_vec!(
         "tikv_import_apply_count",
         "Bucketed histogram of importer apply count",
+        &["type"]
+    ).unwrap();
+    pub static ref EXT_STORAGE_CACHE_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_import_storage_cache",
+        "The operations over storage cache",
+        &["operation"]
+    ).unwrap();
+
+    pub static ref CACHED_FILE_IN_MEM: IntGauge = register_int_gauge!(
+        "tikv_import_apply_cached_bytes",
+        "The files cached by the apply requests of importer."
+    ).unwrap();
+    pub static ref CACHE_EVENT: IntCounterVec = register_int_counter_vec!(
+        "tikv_import_apply_cache_event",
+        "The events of caching. event = {add, remove, out-of-quota}",
         &["type"]
     ).unwrap();
 }

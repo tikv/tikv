@@ -50,31 +50,7 @@ pub fn test_read_keys() {
         let (k, v) = (n.clone(), n);
 
         // Prewrite.
-        ts += 1;
-        let prewrite_start_version = ts;
-        let mut mutation = Mutation::default();
-        mutation.set_op(Op::Put);
-        mutation.set_key(k.clone());
-        mutation.set_value(v.clone());
-        must_kv_prewrite(
-            &client,
-            ctx.clone(),
-            vec![mutation],
-            k.clone(),
-            prewrite_start_version,
-        );
-
-        // Commit.
-        ts += 1;
-        let commit_version = ts;
-        must_kv_commit(
-            &client,
-            ctx.clone(),
-            vec![k.clone()],
-            prewrite_start_version,
-            commit_version,
-            commit_version,
-        );
+        write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
     }
 
     // PointGet

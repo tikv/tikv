@@ -15,11 +15,9 @@ fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, writt
     flush(cluster);
     // Wait for compaction.
     sleep_ms(interval * 2);
-    for engines in cluster.engines.values() {
-        let compact_write_bytes = engines
-            .kv
-            .as_inner()
-            .get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
+    for statistics in &cluster.kv_statistics {
+        let compact_write_bytes =
+            statistics.get_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
         if written {
             assert!(compact_write_bytes > 0);
         } else {

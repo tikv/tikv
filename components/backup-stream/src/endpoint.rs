@@ -1,18 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashSet,
-    fmt,
-    marker::PhantomData,
-    path::PathBuf,
-    sync::{atomic::Ordering, Arc},
-    time::Duration,
+    collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::FutureExt;
+use grpcio::Environment;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -22,7 +18,10 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::RaftStoreRouter,
+    store::RegionReadProgressRegistry,
 };
+use resolved_ts::LeadershipResolver;
+use security::SecurityManager;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
@@ -46,8 +45,8 @@ use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
 use crate::{
     annotate,
     checkpoint_manager::{
-        BasicFlushObserver, CheckpointManager, CheckpointV2FlushObserver,
-        CheckpointV3FlushObserver, FlushObserver, GetCheckpointResult, RegionIdWithVersion,
+        BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
+        GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
     errors::{Error, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
@@ -92,6 +91,9 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     initial_scan_throughput_quota: Limiter,
     region_operator: RegionSubscriptionManager<S, R, PDC>,
     failover_time: Option<Instant>,
+    // We holds the config before, even it is useless for now,
+    // however probably it would be useful in the future.
+    #[allow(dead_code)]
     config: BackupStreamConfig,
     checkpoint_mgr: CheckpointManager,
 }
@@ -114,6 +116,10 @@ where
         router: RT,
         pd_client: Arc<PDC>,
         concurrency_manager: ConcurrencyManager,
+        // Required by Leadership Resolver.
+        env: Arc<Environment>,
+        region_read_progress: RegionReadProgressRegistry,
+        security_mgr: Arc<SecurityManager>,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
         let pool = create_tokio_runtime((config.num_threads / 2).max(1), "backup-stream")
@@ -150,6 +156,14 @@ where
         let initial_scan_throughput_quota = Limiter::new(limit);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         let subs = SubscriptionTracer::default();
+        let leadership_resolver = LeadershipResolver::new(
+            store_id,
+            Arc::clone(&pd_client) as _,
+            env,
+            security_mgr,
+            region_read_progress,
+            Duration::from_secs(60),
+        );
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
             InitialDataLoader::new(
                 router.clone(),
@@ -165,8 +179,11 @@ where
             meta_client.clone(),
             pd_client.clone(),
             ((config.num_threads + 1) / 2).max(1),
+            leadership_resolver,
         );
         pool.spawn(op_loop);
+        let mut checkpoint_mgr = CheckpointManager::default();
+        pool.spawn(checkpoint_mgr.spawn_subscription_mgr());
         Endpoint {
             meta_client,
             range_router,
@@ -185,7 +202,7 @@ where
             region_operator,
             failover_time: None,
             config,
-            checkpoint_mgr: Default::default(),
+            checkpoint_mgr,
         }
     }
 }
@@ -226,7 +243,7 @@ where
                     let safepoint = meta_cli.global_progress_of_task(&task).await?;
                     pdc.update_service_safe_point(
                         safepoint_name,
-                        TimeStamp::new(safepoint - 1),
+                        TimeStamp::new(safepoint.saturating_sub(1)),
                         safepoint_ttl,
                     )
                     .await?;
@@ -273,7 +290,22 @@ where
         meta_client: MetadataClient<S>,
         scheduler: Scheduler<Task>,
     ) -> Result<()> {
-        let tasks = meta_client.get_tasks().await?;
+        let tasks;
+        loop {
+            let r = meta_client.get_tasks().await;
+            match r {
+                Ok(t) => {
+                    tasks = t;
+                    break;
+                }
+                Err(e) => {
+                    e.report("failed to get backup stream task");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            }
+        }
+
         for task in tasks.inner {
             info!("backup stream watch task"; "task" => ?task);
             if task.is_paused {
@@ -317,19 +349,21 @@ where
             let mut watcher = match watcher {
                 Ok(w) => w,
                 Err(e) => {
-                    e.report("failed to start watch pause");
+                    e.report("failed to start watch task");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
             };
+            info!("start watching the task changes."; "from_rev" => %revision_new);
 
             loop {
                 if let Some(event) = watcher.stream.next().await {
-                    info!("backup stream watch event from etcd"; "event" => ?event);
+                    info!("backup stream watch task from etcd"; "event" => ?event);
 
                     let revision = meta_client.get_reversion().await;
                     if let Ok(r) = revision {
                         revision_new = r;
+                        info!("update the revision"; "revision" => revision_new);
                     }
 
                     match event {
@@ -371,13 +405,15 @@ where
                     continue;
                 }
             };
+            info!("start watching the pausing events."; "from_rev" => %revision_new);
 
             loop {
                 if let Some(event) = watcher.stream.next().await {
-                    info!("backup stream watch event from etcd"; "event" => ?event);
+                    info!("backup stream watch pause from etcd"; "event" => ?event);
                     let revision = meta_client.get_reversion().await;
                     if let Ok(r) = revision {
                         revision_new = r;
+                        info!("update the revision"; "revision" => revision_new);
                     }
 
                     match event {
@@ -402,23 +438,9 @@ where
         }
     }
 
-    fn flush_observer(&self) -> Box<dyn FlushObserver> {
+    fn flush_observer(&self) -> impl FlushObserver {
         let basic = BasicFlushObserver::new(self.pd_client.clone(), self.store_id);
-        if self.config.use_checkpoint_v3 {
-            Box::new(CheckpointV3FlushObserver::new(
-                self.scheduler.clone(),
-                self.meta_client.clone(),
-                self.subs.clone(),
-                basic,
-            ))
-        } else {
-            Box::new(CheckpointV2FlushObserver::new(
-                self.meta_client.clone(),
-                self.make_flush_guard(),
-                self.subs.clone(),
-                basic,
-            ))
-        }
+        CheckpointV3FlushObserver::new(self.scheduler.clone(), self.meta_client.clone(), basic)
     }
 
     /// Convert a batch of events to the cmd batch, and update the resolver
@@ -574,7 +596,6 @@ where
         let cli = self.meta_client.clone();
         let init = self.make_initial_loader();
         let range_router = self.range_router.clone();
-        let use_v3 = self.config.use_checkpoint_v3;
 
         info!(
             "register backup stream task";
@@ -598,9 +619,7 @@ where
             let task_clone = task.clone();
             let run = async move {
                 let task_name = task.info.get_name();
-                if !use_v3 {
-                    cli.init_task(&task.info).await?;
-                }
+                cli.init_task(&task.info).await?;
                 let ranges = cli.ranges_of_task(task_name).await?;
                 info!(
                     "register backup stream ranges";
@@ -702,29 +721,6 @@ where
         self.observer.ranges.wl().clear();
         self.subs.clear();
         self.pool.block_on(router.unregister_task(task))
-    }
-
-    /// Make a guard for checking whether we can flush the checkpoint ts.
-    fn make_flush_guard(&self) -> impl FnOnce() -> bool + Send {
-        let failover = self.failover_time;
-        let flush_duration = self.config.max_flush_interval;
-        move || {
-            if failover
-                .as_ref()
-                .map(|failover_t| failover_t.saturating_elapsed() < flush_duration.0 * 2)
-                .unwrap_or(false)
-            {
-                warn!("during failover, skipping advancing resolved ts"; 
-                    "failover_time_ago" => ?failover.map(|failover_t| failover_t.saturating_elapsed()));
-                return false;
-            }
-            let in_flight = crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.load(Ordering::SeqCst);
-            if in_flight > 0 {
-                warn!("inflight leader detected, skipping advancing resolved ts"; "in_flight" => %in_flight);
-                return false;
-            }
-            true
-        }
     }
 
     fn prepare_min_ts(&self) -> future![TimeStamp] {
@@ -929,11 +925,7 @@ where
                 // Let's clear all stale checkpoints first.
                 // Or they may slow down the global checkpoint.
                 self.checkpoint_mgr.clear();
-                for (region, checkpoint) in u {
-                    debug!("setting region checkpoint"; "region" => %region.get_id(), "ts" => %checkpoint);
-                    self.checkpoint_mgr
-                        .update_region_checkpoint(&region, checkpoint)
-                }
+                self.checkpoint_mgr.update_region_checkpoints(u);
             }
             RegionCheckpointOperation::Get(g, cb) => {
                 let _guard = self.pool.handle().enter();
@@ -952,6 +944,14 @@ where
                         })
                         .collect()),
                 }
+            }
+            RegionCheckpointOperation::Subscribe(sub) => {
+                let fut = self.checkpoint_mgr.add_subscriber(sub);
+                self.pool.spawn(async move {
+                    if let Err(err) = fut.await {
+                        err.report("adding subscription");
+                    }
+                });
             }
         }
     }
@@ -999,6 +999,7 @@ pub enum RegionSet {
 pub enum RegionCheckpointOperation {
     Update(Vec<(Region, TimeStamp)>),
     Get(RegionSet, Box<dyn FnOnce(Vec<GetCheckpointResult>) + Send>),
+    Subscribe(Subscription),
 }
 
 impl fmt::Debug for RegionCheckpointOperation {
@@ -1006,6 +1007,7 @@ impl fmt::Debug for RegionCheckpointOperation {
         match self {
             Self::Update(arg0) => f.debug_tuple("Update").field(arg0).finish(),
             Self::Get(arg0, _) => f.debug_tuple("Get").field(arg0).finish(),
+            Self::Subscribe(_) => f.debug_tuple("Subscription").finish(),
         }
     }
 }
@@ -1089,12 +1091,21 @@ pub enum ObserveOp {
 impl std::fmt::Debug for ObserveOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Start { region } => f.debug_struct("Start").field("region", region).finish(),
-            Self::Stop { region } => f.debug_struct("Stop").field("region", region).finish(),
-            Self::Destroy { region } => f.debug_struct("Destroy").field("region", region).finish(),
+            Self::Start { region } => f
+                .debug_struct("Start")
+                .field("region", &utils::debug_region(region))
+                .finish(),
+            Self::Stop { region } => f
+                .debug_struct("Stop")
+                .field("region", &utils::debug_region(region))
+                .finish(),
+            Self::Destroy { region } => f
+                .debug_struct("Destroy")
+                .field("region", &utils::debug_region(region))
+                .finish(),
             Self::RefreshResolver { region } => f
                 .debug_struct("RefreshResolver")
-                .field("region", region)
+                .field("region", &utils::debug_region(region))
                 .finish(),
             Self::NotifyFailToStartObserve {
                 region,
@@ -1102,7 +1113,7 @@ impl std::fmt::Debug for ObserveOp {
                 err,
             } => f
                 .debug_struct("NotifyFailToStartObserve")
-                .field("region", region)
+                .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
                 .finish(),
@@ -1197,5 +1208,43 @@ where
 
     fn run(&mut self, task: Task) {
         self.run_task(task)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use engine_rocks::RocksEngine;
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use test_raftstore::MockRaftStoreRouter;
+    use tikv_util::worker::dummy_scheduler;
+
+    use crate::{
+        checkpoint_manager::tests::MockPdClient, endpoint, endpoint::Endpoint, metadata::test, Task,
+    };
+
+    #[tokio::test]
+    async fn test_start() {
+        let cli = test::test_meta_cli();
+        let (sched, mut rx) = dummy_scheduler();
+        let task = test::simple_task("simple_3");
+        cli.insert_task_with_range(&task, &[]).await.unwrap();
+
+        fail::cfg("failed_to_get_tasks", "1*return").unwrap();
+        Endpoint::<_, MockRegionInfoProvider, RocksEngine, MockRaftStoreRouter, MockPdClient>::start_and_watch_tasks(cli, sched).await.unwrap();
+        fail::remove("failed_to_get_tasks");
+
+        let _t1 = rx.recv().unwrap();
+        let t2 = rx.recv().unwrap();
+
+        match t2 {
+            Task::WatchTask(t) => match t {
+                endpoint::TaskOp::AddTask(t) => {
+                    assert_eq!(t.info, task.info);
+                    assert!(!t.is_paused);
+                }
+                _ => panic!("not match TaskOp type"),
+            },
+            _ => panic!("not match Task type {:?}", t2),
+        }
     }
 }

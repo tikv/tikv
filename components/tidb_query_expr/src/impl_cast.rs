@@ -242,7 +242,7 @@ pub fn get_cast_fn_rpn_node(
         func_meta,
         args_len: 1,
         field_type: to_field_type,
-        metadata: Box::new(tipb::InUnionMetadata::default()),
+        metadata: Box::<tipb::InUnionMetadata>::default(),
     })
 }
 
@@ -373,7 +373,7 @@ fn cast_string_as_int(
                             ctx.warnings
                                 .append_warning(Error::cast_neg_int_as_unsigned());
                         }
-                        Ok(Some(x as i64))
+                        Ok(Some(x))
                     }
                     Err(err) => match *err.kind() {
                         IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
@@ -3118,7 +3118,7 @@ mod tests {
             (Json::from_bool(false).unwrap(), 0, false, false),
             (Json::none().unwrap(), 0, false, false),
             (
-                Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
+                Json::from_f64(((1u64 << 63) + (1u64 << 62)) as f64).unwrap(),
                 i64::MAX,
                 true,
                 false,
@@ -4341,7 +4341,7 @@ mod tests {
         test_as_string_helper(
             ref_cs,
             |ctx, extra, val| {
-                let val = val.map(|x| *x as i64);
+                let val = val.copied();
                 cast_year_as_string(ctx, extra, &val.unwrap())
             },
             "cast_year_as_string",
@@ -5026,10 +5026,8 @@ mod tests {
                 let expect = match res_type {
                     ResType::Zero => Decimal::zero(),
                     ResType::Same => base_res,
-                    ResType::TruncateToMax => max_decimal(res_flen as u8, res_decimal as u8),
-                    ResType::TruncateToMin => {
-                        max_or_min_dec(true, res_flen as u8, res_decimal as u8)
-                    }
+                    ResType::TruncateToMax => max_decimal(res_flen, res_decimal),
+                    ResType::TruncateToMin => max_or_min_dec(true, res_flen, res_decimal),
                     ResType::Round => {
                         let r = base_res
                             .round(res_decimal as i8, RoundMode::HalfEven)
@@ -6697,7 +6695,7 @@ mod tests {
             Json::from_f64(i64::MAX as u64 as f64).unwrap(),
             Json::from_f64(i64::MIN as u64 as f64).unwrap(),
             Json::from_f64(i64::MIN as f64).unwrap(),
-            Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
+            Json::from_f64(((1u64 << 63) + (1u64 << 62)) as f64).unwrap(),
             Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
             Json::from_f64(f64::from(f32::MIN)).unwrap(),
             Json::from_f64(f64::from(f32::MAX)).unwrap(),

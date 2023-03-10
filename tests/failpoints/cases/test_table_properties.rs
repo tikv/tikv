@@ -82,16 +82,16 @@ fn test_check_need_gc() {
     // TEST 2: props.num_versions as f64 > props.num_rows as f64 * ratio_threshold
     // return true.
     do_write(&engine, false, 5);
-    engine.get_rocksdb().flush_cfs(true).unwrap();
+    engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     do_gc(&raw_engine, 2, &mut gc_runner, &dir);
 
     do_write(&engine, false, 5);
-    engine.get_rocksdb().flush_cfs(true).unwrap();
+    engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     // Set ratio_threshold, let (props.num_versions as f64 > props.num_rows as
     // f64 * ratio_threshold) return true
-    gc_runner.ratio_threshold = Option::Some(f64::MIN);
+    gc_runner.ratio_threshold = Option::Some(0.0f64);
 
     // is_bottommost_level = false
     do_gc(&raw_engine, 1, &mut gc_runner, &dir);
@@ -185,7 +185,7 @@ fn test_skip_gc_by_check() {
     let mut gc_runner = TestGcRunner::new(0);
 
     do_write(&engine, false, 5);
-    engine.get_rocksdb().flush_cfs(true).unwrap();
+    engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     // The min_mvcc_ts ts > gc safepoint, check_need_gc return false, don't call
     // dofilter
@@ -208,12 +208,12 @@ fn test_skip_gc_by_check() {
     // TEST 2:When is_bottommost_level = false,
     // write data to level2
     do_write(&engine, false, 5);
-    engine.get_rocksdb().flush_cfs(true).unwrap();
+    engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     do_gc(&raw_engine, 2, &mut gc_runner, &dir);
 
     do_write(&engine, false, 5);
-    engine.get_rocksdb().flush_cfs(true).unwrap();
+    engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     // Set ratio_threshold, let (props.num_versions as f64 > props.num_rows as
     // f64 * ratio_threshold) return false

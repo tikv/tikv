@@ -13,7 +13,7 @@ use tikv::{
     server::gc_worker::GcConfig,
     storage::{
         kv::{Engine, RocksEngine},
-        lock_manager::DummyLockManager,
+        lock_manager::MockLockManager,
         txn::FixtureStore,
         SnapshotStore, StorageApiV1, TestStorageBuilderApiV1,
     },
@@ -116,7 +116,7 @@ pub struct Store<E: Engine> {
 
 impl Store<RocksEngine> {
     pub fn new() -> Self {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         Self::from_storage(storage)
@@ -130,7 +130,7 @@ impl Default for Store<RocksEngine> {
 }
 
 impl<E: Engine> Store<E> {
-    pub fn from_storage(storage: StorageApiV1<E, DummyLockManager>) -> Self {
+    pub fn from_storage(storage: StorageApiV1<E, MockLockManager>) -> Self {
         Self {
             store: SyncTestStorageApiV1::from_storage(0, storage, GcConfig::default()).unwrap(),
             current_ts: 1.into(),

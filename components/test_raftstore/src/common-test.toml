@@ -24,7 +24,8 @@ grpc-raft-conn-num = 1
 # Disable stats concurrency. procinfo performs too bad without optimization,
 # disable it to save CPU for real tests.
 stats-concurrency = 0
-raft-client-backoff-step = "5ms"
+raft-client-max-backoff = "100ms"
+raft-client-initial-reconnect-backoff = "100ms"
 
 [server.labels]
 
@@ -33,7 +34,6 @@ scheduler-concurrency = 10
 scheduler-worker-pool-size = 1
 
 [storage.block-cache]
-shared = true
 capacity = "64MB"
 
 [pd]
@@ -65,6 +65,7 @@ raft-store-max-leader-lease = "240ms"
 allow-remove-leader = true
 merge-check-tick-interval = "100ms"
 pd-heartbeat-tick-interval = "20ms"
+max-entry-cache-warmup-duration = "0ms"
 dev-assert = true
 hibernate-regions = true
 store-io-pool-size = 0

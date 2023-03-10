@@ -4,9 +4,10 @@ use collections::HashSet;
 
 use super::{
     super::Result,
-    path_expr::{PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK},
+    path_expr::{PathExpression, PathLeg},
     Json, JsonRef, JsonType,
 };
+use crate::codec::mysql::json::path_expr::{ArrayIndex, ArraySelection, KeySelection};
 
 impl<'a> JsonRef<'a> {
     /// `extract` receives several path expressions as arguments, matches them
@@ -21,8 +22,11 @@ impl<'a> JsonRef<'a> {
         let mut elem_list = Vec::with_capacity(path_expr_list.len());
         for path_expr in path_expr_list {
             could_return_multiple_matches |= path_expr.contains_any_asterisk();
+            could_return_multiple_matches |= path_expr.contains_any_range();
+
             elem_list.append(&mut extract_json(*self, &path_expr.legs)?)
         }
+
         if elem_list.is_empty() {
             Ok(None)
         } else if could_return_multiple_matches {
@@ -79,43 +83,86 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<Jso
     }
     let (current_leg, sub_path_legs) = (&path_legs[0], &path_legs[1..]);
     let mut ret = vec![];
-    match *current_leg {
-        PathLeg::Index(i) => match j.get_type() {
+    match current_leg {
+        PathLeg::ArraySelection(selection) => match j.get_type() {
             JsonType::Array => {
                 let elem_count = j.get_elem_count();
-                if i == PATH_EXPR_ARRAY_INDEX_ASTERISK {
-                    for k in 0..elem_count {
-                        append_if_ref_unique(
-                            &mut ret,
-                            &extract_json(j.array_get_elem(k)?, sub_path_legs)?,
-                        )
+                match selection {
+                    ArraySelection::Asterisk => {
+                        for k in 0..elem_count {
+                            append_if_ref_unique(
+                                &mut ret,
+                                &extract_json(j.array_get_elem(k)?, sub_path_legs)?,
+                            )
+                        }
                     }
-                } else if (i as usize) < elem_count {
-                    append_if_ref_unique(
-                        &mut ret,
-                        &extract_json(j.array_get_elem(i as usize)?, sub_path_legs)?,
-                    )
+                    ArraySelection::Index(index) => {
+                        if let Some(index) = j.array_get_index(*index) {
+                            if index < elem_count {
+                                append_if_ref_unique(
+                                    &mut ret,
+                                    &extract_json(j.array_get_elem(index)?, sub_path_legs)?,
+                                )
+                            }
+                        }
+                    }
+                    ArraySelection::Range(start, end) => {
+                        if let (Some(start), Some(mut end)) =
+                            (j.array_get_index(*start), j.array_get_index(*end))
+                        {
+                            if end >= elem_count {
+                                end = elem_count - 1
+                            }
+                            if start <= end {
+                                for i in start..=end {
+                                    append_if_ref_unique(
+                                        &mut ret,
+                                        &extract_json(j.array_get_elem(i)?, sub_path_legs)?,
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
             _ => {
-                if i as usize == 0 {
-                    append_if_ref_unique(&mut ret, &extract_json(j, sub_path_legs)?)
+                // If the current object is not an array, still append them if the selection
+                // includes 0. But for asterisk, it still returns NULL.
+                //
+                // as the element is not array, don't use `array_get_index`
+                match selection {
+                    ArraySelection::Index(ArrayIndex::Left(0)) => {
+                        append_if_ref_unique(&mut ret, &extract_json(j, sub_path_legs)?)
+                    }
+                    ArraySelection::Range(
+                        ArrayIndex::Left(0),
+                        ArrayIndex::Right(0) | ArrayIndex::Left(_),
+                    ) => {
+                        // for [0 to Non-negative Number] and [0 to last], it extracts itself
+                        append_if_ref_unique(&mut ret, &extract_json(j, sub_path_legs)?)
+                    }
+                    _ => {}
                 }
             }
         },
-        PathLeg::Key(ref key) => {
+        PathLeg::Key(key) => {
             if j.get_type() == JsonType::Object {
-                if key == PATH_EXPR_ASTERISK {
-                    let elem_count = j.get_elem_count();
-                    for i in 0..elem_count {
-                        append_if_ref_unique(
-                            &mut ret,
-                            &extract_json(j.object_get_val(i)?, sub_path_legs)?,
-                        )
+                match key {
+                    KeySelection::Asterisk => {
+                        let elem_count = j.get_elem_count();
+                        for i in 0..elem_count {
+                            append_if_ref_unique(
+                                &mut ret,
+                                &extract_json(j.object_get_val(i)?, sub_path_legs)?,
+                            )
+                        }
                     }
-                } else if let Some(idx) = j.object_search_key(key.as_bytes()) {
-                    let val = j.object_get_val(idx)?;
-                    append_if_ref_unique(&mut ret, &extract_json(val, sub_path_legs)?)
+                    KeySelection::Key(key) => {
+                        if let Some(idx) = j.object_search_key(key.as_bytes()) {
+                            let val = j.object_get_val(idx)?;
+                            append_if_ref_unique(&mut ret, &extract_json(val, sub_path_legs)?)
+                        }
+                    }
                 }
             }
         }
@@ -154,10 +201,15 @@ mod tests {
     use super::{
         super::path_expr::{
             PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
-            PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK,
+            PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
         },
         *,
     };
+    use crate::codec::mysql::json::path_expr::{ArrayIndex, PATH_EXPRESSION_CONTAINS_RANGE};
+
+    fn select_from_left(index: usize) -> PathLeg {
+        PathLeg::ArraySelection(ArraySelection::Index(ArrayIndex::Left(index as u32)))
+    }
 
     #[test]
     fn test_json_extract() {
@@ -168,7 +220,7 @@ mod tests {
             (
                 "[true, 2017]",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(0)],
+                    legs: vec![select_from_left(0)],
                     flags: PathExpressionFlag::default(),
                 }],
                 Some("true"),
@@ -176,7 +228,7 @@ mod tests {
             (
                 "[true, 2017]",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Asterisk)],
                     flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
                 }],
                 Some("[true, 2017]"),
@@ -184,7 +236,7 @@ mod tests {
             (
                 "[true, 2107]",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(2)],
+                    legs: vec![select_from_left(2)],
                     flags: PathExpressionFlag::default(),
                 }],
                 None,
@@ -192,7 +244,7 @@ mod tests {
             (
                 "6.18",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(0)],
+                    legs: vec![select_from_left(0)],
                     flags: PathExpressionFlag::default(),
                 }],
                 Some("6.18"),
@@ -200,7 +252,7 @@ mod tests {
             (
                 "6.18",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Asterisk)],
                     flags: PathExpressionFlag::default(),
                 }],
                 None,
@@ -208,7 +260,7 @@ mod tests {
             (
                 "true",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(0)],
+                    legs: vec![select_from_left(0)],
                     flags: PathExpressionFlag::default(),
                 }],
                 Some("true"),
@@ -216,7 +268,7 @@ mod tests {
             (
                 "true",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Asterisk)],
                     flags: PathExpressionFlag::default(),
                 }],
                 None,
@@ -224,7 +276,7 @@ mod tests {
             (
                 "6",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(0)],
+                    legs: vec![select_from_left(0)],
                     flags: PathExpressionFlag::default(),
                 }],
                 Some("6"),
@@ -232,7 +284,7 @@ mod tests {
             (
                 "6",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Asterisk)],
                     flags: PathExpressionFlag::default(),
                 }],
                 None,
@@ -240,7 +292,7 @@ mod tests {
             (
                 "-6",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(0)],
+                    legs: vec![select_from_left(0)],
                     flags: PathExpressionFlag::default(),
                 }],
                 Some("-6"),
@@ -248,7 +300,7 @@ mod tests {
             (
                 "-6",
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Asterisk)],
                     flags: PathExpressionFlag::default(),
                 }],
                 None,
@@ -256,7 +308,7 @@ mod tests {
             (
                 r#"{"a": [1, 2, {"aa": "xx"}]}"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Asterisk)],
                     flags: PathExpressionFlag::default(),
                 }],
                 None,
@@ -264,7 +316,7 @@ mod tests {
             (
                 r#"{"a": [1, 2, {"aa": "xx"}]}"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(0)],
+                    legs: vec![select_from_left(0)],
                     flags: PathExpressionFlag::default(),
                 }],
                 Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
@@ -273,7 +325,7 @@ mod tests {
             (
                 r#"{"a": "a1", "b": 20.08, "c": false}"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::Key(String::from("c"))],
+                    legs: vec![PathLeg::Key(KeySelection::Key(String::from("c")))],
                     flags: PathExpressionFlag::default(),
                 }],
                 Some("false"),
@@ -281,7 +333,7 @@ mod tests {
             (
                 r#"{"a": "a1", "b": 20.08, "c": false}"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::Key(String::from(PATH_EXPR_ASTERISK))],
+                    legs: vec![PathLeg::Key(KeySelection::Asterisk)],
                     flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
                 }],
                 Some(r#"["a1", 20.08, false]"#),
@@ -289,7 +341,7 @@ mod tests {
             (
                 r#"{"a": "a1", "b": 20.08, "c": false}"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::Key(String::from("d"))],
+                    legs: vec![PathLeg::Key(KeySelection::Key(String::from("d")))],
                     flags: PathExpressionFlag::default(),
                 }],
                 None,
@@ -298,7 +350,10 @@ mod tests {
             (
                 "21",
                 vec![PathExpression {
-                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                    legs: vec![
+                        PathLeg::DoubleAsterisk,
+                        PathLeg::Key(KeySelection::Key(String::from("c"))),
+                    ],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }],
                 None,
@@ -306,7 +361,10 @@ mod tests {
             (
                 r#"{"g": {"a": "a1", "b": 20.08, "c": false}}"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                    legs: vec![
+                        PathLeg::DoubleAsterisk,
+                        PathLeg::Key(KeySelection::Key(String::from("c"))),
+                    ],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }],
                 Some("[false]"),
@@ -314,7 +372,10 @@ mod tests {
             (
                 r#"[{"a": "a1", "b": 20.08, "c": false}, true]"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                    legs: vec![
+                        PathLeg::DoubleAsterisk,
+                        PathLeg::Key(KeySelection::Key(String::from("c"))),
+                    ],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }],
                 Some("[false]"),
@@ -322,7 +383,7 @@ mod tests {
             (
                 r#"[[0, 1], [2, 3], [4, [5, 6]]]"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Index(0)],
+                    legs: vec![PathLeg::DoubleAsterisk, select_from_left(0)],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }],
                 Some("[[0, 1], 0, 1, 2, 3, 4, 5, 6]"),
@@ -331,11 +392,11 @@ mod tests {
                 r#"[[0, 1], [2, 3], [4, [5, 6]]]"#,
                 vec![
                     PathExpression {
-                        legs: vec![PathLeg::DoubleAsterisk, PathLeg::Index(0)],
+                        legs: vec![PathLeg::DoubleAsterisk, select_from_left(0)],
                         flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                     },
                     PathExpression {
-                        legs: vec![PathLeg::DoubleAsterisk, PathLeg::Index(0)],
+                        legs: vec![PathLeg::DoubleAsterisk, select_from_left(0)],
                         flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                     },
                 ],
@@ -344,7 +405,7 @@ mod tests {
             (
                 "[1]",
                 vec![PathExpression {
-                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Index(0)],
+                    legs: vec![PathLeg::DoubleAsterisk, select_from_left(0)],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }],
                 Some("[1]"),
@@ -352,7 +413,10 @@ mod tests {
             (
                 r#"{"a": 1}"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::Key(String::from("a")), PathLeg::Index(0)],
+                    legs: vec![
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        select_from_left(0),
+                    ],
                     flags: PathExpressionFlag::default(),
                 }],
                 Some("1"),
@@ -360,7 +424,7 @@ mod tests {
             (
                 r#"{"a": 1}"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Index(0)],
+                    legs: vec![PathLeg::DoubleAsterisk, select_from_left(0)],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }],
                 Some(r#"[{"a": 1}, 1]"#),
@@ -369,10 +433,10 @@ mod tests {
                 r#"{"a": 1}"#,
                 vec![PathExpression {
                     legs: vec![
-                        PathLeg::Index(0),
-                        PathLeg::Index(0),
-                        PathLeg::Index(0),
-                        PathLeg::Key(String::from("a")),
+                        select_from_left(0),
+                        select_from_left(0),
+                        select_from_left(0),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
                     ],
                     flags: PathExpressionFlag::default(),
                 }],
@@ -383,8 +447,8 @@ mod tests {
                 vec![PathExpression {
                     legs: vec![
                         PathLeg::DoubleAsterisk,
-                        PathLeg::Key(String::from("a")),
-                        PathLeg::Key(String::from("*")),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::Key(KeySelection::Asterisk),
                     ],
                     flags: PATH_EXPRESSION_CONTAINS_ASTERISK
                         | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
@@ -395,11 +459,17 @@ mod tests {
                 r#"[{"a": [3,4]}, {"b": 2 }]"#,
                 vec![
                     PathExpression {
-                        legs: vec![PathLeg::Index(0), PathLeg::Key(String::from("a"))],
+                        legs: vec![
+                            select_from_left(0),
+                            PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        ],
                         flags: PathExpressionFlag::default(),
                     },
                     PathExpression {
-                        legs: vec![PathLeg::Index(1), PathLeg::Key(String::from("a"))],
+                        legs: vec![
+                            select_from_left(1),
+                            PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        ],
                         flags: PathExpressionFlag::default(),
                     },
                 ],
@@ -408,10 +478,135 @@ mod tests {
             (
                 r#"[{"a": [1,1,1,1]}]"#,
                 vec![PathExpression {
-                    legs: vec![PathLeg::Index(0), PathLeg::Key(String::from("a"))],
+                    legs: vec![
+                        select_from_left(0),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                    ],
                     flags: PathExpressionFlag::default(),
                 }],
                 Some("[1, 1, 1, 1]"),
+            ),
+            (
+                r#"[1,2,3,4]"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Range(
+                        ArrayIndex::Left(1),
+                        ArrayIndex::Left(2),
+                    ))],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }],
+                Some("[2,3]"),
+            ),
+            (
+                r#"[{"a": [1,2,3,4]}]"#,
+                vec![PathExpression {
+                    legs: vec![
+                        select_from_left(0),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::ArraySelection(ArraySelection::Index(ArrayIndex::Right(0))),
+                    ],
+                    flags: PathExpressionFlag::default(),
+                }],
+                Some("4"),
+            ),
+            (
+                r#"[{"a": [1,2,3,4]}]"#,
+                vec![PathExpression {
+                    legs: vec![
+                        select_from_left(0),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::ArraySelection(ArraySelection::Index(ArrayIndex::Right(1))),
+                    ],
+                    flags: PathExpressionFlag::default(),
+                }],
+                Some("3"),
+            ),
+            (
+                r#"[{"a": [1,2,3,4]}]"#,
+                vec![PathExpression {
+                    legs: vec![
+                        select_from_left(0),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::ArraySelection(ArraySelection::Index(ArrayIndex::Right(100))),
+                    ],
+                    flags: PathExpressionFlag::default(),
+                }],
+                None,
+            ),
+            (
+                r#"[{"a": [1,2,3,4]}]"#,
+                vec![PathExpression {
+                    legs: vec![
+                        select_from_left(0),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::ArraySelection(ArraySelection::Range(
+                            ArrayIndex::Left(1),
+                            ArrayIndex::Right(0),
+                        )),
+                    ],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }],
+                Some("[2,3,4]"),
+            ),
+            (
+                r#"[{"a": [1,2,3,4]}]"#,
+                vec![PathExpression {
+                    legs: vec![
+                        select_from_left(0),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::ArraySelection(ArraySelection::Range(
+                            ArrayIndex::Left(1),
+                            ArrayIndex::Right(100),
+                        )),
+                    ],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }],
+                None,
+            ),
+            (
+                r#"[{"a": [1,2,3,4]}]"#,
+                vec![PathExpression {
+                    legs: vec![
+                        select_from_left(0),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::ArraySelection(ArraySelection::Range(
+                            ArrayIndex::Left(1),
+                            ArrayIndex::Left(100),
+                        )),
+                    ],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }],
+                Some("[2,3,4]"),
+            ),
+            (
+                r#"[{"a": [1,2,3,4]}]"#,
+                vec![PathExpression {
+                    legs: vec![
+                        select_from_left(0),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::ArraySelection(ArraySelection::Range(
+                            ArrayIndex::Left(0),
+                            ArrayIndex::Right(0),
+                        )),
+                    ],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }],
+                Some("[1,2,3,4]"),
+            ),
+            (
+                r#"[{"a": [1,2,3,4]}]"#,
+                vec![PathExpression {
+                    legs: vec![
+                        select_from_left(0),
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::ArraySelection(ArraySelection::Range(
+                            ArrayIndex::Left(0),
+                            ArrayIndex::Left(2),
+                        )),
+                    ],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }],
+                Some("[1,2,3]"),
             ),
         ];
         for (i, (js, exprs, expected)) in test_cases.drain(..).enumerate() {

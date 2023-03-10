@@ -82,8 +82,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
 
         let mut scan_key = self.scan_key.take();
         let rows = key_locks.len();
-        // Map txn's start_ts to ReleasedLocks
-        let mut released_locks = HashMap::default();
+        let mut released_locks = ReleasedLocks::new();
         for (current_key, current_lock) in key_locks {
             txn.start_ts = current_lock.ts;
             reader.start_ts = current_lock.ts;
@@ -118,20 +117,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                     commit_ts,
                 }));
             };
-            released_locks
-                .entry(current_lock.ts)
-                .or_insert_with(|| ReleasedLocks::new(current_lock.ts, commit_ts))
-                .push(released);
+            released_locks.push(released);
 
             if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                 scan_key = Some(current_key);
                 break;
             }
         }
-        let lock_mgr = context.lock_mgr;
-        released_locks
-            .into_iter()
-            .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
 
         let pr = if scan_key.is_none() {
             ProcessResult::Res
@@ -146,6 +138,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 cmd: Command::ResolveLockReadPhase(next_cmd),
             }
         };
+        let new_acquired_locks = txn.take_new_locks();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
@@ -153,7 +146,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             to_be_write: write_data,
             rows,
             pr,
-            lock_info: None,
+            lock_info: vec![],
+            released_locks,
+            new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

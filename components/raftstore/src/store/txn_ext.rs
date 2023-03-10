@@ -322,8 +322,10 @@ mod tests {
             primary: primary.to_vec().into_boxed_slice(),
             start_ts: 100.into(),
             ttl: 3000,
-            for_update_ts: 100.into(),
-            min_commit_ts: Default::default(),
+            for_update_ts: 110.into(),
+            min_commit_ts: 110.into(),
+            last_change_ts: 105.into(),
+            versions_to_last_change: 2,
         }
     }
 
@@ -424,6 +426,8 @@ mod tests {
                         ttl: 1000,
                         for_update_ts: 10.into(),
                         min_commit_ts: 20.into(),
+                        last_change_ts: 5.into(),
+                        versions_to_last_change: 2,
                     },
                     deleted,
                 ),

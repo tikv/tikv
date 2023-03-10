@@ -25,8 +25,8 @@ test-engines-panic = [
 ]
 
 [dependencies]
-engine_test = { path = "../engine_test", default-features = false }
-engine_traits = { path = "../engine_traits", default-features = false }
-panic_hook = { path = "../panic_hook" }
+engine_test = { workspace = true }
+engine_traits = { workspace = true }
+panic_hook = { workspace = true }
 tempfile = "3.0"
-tikv_alloc = { path = "../tikv_alloc" }
+tikv_alloc = { workspace = true }

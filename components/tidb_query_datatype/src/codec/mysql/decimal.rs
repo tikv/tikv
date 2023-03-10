@@ -373,11 +373,11 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     }
     let mut carry = 0;
     let mut res = res.map(|_| Decimal::new(int_cnt, frac_cnt, negative));
-    let mut l_idx = l_start + l_int_word_cnt as usize + l_frac_word_cnt as usize;
-    let mut r_idx = r_start + r_int_word_cnt as usize + r_frac_word_cnt as usize;
+    let mut l_idx = l_start + l_int_word_cnt + l_frac_word_cnt as usize;
+    let mut r_idx = r_start + r_int_word_cnt + r_frac_word_cnt as usize;
     // adjust `l_idx` and `r_idx` to the same position of digits after the point.
     if l_frac_word_cnt > r_frac_word_cnt {
-        let l_stop = l_start + l_int_word_cnt as usize + r_frac_word_cnt as usize;
+        let l_stop = l_start + l_int_word_cnt + r_frac_word_cnt as usize;
         if l_frac_word_cnt < frac_word_to {
             // It happens only when suffix 0 exist(3.10000000000-2.00).
             idx_to -= (frac_word_to - l_frac_word_cnt) as usize;
@@ -388,7 +388,7 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
             res.word_buf[idx_to] = lhs.word_buf[l_idx];
         }
     } else {
-        let r_stop = r_start + r_int_word_cnt as usize + l_frac_word_cnt as usize;
+        let r_stop = r_start + r_int_word_cnt + l_frac_word_cnt as usize;
         if frac_word_to > r_frac_word_cnt {
             // It happens only when suffix 0 exist(3.00-2.00000000000).
             idx_to -= (frac_word_to - r_frac_word_cnt) as usize;
@@ -802,7 +802,7 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
         word_cnt!(lhs.int_cnt + rhs.int_cnt) as usize,
         l_frac_word_cnt + r_frac_word_cnt,
     );
-    let (mut old_int_word_to, mut old_frac_word_to) = (int_word_to as i32, frac_word_to as i32);
+    let (mut old_int_word_to, mut old_frac_word_to) = (int_word_to as i32, frac_word_to);
     let res = fix_word_cnt_err(int_word_to as u8, frac_word_to as u8, WORD_BUF_LEN);
     let (int_word_to, frac_word_to) = (res.0 as usize, res.1 as usize);
     let negative = lhs.negative != rhs.negative;
@@ -1623,7 +1623,7 @@ impl Decimal {
         let mut inner_idx = 0;
         let mut word_idx = int_word_cnt as usize;
         let mut word = 0;
-        for c in bs[int_idx - int_cnt as usize..int_idx].iter().rev() {
+        for c in bs[int_idx - int_cnt..int_idx].iter().rev() {
             word += u32::from(c - b'0') * TEN_POW[inner_idx];
             inner_idx += 1;
             if inner_idx == DIGITS_PER_WORD as usize {
@@ -1642,7 +1642,7 @@ impl Decimal {
         word_idx = int_word_cnt as usize;
         word = 0;
         inner_idx = 0;
-        for &c in bs.iter().skip(int_idx + 1).take(frac_cnt as usize) {
+        for &c in bs.iter().skip(int_idx + 1).take(frac_cnt) {
             word = u32::from(c - b'0') + word * 10;
             inner_idx += 1;
             if inner_idx == DIGITS_PER_WORD as usize {
@@ -2389,7 +2389,7 @@ impl Hash for Decimal {
         while idx < stop && self.word_buf[idx] == 0 {
             idx += 1;
         }
-        let start = idx as usize;
+        let start = idx;
         let int_word_cnt = stop - idx;
 
         int_word_cnt.hash(state);

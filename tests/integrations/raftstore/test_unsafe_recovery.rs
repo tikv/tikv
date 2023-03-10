@@ -677,7 +677,6 @@ fn test_force_leader_on_hibernated_leader() {
 // previous follower.
 #[test]
 fn test_force_leader_on_hibernated_follower() {
-    test_util::init_log_for_test();
     let mut cluster = new_node_cluster(0, 5);
     cluster.pd_client.disable_default_operator();
 
@@ -1161,7 +1160,7 @@ fn test_force_leader_multiple_election_rounds() {
 #[test]
 fn test_unsafe_recovery_has_commit_merge() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
 
     cluster.run();
 
@@ -1219,7 +1218,7 @@ fn test_unsafe_recovery_has_commit_merge() {
 #[test]
 fn test_unsafe_recovery_during_merge() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
 
     cluster.run();
 

@@ -1,18 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::VecDeque,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::collections::VecDeque;
 
-use crossbeam::channel::Sender;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::store::{
-    local_metrics::RaftMetrics, Config, PersistedNotifier, WriteMsg, WriteRouter,
-    WriteRouterContext, WriteSenders, WriteTask,
+    local_metrics::RaftMetrics, Config, PersistedNotifier, WriteRouter, WriteRouterContext,
+    WriteSenders, WriteTask,
 };
 use slog::{warn, Logger};
+use tikv_util::slog_panic;
 
 use crate::{
     batch::{StoreContext, StoreRouter},
@@ -26,6 +23,7 @@ struct UnpersistedReady {
     /// Max number of following ready whose data to be persisted is empty.
     max_empty_number: u64,
     raft_msgs: Vec<Vec<RaftMessage>>,
+    has_snapshot: bool,
 }
 
 /// A writer that handles asynchronous writes.
@@ -33,6 +31,8 @@ pub struct AsyncWriter<EK: KvEngine, ER: RaftEngine> {
     write_router: WriteRouter<EK, ER>,
     unpersisted_readies: VecDeque<UnpersistedReady>,
     persisted_number: u64,
+    #[cfg(feature = "testexport")]
+    flush_subscribers: VecDeque<(u64, crate::router::FlushChannel)>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
@@ -42,6 +42,8 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
             write_router,
             unpersisted_readies: VecDeque::new(),
             persisted_number: 0,
+            #[cfg(feature = "testexport")]
+            flush_subscribers: VecDeque::new(),
         }
     }
 
@@ -70,6 +72,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
 
     fn send(&mut self, ctx: &mut impl WriteRouterContext<EK, ER>, task: WriteTask<EK, ER>) {
         let ready_number = task.ready_number();
+        let has_snapshot = task.has_snapshot;
         self.write_router.send_write_msg(
             ctx,
             self.unpersisted_readies.back().map(|r| r.number),
@@ -79,11 +82,11 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
             number: ready_number,
             max_empty_number: ready_number,
             raft_msgs: vec![],
+            has_snapshot,
         });
     }
 
     fn merge(&mut self, task: WriteTask<EK, ER>) -> Option<WriteTask<EK, ER>> {
-        let ready_number = task.ready_number();
         if self.unpersisted_readies.is_empty() {
             // If this ready don't need to be persisted and there is no previous unpersisted
             // ready, we can safely consider it is persisted so the persisted msgs can be
@@ -108,33 +111,35 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
         ctx: &mut impl WriteRouterContext<EK, ER>,
         ready_number: u64,
         logger: &Logger,
-    ) -> Vec<Vec<RaftMessage>> {
+    ) -> (Vec<Vec<RaftMessage>>, bool) {
         if self.persisted_number >= ready_number {
-            return vec![];
+            return (vec![], false);
         }
 
         let last_unpersisted = self.unpersisted_readies.back();
         if last_unpersisted.map_or(true, |u| u.number < ready_number) {
-            panic!(
-                "{:?} ready number is too large {:?} vs {}",
-                logger.list(),
-                last_unpersisted,
-                ready_number
+            slog_panic!(
+                logger,
+                "ready number is too large";
+                "last_unpersisted" => ?last_unpersisted,
+                "ready_number" => ready_number
             );
         }
 
         let mut raft_messages = vec![];
+        let mut has_snapshot = false;
         // There must be a match in `self.unpersisted_readies`.
         loop {
             let Some(v) = self.unpersisted_readies.pop_front() else {
-                panic!("{:?} ready number not found {}", logger.list(), ready_number);
+                slog_panic!(logger, "ready number not found"; "ready_number" => ready_number);
             };
+            has_snapshot |= v.has_snapshot;
             if v.number > ready_number {
-                panic!(
-                    "{:?} ready number not matched {:?} vs {}",
-                    logger.list(),
-                    v,
-                    ready_number
+                slog_panic!(
+                    logger,
+                    "ready number not matched";
+                    "ready" => ?v,
+                    "ready_number" => ready_number
                 );
             }
             if raft_messages.is_empty() {
@@ -151,7 +156,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
         self.write_router
             .check_new_persisted(ctx, self.persisted_number);
 
-        raft_messages
+        (raft_messages, has_snapshot)
     }
 
     pub fn persisted_number(&self) -> u64 {
@@ -163,13 +168,41 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
     }
 }
 
+#[cfg(feature = "testexport")]
+impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
+    pub fn subscirbe_flush(&mut self, ch: crate::router::FlushChannel) {
+        self.flush_subscribers
+            .push_back((self.known_largest_number(), ch));
+    }
+
+    pub fn notify_flush(&mut self) {
+        if self.flush_subscribers.is_empty() {
+            return;
+        }
+        if self.all_ready_persisted() {
+            for (_, ch) in self.flush_subscribers.drain(..) {
+                ch.set_result(());
+            }
+        }
+        while let Some((number, ch)) = self.flush_subscribers.pop_front() {
+            // A channel is registered without ready, so persisted_number should be larger.
+            if self.persisted_number > number {
+                ch.set_result(());
+            } else {
+                self.flush_subscribers.push_front((number, ch));
+                break;
+            }
+        }
+    }
+}
+
 impl<EK, ER, T> WriteRouterContext<EK, ER> for StoreContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
     fn write_senders(&self) -> &WriteSenders<EK, ER> {
-        &self.write_senders
+        &self.schedulers.write
     }
 
     fn config(&self) -> &Config {

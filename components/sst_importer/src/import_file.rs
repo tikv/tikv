@@ -15,6 +15,7 @@ use engine_traits::{
     iter_option, EncryptionKeyManager, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader,
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
+use keys::data_key;
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
@@ -247,9 +248,9 @@ impl ImportDir {
 
     /// Make an import path base on the basic path and the file name.
     pub fn get_import_path(&self, file_name: &str) -> Result<ImportPath> {
-        let save_path = self.root_dir.join(&file_name);
-        let temp_path = self.temp_dir.join(&file_name);
-        let clone_path = self.clone_dir.join(&file_name);
+        let save_path = self.root_dir.join(file_name);
+        let temp_path = self.temp_dir.join(file_name);
+        let clone_path = self.clone_dir.join(file_name);
         Ok(ImportPath {
             save: save_path,
             temp: temp_path,
@@ -276,7 +277,7 @@ impl ImportDir {
 
     pub fn delete_file(&self, path: &Path, key_manager: Option<&DataKeyManager>) -> Result<()> {
         if path.exists() {
-            file_system::remove_file(&path)?;
+            file_system::remove_file(path)?;
             if let Some(manager) = key_manager {
                 manager.delete_file(path.to_str().unwrap())?;
             }
@@ -336,7 +337,7 @@ impl ImportDir {
                     let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
 
                     for &(start, end) in TIDB_RANGES_COMPLEMENT {
-                        let opt = iter_option(start, end, false);
+                        let opt = iter_option(&data_key(start), &data_key(end), false);
                         let mut iter = sst_reader.iter(opt)?;
                         if iter.seek(start)? {
                             error!(
@@ -515,7 +516,7 @@ mod test {
             meta.get_region_epoch().get_version(),
             SST_SUFFIX,
         ));
-        let new_meta = path_to_sst_meta(&path).unwrap();
+        let new_meta = path_to_sst_meta(path).unwrap();
         assert_eq!(meta, new_meta);
     }
 }

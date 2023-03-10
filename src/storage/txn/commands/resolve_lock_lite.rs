@@ -54,7 +54,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         let rows = self.resolve_keys.len();
         // ti-client guarantees the size of resolve_keys will not too large, so no
         // necessary to control the write_size as ResolveLock.
-        let mut released_locks = ReleasedLocks::new(self.start_ts, self.commit_ts);
+        let mut released_locks = ReleasedLocks::new();
         for key in self.resolve_keys {
             released_locks.push(if !self.commit_ts.is_zero() {
                 commit(&mut txn, &mut reader, key, self.commit_ts)?
@@ -62,8 +62,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
                 cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false)?
             });
         }
-        released_locks.wake_up(context.lock_mgr);
 
+        let new_acquired_locks = txn.take_new_locks();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
@@ -71,7 +71,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             to_be_write: write_data,
             rows,
             pr: ProcessResult::Res,
-            lock_info: None,
+            lock_info: vec![],
+            released_locks,
+            new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

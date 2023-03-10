@@ -134,7 +134,7 @@ impl Write for RotatingFileLogger {
                 self.file.flush()?;
 
                 let new_path = (self.rename)(&self.path)?;
-                fs::rename(&self.path, &new_path)?;
+                fs::rename(&self.path, new_path)?;
                 self.file = open_log_file(&self.path)?;
 
                 // Updates all rotators' states.
