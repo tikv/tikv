@@ -4,6 +4,7 @@ use std::{path::Path, sync::Arc};
 
 use engine_rocks::{
     raw::{Cache, Env},
+    util::RangeCompactionFilterFactory,
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
     TabletLogger,
@@ -153,11 +154,16 @@ impl KvEngineFactory {
         db_opts
     }
 
-    fn cf_opts(&self, for_engine: EngineType) -> Vec<(&str, RocksCfOptions)> {
+    fn cf_opts(
+        &self,
+        filter_factory: Option<&RangeCompactionFilterFactory>,
+        for_engine: EngineType,
+    ) -> Vec<(&str, RocksCfOptions)> {
         self.inner.rocksdb_config.build_cf_opts(
             &self.inner.cf_resources,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
+            filter_factory,
             for_engine,
         )
     }
@@ -172,7 +178,7 @@ impl KvEngineFactory {
     pub fn create_shared_db(&self, path: impl AsRef<Path>) -> Result<RocksEngine> {
         let path = path.as_ref();
         let mut db_opts = self.db_opts(EngineType::RaftKv);
-        let cf_opts = self.cf_opts(EngineType::RaftKv);
+        let cf_opts = self.cf_opts(None, EngineType::RaftKv);
         if let Some(listener) = &self.inner.flow_listener {
             db_opts.add_event_listener(listener.clone());
         }
@@ -191,7 +197,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         let mut db_opts = self.db_opts(EngineType::RaftKv2);
         let tablet_name = path.file_name().unwrap().to_str().unwrap().to_string();
         db_opts.set_info_log(TabletLogger::new(tablet_name));
-        let cf_opts = self.cf_opts(EngineType::RaftKv2);
+        let factory = RangeCompactionFilterFactory::new(ctx.start_key.clone(), ctx.end_key.clone());
+        let cf_opts = self.cf_opts(Some(&factory), EngineType::RaftKv2);
         if let Some(listener) = &self.inner.flow_listener {
             db_opts.add_event_listener(listener.clone_with(ctx.id));
         }
@@ -216,17 +223,17 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     }
 
     fn destroy_tablet(&self, ctx: TabletContext, path: &Path) -> Result<()> {
-        info!("destroy tablet"; "path" => %path.display(), "id" => ctx.id, "suffix" => ?ctx.suffix);
+        info!("destroy tablet"; "path" => %path.display(), "region_id" => ctx.id, "suffix" => ?ctx.suffix);
         // Create kv engine.
         let _db_opts = self.db_opts(EngineType::RaftKv2);
-        let _cf_opts = self.cf_opts(EngineType::RaftKv2);
+        let _cf_opts = self.cf_opts(None, EngineType::RaftKv2);
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
         // engine_rocks::util::destroy_engine(
         //   path.to_str().unwrap(),
         //   kv_db_opts,
         //   kv_cfs_opts,
         // )?;
-        let _ = std::fs::remove_dir_all(path);
+        let _ = file_system::trash_dir_all(path);
         if let Some(listener) = &self.inner.flow_listener {
             listener.clone_with(ctx.id).on_destroyed();
         }
@@ -237,7 +244,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         RocksEngine::exists(path.to_str().unwrap())
     }
 
-    #[cfg(any(test, feature = "testexport"))]
+    #[cfg(feature = "testexport")]
     fn set_state_storage(&self, state_storage: Arc<dyn StateStorage>) {
         let inner = Arc::as_ptr(&self.inner) as *mut FactoryInner;
         unsafe {
@@ -250,13 +257,13 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
 mod tests {
     use std::path::Path;
 
-    use engine_traits::TabletRegistry;
+    use engine_traits::{Peekable, SyncMutable, TabletRegistry};
+    use kvproto::metapb::Region;
 
     use super::*;
     use crate::config::TikvConfig;
 
-    #[test]
-    fn test_engine_factory() {
+    fn build_test(name: &'static str) -> (tempfile::TempDir, TabletRegistry<RocksEngine>) {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("components/test_raftstore/src/common-test.toml");
         let cfg = TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
@@ -270,11 +277,18 @@ mod tests {
             .storage
             .block_cache
             .build_shared_cache(cfg.storage.engine);
-        let dir = test_util::temp_dir("test-engine-factory", false);
+        let dir = test_util::temp_dir(name, false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
         let factory = KvEngineFactoryBuilder::new(env, &cfg, cache).build();
         let reg = TabletRegistry::new(Box::new(factory), dir.path()).unwrap();
+        (dir, reg)
+    }
+
+    #[test]
+    fn test_engine_factory() {
+        let (_dir, reg) = build_test("test_engine_factory");
+
         let path = reg.tablet_path(1, 3);
         assert!(!reg.tablet_factory().exists(&path));
         let mut tablet_ctx = TabletContext::with_infinite_region(1, Some(3));
@@ -293,5 +307,37 @@ mod tests {
             .destroy_tablet(tablet_ctx, &path)
             .unwrap();
         assert!(!reg.tablet_factory().exists(&path));
+    }
+
+    #[test]
+    fn test_engine_factory_compaction_filter() {
+        let (_dir, reg) = build_test("test_engine_factory_compaction_filter");
+
+        let region = Region {
+            id: 1,
+            start_key: b"k1".to_vec(),
+            end_key: b"k3".to_vec(),
+            ..Default::default()
+        };
+        let tablet_ctx = TabletContext::new(&region, Some(3));
+        let path = reg.tablet_path(1, 3);
+        let engine = reg.tablet_factory().open_tablet(tablet_ctx, &path).unwrap();
+        engine.put(&keys::data_key(b"k0"), b"v0").unwrap();
+        engine.put(&keys::data_key(b"k1"), b"v1").unwrap();
+        engine.put(&keys::data_key(b"k2"), b"v2").unwrap();
+        engine.put(&keys::data_key(b"k3"), b"v3").unwrap();
+        engine.put(&keys::data_key(b"k4"), b"v4").unwrap();
+        engine.flush_cfs(&[], true).unwrap();
+        assert!(engine.get_value(&keys::data_key(b"k0")).unwrap().is_none());
+        assert_eq!(
+            engine.get_value(&keys::data_key(b"k1")).unwrap().unwrap(),
+            b"v1"
+        );
+        assert_eq!(
+            engine.get_value(&keys::data_key(b"k2")).unwrap().unwrap(),
+            b"v2"
+        );
+        assert!(engine.get_value(&keys::data_key(b"k3")).unwrap().is_none());
+        assert!(engine.get_value(&keys::data_key(b"k4")).unwrap().is_none());
     }
 }
