@@ -23695,7 +23695,8 @@
               "metric": "tikv_snapshot_limit_transport_bytes",
               "refId": "A",
               "step": 40
-            },{
+            },
+            {
               "exemplar": true,
               "expr": "rate(tikv_snapshot_limit_generate_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])",
               "hide": true,
@@ -31983,7 +31984,7 @@
               "intervalFactor": 1,
               "legendFormat": "recycle",
               "refId": "C"
-            },
+            }
           ],
           "thresholds": [],
           "timeFrom": null,
