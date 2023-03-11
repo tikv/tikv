@@ -751,17 +751,16 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
         if self.max_sample_size == 0 {
             return false;
         }
-        let mut need_push = false;
-        let cur_rng = self.base.rng.gen_range(0, i64::MAX);
+        let mut pick = false;
+        self.cur_rng = self.base.rng.gen_range(0, i64::MAX);
         if self.samples.len() < self.max_sample_size {
-            need_push = true;
-        } else if self.samples.peek().unwrap().0.0 < cur_rng {
-            need_push = true;
-            self.cur_rng = cur_rng;
+            pick = true;
+        } else if self.samples.peek().unwrap().0.0 < self.cur_rng {
+            pick = true;
             let (_, evicted) = self.samples.pop().unwrap().0;
             self.base.memory_usage -= evicted.iter().map(|x| x.capacity()).sum::<usize>();
         }
-        need_push
+        pick
     }
 
     fn push_sample(&mut self, data: &[Vec<u8>]) {
