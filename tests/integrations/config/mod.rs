@@ -22,6 +22,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
     store::Config as RaftstoreConfig,
 };
+use resource_control::Config as ResourceControlConfig;
 use security::SecurityConfig;
 use slog::Level;
 use test_util::assert_eq_debug;
@@ -113,7 +114,7 @@ fn test_serde_custom_tikv_config() {
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
         end_point_max_concurrency: 10,
         end_point_perf_level: PerfLevel::EnableTime,
-        snap_max_write_bytes_per_sec: ReadableSize::mb(10),
+        snap_io_max_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
         stats_concurrency: 10,
         heavy_load_threshold: 25,
@@ -345,8 +346,7 @@ fn test_serde_custom_tikv_config() {
             max_write_buffer_number: 12,
             min_write_buffer_number_to_merge: 12,
             max_bytes_for_level_base: ReadableSize::kb(12),
-            target_file_size_base: ReadableSize::kb(123),
-            target_file_size_multiplier: 3,
+            target_file_size_base: Some(ReadableSize::kb(123)),
             level0_file_num_compaction_trigger: 123,
             level0_slowdown_writes_trigger: Some(123),
             level0_stop_writes_trigger: Some(123),
@@ -401,8 +401,7 @@ fn test_serde_custom_tikv_config() {
             max_write_buffer_number: 12,
             min_write_buffer_number_to_merge: 12,
             max_bytes_for_level_base: ReadableSize::kb(12),
-            target_file_size_base: ReadableSize::kb(123),
-            target_file_size_multiplier: 3,
+            target_file_size_base: Some(ReadableSize::kb(123)),
             level0_file_num_compaction_trigger: 123,
             level0_slowdown_writes_trigger: Some(123),
             level0_stop_writes_trigger: Some(123),
@@ -471,8 +470,7 @@ fn test_serde_custom_tikv_config() {
             max_write_buffer_number: 12,
             min_write_buffer_number_to_merge: 12,
             max_bytes_for_level_base: ReadableSize::kb(12),
-            target_file_size_base: ReadableSize::kb(123),
-            target_file_size_multiplier: 3,
+            target_file_size_base: Some(ReadableSize::kb(123)),
             level0_file_num_compaction_trigger: 123,
             level0_slowdown_writes_trigger: Some(123),
             level0_stop_writes_trigger: Some(123),
@@ -541,8 +539,7 @@ fn test_serde_custom_tikv_config() {
             max_write_buffer_number: 12,
             min_write_buffer_number_to_merge: 12,
             max_bytes_for_level_base: ReadableSize::kb(12),
-            target_file_size_base: ReadableSize::kb(123),
-            target_file_size_multiplier: 3,
+            target_file_size_base: Some(ReadableSize::kb(123)),
             level0_file_num_compaction_trigger: 123,
             level0_slowdown_writes_trigger: Some(123),
             level0_stop_writes_trigger: Some(123),
@@ -640,8 +637,7 @@ fn test_serde_custom_tikv_config() {
             max_write_buffer_number: 12,
             min_write_buffer_number_to_merge: 12,
             max_bytes_for_level_base: ReadableSize::kb(12),
-            target_file_size_base: ReadableSize::kb(123),
-            target_file_size_multiplier: 3,
+            target_file_size_base: Some(ReadableSize::kb(123)),
             level0_file_num_compaction_trigger: 123,
             level0_slowdown_writes_trigger: Some(123),
             level0_stop_writes_trigger: Some(123),
@@ -830,6 +826,7 @@ fn test_serde_custom_tikv_config() {
         renew_batch_max_size: 8192,
         alloc_ahead_buffer: ReadableDuration::millis(3000),
     };
+    value.resource_control = ResourceControlConfig { enabled: false };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
     let load = toml::from_str(&custom).unwrap();

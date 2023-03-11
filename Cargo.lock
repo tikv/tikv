@@ -2733,7 +2733,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0561adc3754362675cc08b5203d8b6444e645395"
+source = "git+https://github.com/pingcap/kvproto.git#60b33e619c70d8abe151f086a19a82895965f28f"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2862,7 +2862,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#cd8b60758b46afbbde6fde52fa86a2776b401723"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2881,7 +2881,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#cd8b60758b46afbbde6fde52fa86a2776b401723"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4799,7 +4799,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#cd8b60758b46afbbde6fde52fa86a2776b401723"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -6701,7 +6701,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#614f3ffd42ddc84b78ff59d65f105f2099a6f1b1"
+source = "git+https://github.com/pingcap/tipb.git#955fbdc879517f16b7a2f5967f143b92a6ab03dd"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
