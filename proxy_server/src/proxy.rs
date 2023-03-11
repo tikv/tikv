@@ -275,6 +275,12 @@ pub unsafe fn run_proxy(
                 .long("only-decryption")
                 .help("Only do decryption in Proxy"),
         )
+        .arg(
+            Arg::with_name("engine-role-label")
+                .long("engine-role-label")
+                .help("Set engine role label")
+                .takes_value(true),
+        )
         .get_matches_from(args);
 
     if matches.is_present("print-sample-config") {

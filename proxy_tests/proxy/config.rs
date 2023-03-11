@@ -192,6 +192,74 @@ fn test_engine_label() {
     );
 }
 
+#[test]
+fn test_config_proxy_engine_role_label() {
+    let mut v: Vec<String> = vec![];
+    let mut config = gen_tikv_config(&None, false, &mut v);
+    let mut proxy_config = gen_proxy_config(&None, false, &mut v);
+    // case-1: If engine-role label not specified in arguments, it's none.
+    let args = vec!["test_config_proxy_default1", "--engine-label", "tiflash"];
+    let matches = App::new("RaftStore Proxy")
+        .arg(
+            Arg::with_name("engine-label")
+                .long("engine-label")
+                .help("Set engine label")
+                .required(true)
+                .takes_value(true),
+        )
+        .get_matches_from(args);
+    overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
+    address_proxy_config(&mut config, &proxy_config);
+
+    const DEFAULT_ENGINE_ROLE_LABEL_KEY: &str = "engine_role";
+
+    assert_eq!(
+        config
+            .server
+            .labels
+            .get(DEFAULT_ENGINE_ROLE_LABEL_KEY)
+            .is_none(),
+        true
+    );
+
+    // case-2: If engine-role label specified in arguments, use it as engine-role
+    // label.
+    const EXPECTED_ENGINE_ROLE_LABEL: &str = "write";
+    let args = vec![
+        "test_config_proxy_default1",
+        "--engine-label",
+        "tiflash",
+        "--engine-role-label",
+        EXPECTED_ENGINE_ROLE_LABEL,
+    ];
+    let matches = App::new("RaftStore Proxy")
+        .arg(
+            Arg::with_name("engine-label")
+                .long("engine-label")
+                .help("Set engine label")
+                .required(true)
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("engine-role-label")
+                .long("engine-role-label")
+                .help("Set engine role label")
+                .required(true)
+                .takes_value(true),
+        )
+        .get_matches_from(args);
+    overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
+    address_proxy_config(&mut config, &proxy_config);
+    assert_eq!(
+        config
+            .server
+            .labels
+            .get(DEFAULT_ENGINE_ROLE_LABEL_KEY)
+            .unwrap(),
+        EXPECTED_ENGINE_ROLE_LABEL
+    );
+}
+
 // We test whether Proxy will overwrite TiKV's value,
 // when a config item which is both defined by ProxyConfig and TikvConfig.
 // We only nned to add tests to this function when the logic is different.
