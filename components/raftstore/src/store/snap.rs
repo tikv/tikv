@@ -2074,7 +2074,7 @@ impl TabletSnapManager {
 }
 
 fn is_symlink<P: AsRef<Path>>(path: P) -> Result<bool> {
-    let metadata = box_try!(fs::symlink_metadata(path));
+    let metadata = box_try!(std::fs::symlink_metadata(path));
     Ok(metadata.is_symlink())
 }
 
