@@ -688,3 +688,6 @@ sample-threshold = 100
 byte-threshold = 31457280
 split.split-balance-score = 0.25
 split.split-contained-score = 0.5
+
+[resource-control]
+enabled = false
