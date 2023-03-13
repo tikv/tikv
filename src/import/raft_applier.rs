@@ -21,12 +21,14 @@ use tokio::sync::{
 use crate::storage;
 
 const MAX_INFLIGHT_RAFT_MESSAGE: usize = 8;
-const BUFFER_SIZE: usize = 1024;
 const REGION_WRITER_MAX_IDLE_TIME: Duration = Duration::from_secs(30);
 const DEFAULT_CONFIG: Config = Config {
     max_inflight_raft_message: MAX_INFLIGHT_RAFT_MESSAGE,
     region_writer_max_idle_time: REGION_WRITER_MAX_IDLE_TIME,
 };
+
+const SHARED_CHANNEL_SIZE: usize = 1024;
+const BUFFER_SIZE: usize = 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Config {
@@ -119,6 +121,7 @@ enum RegionMessage {
 pub struct Global<E, S> {
     incoming: mpsc::Receiver<GlobalMessage>,
     regions: HashMap<u64, RegionHandle>,
+    shared: Arc<Semaphore>,
 
     engine: Rc<E>,
     cfg: Config,
@@ -238,13 +241,13 @@ impl Handle {
 }
 
 impl RegionHandle {
-    async fn forward_write(
+    fn forward_write(
         &self,
         wb: WriteData,
         ctx: Context,
         cb: OnComplete<storage::Result<()>>,
         start: Instant,
-    ) {
+    ) -> Option<impl Future<Output = ()>> {
         let remained = self
             .tx
             .try_send(RegionMessage::Apply { wb, ctx, cb, start })
@@ -266,16 +269,14 @@ impl RegionHandle {
                 )));
             }
         };
-        match remained {
-            None => return,
-            Some(x) => {
-                let msg_tx = self.tx.clone();
-                APPLIER_EVENT
-                    .with_label_values(&["region-channel-full"])
-                    .inc();
-                forward_to(msg_tx, x).await;
-            }
-        }
+
+        remained.map(move |x| {
+            let msg_tx = self.tx.clone();
+            APPLIER_EVENT
+                .with_label_values(&["region-channel-full"])
+                .inc();
+            forward_to(msg_tx, x)
+        })
     }
 }
 
@@ -301,6 +302,7 @@ impl<E: Engine, S: Spawner> Global<E, S> {
             incoming: rx,
             engine: Rc::new(engine),
             regions: Default::default(),
+            shared: Arc::new(Semaphore::new(SHARED_CHANNEL_SIZE)),
             cfg: DEFAULT_CONFIG,
             _spawner: PhantomData,
         };
@@ -378,7 +380,25 @@ impl<E: Engine, S: Spawner> Global<E, S> {
                 }
             })
             .or_insert_with(|| Region::<E, S>::spawn(Rc::clone(eng), *cfg, rid));
-        hnd.forward_write(wb, ctx, cb, start).await;
+        if let Some(tsk) = hnd.forward_write(wb, ctx, cb, start) {
+            let permit = match Semaphore::try_acquire_owned(Arc::clone(&self.shared)) {
+                Ok(permit) => Ok(permit),
+                Err(_) => {
+                    APPLIER_EVENT
+                        .with_label_values(&["shared-channel-full"])
+                        .inc();
+                    Semaphore::acquire_owned(Arc::clone(&self.shared)).await
+                }
+            };
+            // Once it returns `err`, the Semaphore should be already closed (perhaps the
+            // server is shutting down), do nothing.
+            if let Ok(permit) = permit {
+                S::spawn(async move {
+                    tsk.await;
+                    drop(permit);
+                })
+            }
+        }
     }
 }
 
