@@ -303,6 +303,7 @@ fn test_scan_detail() {
         assert_eq!(scan_detail.get_lock().get_total(), 1);
 
         assert!(resp.get_exec_details_v2().has_time_detail());
+        assert!(resp.get_exec_details_v2().has_time_detail_v2());
         let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
         assert_eq!(scan_detail_v2.get_total_versions(), 5);
         assert_eq!(scan_detail_v2.get_processed_versions(), 4);
@@ -1017,6 +1018,7 @@ fn test_del_select() {
     assert_eq!(row_count, 5);
 
     assert!(resp.get_exec_details_v2().has_time_detail());
+    assert!(resp.get_exec_details_v2().has_time_detail_v2());
     let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
     assert_eq!(scan_detail_v2.get_total_versions(), 8);
     assert_eq!(scan_detail_v2.get_processed_versions(), 5);
@@ -1722,6 +1724,7 @@ fn test_exec_details() {
     assert!(resp.has_exec_details_v2());
     let exec_details = resp.get_exec_details_v2();
     assert!(exec_details.has_time_detail());
+    assert!(exec_details.has_time_detail_v2());
     assert!(exec_details.has_scan_detail_v2());
 }
 
