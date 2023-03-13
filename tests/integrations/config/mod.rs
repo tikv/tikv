@@ -753,8 +753,19 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     value.backup_stream = BackupStreamConfig {
+<<<<<<< HEAD
         num_threads: 12,
         ..Default::default()
+=======
+        max_flush_interval: ReadableDuration::secs(11),
+        num_threads: 7,
+        enable: true,
+        temp_path: "./stream".to_string(),
+        file_size_limit: ReadableSize::gb(5),
+        initial_scan_pending_memory_quota: ReadableSize::kb(2),
+        initial_scan_rate_limit: ReadableSize::mb(3),
+        min_ts_interval: ReadableDuration::secs(2),
+>>>>>>> 571e513d6c (log-backup: added intervally resolve regions (#14180))
     };
     value.import = ImportConfig {
         num_threads: 123,

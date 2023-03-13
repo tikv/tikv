@@ -621,6 +621,19 @@ batch-size = 7
 s3-multi-part-size = "15MB"
 sst-max-size = "789MB"
 
+<<<<<<< HEAD
+=======
+[log-backup]
+min-ts-interval = "2s"
+max-flush-interval = "11s"
+num-threads = 7
+enable = true
+temp-path = "./stream"
+file-size-limit = "5GiB"
+initial-scan-pending-memory-quota = "2KiB"
+initial-scan-rate-limit = "3MiB"
+
+>>>>>>> 571e513d6c (log-backup: added intervally resolve regions (#14180))
 [backup.hadoop]
 home = "/root/hadoop"
 linux-user = "hadoop"
