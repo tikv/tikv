@@ -782,6 +782,7 @@ fn test_serde_custom_tikv_config() {
         file_size_limit: ReadableSize::gb(5),
         initial_scan_pending_memory_quota: ReadableSize::kb(2),
         initial_scan_rate_limit: ReadableSize::mb(3),
+        min_ts_interval: ReadableDuration::secs(2),
     };
     value.import = ImportConfig {
         num_threads: 123,
