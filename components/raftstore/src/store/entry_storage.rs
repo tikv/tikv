@@ -76,7 +76,7 @@ impl CachedEntries {
         }
     }
 
-    pub fn iter_entries(&self, mut f: impl FnMut(&mut ParsedEntry)) {
+    pub fn iter_entries_mut(&self, mut f: impl FnMut(&mut ParsedEntry)) {
         let mut entries = self.entries.lock().unwrap();
         for entry in &mut entries.0 {
             f(entry);

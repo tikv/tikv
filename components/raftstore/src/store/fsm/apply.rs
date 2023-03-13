@@ -3676,7 +3676,7 @@ impl<EK: KvEngine> ResourceMetered for Msg<EK> {
                 let mut dominant_group = "".to_owned();
                 let mut max_write_bytes = 0;
                 for cached_entries in &apply.entries {
-                    cached_entries.iter_entries(|entry| {
+                    cached_entries.iter_entries_mut(|entry| {
                         if entry.is_empty() {
                             return;
                         }
