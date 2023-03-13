@@ -450,7 +450,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 } else {
                     info!(
                         self.logger,
-                        "reject PrepareMerge because trim status check is not complete";
+                        "suspend PrepareMerge because trim status check is not complete";
                     );
                     Err(Error::PendingPrepareMerge)
                 }
@@ -512,7 +512,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 if applied_index < *fence {
                     info!(
                         self.logger,
-                        "reject PrepareMerge because applied_index has not reached prepare_merge_fence";
+                        "suspend PrepareMerge because applied_index has not reached prepare_merge_fence";
                         "applied_index" => applied_index,
                         "prepare_merge_fence" => fence,
                     );
