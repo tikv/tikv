@@ -2436,6 +2436,8 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct BackupStreamConfig {
     #[online_config(skip)]
+    pub min_ts_interval: ReadableDuration,
+    #[online_config(skip)]
     pub max_flush_interval: ReadableDuration,
     #[online_config(skip)]
     pub num_threads: usize,
@@ -2465,6 +2467,20 @@ impl BackupStreamConfig {
             );
             self.num_threads = default_cfg.num_threads;
         }
+        if self.max_flush_interval < ReadableDuration::secs(10) {
+            return Err(format!(
+                "the max_flush_interval is too small, it is {}, and should be greater than 10s.",
+                self.max_flush_interval
+            )
+            .into());
+        }
+        if self.min_ts_interval < ReadableDuration::secs(1) {
+            return Err(format!(
+                "the min_ts_interval is too small, it is {}, and should be greater than 1s.",
+                self.min_ts_interval
+            )
+            .into());
+        }
         Ok(())
     }
 }
@@ -2475,7 +2491,12 @@ impl Default for BackupStreamConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
+<<<<<<< HEAD:src/config.rs
             max_flush_interval: ReadableDuration::minutes(5),
+=======
+            min_ts_interval: ReadableDuration::secs(10),
+            max_flush_interval: ReadableDuration::minutes(3),
+>>>>>>> 571e513d6c (log-backup: added intervally resolve regions (#14180)):src/config/mod.rs
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(2.0, 12.0) as usize,
             enable: false,
