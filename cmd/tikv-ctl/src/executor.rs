@@ -1183,7 +1183,8 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerV2<ER> {
         threads: u32,
         bottommost: BottommostLevelCompaction,
     ) {
-        unimplemented!()
+        self.compact(db, cf, from, to, threads, bottommost)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
     fn set_region_tombstone(&self, regions: Vec<Region>) {

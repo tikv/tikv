@@ -1758,7 +1758,7 @@ impl RaftEngineConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DbType {
     Kv,
     Raft,

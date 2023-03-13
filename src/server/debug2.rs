@@ -1,16 +1,17 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashSet;
-use engine_rocks::{RocksEngine, RocksEngineIterator};
+use engine_rocks::{raw::CompactOptions, util::get_cf_handle, RocksEngine, RocksEngineIterator};
 use engine_traits::{
     CachedTablet, Iterable, Peekable, RaftEngine, TabletContext, TabletRegistry, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
 };
-use keys::DATA_PREFIX_KEY;
-use kvproto::raft_serverpb::RegionLocalState;
+use keys::{data_key, DATA_PREFIX_KEY};
+use kvproto::{metapb, raft_serverpb::RegionLocalState};
+use nom::AsBytes;
 use raft::prelude::Entry;
 
-use super::debug::RegionInfo;
+use super::debug::{BottommostLevelCompaction, RegionInfo};
 pub use crate::storage::mvcc::MvccInfoIterator;
 use crate::{
     config::{ConfigController, DbType},
@@ -134,7 +135,8 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
             }
         }
         Err(Error::NotFound(format!(
-            "Not found region containing {:?}", key
+            "Not found region containing {:?}",
+            key
         )))
     }
 
@@ -155,6 +157,68 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
             }
         }
     }
+
+    /// Compact the cf[start..end) in the db.
+    pub fn compact(
+        &self,
+        db: DbType,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    ) -> Result<()> {
+        validate_db_and_cf(db, cf)?;
+        if db == DbType::Raft {
+            return Err(box_err!("Get raft db is not allowed"));
+        }
+        let mut compactions = vec![];
+        self.raft_engine
+            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+                let region_state = self
+                    .raft_engine
+                    .get_region_state(region_id, u64::MAX)
+                    .unwrap()
+                    .unwrap();
+                if let Some((start_key, end_key)) =
+                    range_in_region((start, end), region_state.get_region())
+                {
+                    let start = if start_key.is_empty() {
+                        None
+                    } else {
+                        Some(data_key(start_key))
+                    };
+                    let end = if end.is_empty() {
+                        None
+                    } else {
+                        Some(data_key(end_key))
+                    };
+                    compactions.push((region_id, start, end, region_state));
+                };
+
+                Ok(())
+            }).unwrap();
+
+        for (region_id, start_key, end_key, region_state) in compactions {
+            let mut tablet_cache = self.get_tablet_cache(region_id, Some(region_state))?;
+            let talbet = tablet_cache.latest().unwrap();
+            info!("Debugger starts manual compact"; "talbet" => ?talbet, "cf" => cf);
+            let mut opts = CompactOptions::new();
+            opts.set_max_subcompactions(threads as i32);
+            opts.set_exclusive_manual_compaction(false);
+            opts.set_bottommost_level_compaction(bottommost.0);
+            let handle = box_try!(get_cf_handle(talbet.as_inner(), cf));
+            talbet.as_inner().compact_range_cf_opt(
+                handle,
+                &opts,
+                start_key.as_ref().map(|k| k.as_bytes()),
+                end_key.as_ref().map(|k| k.as_bytes()),
+            );
+            info!("Debugger finishes manual compact"; "db" => ?db, "cf" => cf);
+        }
+
+        Ok(())
+    }
 }
 
 fn validate_db_and_cf(db: DbType, cf: &str) -> Result<()> {
@@ -168,6 +232,60 @@ fn validate_db_and_cf(db: DbType, cf: &str) -> Result<()> {
             cf, db
         ))),
     }
+}
+
+// return the overlap range (without data prefix) of the `range` in region or
+// None if they are exclusive
+fn range_in_region<'a>(
+    range: (&'a [u8], &'a [u8]),
+    region: &'a metapb::Region,
+) -> Option<(&'a [u8], &'a [u8])> {
+    if range.0.is_empty() && range.1.is_empty() {
+        return Some((region.get_start_key(), region.get_end_key()));
+    } else if range.0.is_empty() {
+        assert!(range.1.starts_with(DATA_PREFIX_KEY));
+        if region.get_start_key() < &range.1[DATA_PREFIX_KEY.len()..] {
+            return Some((
+                region.get_start_key(),
+                smaller_key(&range.1[DATA_PREFIX_KEY.len()..], region.get_end_key()),
+            ));
+        }
+        None
+    } else if range.1.is_empty() {
+        assert!(range.0.starts_with(DATA_PREFIX_KEY));
+        if &range.0[DATA_PREFIX_KEY.len()..] < region.get_end_key()
+            || region.get_end_key().is_empty()
+        {
+            return Some((
+                larger_key(&range.0[DATA_PREFIX_KEY.len()..], region.get_start_key()),
+                region.get_end_key(),
+            ));
+        }
+        None
+    } else {
+        assert!(range.0.starts_with(DATA_PREFIX_KEY));
+        assert!(range.1.starts_with(DATA_PREFIX_KEY));
+        let start_key = larger_key(&range.0[DATA_PREFIX_KEY.len()..], region.get_start_key());
+        let end_key = smaller_key(&range.1[DATA_PREFIX_KEY.len()..], region.get_end_key());
+        if start_key < end_key {
+            return Some((start_key, end_key));
+        }
+        None
+    }
+}
+
+fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8]) -> &'a [u8] {
+    if key1 < key2 {
+        return key1;
+    }
+    key2
+}
+
+fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8]) -> &'a [u8] {
+    if key1 < key2 || key2.is_empty() {
+        return key2;
+    }
+    key1
 }
 
 #[cfg(test)]
@@ -230,7 +348,7 @@ mod tests {
         }
 
         for cf in &cfs {
-        let got = debugger.get(DbType::Kv, cf, &k).unwrap();
+            let got = debugger.get(DbType::Kv, cf, &k).unwrap();
             assert_eq!(&got, v);
         }
 
@@ -342,5 +460,15 @@ mod tests {
             cfs.iter().find(|&&c| c == cf).unwrap();
             assert_eq!(size, k.len() + v.len());
         }
+    }
+
+    #[test]
+    fn test_compact() {
+        let debugger = new_debugger();
+        let compact = |db, cf| debugger.compact(db, cf, &[0], &[0xFF], 1, Some("skip").into());
+        compact(DbType::Kv, CF_DEFAULT).unwrap();
+        compact(DbType::Kv, CF_LOCK).unwrap();
+        compact(DbType::Kv, CF_WRITE).unwrap();
+        compact(DbType::Raft, CF_DEFAULT).unwrap_err();
     }
 }
