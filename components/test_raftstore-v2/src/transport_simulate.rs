@@ -42,6 +42,10 @@ impl<C> SimulateTransport<C> {
     pub fn add_filter(&mut self, filter: Box<dyn Filter>) {
         self.filters.wl().push(filter);
     }
+
+    pub fn filters(&self) -> &Arc<RwLock<Vec<Box<dyn Filter>>>> {
+        &self.filters
+    }
 }
 
 impl<C: Transport> Transport for SimulateTransport<C> {

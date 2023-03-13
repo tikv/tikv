@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
-use std::{mem, sync::Arc};
+use std::{mem, sync::Arc, time::Duration};
 
 use api_version::KvFormat;
 use fail::fail_point;
@@ -27,12 +27,12 @@ use raftstore::{
     Error as RaftStoreError, Result as RaftStoreResult,
 };
 use tikv_alloc::trace::MemoryTraceGuard;
-use tikv_kv::RaftExtension;
+use tikv_kv::{RaftExtension, StageLatencyStats};
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
     mpsc::future::{unbounded, BatchReceiver, Sender, WakePolicy},
     sys::memory_usage_reaches_high_water,
-    time::{duration_to_ms, duration_to_sec, Instant},
+    time::Instant,
     worker::Scheduler,
 };
 use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
@@ -213,6 +213,10 @@ macro_rules! set_total_time {
         $resp
             .mut_exec_details_v2()
             .mut_time_detail()
+            .set_total_rpc_wall_time_ns($duration.as_nanos() as u64);
+        $resp
+            .mut_exec_details_v2()
+            .mut_time_detail_v2()
             .set_total_rpc_wall_time_ns($duration.as_nanos() as u64);
     };
 }
@@ -578,7 +582,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 Ok(_) => {
                     GRPC_MSG_HISTOGRAM_STATIC
                         .coprocessor_stream
-                        .observe(duration_to_sec(begin_instant.saturating_elapsed()));
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                     let _ = sink.close().await;
                 }
                 Err(e) => {
@@ -702,6 +706,24 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         }
     }
 
+    fn tablet_snapshot(
+        &mut self,
+        ctx: RpcContext<'_>,
+        stream: RequestStream<TabletSnapshotRequest>,
+        sink: DuplexSink<TabletSnapshotResponse>,
+    ) {
+        let task = SnapTask::RecvTablet { stream, sink };
+        if let Err(e) = self.snap_scheduler.schedule(task) {
+            let err_msg = format!("{}", e);
+            let sink = match e.into_inner() {
+                SnapTask::Recv { sink, .. } => sink,
+                _ => unreachable!(),
+            };
+            let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);
+            ctx.spawn(sink.fail(status).map(|_| ()));
+        }
+    }
+
     #[allow(clippy::collapsible_else_if)]
     fn split_region(
         &mut self,
@@ -777,7 +799,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .split_region
-                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
+                .observe(begin_instant.saturating_elapsed().as_secs_f64());
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -1202,6 +1224,9 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             exec_details
                 .mut_time_detail()
                 .set_total_rpc_wall_time_ns(elapsed.as_nanos() as u64);
+            exec_details
+                .mut_time_detail_v2()
+                .set_total_rpc_wall_time_ns(elapsed.as_nanos() as u64);
         }
     }
 }
@@ -1244,7 +1269,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
 
     async move {
         let v = v.await;
-        let duration_ms = duration_to_ms(start.saturating_elapsed());
+        let duration = start.saturating_elapsed();
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1257,10 +1282,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(scan_detail_v2);
                     });
-                    let time_detail = exec_detail_v2.mut_time_detail();
-                    time_detail.set_kv_read_wall_time_ms(duration_ms);
-                    time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms);
-                    time_detail.set_process_wall_time_ms(stats.latency_stats.process_wall_time_ms);
+                    set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     match val {
                         Some(val) => resp.set_value(val),
                         None => resp.set_not_found(true),
@@ -1272,6 +1294,29 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
         GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
+}
+
+fn set_time_detail(
+    exec_detail_v2: &mut ExecDetailsV2,
+    total_dur: Duration,
+    stats: &StageLatencyStats,
+) {
+    let duration_ns = total_dur.as_nanos() as u64;
+    // deprecated. we will remove the `time_detail` field in future version.
+    {
+        let time_detail = exec_detail_v2.mut_time_detail();
+        time_detail.set_kv_read_wall_time_ms(duration_ns / 1_000_000);
+        time_detail.set_wait_wall_time_ms(stats.wait_wall_time_ns / 1_000_000);
+        time_detail.set_process_wall_time_ms(stats.process_wall_time_ns / 1_000_000);
+    }
+
+    let time_detail_v2 = exec_detail_v2.mut_time_detail_v2();
+    time_detail_v2.set_kv_read_wall_time_ns(duration_ns);
+    time_detail_v2.set_wait_wall_time_ns(stats.wait_wall_time_ns);
+    time_detail_v2.set_process_wall_time_ns(stats.process_wall_time_ns);
+    // currently, the schedule suspend_wall_time is always 0 for get and
+    // batch_get. TODO: once we support aync-io, we may also count the
+    // schedule suspend duration here.
 }
 
 fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
@@ -1338,7 +1383,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
 
     async move {
         let v = v.await;
-        let duration_ms = duration_to_ms(start.saturating_elapsed());
+        let duration = start.saturating_elapsed();
         let mut resp = BatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1352,10 +1397,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(scan_detail_v2);
                     });
-                    let time_detail = exec_detail_v2.mut_time_detail();
-                    time_detail.set_kv_read_wall_time_ms(duration_ms);
-                    time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms);
-                    time_detail.set_process_wall_time_ms(stats.latency_stats.process_wall_time_ms);
+                    set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
                 }
                 Err(e) => {
