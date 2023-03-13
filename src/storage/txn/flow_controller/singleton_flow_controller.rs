@@ -21,6 +21,7 @@ use engine_traits::{CfNamesExt, FlowControlFactorsExt};
 use getset::{CopyGetters, Setters};
 use num_traits::cast::{AsPrimitive, FromPrimitive};
 use rand::Rng;
+use slog_global::info;
 use tikv_util::{
     sys::thread::StdThreadBuildWrapper,
     time::{Instant, Limiter},
@@ -699,9 +700,8 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             .log2();
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
         checker.long_term_pending_bytes.observe(num);
-        SCHED_PENDING_COMPACTION_BYTES_GAUGE
-            .with_label_values(&[&cf])
-            .set((checker.long_term_pending_bytes.get_avg() * RATIO_SCALE_FACTOR as f64) as i64);
+        let gauge = SCHED_PENDING_COMPACTION_BYTES_GAUGE.with_label_values(&[&cf]);
+        gauge.set((checker.long_term_pending_bytes.get_avg() * RATIO_SCALE_FACTOR as f64) as i64);
 
         // do special check on start, see the comment of the variable definition for
         // detail.
@@ -716,6 +716,11 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         }
 
         let pending_compaction_bytes = checker.long_term_pending_bytes.get_avg();
+        info!(">>> on_pending_compaction_bytes_change";
+            "num" => num,
+            "gauge" => gauge.get(),
+            "pending_compaction_bytes" => pending_compaction_bytes);
+
         let ignore = if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
             if pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
                 checker.pending_bytes_before_unsafe_destroy_range = None;
