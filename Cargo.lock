@@ -4702,6 +4702,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "online_config",
+ "parking_lot 0.12.1",
  "pd_client",
  "pin-project",
  "prometheus",
