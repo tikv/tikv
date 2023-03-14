@@ -755,6 +755,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
     pub fn set_hint_min_ts(&mut self, ts_bound: Option<Bound<TimeStamp>>) {
         self.hint_min_ts = ts_bound;
     }
+
+    pub fn snapshot_ext(&self) -> S::Ext<'_> {
+        self.snapshot.ext()
+    }
 }
 
 #[cfg(test)]
@@ -1222,7 +1226,7 @@ pub mod tests {
         let overlapped_write = reader
             .get_txn_commit_record(&key, 55.into())
             .unwrap()
-            .unwrap_none();
+            .unwrap_none(0);
         assert!(overlapped_write.is_none());
 
         // When no such record is found but a record of another txn has a write record
@@ -1230,7 +1234,7 @@ pub mod tests {
         let overlapped_write = reader
             .get_txn_commit_record(&key, 50.into())
             .unwrap()
-            .unwrap_none()
+            .unwrap_none(0)
             .unwrap();
         assert_eq!(overlapped_write.write.start_ts, 45.into());
         assert_eq!(overlapped_write.write.write_type, WriteType::Put);

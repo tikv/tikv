@@ -27,6 +27,7 @@ use keys::{enc_end_key, enc_start_key};
 use kvproto::{
     encryptionpb::EncryptionMethod,
     metapb::Region,
+    pdpb::SnapshotStat,
     raft_serverpb::{RaftSnapshotData, SnapshotCfFile, SnapshotMeta},
 };
 use openssl::symm::{Cipher, Crypter, Mode};
@@ -35,7 +36,7 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use thiserror::Error;
 use tikv_util::{
     box_err, box_try, debug, error, info,
-    time::{duration_to_sec, Instant, Limiter},
+    time::{duration_to_sec, Instant, Limiter, UnixSecs},
     warn, HandyRwLock,
 };
 
@@ -145,7 +146,6 @@ impl SnapKey {
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
             return Err(io::Error::new(ErrorKind::Other, e));
         }
-
         Ok(SnapKey::from_region_snap(
             snap_data.get_region().get_id(),
             snap,
@@ -1032,6 +1032,7 @@ impl Snapshot {
         region: &Region,
         allow_multi_files_snapshot: bool,
         for_balance: bool,
+        start: UnixSecs,
     ) -> RaftStoreResult<RaftSnapshotData> {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
@@ -1050,7 +1051,10 @@ impl Snapshot {
         // set snapshot meta data
         snap_data.set_file_size(total_size);
         snap_data.set_version(SNAPSHOT_VERSION);
-        snap_data.set_meta(self.meta_file.meta.as_ref().unwrap().clone());
+        let meta = self.meta_file.meta.as_mut().unwrap();
+        meta.set_start(start.into_inner());
+        meta.set_generate_duration_sec(t.saturating_elapsed().as_secs());
+        snap_data.set_meta(meta.clone());
 
         SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()));
         SNAPSHOT_KV_COUNT_HISTOGRAM.observe(total_count as f64);
@@ -1362,6 +1366,7 @@ pub enum SnapEntry {
 pub struct SnapStats {
     pub sending_count: usize,
     pub receiving_count: usize,
+    pub stats: Vec<SnapshotStat>,
 }
 
 #[derive(Clone)]
@@ -1375,6 +1380,7 @@ struct SnapManagerCore {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     max_per_file_size: Arc<AtomicU64>,
     enable_multi_snapshot_files: Arc<AtomicBool>,
+    stats: Arc<Mutex<Vec<SnapshotStat>>>,
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
@@ -1656,6 +1662,18 @@ impl SnapManager {
         self.core.limiter.speed_limit()
     }
 
+    pub fn collect_stat(&self, snap: SnapshotStat) {
+        debug!(
+            "collect snapshot stat";
+            "region_id" => snap.region_id,
+            "total_size" => snap.get_transport_size(),
+            "total_duration_sec" => snap.get_total_duration_sec(),
+            "generate_duration_sec" => snap.get_generate_duration_sec(),
+            "send_duration_sec" => snap.get_generate_duration_sec(),
+        );
+        self.core.stats.lock().unwrap().push(snap);
+    }
+
     pub fn register(&self, key: SnapKey, entry: SnapEntry) {
         debug!(
             "register snapshot";
@@ -1726,9 +1744,11 @@ impl SnapManager {
             }
         }
 
+        let stats = std::mem::take(self.core.stats.lock().unwrap().as_mut());
         SnapStats {
             sending_count: sending_cnt,
             receiving_count: receiving_cnt,
+            stats,
         }
     }
 
@@ -1887,6 +1907,7 @@ impl SnapManagerBuilder {
                 enable_multi_snapshot_files: Arc::new(AtomicBool::new(
                     self.enable_multi_snapshot_files,
                 )),
+                stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
         };
@@ -2269,6 +2290,7 @@ pub mod tests {
             encryption_key_manager: None,
             max_per_file_size: Arc::new(AtomicU64::new(max_per_file_size)),
             enable_multi_snapshot_files: Arc::new(AtomicBool::new(true)),
+            stats: Default::default(),
         }
     }
 
@@ -2405,7 +2427,9 @@ pub mod tests {
         assert!(!s1.exists());
         assert_eq!(mgr_core.get_total_snap_size().unwrap(), 0);
 
-        let mut snap_data = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
 
         // Ensure that this snapshot file does exist after being built.
         assert!(s1.exists());
@@ -2505,13 +2529,17 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s1.exists());
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(s2.exists());
 
-        let _ = s2.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s2
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s2.exists());
     }
 
@@ -2654,7 +2682,9 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s1.exists());
 
         corrupt_snapshot_size_in(dir.path());
@@ -2663,7 +2693,9 @@ pub mod tests {
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        let snap_data = s2.build(&db, &snapshot, &region, true, false).unwrap();
+        let snap_data = s2
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2724,7 +2756,9 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s1.exists());
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
@@ -2733,7 +2767,9 @@ pub mod tests {
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        let mut snap_data = s2.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s2
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2795,7 +2831,9 @@ pub mod tests {
         let mgr_core = create_manager_core(&path, u64::MAX);
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
         let mut region = gen_test_region(1, 1, 1);
-        let mut snap_data = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         let mut s = Snapshot::new_for_sending(&path, &key1, &mgr_core).unwrap();
         let expected_size = s.total_size();
         let mut s2 =
@@ -2867,7 +2905,9 @@ pub mod tests {
         // Ensure the snapshot being built will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Generating);
         let mut s1 = src_mgr.get_snapshot_for_building(&key).unwrap();
-        let mut snap_data = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
 
         check_registry_around_deregister(&src_mgr, &key, &SnapEntry::Generating);
 
@@ -2950,6 +2990,7 @@ pub mod tests {
                 &gen_test_region(100, 1, 1),
                 true,
                 false,
+                UnixSecs::now(),
             )
             .unwrap()
         };
@@ -2973,7 +3014,7 @@ pub mod tests {
             let region = gen_test_region(region_id, 1, 1);
             let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let _ = s
-                .build(&engine.kv, &snapshot, &region, true, false)
+                .build(&engine.kv, &snapshot, &region, true, false, UnixSecs::now())
                 .unwrap();
 
             // The first snap_size is for region 100.
@@ -3043,7 +3084,9 @@ pub mod tests {
         // correctly.
         for _ in 0..2 {
             let mut s1 = snap_mgr.get_snapshot_for_building(&key).unwrap();
-            let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+            let _ = s1
+                .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+                .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
     }
