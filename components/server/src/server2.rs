@@ -25,7 +25,7 @@ use std::{
     time::Duration,
     u64,
 };
-use crate::common::TikvServerCore;
+
 use api_version::{dispatch_api_version, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
@@ -116,8 +116,8 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    memory::*, raft_engine_switch::*, server::Stop, setup::*, signal_handler,
-    tikv_util::sys::thread::ThreadBuildWrapper,
+    common::TikvServerCore, memory::*, raft_engine_switch::*, server::Stop, setup::*,
+    signal_handler, tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 // minimum number of core kept for background requests
