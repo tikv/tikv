@@ -478,10 +478,7 @@ where
                     // safely.
                     let rts = min_region.map(|rs| rs.checkpoint).unwrap_or(min_ts);
                     info!("getting checkpoint"; "defined_by_region" => ?min_region);
-                    callback(ResolvedRegions::new(
-                        rts,
-                        cps.into_iter().map(|r| (r.region, r.checkpoint)).collect(),
-                    ));
+                    callback(ResolvedRegions::new(rts, cps));
                 }
             }
         }
