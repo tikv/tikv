@@ -154,7 +154,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // When it's handling snapshot, it's pointless to tick as all the side
         // affects have to wait till snapshot is applied. On the other hand, ticking
         // will bring other corner cases like elections.
-        !self.is_handling_snapshot() && self.raft_group_mut().tick()
+        !self.is_handling_snapshot() && self.serving() && self.raft_group_mut().tick()
     }
 
     pub fn on_peer_unreachable(&mut self, to_peer_id: u64) {
@@ -934,6 +934,25 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let prev_raft_state = self.entry_storage().raft_state().clone();
         let ever_persisted = self.ever_persisted();
 
+        // If snapshot initializes the peer, we don't need to write apply trace again.
+        if !ever_persisted {
+            let region_id = self.region().get_id();
+            let entry_storage = self.entry_storage();
+            let raft_engine = entry_storage.raft_engine();
+            if write_task.raft_wb.is_none() {
+                write_task.raft_wb = Some(raft_engine.log_batch(64));
+            }
+            let wb = write_task.raft_wb.as_mut().unwrap();
+            // There may be tombstone key from last peer.
+            raft_engine
+                .clean(region_id, 0, entry_storage.raft_state(), wb)
+                .unwrap_or_else(|e| {
+                    slog_panic!(self.logger(), "failed to clean up region"; "error" => ?e);
+                });
+            self.init_apply_trace(write_task);
+            self.set_ever_persisted();
+        }
+
         if !ready.snapshot().is_empty() {
             if let Err(e) = self.apply_snapshot(
                 ready.snapshot(),
@@ -955,24 +974,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         }
         if !ever_persisted || prev_raft_state != *entry_storage.raft_state() {
             write_task.raft_state = Some(entry_storage.raft_state().clone());
-        }
-        // If snapshot initializes the peer, we don't need to write apply trace again.
-        if !self.ever_persisted() {
-            let region_id = self.region().get_id();
-            let entry_storage = self.entry_storage();
-            let raft_engine = entry_storage.raft_engine();
-            if write_task.raft_wb.is_none() {
-                write_task.raft_wb = Some(raft_engine.log_batch(64));
-            }
-            let wb = write_task.raft_wb.as_mut().unwrap();
-            // There may be tombstone key from last peer.
-            raft_engine
-                .clean(region_id, 0, entry_storage.raft_state(), wb)
-                .unwrap_or_else(|e| {
-                    slog_panic!(self.logger(), "failed to clean up region"; "error" => ?e);
-                });
-            self.init_apply_trace(write_task);
-            self.set_ever_persisted();
         }
         if self.apply_trace().should_persist() {
             self.record_apply_trace(write_task);
