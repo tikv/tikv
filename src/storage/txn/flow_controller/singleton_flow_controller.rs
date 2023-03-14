@@ -730,7 +730,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         // a relative small range
         let mut num = (self.engine.pending_compaction_bytes(self.region_id, &cf) as f64).log2();
         if !num.is_finite() {
-            // 0.log2() == -inf, which is not expected
+            // 0.log2() == -inf, which is not expected and may lead to sum always be NaN
             num = 0.0;
         }
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
@@ -738,6 +738,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         SCHED_PENDING_COMPACTION_BYTES_GAUGE
             .with_label_values(&[&cf])
             .set((checker.long_term_pending_bytes.get_avg() * RATIO_SCALE_FACTOR as f64) as i64);
+
         // do special check on start, see the comment of the variable definition for
         // detail.
         if checker.on_start_pending_bytes {
@@ -1081,7 +1082,7 @@ pub(super) mod tests {
         }
     }
 
-    fn send_flow_info(tx: &mpsc::SyncSender<FlowInfo>, region_id: u64, tablet_suffix: u64) {
+    fn send_flow_info(tx: &mpsc::SyncSender<FlowInfo>, region_id: u64) {
         tx.send(FlowInfo::Flush("default".to_string(), 0, region_id))
             .unwrap();
         tx.send(FlowInfo::Compaction("default".to_string(), region_id))
@@ -1142,30 +1143,30 @@ pub(super) mod tests {
 
         // exceeds the threshold on start
         stub.0.num_memtables.store(8, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(region_id), true);
         // once falls below the threshold, pass the on start check
         stub.0.num_memtables.store(1, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         // not throttle when the average of the sliding window doesn't exceeds the
         // threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), true);
 
         // the average of sliding window exceeds the threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), false);
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
 
         // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtables.store(1, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), true);
     }
@@ -1196,17 +1197,17 @@ pub(super) mod tests {
 
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(region_id), true);
         // once fall below the threshold, pass the on start check
         stub.0.num_l0_files.store(10, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
 
         // exceeds the threshold, throttle now
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), false);
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
@@ -1232,25 +1233,25 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         // on start check forbids flow control
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
         // once fall below the threshold, pass the on start check
         stub.0
             .pending_compaction_bytes
             .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
 
         stub.0
             .pending_compaction_bytes
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024 * 1024, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
         // pending compaction bytes jump after unsafe destroy range
@@ -1264,7 +1265,7 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024 * 1024, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
         stub.0
@@ -1286,13 +1287,13 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
             .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        send_flow_info(tx, region_id, tablet_suffix);
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
 
@@ -1309,24 +1310,24 @@ pub(super) mod tests {
     #[test]
     fn test_flow_controller_pending_compaction_bytes_of_zero() {
         let region_id = 0;
-        let tablet_suffix = 0;
         let stub = EngineStub::new();
         let (tx, rx) = mpsc::sync_channel(0);
         let flow_controller =
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
         let flow_controller = FlowController::Singleton(flow_controller);
+
+        // should handle zero pending compaction bytes properly
         stub.0.pending_compaction_bytes.store(0, Ordering::Relaxed);
-        send_flow_info(&tx, region_id, tablet_suffix);
-        // on start check forbids flow control
+        send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
         stub.0
             .pending_compaction_bytes
             .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        send_flow_info(&tx, region_id, tablet_suffix);
+        send_flow_info(&tx, region_id);
         stub.0
             .pending_compaction_bytes
             .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        send_flow_info(&tx, region_id, tablet_suffix);
+        send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
 
