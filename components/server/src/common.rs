@@ -2,35 +2,17 @@
 
 use std::{
     cmp,
-    collections::HashMap,
-    convert::TryFrom,
-    env, fmt,
-    net::SocketAddr,
-    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
-    str::FromStr,
-    sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
-    },
-    time::Duration,
     u64,
 };
 
 use file_system::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor,
-    MetricsManager as IoMetricsManager,
+    File,
 };
 use tikv::config::TikvConfig;
 use tikv_util::{
-    check_environment_variables,
-    config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
-    math::MovingAvgU32,
-    metrics::INSTANCE_BACKEND_CPU_QUOTA,
-    quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{
-        cpu_time::ProcessStat, disk, path_in_diff_mount_point, register_memory_usage_high_water,
-        SysQuota,
+        disk, path_in_diff_mount_point,
     },
 };
 
