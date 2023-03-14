@@ -1184,7 +1184,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-channel",
  "crossbeam-deque",
- "crossbeam-epoch 0.9.8",
+ "crossbeam-epoch",
  "crossbeam-queue",
  "crossbeam-utils 0.8.8",
 ]
@@ -1201,12 +1201,13 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-deque"
-version = "0.8.2"
-source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2ebeaf58fe8a193134056#41ed3d948720f26149b2ebeaf58fe8a193134056"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce6fd6f855243022dcecf8702fef0c297d4338e226845fe067f6341ad9fa0cef"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.10",
- "crossbeam-utils 0.8.11",
+ "crossbeam-epoch",
+ "crossbeam-utils 0.8.8",
 ]
 
 [[package]]
@@ -1220,19 +1221,6 @@ dependencies = [
  "crossbeam-utils 0.8.8",
  "lazy_static",
  "memoffset 0.6.4",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-epoch"
-version = "0.9.10"
-source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2ebeaf58fe8a193134056#41ed3d948720f26149b2ebeaf58fe8a193134056"
-dependencies = [
- "autocfg",
- "cfg-if 1.0.0",
- "crossbeam-utils 0.8.11",
- "memoffset 0.6.4",
- "once_cell",
  "scopeguard",
 ]
 
@@ -1253,7 +1241,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "883a5821d7d079fcf34ac55f27a833ee61678110f6b97637cc74513c0d0b42fc"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.8",
+ "crossbeam-epoch",
  "crossbeam-utils 0.8.8",
  "scopeguard",
 ]
@@ -1277,15 +1265,6 @@ checksum = "0bf124c720b7686e3c2663cf54062ab0f68a88af2fb6a030e87e30bf721fcb38"
 dependencies = [
  "cfg-if 1.0.0",
  "lazy_static",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.11"
-source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2ebeaf58fe8a193134056#41ed3d948720f26149b2ebeaf58fe8a193134056"
-dependencies = [
- "cfg-if 1.0.0",
- "once_cell",
 ]
 
 [[package]]
@@ -7492,7 +7471,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#7ed25299d60a5338bea4ac0ed7470887ab74a010"
+source = "git+https://github.com/Connor1996/yatp?branch=priority#45f5f05323db41ff6bd32f5249d634c022532fe0"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",

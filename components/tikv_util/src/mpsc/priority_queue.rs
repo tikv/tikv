@@ -73,7 +73,7 @@ impl<T> PriorityQueue<T> {
         }
     }
 
-    pub fn get_map_key(&self, pri: u64) -> MapKey {
+    pub fn get_map_key(&self, pri: Priority) -> MapKey {
         MapKey {
             priority: pri,
             sequence: self.sequencer.fetch_add(1, Ordering::Relaxed),
@@ -85,12 +85,14 @@ impl<T> PriorityQueue<T> {
     }
 }
 
+pub type Priority = yatp::queue::priority::Priority;
+
 // When derived `PartialOrd` on structs, it will produce a lexicographic
 // ordering based on the top-to-bottom declaration order of the struct’s
 // members.
 #[derive(Eq, PartialEq, Ord, PartialOrd)]
 struct MapKey {
-    priority: u64,
+    priority: Priority,
     sequence: u64,
 }
 
@@ -99,12 +101,12 @@ pub struct Sender<T: Send> {
 }
 
 impl<T: Send + 'static> Sender<T> {
-    pub fn try_send(&self, msg: T, pri: u64) -> Result<(), TrySendError<T>> {
+    pub fn try_send(&self, msg: T, pri: Priority) -> Result<(), TrySendError<T>> {
         self.send(msg, pri)
             .map_err(|SendError(msg)| TrySendError::Disconnected(msg))
     }
 
-    pub fn send(&self, msg: T, pri: u64) -> Result<(), SendError<T>> {
+    pub fn send(&self, msg: T, pri: Priority) -> Result<(), SendError<T>> {
         if self.inner.receivers.load(Ordering::Acquire) == 0 {
             return Err(SendError(msg));
         }

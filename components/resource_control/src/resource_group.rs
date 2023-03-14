@@ -14,7 +14,7 @@ use kvproto::{
     resource_manager::{GroupMode, ResourceGroup},
 };
 use tikv_util::info;
-use yatp::queue::priority::TaskPriorityProvider;
+use yatp::queue::priority::{Priority, TaskPriorityProvider};
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
@@ -174,14 +174,14 @@ impl ResourceController {
         }
     }
 
-    fn add_resource_group(&self, name: Vec<u8>, ru_quota: u64, priority: u64) {
+    fn add_resource_group(&self, name: Vec<u8>, ru_quota: u64, group_priority: u64) {
         let mut max_ru_quota = self.max_ru_quota.lock().unwrap();
         if ru_quota > *max_ru_quota {
             *max_ru_quota = ru_quota;
             // adjust all group weight because the current value is too small.
-            self.adjust_all_resource_group_factors(ru_quota, priority);
+            self.adjust_all_resource_group_factors(ru_quota);
         }
-        let weight = Self::calculate_factor(*max_ru_quota, ru_quota) * priority;
+        let weight = Self::calculate_factor(*max_ru_quota, ru_quota);
 
         let vt_delta_for_get = if self.is_read {
             DEFAULT_PRIORITY_PER_READ_TASK * weight
@@ -190,6 +190,7 @@ impl ResourceController {
         };
         let group = GroupPriorityTracker {
             ru_quota,
+            group_priority,
             weight,
             virtual_time: AtomicU64::new(self.last_min_vt.load(Ordering::Acquire)),
             vt_delta_for_get,
@@ -204,9 +205,9 @@ impl ResourceController {
     // adjust all the existing groups. As we expect this won't happen very
     // often, and iterate 10k entry cost less than 5ms, so the performance is
     // acceptable.
-    fn adjust_all_resource_group_factors(&self, max_ru_quota: u64, priority: u64) {
+    fn adjust_all_resource_group_factors(&self, max_ru_quota: u64) {
         self.resource_consumptions.iter_mut().for_each(|mut g| {
-            g.value_mut().weight = Self::calculate_factor(max_ru_quota, g.ru_quota) * priority;
+            g.value_mut().weight = Self::calculate_factor(max_ru_quota, g.ru_quota);
         });
     }
 
@@ -265,7 +266,7 @@ impl ResourceController {
         self.last_min_vt.store(max_vt, Ordering::Relaxed);
     }
 
-    pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
+    pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> Priority {
         let level = match pri {
             CommandPri::Low => 2,
             CommandPri::Normal => 1,
@@ -276,7 +277,7 @@ impl ResourceController {
 }
 
 impl TaskPriorityProvider for ResourceController {
-    fn priority_of(&self, extras: &yatp::queue::Extras) -> u64 {
+    fn priority_of(&self, extras: &yatp::queue::Extras) -> Priority {
         self.resource_group(extras.metadata())
             .get_priority(extras.current_level() as usize)
     }
@@ -285,6 +286,7 @@ impl TaskPriorityProvider for ResourceController {
 struct GroupPriorityTracker {
     // the ru setting of this group.
     ru_quota: u64,
+    group_priority: u64,
     weight: u64,
     virtual_time: AtomicU64,
     // the constant delta value for each `get_priority` call,
@@ -292,15 +294,19 @@ struct GroupPriorityTracker {
 }
 
 impl GroupPriorityTracker {
-    fn get_priority(&self, level: usize) -> u64 {
+    fn get_priority(&self, level: usize) -> Priority {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
-        (if self.vt_delta_for_get > 0 {
+        let vt = (if self.vt_delta_for_get > 0 {
             self.virtual_time
                 .fetch_add(self.vt_delta_for_get, Ordering::Relaxed)
                 + self.vt_delta_for_get
         } else {
             self.virtual_time.load(Ordering::Relaxed)
-        }) + task_extra_priority
+        }) + task_extra_priority;
+        Priority {
+            priority: self.group_priority,
+            vt,
+        }
     }
 
     #[inline]
