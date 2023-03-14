@@ -2,7 +2,7 @@
 
 use collections::HashMap;
 use crossbeam::channel::TrySendError;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{data_cf_offset, KvEngine, RaftEngine};
 use kvproto::import_sstpb::SstMeta;
 use raftstore::{
     store::{check_sst_for_ingestion, metrics::PEER_WRITE_CMD_COUNTER, util},
@@ -82,10 +82,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
-    pub fn apply_ingest(&mut self, ssts: Vec<SstMeta>) -> Result<()> {
+    pub fn apply_ingest(&mut self, index: u64, ssts: Vec<SstMeta>) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let mut infos = Vec::with_capacity(ssts.len());
         for sst in &ssts {
+            // This may not be enough as ingest sst may not trigger flush at all.
+            let off = data_cf_offset(sst.get_cf_name());
+            if self.should_skip(off, index) {
+                continue;
+            }
             if let Err(e) = check_sst_for_ingestion(sst, self.region()) {
                 error!(
                     self.logger,
@@ -104,10 +109,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
             }
         }
-        // Unlike v1, we can't batch ssts accross regions.
-        self.flush();
-        if let Err(e) = self.sst_importer().ingest(&infos, self.tablet()) {
-            slog_panic!(self.logger, "ingest fail"; "ssts" => ?ssts, "error" => ?e);
+        if !infos.is_empty() {
+            // Unlike v1, we can't batch ssts accross regions.
+            self.flush();
+            if let Err(e) = self.sst_importer().ingest(&infos, self.tablet()) {
+                slog_panic!(self.logger, "ingest fail"; "ssts" => ?ssts, "error" => ?e);
+            }
         }
         Ok(())
     }

@@ -585,7 +585,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                 )?;
                             }
                             SimpleWrite::Ingest(ssts) => {
-                                self.apply_ingest(ssts)?;
+                                self.apply_ingest(log_index, ssts)?;
                             }
                         }
                     }
