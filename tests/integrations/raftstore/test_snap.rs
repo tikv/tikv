@@ -23,7 +23,11 @@ use security::SecurityManager;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::server::snap::send_snap;
-use tikv_util::{config::*, time::Instant, HandyRwLock};
+use tikv_util::{
+    config::*,
+    time::{Instant, UnixSecs},
+    HandyRwLock,
+};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
     cluster.cfg.rocksdb.titan.enabled = true;
@@ -508,7 +512,7 @@ fn test_inspected_snapshot() {
 #[test]
 fn test_gen_during_heavy_recv() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.server.snap_io_max_bytes_per_sec = ReadableSize(5 * 1024 * 1024);
+    cluster.cfg.server.snap_io_max_bytes_per_sec = ReadableSize(1024 * 1024);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -554,6 +558,7 @@ fn test_gen_during_heavy_recv() {
         snap_apply_state,
         true,
         true,
+        UnixSecs::now(),
     )
     .unwrap();
 
@@ -593,8 +598,14 @@ fn test_gen_during_heavy_recv() {
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     sleep_ms(500);
     must_get_equal(&cluster.get_engine(3), b"zzz-0000", b"value");
-    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
-    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
+
+    // store 1 and store 2 must send snapshot, so stats should record the snapshot.
+    let send_stats = cluster.get_snap_mgr(1).stats();
+    let recv_stats = cluster.get_snap_mgr(2).stats();
+    assert_eq!(send_stats.sending_count, 0);
+    assert_eq!(recv_stats.receiving_count, 0);
+    assert_ne!(send_stats.stats.len(), 0);
+    assert_ne!(recv_stats.stats.len(), 0);
     drop(cluster);
     let _ = th.join();
 }
