@@ -932,10 +932,23 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         write_task: &mut WriteTask<EK, ER>,
     ) {
         let prev_raft_state = self.entry_storage().raft_state().clone();
-        let ever_persisted = self.ever_persisted();
+        let prev_ever_persisted = self.ever_persisted();
 
-        // If snapshot initializes the peer, we don't need to write apply trace again.
-        if !ever_persisted {
+        if !ready.snapshot().is_empty() {
+            if let Err(e) = self.apply_snapshot(
+                ready.snapshot(),
+                write_task,
+                ctx.snap_mgr.clone(),
+                ctx.tablet_registry.clone(),
+            ) {
+                SNAP_COUNTER.apply.fail.inc();
+                error!(self.logger(),"failed to apply snapshot";"error" => ?e)
+            }
+        }
+
+        // If snapshot initializes the peer (in `apply_snapshot`), we don't need to
+        // write apply trace again.
+        if !self.ever_persisted() {
             let region_id = self.region().get_id();
             let entry_storage = self.entry_storage();
             let raft_engine = entry_storage.raft_engine();
@@ -953,18 +966,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             self.set_ever_persisted();
         }
 
-        if !ready.snapshot().is_empty() {
-            if let Err(e) = self.apply_snapshot(
-                ready.snapshot(),
-                write_task,
-                ctx.snap_mgr.clone(),
-                ctx.tablet_registry.clone(),
-            ) {
-                SNAP_COUNTER.apply.fail.inc();
-                error!(self.logger(),"failed to apply snapshot";"error" => ?e)
-            }
-        }
-
         let entry_storage = self.entry_storage_mut();
         if !ready.entries().is_empty() {
             entry_storage.append(ready.take_entries(), write_task);
@@ -972,7 +973,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         if let Some(hs) = ready.hs() {
             entry_storage.raft_state_mut().set_hard_state(hs.clone());
         }
-        if !ever_persisted || prev_raft_state != *entry_storage.raft_state() {
+        if !prev_ever_persisted || prev_raft_state != *entry_storage.raft_state() {
             write_task.raft_state = Some(entry_storage.raft_state().clone());
         }
         if self.apply_trace().should_persist() {
