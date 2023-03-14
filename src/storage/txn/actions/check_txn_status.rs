@@ -159,10 +159,11 @@ pub fn rollback_lock(
             if write.write_type != WriteType::Rollback =>
         {
             panic!(
-                "txn record found but not expected: {:?} {} {:?} [region_id={}]",
+                "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
                 write,
                 commit_ts,
                 txn,
+                lock,
                 reader.reader.snapshot_ext().get_region_id().unwrap_or(0)
             )
         }
