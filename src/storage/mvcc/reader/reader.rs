@@ -755,6 +755,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
     pub fn set_hint_min_ts(&mut self, ts_bound: Option<Bound<TimeStamp>>) {
         self.hint_min_ts = ts_bound;
     }
+
+    pub fn snapshot_ext(&self) -> S::Ext<'_> {
+        self.snapshot.ext()
+    }
 }
 
 #[cfg(test)]
