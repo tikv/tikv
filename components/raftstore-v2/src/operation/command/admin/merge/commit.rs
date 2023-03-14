@@ -57,7 +57,7 @@ use futures::channel::oneshot;
 use kvproto::{
     metapb::Region,
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CommitMergeRequest, RaftCmdRequest},
-    raft_serverpb::PeerState,
+    raft_serverpb::{PeerState, RegionLocalState},
 };
 use protobuf::Message;
 use raft::{GetEntriesContext, Storage, INVALID_ID, NO_LIMIT};
@@ -70,7 +70,6 @@ use raftstore::{
 };
 use slog::{debug, error, info};
 use tikv_util::{
-    box_err,
     config::ReadableDuration,
     log::SlogFormat,
     slog_panic,
@@ -93,7 +92,7 @@ pub struct CommitMergeResult {
     // Only used to respond `CatchUpLogs` to source peer.
     prepare_merge_index: u64,
     source_path: PathBuf,
-    region: Region,
+    region_state: RegionLocalState,
     source: Region,
     source_safe_ts: u64,
     tablet: Box<dyn Any + Send + Sync>,
@@ -238,10 +237,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .region_state()
             .get_merged_records()
             .iter()
-            .any(|p| {
-                p.get_source_region_id() == source_region.get_id()
-                    && p.get_source_epoch() == source_region.get_region_epoch()
-            })
+            .any(|p| p.get_source_region_id() == source_region.get_id())
         {
             info!(
                 self.logger,
@@ -279,6 +275,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 Some(true)
             }
         } else {
+            info!(
+                self.logger,
+                "ignore commit merge because self epoch is stale";
+                "source" => ?source_region,
+            );
             None
         }
     }
@@ -326,9 +327,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
                 Err(_) => {
                     if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
-                        return Err(box_err!("{} shutdown", SlogFormat(&self.logger)));
+                        loop {
+                            std::thread::park();
+                        }
                     } else {
-                        slog_panic!(self.logger, "source peer is missing");
+                        slog_panic!(
+                            self.logger,
+                            "source peer is missing when getting checkpoint for merge"
+                        );
                     }
                 }
             }
@@ -367,28 +373,52 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
 
         let path = reg.tablet_path(self.region_id(), index);
-        if path.exists() {
-            // Redo merge. Source tablet is flushed before creating this path. The fact that
-            // we need to replay `CommitMerge` means `self.tablet().flush_cfs()` has not
-            // completed. So it's safe to delete it without losing any writes.
+
+        // There're several ways to make engine merge recoverable:
+        // (1) flush self, merge, advance admin flushed. If we need to replay
+        // `CommitMerge` after restart, it means the admin flushed is not persisted. But
+        // it's possible that some cfs have been flushed, and they will not be replayed.
+        // In that case we must not redo merging tablet.
+        // (2) merge (with flush_state.applied_index=`index`), flush merged tablet. If
+        // we need to replay `CommitMerge`, it means the flush is not completed,
+        // merged tablet doesn't have any writes beyond `index`.
+        // (3) re-entrant merge. Merge will always be redo regardless of whether the
+        // merged tablet already has data.
+        //
+        // We use method 1.
+        let mut needs_merge = !path.exists();
+        if path.exists()
+            && self
+                .log_recovery()
+                .as_ref()
+                .map_or(true, |trace| trace.iter().all(|i| *i < index))
+        {
+            // Path exists, but no data has been flushed. It's safe to redo.
             std::fs::remove_dir_all(&path).unwrap();
+            needs_merge = true;
         }
-        // Avoid seqno jump back between self.tablet and the newly created tablet.
-        self.tablet().flush_cfs(&[], true).unwrap();
+
+        if needs_merge {
+            // Avoid seqno jump back between self.tablet and the newly created tablet.
+            self.tablet().flush_cfs(&[], true).unwrap();
+        }
         let flush_time = now.saturating_elapsed();
+
         let mut ctx = TabletContext::new(&region, Some(index));
         ctx.flush_state = Some(self.flush_state().clone());
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
-        tablet
-            .merge(&[&source_tablet, self.tablet()])
-            .unwrap_or_else(|e| {
-                slog_panic!(
-                    self.logger,
-                    "fails to merge tablet";
-                    "path" => %path.display(),
-                    "error" => ?e
-                )
-            });
+        if needs_merge {
+            tablet
+                .merge(&[&source_tablet, self.tablet()])
+                .unwrap_or_else(|e| {
+                    slog_panic!(
+                        self.logger,
+                        "fails to merge tablet";
+                        "path" => %path.display(),
+                        "error" => ?e
+                    )
+                });
+        }
         let merge_time = now.saturating_elapsed();
 
         info!(
@@ -403,10 +433,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         self.set_tablet(tablet.clone());
 
-        self.region_state_mut().set_region(region.clone());
-        self.region_state_mut().set_state(PeerState::Normal);
-        self.region_state_mut().clear_merge_state();
-        self.region_state_mut().set_tablet_index(index);
+        let state = self.region_state_mut();
+        state.set_region(region.clone());
+        state.set_state(PeerState::Normal);
+        assert!(!state.has_merge_state());
+        state.set_tablet_index(index);
+        let mut merged_records: Vec<_> = state.take_merged_records().into();
+        for p in source_region.get_peers() {
+            merged_records.push(p.clone());
+        }
+        state.set_merged_records(merged_records.into());
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
 
@@ -416,7 +452,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 index,
                 prepare_merge_index: merge.get_commit(),
                 source_path,
-                region,
+                region_state: self.region_state().clone(),
                 source: source_region.to_owned(),
                 source_safe_ts,
                 tablet: Box::new(tablet),
@@ -595,28 +631,28 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut res: CommitMergeResult,
     ) {
+        let region = res.region_state.get_region();
+        assert!(
+            res.source.get_end_key() == region.get_end_key()
+                || res.source.get_start_key() == region.get_start_key()
+        );
         let tablet: EK = match res.tablet.downcast() {
             Ok(t) => *t,
             Err(t) => unreachable!("tablet type should be the same: {:?}", t),
         };
         let acquired_source_safe_ts_before = res.source_safe_ts > 0;
+
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
-
             if let Some(p) = meta.region_read_progress.get(&res.source.get_id()) {
                 res.source_safe_ts = p.safe_ts();
             }
-
-            assert!(
-                res.source.get_end_key() == res.region.get_end_key()
-                    || res.source.get_start_key() == res.region.get_start_key()
-            );
-            meta.set_region(&res.region, true, &self.logger);
-            let (reader, read_tablet) = meta.readers.get_mut(&res.region.get_id()).unwrap();
+            meta.set_region(region, true, &self.logger);
+            let (reader, read_tablet) = meta.readers.get_mut(&region.get_id()).unwrap();
             self.set_region(
                 &store_ctx.coprocessor_host,
                 reader,
-                res.region.clone(),
+                region.clone(),
                 RegionChangeReason::CommitMerge,
                 res.index,
             );
@@ -631,12 +667,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 res.index,
                 &store_ctx.coprocessor_host,
             );
-            self.txn_context().after_commit_merge(
-                store_ctx,
-                self.term(),
-                self.region(),
-                &self.logger,
-            );
+            self.txn_context()
+                .after_commit_merge(store_ctx, self.term(), region, &self.logger);
         }
 
         // We could only have gotten safe ts by sending `CatchUpLogs` earlier. If we
@@ -671,15 +703,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.region_buckets_info_mut().set_bucket_stat(None);
 
         let region_id = self.region_id();
-        let mut region_state = self.storage().region_state().clone();
-        region_state.set_state(PeerState::Normal);
-        region_state.set_region(self.region().clone());
-        // TODO: set_merged_records?
-        region_state.set_tablet_index(res.index);
         self.state_changes_mut()
-            .put_region_state(region_id, res.index, &region_state)
+            .put_region_state(region_id, res.index, &res.region_state)
             .unwrap();
-        self.storage_mut().set_region_state(region_state);
+        self.storage_mut().set_region_state(res.region_state);
         self.storage_mut()
             .apply_trace_mut()
             .on_admin_flush(res.index);
