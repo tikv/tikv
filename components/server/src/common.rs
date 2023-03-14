@@ -6,15 +6,9 @@ use std::{
     u64,
 };
 
-use file_system::{
-    File,
-};
+use file_system::File;
 use tikv::config::TikvConfig;
-use tikv_util::{
-    sys::{
-        disk, path_in_diff_mount_point,
-    },
-};
+use tikv_util::sys::{disk, path_in_diff_mount_point};
 
 pub struct TikvServerCore {
     pub config: TikvConfig,
