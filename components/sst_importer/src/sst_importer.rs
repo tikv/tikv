@@ -36,7 +36,6 @@ use tikv_util::{
         bytes::{decode_bytes_in_place, encode_bytes},
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     },
-    config::ReadableSize,
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
 };
@@ -49,7 +48,7 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util, Config, Error, Result,
+    util, Config, Error, Result, ConfigManager,
 };
 
 pub struct LoadedFile {
@@ -278,7 +277,7 @@ pub struct SstImporter {
     download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: Arc<AtomicU64>,
-    mem_limit: ReadableSize,
+    mem_limit: Arc<AtomicU64>,
 }
 
 impl SstImporter {
@@ -321,7 +320,7 @@ impl SstImporter {
             cached_storage,
             download_rt,
             mem_use: Arc::new(AtomicU64::new(0)),
-            mem_limit: ReadableSize(memory_limit as u64),
+            mem_limit: Arc::new(AtomicU64::new(memory_limit as u64)),
         })
     }
 
@@ -583,6 +582,20 @@ impl SstImporter {
         Ok(())
     }
 
+    pub fn update_mem_limit(&self, cfg_mgr: ConfigManager) {
+        let mem_ratio = cfg_mgr.0.as_ref()
+        .read()
+        .unwrap()
+        .memory_use_ratio;
+
+        let memory_limit = (SysQuota::memory_limit_in_bytes() as f64) * mem_ratio;
+
+        if self.mem_limit.load(Ordering::SeqCst) != memory_limit as u64 {
+            self.mem_limit.store(memory_limit as u64
+                , Ordering::SeqCst);
+        }
+    }
+
     pub fn shrink_by_tick(&self) -> usize {
         let mut shrink_buff_size: usize = 0;
         let mut retain_buff_size: usize = 0;
@@ -643,7 +656,7 @@ impl SstImporter {
     // If mem_limit is 0, which represent download kv-file when import.
     // Or read kv-file into buffer directly.
     pub fn import_support_download(&self) -> bool {
-        self.mem_limit == ReadableSize(0)
+        self.mem_limit.load(Ordering::SeqCst) == 0
     }
 
     fn request_memory(&self, meta: &KvMeta) -> Option<MemUsePermit> {
@@ -651,7 +664,7 @@ impl SstImporter {
         let old = self.mem_use.fetch_add(size, Ordering::SeqCst);
 
         // If the memory is limited, roll backup the mem_use and return false.
-        if old + size > self.mem_limit.0 {
+        if old + size > self.mem_limit.load(Ordering::SeqCst) {
             self.mem_use.fetch_sub(size, Ordering::SeqCst);
             CACHE_EVENT.with_label_values(&["out-of-quota"]).inc();
             None
