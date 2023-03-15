@@ -1167,10 +1167,14 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerV2<ER> {
     }
 
     fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
-        unimplemented!()
+        let iter = self
+            .scan_mvcc(&from, &to, limit)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
+        let stream = stream::iter(iter).map_err(|e| e.to_string());
+        Box::pin(stream)
     }
 
-    fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
+    fn raw_scan_impl(&self, _from_key: &[u8], _end_key: &[u8], _limit: usize, _cf: &str) {
         unimplemented!()
     }
 
@@ -1187,19 +1191,19 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerV2<ER> {
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
-    fn set_region_tombstone(&self, regions: Vec<Region>) {
+    fn set_region_tombstone(&self, _regions: Vec<Region>) {
         unimplemented!()
     }
 
-    fn set_region_tombstone_by_id(&self, regions: Vec<u64>) {
+    fn set_region_tombstone_by_id(&self, _regions: Vec<u64>) {
         unimplemented!()
     }
 
-    fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
+    fn recover_regions(&self, _regions: Vec<Region>, _read_only: bool) {
         unimplemented!()
     }
 
-    fn recover_all(&self, threads: usize, read_only: bool) {
+    fn recover_all(&self, _threads: usize, _read_only: bool) {
         unimplemented!()
     }
 
@@ -1209,22 +1213,22 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerV2<ER> {
 
     fn remove_fail_stores(
         &self,
-        store_ids: Vec<u64>,
-        region_ids: Option<Vec<u64>>,
-        promote_learner: bool,
+        _store_ids: Vec<u64>,
+        _region_ids: Option<Vec<u64>>,
+        _promote_learner: bool,
     ) {
         unimplemented!()
     }
 
-    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
+    fn drop_unapplied_raftlog(&self, _region_ids: Option<Vec<u64>>) {
         unimplemented!()
     }
 
-    fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
+    fn recreate_region(&self, _sec_mgr: Arc<SecurityManager>, _pd_cfg: &PdConfig, _region_id: u64) {
         unimplemented!()
     }
 
-    fn dump_metrics(&self, tags: Vec<&str>) {
+    fn dump_metrics(&self, _tags: Vec<&str>) {
         unimplemented!()
     }
 
@@ -1232,15 +1236,15 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerV2<ER> {
         unimplemented!()
     }
 
-    fn modify_tikv_config(&self, config_name: &str, config_value: &str) {
+    fn modify_tikv_config(&self, _config_name: &str, _config_value: &str) {
         unimplemented!()
     }
 
-    fn dump_region_properties(&self, region_id: u64) {
+    fn dump_region_properties(&self, _region_id: u64) {
         unimplemented!()
     }
 
-    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+    fn dump_range_properties(&self, _start: Vec<u8>, _end: Vec<u8>) {
         unimplemented!()
     }
 
@@ -1252,7 +1256,7 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerV2<ER> {
         unimplemented!()
     }
 
-    fn reset_to_version(&self, version: u64) {
+    fn reset_to_version(&self, _version: u64) {
         unimplemented!()
     }
 }
