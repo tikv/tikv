@@ -14,8 +14,6 @@
 use std::{
     cmp,
     collections::HashMap,
-    env,
-    net::SocketAddr,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
@@ -29,20 +27,18 @@ use std::{
 use api_version::{dispatch_api_version, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
-use encryption_export::{DataKeyManager};
+use encryption_export::DataKeyManager;
 use engine_rocks::{
     flush_engine_statistics, from_rocks_compression_type,
     raw::{Cache, Env},
-    FlowInfo, RocksEngine, RocksStatistics,
+    RocksEngine, RocksStatistics,
 };
 use engine_traits::{
     CachedTablet, CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
     RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-
 use file_system::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor,
-    MetricsManager as IoMetricsManager,
+    get_io_rate_limiter, BytesFetcher, IoBudgetAdjustor, MetricsManager as IoMetricsManager,
 };
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -142,12 +138,12 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     let high_water = (tikv.core.config.memory_usage_high_water * memory_limit as f64) as u64;
     register_memory_usage_high_water(high_water);
 
-    tikv.check_conflict_addr();
+    tikv.core.check_conflict_addr();
     tikv.core.init_fs();
     tikv.core.init_yatp();
     tikv.core.init_encryption();
-    let fetcher = tikv.init_io_utility();
-    let listener = tikv.init_flow_receiver();
+    let fetcher = tikv.core.init_io_utility();
+    let listener = tikv.core.init_flow_receiver();
     let engines_info = tikv.init_engines(listener);
     let server_config = tikv.init_servers::<F>();
     tikv.register_services();
@@ -210,8 +206,6 @@ struct TikvServer<ER: RaftEngine> {
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
-    flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     router: Option<RaftRouter<RocksEngine, ER>>,
     node: Option<NodeV2<RpcClient, RocksEngine, ER>>,
     resolver: Option<resolve::PdStoreAddrResolver>,
@@ -342,6 +336,8 @@ where
                 store_path,
                 lock_files: vec![],
                 encryption_key_manager: None,
+                flow_info_sender: None,
+                flow_info_receiver: None,
             },
             cfg_controller: Some(cfg_controller),
             security_mgr,
@@ -361,8 +357,6 @@ where
             env,
             background_worker,
             check_leader_worker,
-            flow_info_sender: None,
-            flow_info_receiver: None,
             sst_worker: None,
             quota_limiter,
             resource_manager,
@@ -442,56 +436,11 @@ where
         pd_client
     }
 
-    fn check_conflict_addr(&mut self) {
-        let cur_addr: SocketAddr = self
-            .core
-            .config
-            .server
-            .addr
-            .parse()
-            .expect("failed to parse into a socket address");
-        let cur_ip = cur_addr.ip();
-        let cur_port = cur_addr.port();
-        let lock_dir = get_lock_dir();
-
-        let search_base = env::temp_dir().join(lock_dir);
-        file_system::create_dir_all(&search_base)
-            .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
-
-        for entry in file_system::read_dir(&search_base).unwrap().flatten() {
-            if !entry.file_type().unwrap().is_file() {
-                continue;
-            }
-            let file_path = entry.path();
-            let file_name = file_path.file_name().unwrap().to_str().unwrap();
-            if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
-                let ip = addr.ip();
-                let port = addr.port();
-                if cur_port == port
-                    && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
-                {
-                    let _ = try_lock_conflict_addr(file_path);
-                }
-            }
-        }
-
-        let cur_path = search_base.join(cur_addr.to_string().replace(':', "_"));
-        let cur_file = try_lock_conflict_addr(cur_path);
-        self.core.lock_files.push(cur_file);
-    }
-
-    fn init_flow_receiver(&mut self) -> engine_rocks::FlowListener {
-        let (tx, rx) = mpsc::channel();
-        self.flow_info_sender = Some(tx.clone());
-        self.flow_info_receiver = Some(rx);
-        engine_rocks::FlowListener::new(tx)
-    }
-
     fn init_gc_worker(&mut self) -> GcWorker<RaftKv2<RocksEngine, ER>> {
         let engines = self.engines.as_ref().unwrap();
         let gc_worker = GcWorker::new(
             engines.engine.clone(),
-            self.flow_info_sender.take().unwrap(),
+            self.core.flow_info_sender.take().unwrap(),
             self.core.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
             Arc::new(self.region_info_accessor.clone().unwrap()),
@@ -510,7 +459,7 @@ where
         let flow_controller = Arc::new(FlowController::Tablet(TabletFlowController::new(
             &self.core.config.storage.flow_control,
             self.tablet_registry.clone().unwrap(),
-            self.flow_info_receiver.take().unwrap(),
+            self.core.flow_info_receiver.take().unwrap(),
         )));
         let mut gc_worker = self.init_gc_worker();
         let ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
@@ -936,29 +885,6 @@ where
         {
             warn!("failed to register resource metering pubsub service");
         }
-    }
-
-    fn init_io_utility(&mut self) -> BytesFetcher {
-        let stats_collector_enabled = file_system::init_io_stats_collector()
-            .map_err(|e| warn!("failed to init I/O stats collector: {}", e))
-            .is_ok();
-
-        let limiter = Arc::new(
-            self.core
-                .config
-                .storage
-                .io_rate_limit
-                .build(!stats_collector_enabled /* enable_statistics */),
-        );
-        let fetcher = if stats_collector_enabled {
-            BytesFetcher::FromIoStatsCollector()
-        } else {
-            BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
-        };
-        // Set up IO limiter even when rate limit is disabled, so that rate limits can
-        // be dynamically applied later on.
-        set_io_rate_limiter(Some(limiter));
-        fetcher
     }
 
     fn init_metrics_flusher(
@@ -1555,34 +1481,6 @@ fn check_system_config(config: &TikvConfig) {
             "err" => %e
         );
     }
-}
-
-fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
-    let f = File::create(path.as_ref()).unwrap_or_else(|e| {
-        fatal!(
-            "failed to create lock at {}: {}",
-            path.as_ref().display(),
-            e
-        )
-    });
-
-    if f.try_lock_exclusive().is_err() {
-        fatal!(
-            "{} already in use, maybe another instance is binding with this address.",
-            path.as_ref().file_name().unwrap().to_str().unwrap()
-        );
-    }
-    f
-}
-
-#[cfg(unix)]
-fn get_lock_dir() -> String {
-    format!("{}_TIKV_LOCK_FILES", unsafe { libc::getuid() })
-}
-
-#[cfg(not(unix))]
-fn get_lock_dir() -> String {
-    "TIKV_LOCK_FILES".to_owned()
 }
 
 pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
