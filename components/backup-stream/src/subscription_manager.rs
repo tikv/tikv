@@ -11,7 +11,7 @@ use std::{
 use crossbeam::channel::{Receiver as SyncReceiver, Sender as SyncSender};
 use crossbeam_channel::SendError;
 use engine_traits::KvEngine;
-use error_code::ErrorCodeExt;
+use error_code::{backup_stream as errs, ErrorCodeExt};
 use futures::FutureExt;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
@@ -47,6 +47,7 @@ use crate::{
 type ScanPool = yatp::ThreadPool<yatp::task::callback::TaskCell>;
 
 const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
+const RETRY_AWAIT_INTERVAL: Duration = Duration::from_secs(2);
 
 /// a request for doing initial scanning.
 struct ScanCmd {
@@ -293,46 +294,53 @@ impl ScanPoolHandle {
 /// The default channel size.
 const MESSAGE_BUFFER_SIZE: usize = 32768;
 
+#[derive(Clone)]
+pub struct Handle(Sender<ObserveOp>);
+
+impl Handle {
+    /// send an operation request to the manager.
+    /// the returned future would be resolved after send is success.
+    /// the opeartion would be executed asynchronously.
+    pub async fn request(&self, op: ObserveOp) {
+        if let Err(err) = self.0.send(op).await {
+            annotate!(err, "BUG: region operator channel closed.")
+                .report("when executing region op");
+        }
+    }
+}
+
 /// The operator for region subscription.
 /// It make a queue for operations over the `SubscriptionTracer`, generally,
 /// we should only modify the `SubscriptionTracer` itself (i.e. insert records,
 /// remove records) at here. So the order subscription / desubscription won't be
 /// broken.
-pub struct RegionSubscriptionManager<S, R, PDC> {
+pub struct RegionSubscriptionManager<S, R> {
     // Note: these fields appear everywhere, maybe make them a `context` type?
     regions: R,
     meta_cli: MetadataClient<S>,
-    pd_client: Arc<PDC>,
     range_router: Router,
     scheduler: Scheduler<Task>,
-    observer: BackupStreamObserver,
     subs: SubscriptionTracer,
-
-    messenger: Sender<ObserveOp>,
     scan_pool_handle: Arc<ScanPoolHandle>,
     scans: Arc<CallbackWaitGroup>,
+
+    stat: Statistic,
 }
 
-impl<S, R, PDC> Clone for RegionSubscriptionManager<S, R, PDC>
-where
-    S: MetaStore + 'static,
-    R: RegionInfoProvider + Clone + 'static,
-    PDC: PdClient + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            regions: self.regions.clone(),
-            meta_cli: self.meta_cli.clone(),
-            // We should manually call Arc::clone here or rustc complains that `PDC` isn't `Clone`.
-            pd_client: Arc::clone(&self.pd_client),
-            range_router: self.range_router.clone(),
-            scheduler: self.scheduler.clone(),
-            observer: self.observer.clone(),
-            subs: self.subs.clone(),
-            messenger: self.messenger.clone(),
-            scan_pool_handle: self.scan_pool_handle.clone(),
-            scans: CallbackWaitGroup::new(),
-        }
+/// Some information recorded for testing or something.
+/// This should be in `#[cfg(test)]`, however that would make this unusable in
+/// integration tests.
+#[derive(Default)]
+pub struct Statistic {
+    event_retry_start: usize,
+    event_retry_request: usize,
+    event_retry_skipped: usize,
+}
+
+impl Statistic {
+    fn skip_retry(&mut self, tag: &'static str) {
+        metrics::SKIP_RETRY.with_label_values(&[tag]).inc();
+        self.event_retry_skipped += 1;
     }
 }
 
@@ -343,11 +351,10 @@ fn create_scan_pool(num_threads: usize) -> ScanPool {
         .build_callback_pool()
 }
 
-impl<S, R, PDC> RegionSubscriptionManager<S, R, PDC>
+impl<S, R> RegionSubscriptionManager<S, R>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
-    PDC: PdClient + 'static,
 {
     /// create a [`RegionSubscriptionManager`].
     ///
@@ -357,52 +364,39 @@ where
     /// operator loop future.
     pub fn start<E, RT>(
         initial_loader: InitialDataLoader<E, R, RT>,
-        observer: BackupStreamObserver,
         meta_cli: MetadataClient<S>,
-        pd_client: Arc<PDC>,
         scan_pool_size: usize,
         leader_checker: LeadershipResolver,
-    ) -> (Self, future![()])
+    ) -> (Handle, future![()])
     where
         E: KvEngine,
         RT: RaftStoreRouter<E> + 'static,
     {
         let (tx, rx) = channel(MESSAGE_BUFFER_SIZE);
+        let handle = Handle(tx);
         let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size);
         let op = Self {
             regions: initial_loader.regions.clone(),
             meta_cli,
-            pd_client,
             range_router: initial_loader.sink.clone(),
             scheduler: initial_loader.scheduler.clone(),
-            observer,
             subs: initial_loader.tracing,
-            messenger: tx,
             scan_pool_handle: Arc::new(scan_pool_handle),
             scans: CallbackWaitGroup::new(),
+            stat: Default::default(),
         };
-        let fut = op.clone().region_operator_loop(rx, leader_checker);
-        (op, fut)
-    }
-
-    /// send an operation request to the manager.
-    /// the returned future would be resolved after send is success.
-    /// the opeartion would be executed asynchronously.
-    pub async fn request(&self, op: ObserveOp) {
-        if let Err(err) = self.messenger.send(op).await {
-            annotate!(err, "BUG: region operator channel closed.")
-                .report("when executing region op");
-        }
+        let fut = op.region_operator_loop(rx, leader_checker);
+        (handle, fut)
     }
 
     /// wait initial scanning get finished.
-    pub fn wait(&self, timeout: Duration) -> future![bool] {
+    fn wait(&self, timeout: Duration) -> future![bool] {
         tokio::time::timeout(timeout, self.scans.wait()).map(|result| result.is_err())
     }
 
     /// the handler loop.
     async fn region_operator_loop(
-        self,
+        mut self,
         mut message_box: Receiver<ObserveOp>,
         mut leader_checker: LeadershipResolver,
     ) {
@@ -415,7 +409,6 @@ where
                     metrics::INITIAL_SCAN_REASON
                         .with_label_values(&["leader-changed"])
                         .inc();
-                    crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_sub(1, Ordering::SeqCst);
                 }
                 ObserveOp::Stop { ref region } => {
                     self.subs.deregister_region_if(region, |_, _| true);
@@ -441,7 +434,8 @@ where
                 } => {
                     info!("retry observe region"; "region" => %region.get_id(), "err" => %err);
                     // No need for retrying observe canceled.
-                    if err.error_code() == error_code::backup_stream::OBSERVE_CANCELED {
+                    let err_code = ErrorCodeExt::error_code(&*err);
+                    if err_code == errs::OBSERVE_CANCELED || err_code == errs::NO_SUCH_TASK {
                         return;
                     }
                     let (start, end) = (
@@ -548,22 +542,27 @@ where
         Ok(())
     }
 
-    async fn start_observe(&self, region: Region) {
+    async fn start_observe(&mut self, region: Region) {
         let handle = ObserveHandle::new();
+        let schd = self.scheduler.clone();
         if let Err(err) = self.try_start_observe(&region, handle.clone()).await {
-            warn!("failed to start observe, retrying"; "err" => %err);
-            try_send!(
-                self.scheduler,
-                Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
-                    region,
-                    handle,
-                    err: Box::new(err)
-                })
-            );
+            warn!("failed to start observe, would retry"; "err" => %err, utils::slog_region(&region));
+            self.stat.event_retry_request += 1;
+            tokio::spawn(async move {
+                tokio::time::sleep(RETRY_AWAIT_INTERVAL).await;
+                try_send!(
+                    schd,
+                    Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
+                        region,
+                        handle,
+                        err: Box::new(err)
+                    })
+                )
+            });
         }
     }
 
-    async fn retry_observe(&self, region: Region, handle: ObserveHandle) -> Result<()> {
+    async fn retry_observe(&mut self, region: Region, handle: ObserveHandle) -> Result<()> {
         let (tx, rx) = crossbeam::channel::bounded(1);
         self.regions
             .find_region_by_id(
@@ -584,14 +583,12 @@ where
             .recv()
             .map_err(|err| annotate!(err, "BUG?: unexpected channel message dropped."))?;
         if new_region_info.is_none() {
-            metrics::SKIP_RETRY
-                .with_label_values(&["region-absent"])
-                .inc();
+            self.stat.skip_retry("region-absent");
             return Ok(());
         }
         let new_region_info = new_region_info.unwrap();
         if new_region_info.role != StateRole::Leader {
-            metrics::SKIP_RETRY.with_label_values(&["not-leader"]).inc();
+            self.stat.skip_retry("not-leader");
             return Ok(());
         }
         // Note: we may fail before we insert the region info to the subscription map.
@@ -606,14 +603,13 @@ where
             should_remove
         });
         if !removed && exists {
-            metrics::SKIP_RETRY
-                .with_label_values(&["stale-command"])
-                .inc();
+            self.stat.skip_retry("stale-command");
             return Ok(());
         }
         metrics::INITIAL_SCAN_REASON
             .with_label_values(&["retry"])
             .inc();
+        self.stat.event_retry_start += 1;
         self.start_observe(region).await;
         Ok(())
     }
