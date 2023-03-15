@@ -25,7 +25,7 @@ fn test_restart_resume() {
         region_1,
         peer_1.clone(),
         region_1_id + 1,
-        peer_2.clone(),
+        peer_2,
         Some(format!("k{}k", region_1_id).as_bytes()),
         Some(format!("k{}k", region_1_id + 1).as_bytes()),
         format!("k{}", region_1_id + 1).as_bytes(),
@@ -38,7 +38,7 @@ fn test_restart_resume() {
         fail::cfg("raft_before_save_on_store_1", "return").unwrap()
     })
     .unwrap();
-    let region_2 = merge_region(router, region_1.clone(), peer_1, region_2);
+    let region_2 = merge_region(router, region_1, peer_1, region_2);
     let new_epoch = region_2.get_region_epoch();
     {
         // Read region 1 data from region 2.
