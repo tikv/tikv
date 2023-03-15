@@ -57,7 +57,7 @@ use futures::channel::oneshot;
 use kvproto::{
     metapb::Region,
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CommitMergeRequest, RaftCmdRequest},
-    raft_serverpb::{PeerState, RegionLocalState},
+    raft_serverpb::{MergedRecord, PeerState, RegionLocalState},
 };
 use protobuf::Message;
 use raft::{GetEntriesContext, Storage, INVALID_ID, NO_LIMIT};
@@ -376,49 +376,42 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         // There're several ways to make engine merge recoverable:
         // (1) flush self, merge, advance admin flushed. If we need to replay
-        // `CommitMerge` after restart, it means the admin flushed is not persisted. But
-        // it's possible that some cfs have been flushed, and they will not be replayed.
-        // In that case we must not redo merging tablet.
-        // (2) merge (with flush_state.applied_index=`index`), flush merged tablet. If
-        // we need to replay `CommitMerge`, it means the flush is not completed,
-        // merged tablet doesn't have any writes beyond `index`.
-        // (3) re-entrant merge. Merge will always be redo regardless of whether the
-        // merged tablet already has data.
+        // `CommitMerge` after restart, it means the admin flushed is not persisted. It
+        // also means no other newer writes have been persisted (because
+        // unapplied `CommitMerge` rejects other writes, those writes would share the
+        // same write task as persisting admin flushed). (2) re-entrant merge.
+        // Merge will always be redo regardless of whether the merged tablet
+        // already has data.
         //
         // We use method 1.
-        let mut needs_merge = !path.exists();
-        if path.exists()
-            && self
-                .log_recovery()
+        assert!(
+            self.log_recovery()
                 .as_ref()
                 .map_or(true, |trace| trace.iter().all(|i| *i < index))
-        {
-            // Path exists, but no data has been flushed. It's safe to redo.
+        );
+        if path.exists() {
+            // Redo the merge.
             std::fs::remove_dir_all(&path).unwrap();
-            needs_merge = true;
         }
 
-        if needs_merge {
-            // Avoid seqno jump back between self.tablet and the newly created tablet.
-            self.tablet().flush_cfs(&[], true).unwrap();
-        }
+        // Avoid seqno jump back between self.tablet and the newly created tablet.
+        // If we are recovering, this flush would just be a noop.
+        self.tablet().flush_cfs(&[], true).unwrap();
         let flush_time = now.saturating_elapsed();
 
         let mut ctx = TabletContext::new(&region, Some(index));
         ctx.flush_state = Some(self.flush_state().clone());
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
-        if needs_merge {
-            tablet
-                .merge(&[&source_tablet, self.tablet()])
-                .unwrap_or_else(|e| {
-                    slog_panic!(
-                        self.logger,
-                        "fails to merge tablet";
-                        "path" => %path.display(),
-                        "error" => ?e
-                    )
-                });
-        }
+        tablet
+            .merge(&[&source_tablet, self.tablet()])
+            .unwrap_or_else(|e| {
+                slog_panic!(
+                    self.logger,
+                    "fails to merge tablet";
+                    "path" => %path.display(),
+                    "error" => ?e
+                )
+            });
         let merge_time = now.saturating_elapsed();
 
         info!(
@@ -438,11 +431,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         state.set_state(PeerState::Normal);
         assert!(!state.has_merge_state());
         state.set_tablet_index(index);
-        let mut merged_records: Vec<_> = state.take_merged_records().into();
-        for p in source_region.get_peers() {
-            merged_records.push(p.clone());
-        }
-        state.set_merged_records(merged_records.into());
+        let mut merged_record = MergedRecord::default();
+        merged_record.set_source_region_id(source_region.get_id());
+        merged_record.set_source_epoch(source_region.get_region_epoch().clone());
+        merged_record.set_source_peers(source_region.get_peers().into());
+        merged_record.set_target_region_id(region.get_id());
+        merged_record.set_target_epoch(region.get_region_epoch().clone());
+        merged_record.set_target_peers(region.get_peers().into());
+        merged_record.set_index(index);
+        state.mut_merged_records().push(merged_record);
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
 
