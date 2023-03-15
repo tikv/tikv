@@ -1322,8 +1322,6 @@ mod test {
 
     #[test]
     fn failure_and_split() {
-        test_util::init_log_for_test();
-
         let mut suite = super::SuiteBuilder::new_named("failure_and_split")
             .nodes(1)
             .build();
