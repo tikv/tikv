@@ -3,59 +3,18 @@
 //! into the storage.
 
 use std::{
-    collections::HashMap, error::Error, marker::PhantomData, rc::Rc, sync::Arc, time::Duration,
+    collections::HashMap,
+    sync::{Arc, Mutex, Weak},
 };
 
-use futures::{Future, FutureExt, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use kvproto::kvrpcpb::Context;
-use sst_importer::metrics::{
-    ACTIVE_RAFT_APPLIER, APPLIER_ENGINE_REQUEST, APPLIER_EVENT, IMPORTER_APPLY_BYTES,
-};
-use tikv_kv::{Engine, WriteData, WriteEvent};
+use sst_importer::metrics::{APPLIER_ENGINE_REQUEST_DURATION, APPLIER_EVENT, IMPORTER_APPLY_BYTES};
+use tikv_kv::{with_tls_engine, Engine, WriteData, WriteEvent};
 use tikv_util::{fut, time::Instant};
-use tokio::sync::{
-    mpsc::{self, error::TrySendError},
-    oneshot, Semaphore,
-};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::storage;
-
-const MAX_INFLIGHT_RAFT_MESSAGE: usize = 8;
-const REGION_WRITER_MAX_IDLE_TIME: Duration = Duration::from_secs(30);
-const DEFAULT_CONFIG: Config = Config {
-    max_inflight_raft_message: MAX_INFLIGHT_RAFT_MESSAGE,
-    region_writer_max_idle_time: REGION_WRITER_MAX_IDLE_TIME,
-};
-
-const SHARED_CHANNEL_SIZE: usize = 1024;
-const BUFFER_SIZE: usize = 1024;
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Config {
-    max_inflight_raft_message: usize,
-    region_writer_max_idle_time: Duration,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        DEFAULT_CONFIG
-    }
-}
-
-pub struct TokioLocalSpawner;
-
-impl Spawner for TokioLocalSpawner {
-    fn spawn<F>(task: F)
-    where
-        F: Future<Output = ()> + 'static,
-    {
-        tokio::task::spawn_local(task);
-    }
-}
-
-pub trait Spawner: 'static {
-    fn spawn<F: Future<Output = ()> + 'static>(task: F);
-}
 
 async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> storage::Result<()> {
     match s.next().await {
@@ -66,417 +25,146 @@ async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> sto
     }
 }
 
-fn extract_unsent_message<T>(x: TrySendError<T>) -> T {
-    match x {
-        TrySendError::Full(x) => x,
-        TrySendError::Closed(x) => x,
+const MAX_CONCURRENCY_PER_REGION: usize = 16;
+
+async fn acquire_semaphore(smp: &Arc<Semaphore>) -> Option<OwnedSemaphorePermit> {
+    if let Ok(pmt) = Arc::clone(smp).try_acquire_owned() {
+        return Some(pmt);
+    }
+    APPLIER_EVENT.with_label_values(&["raft-throttled"]).inc();
+    Arc::clone(smp).acquire_owned().await.ok()
+}
+
+#[repr(transparent)]
+#[derive(Clone)]
+pub struct ThrottledTlsEngineWriter(Arc<Mutex<Inner>>);
+
+pub struct GcHandle(Weak<Mutex<Inner>>);
+
+impl GcHandle {
+    pub fn gc(&self) -> bool {
+        match Weak::upgrade(&self.0) {
+            Some(x) => {
+                ThrottledTlsEngineWriter(x).gc();
+                true
+            }
+            None => false,
+        }
     }
 }
 
-type OnComplete<T> = oneshot::Sender<T>;
-
-#[derive(Debug)]
-enum GlobalMessage {
-    Apply {
-        wb: WriteData,
-        ctx: Context,
-        cb: OnComplete<storage::Result<()>>,
-        start: Instant,
-    },
-    Clear {
-        cb: OnComplete<storage::Result<()>>,
-    },
-    UpdateConfig {
-        cfg: Config,
-        cb: OnComplete<()>,
-    },
-    MaybeGc {
-        cb: OnComplete<()>,
-    },
-    #[cfg(test)]
-    InspectWorkerStatus {
-        cb: OnComplete<(
-            usize, // Running worker
-            usize, // Worker reference count
-        )>,
-    },
-    #[cfg(test)]
-    InspectPendingRaftCmd {
-        cb: OnComplete<HashMap<u64, usize>>,
-    },
+impl Default for ThrottledTlsEngineWriter {
+    fn default() -> Self {
+        Self(Arc::default())
+    }
 }
 
-#[derive(Debug)]
-enum RegionMessage {
-    Apply {
-        wb: WriteData,
-        ctx: Context,
-        cb: OnComplete<storage::Result<()>>,
-        start: Instant,
-    },
-    #[cfg(test)]
-    InspectPendingRaftCmd { cb: mpsc::Sender<(u64, usize)> },
-}
-
-pub struct Global<E, S> {
-    incoming: mpsc::Receiver<GlobalMessage>,
-    regions: HashMap<u64, RegionHandle>,
-    shared: Arc<Semaphore>,
-
-    engine: Rc<E>,
-    cfg: Config,
-    _spawner: PhantomData<S>,
-}
-
-pub struct Region<E, S> {
-    #[allow(dead_code)]
-    region_id: u64,
-    incoming: mpsc::Receiver<RegionMessage>,
-    quota: Arc<Semaphore>,
-
-    engine: Rc<E>,
-    cfg: Config,
-    _spawner: PhantomData<S>,
-}
-
-#[derive(Clone)]
-pub struct Handle {
-    tx: mpsc::Sender<GlobalMessage>,
-}
-
-#[derive(Clone)]
-pub struct RegionHandle {
-    tx: mpsc::Sender<RegionMessage>,
-}
-
-impl Handle {
-    fn try_msg<E>(
+impl ThrottledTlsEngineWriter {
+    /// Write into the thread local storage engine.
+    ///
+    /// # Safety
+    ///
+    /// Before polling the future this returns, make sure the carrier thread's
+    /// `TLS_ENGINE_ANY` is an engine typed `E`, or at least has the same
+    /// memory layout of `E`.
+    pub unsafe fn write<E: Engine>(
         &self,
-        msg: impl FnOnce(OnComplete<Result<(), E>>) -> GlobalMessage,
-    ) -> fut![Result<(), E>]
-    where
-        E: From<Box<dyn Error + Send + Sync>> + Send + 'static,
-    {
-        let (tx, rx) = oneshot::channel();
-
-        let msg_tx = self.tx.clone();
-        let msg = msg(tx);
-        let msg = msg_tx.try_send(msg).err().map(|x| {
-            APPLIER_EVENT
-                .with_label_values(&["global-channel-full"])
-                .inc();
-            extract_unsent_message(x)
-        });
-        async move {
-            if let Some(msg) = msg {
-                msg_tx
-                    .send(msg)
-                    .await
-                    .map_err(|err| -> E { box_err!("failed to send: {}", err) })?;
-            }
-            rx.await
-                .map_err(|err| -> E { box_err!("failed to send: {}", err) })?
-        }
-    }
-
-    fn msg<T>(&self, msg: impl FnOnce(OnComplete<T>) -> GlobalMessage) -> fut![Option<T>]
-    where
-        T: Send + 'static,
-    {
-        let (tx, rx) = oneshot::channel();
-        let msg_tx = self.tx.clone();
-        let msg = msg(tx);
-
-        let msg = msg_tx.try_send(msg).err().map(|x| {
-            APPLIER_EVENT
-                .with_label_values(&["global-channel-full"])
-                .inc();
-            extract_unsent_message(x)
-        });
-        async move {
-            if let Some(msg) = msg {
-                msg_tx.send(msg).await.ok()?;
-            }
-            rx.await.ok()
-        }
-    }
-
-    pub fn write(&self, wb: WriteData, cx: Context) -> fut![storage::Result<()>] {
+        wd: WriteData,
+        ctx: Context,
+    ) -> fut![storage::Result<()>] {
+        let mut this = self.0.lock().unwrap();
+        let max_permit = this.max_permit;
         let start = Instant::now_coarse();
-        self.try_msg(move |cb| GlobalMessage::Apply {
-            wb,
-            ctx: cx,
-            cb,
-            start,
-        })
-    }
-
-    pub fn clear(&self) -> fut![storage::Result<()>] {
-        self.try_msg(|cb| GlobalMessage::Clear { cb })
-    }
-
-    #[allow(dead_code)]
-    pub fn gc_hint(&self) -> fut![bool] {
-        self.msg(|cb| GlobalMessage::MaybeGc { cb })
-            .map(|x| x.is_some())
-    }
-
-    #[allow(dead_code)]
-    pub fn update_config(&self, cfg: Config) -> fut![bool] {
-        self.msg(move |cb| GlobalMessage::UpdateConfig { cfg, cb })
-            .map(|x| x.is_some())
-    }
-
-    #[cfg(test)]
-    pub fn inspect_worker(&self) -> fut![(usize, usize)] {
-        self.msg(|cb| GlobalMessage::InspectWorkerStatus { cb })
-            .map(|x| x.unwrap())
-    }
-
-    #[cfg(test)]
-    pub fn inspect_inflight(&self) -> fut![HashMap<u64, usize>] {
-        self.msg(|cb| GlobalMessage::InspectPendingRaftCmd { cb })
-            .map(|x| x.unwrap())
-    }
-}
-
-impl RegionHandle {
-    fn forward_write(
-        &self,
-        wb: WriteData,
-        ctx: Context,
-        cb: OnComplete<storage::Result<()>>,
-        start: Instant,
-    ) -> Option<impl Future<Output = ()>> {
-        let remained = self
-            .tx
-            .try_send(RegionMessage::Apply { wb, ctx, cb, start })
-            .err()
-            .map(extract_unsent_message);
-
-        let forward_to = move |tx: mpsc::Sender<RegionMessage>, message| async move {
-            if let Err(err) = tx.send(message).await {
-                let (cb, ctx) = match err.0 {
-                    RegionMessage::Apply { cb, ctx, .. } => (cb, ctx),
-                    #[cfg(test)]
-                    _ => unreachable!(),
-                };
-
-                // Or the receiver may gone, that was ok.
-                let _ = cb.send(Err(box_err!(
-                    "failed to send message into region writer (ctx = {:?})",
-                    ctx
-                )));
-            }
-        };
-
-        remained.map(move |x| {
-            let msg_tx = self.tx.clone();
-            APPLIER_EVENT
-                .with_label_values(&["region-channel-full"])
-                .inc();
-            forward_to(msg_tx, x)
-        })
-    }
-}
-
-impl<E: Engine> Global<E, TokioLocalSpawner> {
-    pub fn spawn_tokio(engine: E, rt: &tokio::runtime::Handle) -> Handle {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        rt.spawn_blocking(move || {
-            let (app, handle) = Global::<E, TokioLocalSpawner>::create(engine);
-            // Once it fail, the outer rx would know.
-            let _ = tx.send(handle);
-            let local = tokio::task::LocalSet::new();
-            tokio::runtime::Handle::current().block_on(local.run_until(app.main_loop()))
-        });
-        rx.blocking_recv()
-            .expect("failed to initialize the raft writer")
-    }
-}
-
-impl<E: Engine, S: Spawner> Global<E, S> {
-    pub fn create(engine: E) -> (Self, Handle) {
-        let (tx, rx) = mpsc::channel(BUFFER_SIZE);
-        let this = Self {
-            incoming: rx,
-            engine: Rc::new(engine),
-            regions: Default::default(),
-            shared: Arc::new(Semaphore::new(SHARED_CHANNEL_SIZE)),
-            cfg: DEFAULT_CONFIG,
-            _spawner: PhantomData,
-        };
-
-        (this, Handle { tx })
-    }
-
-    pub async fn main_loop(mut self) {
-        while let Some(msg) = self.incoming.recv().await {
-            match msg {
-                GlobalMessage::Apply { wb, ctx, cb, start } => {
-                    self.forward_write(wb, ctx, cb, start).await;
-                }
-                GlobalMessage::Clear { cb } => {
-                    self.regions.clear();
-                    let _ = cb.send(Ok(()));
-                }
-                GlobalMessage::UpdateConfig { cb, cfg } => {
-                    self.regions.clear();
-                    self.cfg = cfg;
-                    let _ = cb.send(());
-                }
-                GlobalMessage::MaybeGc { cb } => {
-                    self.gc();
-                    let _ = cb.send(());
-                }
-                #[cfg(test)]
-                GlobalMessage::InspectWorkerStatus { cb } => {
-                    let _ = cb.send((
-                        self.regions.values().filter(|x| !x.tx.is_closed()).count(),
-                        self.regions.len(),
+        let sem = this
+            .sems
+            .entry(ctx.get_region_id())
+            .or_insert_with(|| Arc::new(Semaphore::new(max_permit)))
+            .clone();
+        async move {
+            APPLIER_ENGINE_REQUEST_DURATION
+                .with_label_values(&["queuing"])
+                .observe(start.saturating_elapsed_secs());
+            let start = Instant::now_coarse();
+            let _prm = match acquire_semaphore(&sem).await {
+                Some(prm) => prm,
+                // When the permit has been closed. (Maybe tikv is shutting down?)
+                None => {
+                    return Err(box_err!(
+                        "the semaphore bind to region {} has been closed",
+                        ctx.get_region_id()
                     ));
                 }
-                #[cfg(test)]
-                GlobalMessage::InspectPendingRaftCmd { cb } => {
-                    let (tx, mut rx) = mpsc::channel(self.regions.len());
-                    for v in self.regions.values() {
-                        let msg = RegionMessage::InspectPendingRaftCmd { cb: tx.clone() };
-                        // Don't wait: we may get stuck when there are some failpoints.
-                        v.tx.try_send(msg).unwrap();
-                    }
-                    S::spawn(async move {
-                        let mut h = HashMap::new();
-                        while let Some((rid, cnt)) = rx.recv().await {
-                            h.insert(rid, cnt);
-                        }
-                        cb.send(h).unwrap();
-                    })
-                }
-            }
-        }
-    }
-
-    fn gc(&mut self) {
-        self.regions.retain(|_, hnd| !hnd.tx.is_closed());
-    }
-
-    async fn forward_write(
-        &mut self,
-        wb: WriteData,
-        ctx: Context,
-        cb: OnComplete<storage::Result<()>>,
-        start: Instant,
-    ) {
-        let rid = ctx.get_region_id();
-        let eng = &self.engine;
-        let cfg = &self.cfg;
-        let rgn = &mut self.regions;
-
-        let hnd = rgn
-            .entry(rid)
-            .and_modify(|hnd| {
-                if hnd.tx.is_closed() {
-                    *hnd = Region::<E, S>::spawn(Rc::clone(eng), *cfg, rid);
-                }
-            })
-            .or_insert_with(|| Region::<E, S>::spawn(Rc::clone(eng), *cfg, rid));
-        if let Some(tsk) = hnd.forward_write(wb, ctx, cb, start) {
-            let permit = match Semaphore::try_acquire_owned(Arc::clone(&self.shared)) {
-                Ok(permit) => Ok(permit),
-                Err(_) => {
-                    APPLIER_EVENT
-                        .with_label_values(&["shared-channel-full"])
-                        .inc();
-                    Semaphore::acquire_owned(Arc::clone(&self.shared)).await
-                }
             };
-            // Once it returns `err`, the Semaphore should be already closed (perhaps the
-            // server is shutting down), do nothing.
-            if let Ok(permit) = permit {
-                S::spawn(async move {
-                    tsk.await;
-                    drop(permit);
-                })
-            }
+
+            APPLIER_ENGINE_REQUEST_DURATION
+                .with_label_values(&["get_permit"])
+                .observe(start.saturating_elapsed_secs());
+            let start = Instant::now_coarse();
+            let size = wd.size();
+            let fut = with_tls_engine::<E, _, _>(move |engine| {
+                engine.async_write(&ctx, wd, WriteEvent::BASIC_EVENT, None)
+            });
+            let res = wait_write(fut).await;
+
+            APPLIER_ENGINE_REQUEST_DURATION
+                .with_label_values(&["apply"])
+                .observe(start.saturating_elapsed_secs());
+            IMPORTER_APPLY_BYTES.observe(size as _);
+            res
         }
+    }
+
+    fn gc(&self) {
+        let mut this = self.0.lock().unwrap();
+
+        this.sems.retain(|_, v| Arc::strong_count(v) > 1)
+    }
+
+    pub fn gc_handle(&self) -> GcHandle {
+        GcHandle(Arc::downgrade(&self.0))
+    }
+
+    #[cfg(test)]
+    pub fn with_max_concurrency_per_region(conc: usize) -> Self {
+        let mut inner = Inner::default();
+        inner.max_permit = conc;
+        Self(Arc::new(Mutex::new(inner)))
+    }
+
+    #[cfg(test)]
+    pub fn inspect_inflight(&self) -> HashMap<u64, usize> {
+        let this = self.0.lock().unwrap();
+        let max_permit = this.max_permit;
+        this.sems
+            .iter()
+            .map(|(rid, sem)| (*rid, max_permit - sem.available_permits()))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub fn inspect_worker(&self) -> usize {
+        let this = self.0.lock().unwrap();
+        this.sems.len()
     }
 }
 
-impl<E: Engine, S: Spawner> Region<E, S> {
-    fn spawn(engine: Rc<E>, cfg: Config, region_id: u64) -> RegionHandle {
-        // NOTE: When the queuing request is 2x the max inflight message count, it may
-        // stall all requests (for every region). Should we make the channel buffer
-        // longer?
-        let (tx, rx) = mpsc::channel(cfg.max_inflight_raft_message);
-        let quota = Arc::new(Semaphore::new(cfg.max_inflight_raft_message));
-        let handle = RegionHandle { tx };
-        let this = Self {
-            region_id,
-            incoming: rx,
-            quota,
-            engine,
-            cfg,
-            _spawner: PhantomData,
-        };
-        S::spawn(this.main_loop());
-        handle
-    }
+struct Inner {
+    sems: HashMap<u64, Arc<Semaphore>>,
+    max_permit: usize,
+}
 
-    async fn main_loop(mut self) {
-        ACTIVE_RAFT_APPLIER.inc();
-        defer! {{ ACTIVE_RAFT_APPLIER.dec(); }}
-        while let Ok(Some(msg)) =
-            tokio::time::timeout(self.cfg.region_writer_max_idle_time, self.incoming.recv()).await
-        {
-            match msg {
-                RegionMessage::Apply { wb, cb, ctx, start } => {
-                    APPLIER_ENGINE_REQUEST
-                        .with_label_values(&["queuing"])
-                        .observe(start.saturating_elapsed_secs());
-                    let start = Instant::now();
-
-                    let q = Arc::clone(&self.quota)
-                        .acquire_owned()
-                        .await
-                        .expect("semaphore closed");
-                    let write_size = wb.size();
-                    let fut = self
-                        .engine
-                        .async_write(&ctx, wb, WriteEvent::BASIC_EVENT, None);
-
-                    IMPORTER_APPLY_BYTES.observe(write_size as _);
-                    APPLIER_ENGINE_REQUEST
-                        .with_label_values(&["get_permit"])
-                        .observe(start.saturating_elapsed_secs());
-                    let start = Instant::now();
-
-                    S::spawn(async move {
-                        let _ = cb.send(wait_write(fut).await);
-                        drop(q);
-
-                        APPLIER_ENGINE_REQUEST
-                            .with_label_values(&["apply"])
-                            .observe(start.saturating_elapsed_secs());
-                    });
-                }
-                #[cfg(test)]
-                RegionMessage::InspectPendingRaftCmd { cb } => {
-                    cb.send((
-                        self.region_id,
-                        self.cfg.max_inflight_raft_message
-                            - self.quota.as_ref().available_permits(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-            }
+impl Default for Inner {
+    fn default() -> Self {
+        Self {
+            sems: Default::default(),
+            max_permit: MAX_CONCURRENCY_PER_REGION,
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::{convert::identity, iter::IntoIterator, time::Duration};
+    use std::{convert::identity, iter::IntoIterator, sync::Mutex, time::Duration};
 
     use engine_rocks::RocksEngineIterator;
     use engine_traits::{Iterator, ALL_CFS, CF_DEFAULT, CF_WRITE};
@@ -484,14 +172,15 @@ mod test {
     use kvproto::kvrpcpb::Context;
     use tempfile::TempDir;
     use tikv_kv::{Engine, Modify, RocksEngine, SnapContext, Snapshot, WriteData, WriteEvent};
+    use tikv_util::sys::thread::ThreadBuildWrapper;
     use tokio::runtime::{Builder, Runtime};
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::{Config, Global, Handle as GlobalHandle};
+    use super::ThrottledTlsEngineWriter;
     use crate::storage::TestEngineBuilder;
 
     struct Suite {
-        handle: GlobalHandle,
+        handle: ThrottledTlsEngineWriter,
         rt: Runtime,
         eng: RocksEngine,
 
@@ -527,7 +216,12 @@ mod test {
             args: impl std::iter::Iterator<Item = (WriteData, Context)>,
         ) -> fut![()] {
             let fut = args
-                .map(|arg| self.rt.spawn(self.handle.write(arg.0, arg.1)))
+                .map(|arg| {
+                    self.rt.spawn(
+                        // SAFETY: we have already register the engine.
+                        unsafe { self.handle.write::<RocksEngine>(arg.0, arg.1) },
+                    )
+                })
                 .collect::<Vec<_>>();
             async {
                 join_all(
@@ -549,13 +243,14 @@ mod test {
         }
     }
 
-    fn create_applier(cfg: Config) -> Suite {
+    fn create_applier(max_pending_raft_cmd: usize) -> Suite {
         let temp_dirs = [TempDir::new().unwrap(), TempDir::new().unwrap()];
         let engine = TestEngineBuilder::new()
             .path(temp_dirs[0].path())
             .build()
             .unwrap();
         let eng = engine.clone();
+        let engine = Mutex::new(engine);
         let mirror = TestEngineBuilder::new()
             .path(temp_dirs[1].path())
             .build()
@@ -563,10 +258,13 @@ mod test {
         let rt = Builder::new_multi_thread()
             .enable_all()
             .worker_threads(1)
+            .after_start_wrapper(move || tikv_kv::set_tls_engine(engine.lock().unwrap().clone()))
+            // SAFETY: see the line above.
+            .before_stop_wrapper(|| unsafe { tikv_kv::destroy_tls_engine::<RocksEngine>() })
             .build()
             .unwrap();
-        let handle = Global::spawn_tokio(engine, rt.handle());
-        assert!(rt.block_on(handle.update_config(cfg)));
+        let handle =
+            ThrottledTlsEngineWriter::with_max_concurrency_per_region(max_pending_raft_cmd);
         Suite {
             handle,
             rt,
@@ -652,7 +350,7 @@ mod test {
 
     #[test]
     fn test_basic() {
-        let mut suite = create_applier(Config::default());
+        let mut suite = create_applier(16);
         let b1 = suite.batch(1, |t| {
             t("1", "amazing world in my dream");
             t("2", "gazing at the abyss");
@@ -672,10 +370,7 @@ mod test {
     // side-effective ;)
     #[allow(clippy::needless_collect)]
     fn test_inflight_max() {
-        let mut suite = create_applier(Config {
-            max_inflight_raft_message: 3,
-            ..Default::default()
-        });
+        let mut suite = create_applier(3);
 
         let b1 = (1..6)
             .map(|_| {
@@ -696,7 +391,8 @@ mod test {
             .collect::<Vec<_>>();
         fail::cfg("rockskv_write_modifies", "sleep(5000)").unwrap();
         let fut = suite.send_to_applier(b1.into_iter().chain(b2));
-        let pending_requests = suite.wait(suite.handle.inspect_inflight());
+        std::thread::sleep(Duration::from_secs(1));
+        let pending_requests = suite.handle.inspect_inflight();
         assert_eq!(*pending_requests.get(&1).unwrap(), 3usize);
         assert_eq!(*pending_requests.get(&2).unwrap(), 2usize);
         fail::cfg("rockskv_write_modifies", "off").unwrap();
@@ -707,10 +403,7 @@ mod test {
 
     #[test]
     fn test_gc() {
-        let mut suite = create_applier(Config {
-            region_writer_max_idle_time: Duration::from_millis(100),
-            ..Default::default()
-        });
+        let mut suite = create_applier(16);
         let b1 = suite.batch(1, |t| {
             t("where is the sun", "it is in the clear sky");
             t("where are the words", "they are in some language model");
@@ -734,22 +427,24 @@ mod test {
                 "then we can check there should be only one running worker.",
             );
         });
-        assert_eq!(suite.wait(suite.handle.inspect_worker()), (0, 0));
+        assert_eq!(suite.handle.inspect_worker(), 0);
         fail::cfg("rockskv_async_write", "sleep(5000)").unwrap();
         let fut = suite.send_to_applier(std::iter::once(b1));
-        assert_eq!(suite.wait(suite.handle.inspect_worker()), (1, 1));
+        assert_eq!(suite.handle.inspect_worker(), 1);
         let fut2 = suite.send_to_applier(std::iter::once(b2));
-        assert_eq!(suite.wait(suite.handle.inspect_worker()), (2, 2));
+        assert_eq!(suite.handle.inspect_worker(), 2);
 
         fail::cfg("rockskv_async_write", "off").unwrap();
         suite.wait(async move {
             fut.await;
             fut2.await;
         });
-        std::thread::sleep(Duration::from_millis(500));
-        assert_eq!(suite.wait(suite.handle.inspect_worker()), (0, 2));
 
-        suite.wait(suite.handle.gc_hint());
-        assert_eq!(suite.wait(suite.handle.inspect_worker()), (0, 0));
+        let hnd = suite.handle.gc_handle();
+        assert!(hnd.gc());
+        assert_eq!(suite.handle.inspect_worker(), 0);
+
+        drop(suite);
+        assert!(!hnd.gc());
     }
 }

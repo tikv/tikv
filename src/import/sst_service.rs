@@ -2,6 +2,7 @@
 
 use std::{
     collections::{HashMap, VecDeque},
+    convert::identity,
     future::Future,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -11,7 +12,7 @@ use std::{
 use collections::HashSet;
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
-use futures::{sink::SinkExt, stream::TryStreamExt, Stream, StreamExt, TryFutureExt};
+use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, Stream, StreamExt, TryFutureExt};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -76,6 +77,17 @@ fn transfer_error(err: storage::Error) -> ImportPbError {
     e
 }
 
+fn convert_join_error(err: tokio::task::JoinError) -> ImportPbError {
+    let mut e = ImportPbError::default();
+    if err.is_cancelled() {
+        e.set_message("task canceled, probably runtime is shutting down.".to_owned());
+    }
+    if err.is_panic() {
+        e.set_message(format!("panicked! {}", err))
+    }
+    e
+}
+
 async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> storage::Result<()> {
     match s.next().await {
         Some(WriteEvent::Finished(Ok(()))) => Ok(()),
@@ -100,7 +112,7 @@ pub struct ImportSstService<E: Engine> {
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
 
-    applier: raft_applier::Handle,
+    applier: raft_applier::ThrottledTlsEngineWriter,
 }
 
 struct RequestCollector {
@@ -271,6 +283,7 @@ impl<E: Engine> ImportSstService<E> {
         importer: Arc<SstImporter>,
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
+        let eng = Mutex::new(engine.clone());
         let threads = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(cfg.num_threads)
             .enable_all()
@@ -279,23 +292,24 @@ impl<E: Engine> ImportSstService<E> {
                 tikv_util::thread_group::set_properties(props.clone());
                 tikv_alloc::add_thread_memory_accessor();
                 set_io_type(IoType::Import);
+                tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
             })
-            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
+            .before_stop_wrapper(move || {
+                tikv_alloc::remove_thread_memory_accessor();
+                // SAFETY: we have set the engine at some lines above with type `E`.
+                unsafe { tikv_kv::destroy_tls_engine::<E>() };
+            })
             .build()
             .unwrap();
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(threads.handle(), tablet.clone());
         }
         threads.spawn(Self::tick(importer.clone()));
-        let handle = raft_applier::Global::spawn_tokio(engine.clone(), threads.handle());
-        let applier = handle.clone();
+        let applier = raft_applier::ThrottledTlsEngineWriter::default();
+        let gc_handle = applier.gc_handle();
         threads.spawn(async move {
-            loop {
-                sleep(Duration::from_secs(300)).await;
-                if !handle.gc_hint().await {
-                    info!("sst_importer: applier GC loop exits");
-                    return;
-                }
+            while gc_handle.gc() {
+                tokio::time::sleep(Duration::from_secs(300)).await;
             }
         });
 
@@ -465,7 +479,7 @@ impl<E: Engine> ImportSstService<E> {
     async fn apply_imp(
         mut req: ApplyRequest,
         importer: Arc<SstImporter>,
-        handle: raft_applier::Handle,
+        handle: raft_applier::ThrottledTlsEngineWriter,
         limiter: Limiter,
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {
@@ -520,15 +534,20 @@ impl<E: Engine> ImportSstService<E> {
                 // Record the start of a task would greatly help us to inspect pending
                 // tasks.
                 APPLIER_EVENT.with_label_values(&["begin_req"]).inc();
-                inflight_futures
-                    .push_back(handle.write(w, context.clone()).map_err(transfer_error));
+                // SAFETY: we have registered the thread local storage engine into the thread
+                // when creating them.
+                let task = unsafe {
+                    handle
+                        .write::<E>(w, context.clone())
+                        .map_err(transfer_error)
+                };
+                inflight_futures.push_back(
+                    tokio::spawn(task)
+                        .map_err(convert_join_error)
+                        .map(|x| x.and_then(identity)),
+                );
                 if inflight_futures.len() >= REQUEST_WRITE_CONCURRENCY {
-                    // Wait all pending requests, because the request may not be sent when the
-                    // buffer is full.
-                    // TODO: Maybe make `write` returns a stream like what `Engine::async_write`
-                    // did? So we can back-pressure here when the channel is full hence we have
-                    // max safe concurrency.
-                    futures::future::try_join_all(inflight_futures.drain(..)).await?;
+                    inflight_futures.pop_front().unwrap().await?;
                 }
             }
         }
@@ -708,7 +727,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let importer = Arc::clone(&self.importer);
         let start = Instant::now();
         let mut resp = ClearResponse::default();
-        let handle = self.applier.clone();
 
         let handle_task = async move {
             // Records how long the apply task waits to be scheduled.
@@ -724,12 +742,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             sst_importer::metrics::IMPORTER_APPLY_DURATION
                 .with_label_values(&[label])
                 .observe(start.saturating_elapsed().as_secs_f64());
-            if let Err(e) = handle.clear().await {
-                let mut import_err = ImportPbError::default();
-                import_err.set_message(format!("failed to clear appliers: {}", e));
-                resp.set_error(import_err);
-            }
-
             crate::send_rpc_response!(Ok(resp), sink, label, timer);
         };
         self.threads.spawn(handle_task);
