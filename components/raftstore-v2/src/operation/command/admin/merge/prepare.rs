@@ -472,14 +472,17 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         });
         let reg = self.tablet_registry();
         let path = merge_source_path(reg, self.region_id(), log_index);
-        checkpointer.create_at(&path, None, 0).unwrap_or_else(|e| {
-            slog_panic!(
-                self.logger,
-                "fails to create checkpoint";
-                "path" => %path.display(),
-                "error" => ?e
-            )
-        });
+        // We might be replaying this command.
+        if !path.exists() {
+            checkpointer.create_at(&path, None, 0).unwrap_or_else(|e| {
+                slog_panic!(
+                    self.logger,
+                    "fails to create checkpoint";
+                    "path" => %path.display(),
+                    "error" => ?e
+                )
+            });
+        }
 
         Ok((
             AdminResponse::default(),

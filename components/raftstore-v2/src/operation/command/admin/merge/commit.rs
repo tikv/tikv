@@ -303,6 +303,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
+        fail::fail_point!("apply_before_commit_merge");
         PEER_ADMIN_CMD_COUNTER.commit_merge.all.inc();
 
         self.flush();
@@ -379,9 +380,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // `CommitMerge` after restart, it means the admin flushed is not persisted. It
         // also means no other newer writes have been persisted (because
         // unapplied `CommitMerge` rejects other writes, those writes would share the
-        // same write task as persisting admin flushed). (2) re-entrant merge.
-        // Merge will always be redo regardless of whether the merged tablet
-        // already has data.
+        // same write task as persisting admin flushed).
+        // (2) re-entrant merge. Merge will always be redo regardless of whether the
+        // merged tablet already has data.
         //
         // We use method 1.
         assert!(
@@ -390,6 +391,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 .map_or(true, |trace| trace.iter().all(|i| *i < index))
         );
         if path.exists() {
+            info!(self.logger, "redo merge");
             // Redo the merge.
             std::fs::remove_dir_all(&path).unwrap();
         }
