@@ -2543,9 +2543,9 @@ where
             Ok(())
         } else {
             // This can be a message that sent when it's still a follower. Nevertheleast,
-            // it's meaningless to continue to handle the request as callbacks are cleared. 
-            if msg.get_message().get_msg_type() ==
-                MessageType::MsgReadIndex && self.fsm.peer.is_leader()
+            // it's meaningless to continue to handle the request as callbacks are cleared.
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                && self.fsm.peer.is_leader()
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.fsm.peer_id())
             {

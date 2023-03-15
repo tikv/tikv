@@ -9,7 +9,6 @@ use std::{
     cmp::{Ord, Ordering as CmpOrdering},
     collections::VecDeque,
     fmt::{self, Debug, Formatter},
-    io::BufRead,
     mem,
     ops::{Deref, DerefMut, Range as StdRange},
     sync::{
@@ -46,12 +45,8 @@ use kvproto::{
 };
 use pd_client::{BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
-use protobuf::{wire_format::WireType, CodedInputStream, Message};
-use raft::eraftpb::{
-    ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
-};
-use raft_proto::ConfChangeI;
-use resource_control::{ResourceController, ResourceMetered};
+use raft::eraftpb::{ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot};
+use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -93,6 +88,7 @@ use crate::{
         util::{
             self, admin_cmd_epoch_lookup, check_flashback_state, check_req_region_epoch,
             compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
+            ParsedEntry,
         },
         Config, RegionSnapshot, RegionTask, WriteCallback,
     },
@@ -852,43 +848,6 @@ fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     false
 }
 
-fn can_witness_skip(entry: &Entry) -> bool {
-    // need to handle ConfChange entry type
-    if entry.get_entry_type() != EntryType::EntryNormal {
-        return false;
-    }
-
-    // HACK: check admin request field in serialized data from `RaftCmdRequest`
-    // without deserializing all. It's done by checking the existence of the
-    // field number of `admin_request`.
-    // See the encoding in `write_to_with_cached_sizes()` of `RaftCmdRequest` in
-    // `raft_cmdpb.rs` for reference.
-    let mut is = CodedInputStream::from_bytes(entry.get_data());
-    if is.eof().unwrap() {
-        return true;
-    }
-    let (mut field_number, wire_type) = is.read_tag_unpack().unwrap();
-    // Header field is of number 1
-    if field_number == 1 {
-        if wire_type != WireType::WireTypeLengthDelimited {
-            panic!("unexpected wire type");
-        }
-        let len = is.read_raw_varint32().unwrap();
-        // skip parsing the content of `Header`
-        is.consume(len as usize);
-        // read next field number
-        (field_number, _) = is.read_tag_unpack().unwrap();
-    }
-
-    // `Requests` field is of number 2 and `AdminRequest` field is of number 3.
-    // - If the next field is 2, there must be no admin request as in one
-    //   `RaftCmdRequest`, either requests or admin_request is filled.
-    // - If the next field is 3, it's exactly an admin request.
-    // - If the next field is others, neither requests nor admin_request is filled,
-    //   so there is no admin request.
-    field_number != 3
-}
-
 /// A struct that stores the state related to Merge.
 ///
 /// When executing a `CommitMerge`, the source peer may have not applied
@@ -911,7 +870,7 @@ where
 {
     /// All of the entries that need to continue to be applied after
     /// the source peer has applied its logs.
-    pending_entries: Vec<Entry>,
+    pending_entries: Vec<ParsedEntry>,
     /// All of messages that need to continue to be handled after
     /// the source peer has applied its logs and pending entries
     /// are all handled.
@@ -1091,7 +1050,7 @@ where
     fn handle_raft_committed_entries(
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
-        mut committed_entries_drainer: Drain<'_, Entry>,
+        mut committed_entries_drainer: Drain<'_, ParsedEntry>,
     ) {
         if committed_entries_drainer.len() == 0 {
             return;
@@ -1102,7 +1061,7 @@ where
         // must re-propose these commands again.
         apply_ctx.committed_count += committed_entries_drainer.len();
         let mut results = VecDeque::new();
-        while let Some(entry) = committed_entries_drainer.next() {
+        while let Some(mut entry) = committed_entries_drainer.next() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
@@ -1124,9 +1083,9 @@ where
             // running on data written by new version tikv), but PD will reject old version
             // tikv join the cluster, so this should not happen.
             let res = match entry.get_entry_type() {
-                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
+                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &mut entry),
                 EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
-                    self.handle_raft_entry_conf_change(apply_ctx, &entry)
+                    self.handle_raft_entry_conf_change(apply_ctx, &mut entry)
                 }
             };
 
@@ -1196,7 +1155,7 @@ where
     fn handle_raft_entry_normal(
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
-        entry: &Entry,
+        entry: &mut ParsedEntry,
     ) -> ApplyResult<EK::Snapshot> {
         fail_point!(
             "yield_apply_first_region",
@@ -1206,11 +1165,10 @@ where
 
         let index = entry.get_index();
         let term = entry.get_term();
-        let data = entry.get_data();
 
-        if !data.is_empty() {
-            if !self.peer.is_witness || !can_witness_skip(entry) {
-                let cmd = util::parse_data_at(data, index, &self.tag);
+        if !entry.is_empty() {
+            if !self.peer.is_witness || !entry.can_witness_skip() {
+                let cmd = entry.take_cmd();
                 if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                     self.priority = Priority::Low;
                 }
@@ -1269,7 +1227,7 @@ where
     fn handle_raft_entry_conf_change(
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
-        entry: &Entry,
+        entry: &mut ParsedEntry,
     ) -> ApplyResult<EK::Snapshot> {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
@@ -1277,16 +1235,7 @@ where
             ApplyResult::Yield
         });
         let (index, term) = (entry.get_index(), entry.get_term());
-        let conf_change: ConfChangeV2 = match entry.get_entry_type() {
-            EntryType::EntryConfChange => {
-                let conf_change: ConfChange =
-                    util::parse_data_at(entry.get_data(), index, &self.tag);
-                conf_change.into_v2()
-            }
-            EntryType::EntryConfChangeV2 => util::parse_data_at(entry.get_data(), index, &self.tag),
-            _ => unreachable!(),
-        };
-        let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
+        let (conf_change, cmd) = entry.take_conf_change();
         match self.process_raft_cmd(apply_ctx, index, term, cmd) {
             ApplyResult::None => {
                 // If failed, tell Raft that the `ConfChange` was aborted.
@@ -3242,6 +3191,11 @@ where
         ctx: &mut ApplyContext<EK>,
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        fail_point!(
+            "before_exec_batch_switch_witness",
+            self.id() == 2,
+            |_| unimplemented!()
+        );
         assert!(request.has_switch_witnesses());
         let switches = request
             .get_switch_witnesses()
@@ -3721,19 +3675,29 @@ where
 }
 
 impl<EK: KvEngine> ResourceMetered for Msg<EK> {
-    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+    fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
         match self {
             Msg::Apply { apply, .. } => {
-                let mut map = HashMap::default();
+                let mut dominant_group = "".to_owned();
+                let mut max_write_bytes = 0;
                 for cached_entries in &apply.entries {
-                    cached_entries.iter_entries(|entry| {
-                        // TODO: maybe use a more efficient way to get the resource group name.
-                        let header = util::get_entry_header(entry);
-                        let group_name = header.get_resource_group_name().to_owned();
-                        *map.entry(group_name).or_default() += entry.compute_size() as u64;
+                    cached_entries.iter_entries_mut(|entry| {
+                        if entry.is_empty() {
+                            return;
+                        }
+                        let write_bytes = entry.compute_size() as u64;
+                        let group_name = entry.get_cmd().get_header().get_resource_group_name();
+                        resource_ctl.consume(
+                            group_name.as_bytes(),
+                            ResourceConsumeType::IoBytes(write_bytes),
+                        );
+                        if write_bytes > max_write_bytes {
+                            dominant_group = group_name.to_owned();
+                            max_write_bytes = write_bytes;
+                        }
                     });
                 }
-                Some(map)
+                Some(dominant_group)
             }
             _ => None,
         }
@@ -3919,19 +3883,21 @@ where
 
         let mut dangle_size = 0;
         for cached_entries in apply.entries {
-            let (e, sz) = cached_entries.take_entries();
+            let (ents, sz) = cached_entries.take_entries();
             dangle_size += sz;
-            if e.is_empty() {
+            if ents.is_empty() {
                 let rid = self.delegate.region_id();
                 let StdRange { start, end } = cached_entries.range;
+                let mut tmp_ents = Vec::new();
                 self.delegate
                     .raft_engine
-                    .fetch_entries_to(rid, start, end, None, &mut entries)
+                    .fetch_entries_to(rid, start, end, None, &mut tmp_ents)
                     .unwrap();
+                entries.extend(tmp_ents.into_iter().map(|e| ParsedEntry::new(e)));
             } else if entries.is_empty() {
-                entries = e;
+                entries = ents;
             } else {
-                entries.extend(e);
+                entries.extend(ents);
             }
         }
         if dangle_size > 0 {
@@ -4903,9 +4869,9 @@ mod memtrace {
         EK: KvEngine,
     {
         fn heap_size(&self) -> usize {
-            let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>();
+            let mut size = self.pending_entries.capacity() * mem::size_of::<ParsedEntry>();
             for e in &self.pending_entries {
-                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+                size += e.bytes_capacity();
             }
 
             size += self.pending_msgs.capacity() * mem::size_of::<Msg<EK>>();
@@ -4962,7 +4928,6 @@ mod tests {
         time::*,
     };
 
-    use bytes::Bytes;
     use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot};
     use engine_traits::{Peekable as PeekableTrait, SyncMutable, WriteBatchExt};
@@ -4972,7 +4937,6 @@ mod tests {
         raft_cmdpb::*,
     };
     use protobuf::Message;
-    use raft::eraftpb::{ConfChange, ConfChangeV2};
     use sst_importer::Config as ImportConfig;
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
@@ -5077,42 +5041,6 @@ mod tests {
                 raft_engine: Box::new(PanicEngine),
             }
         }
-    }
-
-    #[test]
-    fn test_can_witness_skip() {
-        let mut entry = Entry::new();
-        let mut req = RaftCmdRequest::default();
-        entry.set_entry_type(EntryType::EntryNormal);
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(can_witness_skip(&entry));
-
-        req.mut_admin_request()
-            .set_cmd_type(AdminCmdType::CompactLog);
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(!can_witness_skip(&entry));
-
-        let mut req = RaftCmdRequest::default();
-        let mut request = Request::default();
-        request.set_cmd_type(CmdType::Put);
-        req.set_requests(vec![request].into());
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(can_witness_skip(&entry));
-
-        entry.set_entry_type(EntryType::EntryConfChange);
-        let conf_change = ConfChange::new();
-        let data = conf_change.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(!can_witness_skip(&entry));
-
-        entry.set_entry_type(EntryType::EntryConfChangeV2);
-        let conf_change_v2 = ConfChangeV2::new();
-        let data = conf_change_v2.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(!can_witness_skip(&entry));
     }
 
     #[test]

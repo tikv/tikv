@@ -91,7 +91,7 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    import::{ImportSstService, SstImporter},
+    import::{ImportSstService, LocalTablets, SstImporter},
     read_pool::{
         build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
     },
@@ -103,6 +103,7 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
+        tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
         KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
         GRPC_THREAD_PREFIX,
@@ -885,8 +886,8 @@ where
             .unwrap()
             .to_owned();
 
-        let bps = i64::try_from(self.config.server.snap_max_write_bytes_per_sec.0)
-            .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));
+        let bps = i64::try_from(self.config.server.snap_io_max_bytes_per_sec.0)
+            .unwrap_or_else(|_| fatal!("snap_io_max_bytes_per_sec > i64::max_value"));
 
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(bps)
@@ -1246,7 +1247,7 @@ where
             self.config.import.clone(),
             self.config.raft_store.raft_entry_max_size,
             engines.engine.clone(),
-            engines.engines.kv.clone(),
+            LocalTablets::Singleton(engines.engines.kv.clone()),
             servers.importer.clone(),
         );
         if servers
@@ -1685,7 +1686,7 @@ where
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
             .server
-            .start(server_config, self.security_mgr.clone())
+            .start(server_config, self.security_mgr.clone(), NoSnapshotCache)
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
     }
 

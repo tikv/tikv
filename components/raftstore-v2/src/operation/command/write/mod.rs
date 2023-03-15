@@ -1,10 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{data_cf_offset, KvEngine, Mutable, RaftEngine, CF_DEFAULT};
-use kvproto::{import_sstpb::SstMeta, raft_cmdpb::RaftRequestHeader};
+use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
     store::{
-        check_sst_for_ingestion, cmd_resp,
+        cmd_resp,
         fsm::{apply, MAX_PROPOSAL_SIZE_RATIO},
         metrics::PEER_WRITE_CMD_COUNTER,
         msg::ErrorCallback,
@@ -12,7 +12,6 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::error;
 use tikv_util::slog_panic;
 
 use crate::{
@@ -22,6 +21,7 @@ use crate::{
     router::{ApplyTask, CmdResChannel},
 };
 
+mod ingest;
 mod simple_write;
 
 pub use simple_write::{
@@ -231,37 +231,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         _notify_only: bool,
     ) -> Result<()> {
         // TODO: reuse the same delete as split/merge.
-        Ok(())
-    }
-
-    #[inline]
-    pub fn apply_ingest(&mut self, ssts: Vec<SstMeta>) -> Result<()> {
-        PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
-        let mut infos = Vec::with_capacity(ssts.len());
-        for sst in &ssts {
-            if let Err(e) = check_sst_for_ingestion(sst, self.region()) {
-                error!(
-                    self.logger,
-                    "ingest fail";
-                    "sst" => ?sst,
-                    "region" => ?self.region(),
-                    "error" => ?e
-                );
-                let _ = self.sst_importer().delete(sst);
-                return Err(e);
-            }
-            match self.sst_importer().validate(sst) {
-                Ok(meta_info) => infos.push(meta_info),
-                Err(e) => {
-                    slog_panic!(self.logger, "corrupted sst"; "sst" => ?sst, "error" => ?e);
-                }
-            }
-        }
-        // Unlike v1, we can't batch ssts accross regions.
-        self.flush();
-        if let Err(e) = self.sst_importer().ingest(&infos, self.tablet()) {
-            slog_panic!(self.logger, "ingest fail"; "ssts" => ?ssts, "error" => ?e);
-        }
         Ok(())
     }
 }
