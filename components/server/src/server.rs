@@ -36,7 +36,7 @@ use backup_stream::{
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
-use encryption_export::{data_key_manager_from_config, DataKeyManager};
+use encryption_export::{DataKeyManager};
 use engine_rocks::{
     flush_engine_statistics, from_rocks_compression_type,
     raw::{Cache, Env},
@@ -48,7 +48,7 @@ use engine_traits::{
     RaftEngine, SingletonFactory, StatisticsReporter, TabletContext, TabletRegistry, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
 };
-use error_code::ErrorCodeExt;
+
 use file_system::{
     get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor,
     MetricsManager as IoMetricsManager,
