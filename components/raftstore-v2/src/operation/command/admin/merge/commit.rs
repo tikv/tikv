@@ -37,10 +37,10 @@
 //!                    propose CommitMerge ---------------> append CommitMerge
 //!                     apply CommitMerge                    apply CommitMerge
 //!                        on apply res                             /|
-//!                            /|                     +------------+ |
-//!           +---------------+ |                    / `CatchUpLogs` |
-//!          /  `CatchUpLogs`   |                   /                |
-//!         /              (complete)         append logs         (pause)
+//!                           /|                      +------------+ |
+//!          +---------------+ |                     / `CatchUpLogs` |
+//!         / `AckCommitMerge` |                    /                |
+//!        /              (complete)          append logs         (pause)
 //!    destroy self                                |                 .
 //!                                        apply PrepareMerge        .
 //!                                                |                 .
@@ -674,17 +674,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // deliberately delayed after reading `store_ctx.meta` to get the source safe ts
         // before its meta gets cleaned up.
         if !acquired_source_safe_ts_before {
-            let (tx, _) = oneshot::channel();
-            let mut merge = CommitMergeRequest::default();
-            merge.set_source(res.source.clone());
-            merge.set_commit(res.prepare_merge_index);
             let _ = store_ctx.router.force_send(
                 res.source.get_id(),
-                PeerMsg::CatchUpLogs(CatchUpLogs {
-                    target_region_id: self.region_id(),
-                    merge,
-                    tx,
-                }),
+                PeerMsg::AckCommitMerge {
+                    index: res.prepare_merge_index,
+                    target_id: self.region_id(),
+                },
             );
         }
 
@@ -718,6 +713,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "target_region" => ?self.region(),
             );
             self.add_pending_tick(PeerTick::SplitRegionCheck);
+        }
+    }
+
+    // Called on source peer.
+    pub fn on_ack_commit_merge(&mut self, index: u64, target_id: u64) {
+        if let Some(state) = self.applied_merge_state()
+            && state.get_commit() == index
+        {
+            assert_eq!(
+                state.get_target().get_id(),
+                target_id,
+                "{}",
+                SlogFormat(&self.logger)
+            );
+            self.take_merge_context();
+            self.mark_for_destroy(None);
         }
     }
 }

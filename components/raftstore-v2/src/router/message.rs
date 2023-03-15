@@ -209,6 +209,10 @@ pub enum PeerMsg {
     },
     CleanupImportSst(Box<[SstMeta]>),
     AskCommitMerge(RaftCmdRequest),
+    AckCommitMerge {
+        index: u64,
+        target_id: u64,
+    },
     RejectCommitMerge {
         index: u64,
     },
