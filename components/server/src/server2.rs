@@ -144,8 +144,8 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
 
     tikv.check_conflict_addr();
     tikv.core.init_fs();
-    tikv.init_yatp();
-    tikv.init_encryption();
+    tikv.core.init_yatp();
+    tikv.core.init_encryption();
     let fetcher = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
     let engines_info = tikv.init_engines(listener);
@@ -216,7 +216,6 @@ struct TikvServer<ER: RaftEngine> {
     node: Option<NodeV2<RpcClient, RocksEngine, ER>>,
     resolver: Option<resolve::PdStoreAddrResolver>,
     snap_mgr: Option<TabletSnapManager>, // Will be filled in `init_servers`.
-    encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
@@ -342,6 +341,7 @@ where
                 config,
                 store_path,
                 lock_files: vec![],
+                encryption_key_manager: None,
             },
             cfg_controller: Some(cfg_controller),
             security_mgr,
@@ -350,7 +350,6 @@ where
             node: None,
             resolver: None,
             snap_mgr: None,
-            encryption_key_manager: None,
             engines: None,
             kv_statistics: None,
             raft_statistics: None,
@@ -479,31 +478,6 @@ where
         let cur_path = search_base.join(cur_addr.to_string().replace(':', "_"));
         let cur_file = try_lock_conflict_addr(cur_path);
         self.core.lock_files.push(cur_file);
-    }
-
-    fn init_yatp(&self) {
-        yatp::metrics::set_namespace(Some("tikv"));
-        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone())).unwrap();
-        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone())).unwrap();
-        prometheus::register(Box::new(yatp::metrics::TASK_EXEC_DURATION.clone())).unwrap();
-        prometheus::register(Box::new(yatp::metrics::TASK_POLL_DURATION.clone())).unwrap();
-        prometheus::register(Box::new(yatp::metrics::TASK_EXEC_TIMES.clone())).unwrap();
-    }
-
-    fn init_encryption(&mut self) {
-        self.encryption_key_manager = data_key_manager_from_config(
-            &self.core.config.security.encryption,
-            &self.core.config.storage.data_dir,
-        )
-        .map_err(|e| {
-            panic!(
-                "Encryption failed to initialize: {}. code: {}",
-                e,
-                e.error_code()
-            )
-        })
-        .unwrap()
-        .map(Arc::new);
     }
 
     fn init_flow_receiver(&mut self) -> engine_rocks::FlowListener {
@@ -792,7 +766,7 @@ where
         let mut importer = SstImporter::new(
             &self.core.config.import,
             import_path,
-            self.encryption_key_manager.clone(),
+            self.core.encryption_key_manager.clone(),
             self.core.config.storage.api_version(),
         )
         .unwrap();
@@ -1449,14 +1423,17 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let env = self
             .core
             .config
-            .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
+            .build_shared_rocks_env(
+                self.core.encryption_key_manager.clone(),
+                get_io_rate_limiter(),
+            )
             .unwrap();
 
         // Create raft engine
         let (raft_engine, raft_statistics) = CER::build(
             &self.core.config,
             &env,
-            &self.encryption_key_manager,
+            &self.core.encryption_key_manager,
             &block_cache,
         );
         self.raft_statistics = raft_statistics;

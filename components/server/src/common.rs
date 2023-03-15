@@ -1,11 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::{
     cmp,
     path::{Path, PathBuf},
+    sync::Arc,
     u64,
 };
 
+use encryption_export::{data_key_manager_from_config, DataKeyManager};
+use error_code::ErrorCodeExt;
 use file_system::File;
 use tikv::config::TikvConfig;
 use tikv_util::sys::{disk, path_in_diff_mount_point};
@@ -14,6 +16,7 @@ pub struct TikvServerCore {
     pub config: TikvConfig,
     pub store_path: PathBuf,
     pub lock_files: Vec<File>,
+    pub encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl TikvServerCore {
@@ -106,5 +109,30 @@ impl TikvServerCore {
                 raft_reserved_size,
             );
         }
+    }
+
+    pub fn init_yatp(&self) {
+        yatp::metrics::set_namespace(Some("tikv"));
+        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone())).unwrap();
+        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone())).unwrap();
+        prometheus::register(Box::new(yatp::metrics::TASK_EXEC_DURATION.clone())).unwrap();
+        prometheus::register(Box::new(yatp::metrics::TASK_POLL_DURATION.clone())).unwrap();
+        prometheus::register(Box::new(yatp::metrics::TASK_EXEC_TIMES.clone())).unwrap();
+    }
+
+    pub fn init_encryption(&mut self) {
+        self.encryption_key_manager = data_key_manager_from_config(
+            &self.config.security.encryption,
+            &self.config.storage.data_dir,
+        )
+        .map_err(|e| {
+            panic!(
+                "Encryption failed to initialize: {}. code: {}",
+                e,
+                e.error_code()
+            )
+        })
+        .unwrap()
+        .map(Arc::new);
     }
 }
