@@ -946,11 +946,24 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         }
 
+        if !ready.entries().is_empty() {
+            assert!(self.ever_persisted(), "{}", SlogFormat(self.logger()));
+            self.entry_storage_mut()
+                .append(ready.take_entries(), write_task);
+        }
+        if let Some(hs) = ready.hs() {
+            self.entry_storage_mut()
+                .raft_state_mut()
+                .set_hard_state(hs.clone());
+        }
+        let entry_storage = self.entry_storage();
+        if !prev_ever_persisted || prev_raft_state != *entry_storage.raft_state() {
+            write_task.raft_state = Some(entry_storage.raft_state().clone());
+        }
         // If snapshot initializes the peer (in `apply_snapshot`), we don't need to
         // write apply trace again.
         if !self.ever_persisted() {
             let region_id = self.region().get_id();
-            let entry_storage = self.entry_storage();
             let raft_engine = entry_storage.raft_engine();
             if write_task.raft_wb.is_none() {
                 write_task.raft_wb = Some(raft_engine.log_batch(64));
@@ -964,17 +977,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 });
             self.init_apply_trace(write_task);
             self.set_ever_persisted();
-        }
-
-        let entry_storage = self.entry_storage_mut();
-        if !ready.entries().is_empty() {
-            entry_storage.append(ready.take_entries(), write_task);
-        }
-        if let Some(hs) = ready.hs() {
-            entry_storage.raft_state_mut().set_hard_state(hs.clone());
-        }
-        if !prev_ever_persisted || prev_raft_state != *entry_storage.raft_state() {
-            write_task.raft_state = Some(entry_storage.raft_state().clone());
         }
         if self.apply_trace().should_persist() {
             self.record_apply_trace(write_task);
