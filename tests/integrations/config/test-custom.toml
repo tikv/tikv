@@ -74,7 +74,7 @@ end-point-enable-batch-if-possible = true
 end-point-request-max-handle-duration = "12s"
 end-point-max-concurrency = 10
 end-point-perf-level = 5
-snap-max-write-bytes-per-sec = "10MB"
+snap-io-max-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
 heavy-load-threshold = 25
@@ -632,6 +632,7 @@ s3-multi-part-size = "15MB"
 sst-max-size = "789MB"
 
 [log-backup]
+min-ts-interval = "2s"
 max-flush-interval = "11s"
 num-threads = 7
 enable = true
@@ -688,3 +689,6 @@ sample-threshold = 100
 byte-threshold = 31457280
 split.split-balance-score = 0.25
 split.split-contained-score = 0.5
+
+[resource-control]
+enabled = false

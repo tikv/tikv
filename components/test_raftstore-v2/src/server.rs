@@ -242,6 +242,7 @@ pub struct ServerMeta {
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: StoreRouter<RocksEngine, RaftTestEngine>,
+    gc_worker: GcWorker<TestRaftKv2>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
@@ -579,7 +580,7 @@ impl ServerCluster {
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
         node.start(
             raft_engine,
-            tablet_registry,
+            tablet_registry.clone(),
             &raft_router,
             simulate_trans.clone(),
             snap_mgr.clone(),
@@ -615,7 +616,9 @@ impl ServerCluster {
             )
             .unwrap();
 
-        server.start(server_cfg, security_mgr).unwrap();
+        server
+            .start(server_cfg, security_mgr, tablet_registry)
+            .unwrap();
 
         self.metas.insert(
             node_id,
@@ -624,6 +627,7 @@ impl ServerCluster {
                 node,
                 server,
                 sim_router,
+                gc_worker,
                 sim_trans: simulate_trans,
                 rsmeter_cleanup,
             },
@@ -633,6 +637,10 @@ impl ServerCluster {
             .insert(node_id, concurrency_manager);
 
         Ok(node_id)
+    }
+
+    pub fn get_gc_worker(&self, node_id: u64) -> &GcWorker<TestRaftKv2> {
+        &self.metas.get(&node_id).unwrap().gc_worker
     }
 
     pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<CausalTsProviderImpl>> {

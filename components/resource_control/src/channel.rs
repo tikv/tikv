@@ -1,17 +1,15 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::{cell::RefCell, sync::Arc};
 
-use collections::HashMap;
 use crossbeam::channel::{self, RecvError, SendError, TryRecvError, TrySendError};
 use kvproto::kvrpcpb::CommandPri;
 use tikv_util::mpsc::priority_queue;
 
-use crate::{ResourceConsumeType, ResourceController};
+use crate::ResourceController;
 
 pub trait ResourceMetered {
     // returns the msg consumption of each hash map
-    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+    fn consume_resource(&self, _: &Arc<ResourceController>) -> Option<String> {
         None
     }
 }
@@ -132,19 +130,7 @@ impl<T: Send + 'static> Sender<T> {
                 last_msg_group,
                 ..
             } => {
-                if let Some(mut groups) = msg.get_resource_consumptions() {
-                    let mut dominant_group = "".to_owned();
-                    let mut max_write_bytes = 0;
-                    for (group_name, write_bytes) in groups.drain() {
-                        resource_ctl.consume(
-                            group_name.as_bytes(),
-                            ResourceConsumeType::IoBytes(write_bytes),
-                        );
-                        if write_bytes > max_write_bytes {
-                            dominant_group = group_name;
-                            max_write_bytes = write_bytes;
-                        }
-                    }
+                if let Some(dominant_group) = msg.consume_resource(resource_ctl) {
                     *last_msg_group.borrow_mut() = dominant_group;
                 }
             }
@@ -179,5 +165,61 @@ impl<T: Send + 'static> Receiver<T> {
             Receiver::Vanilla(receiver) => receiver.try_recv(),
             Receiver::Priority(receiver) => receiver.try_recv(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{thread, usize};
+
+    use test::Bencher;
+
+    use super::*;
+    use crate::ResourceConsumeType;
+
+    struct Msg(usize);
+
+    impl ResourceMetered for Msg {
+        fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
+            // None
+            let write_bytes = self.0 as u64;
+            let group_name = "test".to_owned();
+            resource_ctl.consume(
+                group_name.as_bytes(),
+                ResourceConsumeType::IoBytes(write_bytes),
+            );
+            Some(group_name)
+        }
+    }
+
+    #[bench]
+    fn bench_channel(b: &mut Bencher) {
+        let (tx, rx) = unbounded(Some(Arc::new(ResourceController::new(
+            "test".to_owned(),
+            false,
+        ))));
+
+        let t = thread::spawn(move || {
+            let mut n2: usize = 0;
+            loop {
+                if let Ok(Msg(n)) = rx.recv() {
+                    n2 += n;
+                } else {
+                    return n2;
+                }
+            }
+        });
+
+        let mut n1 = 0;
+        b.iter(|| {
+            n1 += 1;
+            let msg = Msg(1);
+            tx.consume_msg_resource(&msg);
+            tx.send(msg, 0).unwrap();
+        });
+
+        drop(tx);
+        let n2 = t.join().unwrap();
+        assert_eq!(n1, n2);
     }
 }
