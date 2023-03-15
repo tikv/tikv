@@ -405,12 +405,12 @@ debug = false
 opt-level = 1
 
 [profile.dev.package.tests]
-opt-level = 0
-debug = true
+debug = 1
+opt-level = 1
 
 [profile.dev]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 4
 lto = false
 incremental = true
@@ -436,7 +436,7 @@ codegen-units = 4
 
 [profile.test]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 16
 lto = false
 incremental = true
