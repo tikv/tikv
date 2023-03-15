@@ -23,7 +23,7 @@ use std::{
     convert::TryFrom,
     fmt::Debug,
     fs::{self, File},
-    io::{BorrowedBuf, Read, Seek, SeekFrom, Write},
+    io::{BorrowedBuf, Error as IoError, ErrorKind, Read, Seek, SeekFrom, Write},
     path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -46,6 +46,7 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::{
+    pdpb::SnapshotStat,
     raft_serverpb::{
         RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
         TabletSnapshotPreview, TabletSnapshotRequest, TabletSnapshotResponse,
@@ -58,7 +59,7 @@ use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{ReadableSize, Tracker, VersionTrack},
-    time::Instant,
+    time::{Instant, UnixSecs},
     worker::Runnable,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
@@ -634,6 +635,17 @@ pub fn send_snap(
         msg.get_message().get_snapshot(),
     );
 
+    let (snap_start, generate_duration_sec) = {
+        let snap = msg.get_message().get_snapshot();
+        let mut snap_data = RaftSnapshotData::default();
+        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
+            return Err(Error::Io(IoError::new(ErrorKind::Other, e)));
+        }
+        let snap_start = snap_data.get_meta().get_start();
+        let generate_duration_sec = snap_data.get_meta().get_generate_duration_sec();
+        (snap_start, generate_duration_sec)
+    };
+
     let cb = ChannelBuilder::new(env)
         .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
         .keepalive_time(cfg.grpc_keepalive_time.0)
@@ -654,11 +666,25 @@ pub fn send_snap(
         drop(client);
         mgr.delete_snapshot(&key);
         match recv_result {
-            None => Ok(SendStat {
-                key,
-                total_size,
-                elapsed: timer.saturating_elapsed(),
-            }),
+            None => {
+                let cost = UnixSecs::now().into_inner().saturating_sub(snap_start);
+                // it should ignore if the duration of snapshot is less than 1s to decrease the
+                // grpc data size.
+                if cost >= 1 {
+                    let mut stat = SnapshotStat::default();
+                    stat.set_region_id(key.region_id);
+                    stat.set_transport_size(total_size);
+                    stat.set_generate_duration_sec(generate_duration_sec);
+                    stat.set_send_duration_sec(timer.saturating_elapsed().as_secs());
+                    stat.set_total_duration_sec(cost);
+                    mgr.collect_stat(stat);
+                }
+                Ok(SendStat {
+                    key,
+                    total_size,
+                    elapsed: timer.saturating_elapsed(),
+                })
+            }
             Some(Err(e)) => Err(e.into()),
             Some(Ok(resp)) => Err(Error::Other(
                 format!("receive unexpected response {:?}", resp).into(),

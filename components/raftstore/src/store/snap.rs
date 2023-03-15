@@ -1975,6 +1975,7 @@ pub struct TabletSnapManager {
     // directory to store snapfile.
     base: PathBuf,
     receiving: Arc<Mutex<Vec<TabletSnapKey>>>,
+    stats: Arc<Mutex<Vec<SnapshotStat>>>,
 }
 
 impl TabletSnapManager {
@@ -1994,7 +1995,29 @@ impl TabletSnapManager {
         Ok(Self {
             base: path,
             receiving: Arc::default(),
+            stats: Arc::default(),
         })
+    }
+
+    pub fn collect_stat(&self, snap: SnapshotStat) {
+        debug!(
+            "collect snapshot stat";
+            "region_id" => snap.region_id,
+            "total_size" => snap.get_transport_size(),
+            "total_duration_sec" => snap.get_total_duration_sec(),
+            "generate_duration_sec" => snap.get_generate_duration_sec(),
+            "send_duration_sec" => snap.get_generate_duration_sec(),
+        );
+        self.stats.lock().unwrap().push(snap);
+    }
+
+    pub fn stats(&self) -> SnapStats {
+        let stats = std::mem::take(self.stats.lock().unwrap().as_mut());
+        SnapStats {
+            sending_count: 0,
+            receiving_count: 0,
+            stats,
+        }
     }
 
     pub fn tablet_gen_path(&self, key: &TabletSnapKey) -> PathBuf {
