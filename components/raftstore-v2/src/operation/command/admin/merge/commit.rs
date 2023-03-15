@@ -303,6 +303,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
+        println!("apply_commit_merge");
         fail::fail_point!("apply_before_commit_merge");
         PEER_ADMIN_CMD_COUNTER.commit_merge.all.inc();
 
@@ -630,6 +631,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut res: CommitMergeResult,
     ) {
+        println!("on_apply_res_commit_merge");
         let region = res.region_state.get_region();
         assert!(
             res.source.get_end_key() == region.get_end_key()

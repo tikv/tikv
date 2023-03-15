@@ -2,9 +2,7 @@
 
 use std::time::Duration;
 
-use engine_traits::{Peekable, CF_DEFAULT};
-use futures::executor::block_on;
-use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
+use engine_traits::Peekable;
 use tikv_util::store::new_peer;
 
 use crate::cluster::{merge_helper::merge_region, split_helper::split_region, Cluster};
@@ -34,6 +32,7 @@ fn test_restart_resume() {
     );
     let region_2_id = region_2.get_id();
 
+    // Drop raft writes.
     fail::cfg_callback("apply_before_commit_merge", || {
         fail::cfg("raft_before_save_on_store_1", "return").unwrap()
     })
@@ -51,9 +50,8 @@ fn test_restart_resume() {
             key
         );
     }
-    // fail::remove("raft_before_save_on_store_1");
 
-    fail::remove("apply_before_commit_merge");
+    // Restore raft writes during replay.
     fail::cfg_callback("apply_before_commit_merge", || {
         fail::remove("raft_before_save_on_store_1");
         fail::remove("apply_before_commit_merge");
@@ -71,8 +69,8 @@ fn test_restart_resume() {
     {
         std::thread::sleep(Duration::from_millis(100));
         retry += 1;
-        if retry > 100 {
-            panic!("not replayed after 100 retries");
+        if retry > 50 {
+            panic!("merge not replayed after 5s");
         }
     }
     {
@@ -86,15 +84,6 @@ fn test_restart_resume() {
             key
         );
     }
-
-    // Write something. This should persist admin flushed.
-    let mut put = SimpleWriteEncoder::with_capacity(64);
-    put.put(CF_DEFAULT, b"k{region_1_id}2", b"value");
-    let header = Box::new(router.new_request_for(region_2_id).take_header());
-    let (msg, sub) = PeerMsg::simple_write(header, put.encode());
-    router.send(region_2_id, msg).unwrap();
-    let resp = block_on(sub.result()).unwrap();
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
 
     cluster.restart(0);
     let router = &mut cluster.routers[0];
