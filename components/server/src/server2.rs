@@ -999,10 +999,10 @@ where
             fatal!("failed to register import service");
         }
 
-        self.cfg_controller.as_mut().unwrap().register(
-            tikv::config::Module::Import,
-            Box::new(import_cfg_mgr),
-        );
+        self.cfg_controller
+            .as_mut()
+            .unwrap()
+            .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(

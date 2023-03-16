@@ -48,7 +48,7 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util, Config, Error, Result, ConfigManager,
+    util, Config, ConfigManager, Error, Result,
 };
 
 pub struct LoadedFile {
@@ -307,8 +307,12 @@ impl SstImporter {
             .build()?;
         download_rt.spawn(cached_storage.gc_loop());
 
-        let memory_limit = (SysQuota::memory_limit_in_bytes() as f64) * cfg.memory_use_ratio;
-        info!("sst importer memory limit when apply"; "size" => ?memory_limit);
+        let memory_limit = Self::calcualte_usage_mem(cfg.memory_use_ratio);
+        info!(
+            "sst importer memory limit when apply";
+            "ratio" => cfg.memory_use_ratio,
+            "size" => ?memory_limit,
+        );
 
         Ok(SstImporter {
             dir: ImportDir::new(root)?,
@@ -322,6 +326,10 @@ impl SstImporter {
             mem_use: Arc::new(AtomicU64::new(0)),
             mem_limit: Arc::new(AtomicU64::new(memory_limit as u64)),
         })
+    }
+
+    fn calcualte_usage_mem(mem_ratio: f64) -> u64 {
+        ((SysQuota::memory_limit_in_bytes() as f64) * mem_ratio) as u64
     }
 
     pub fn set_compression_type(
@@ -583,16 +591,15 @@ impl SstImporter {
     }
 
     pub fn update_mem_limit(&self, cfg_mgr: ConfigManager) {
-        let mem_ratio = cfg_mgr.0.as_ref()
-        .read()
-        .unwrap()
-        .memory_use_ratio;
+        let mem_ratio = cfg_mgr.read().unwrap().memory_use_ratio;
+        let memory_limit = Self::calcualte_usage_mem(mem_ratio);
 
-        let memory_limit = (SysQuota::memory_limit_in_bytes() as f64) * mem_ratio;
-
-        if self.mem_limit.load(Ordering::SeqCst) != memory_limit as u64 {
-            self.mem_limit.store(memory_limit as u64
-                , Ordering::SeqCst);
+        if self.mem_limit.load(Ordering::SeqCst) != memory_limit {
+            self.mem_limit.store(memory_limit, Ordering::SeqCst);
+            info!("update importer config";
+                "memory-use-ratio" => mem_ratio,
+                "size" => memory_limit,
+            )
         }
     }
 

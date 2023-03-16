@@ -664,7 +664,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let import = self.importer.clone();
         let (rx, buf_driver) = create_stream_with_buffer(
             stream,
-            self.cfg.0.as_ref().read().unwrap().stream_channel_window,
+            self.cfg.read().unwrap().stream_channel_window,
         );
         let mut map_rx = rx.map_err(Error::from);
 

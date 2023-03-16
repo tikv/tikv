@@ -81,7 +81,7 @@ impl online_config::ConfigManager for ConfigManager {
         let mut cfg = self.0.read().unwrap().clone();
         cfg.update(change)?;
 
-        if let Err(e) = cfg.validate(){
+        if let Err(e) = cfg.validate() {
             warn!(
                 "import config changed";
                 "change" => ?cfg,
@@ -89,15 +89,15 @@ impl online_config::ConfigManager for ConfigManager {
             return Err(e);
         }
 
-        *self.0.write().unwrap() = cfg;
+        *self.write().unwrap() = cfg;
         Ok(())
     }
 }
 
 impl std::ops::Deref for ConfigManager {
-    type Target = Arc<RwLock<Config>>;
+    type Target = RwLock<Config>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0.as_ref()
     }
 }
