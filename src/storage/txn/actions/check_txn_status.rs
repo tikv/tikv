@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use tikv_kv::SnapshotExt;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
 
@@ -154,8 +155,17 @@ pub fn rollback_lock(
 ) -> Result<Option<ReleasedLock>> {
     let overlapped_write = match reader.get_txn_commit_record(&key)? {
         TxnCommitRecord::None { overlapped_write } => overlapped_write,
-        TxnCommitRecord::SingleRecord { write, .. } if write.write_type != WriteType::Rollback => {
-            panic!("txn record found but not expected: {:?}", txn)
+        TxnCommitRecord::SingleRecord { write, commit_ts }
+            if write.write_type != WriteType::Rollback =>
+        {
+            panic!(
+                "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
+                write,
+                commit_ts,
+                txn,
+                lock,
+                reader.reader.snapshot_ext().get_region_id().unwrap_or(0)
+            )
         }
         _ => return Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero())),
     };
