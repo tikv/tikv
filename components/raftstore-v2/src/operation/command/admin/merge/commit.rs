@@ -49,10 +49,14 @@
 //!                                           destroy self       (complete)
 //! ```
 
-use std::{any::Any, cmp, path::PathBuf};
+use std::{
+    any::Any,
+    cmp, fs, io,
+    path::{Path, PathBuf},
+};
 
 use crossbeam::channel::SendError;
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry};
 use futures::channel::oneshot;
 use kvproto::{
     metapb::Region,
@@ -68,7 +72,7 @@ use raftstore::{
     },
     Result,
 };
-use slog::{debug, error, info};
+use slog::{debug, error, info, Logger};
 use tikv_util::{
     config::ReadableDuration,
     log::SlogFormat,
@@ -104,6 +108,40 @@ pub struct CatchUpLogs {
     merge: CommitMergeRequest,
     // safe_ts.
     tx: oneshot::Sender<u64>,
+}
+
+struct MergeInProgressGuard(PathBuf);
+
+impl MergeInProgressGuard {
+    const PREFIX: &str = "merge-in-progress";
+
+    // Index is the commit index of `CommitMergeRequest`
+    fn new<EK>(
+        logger: &Logger,
+        registry: &TabletRegistry<EK>,
+        target_region_id: u64,
+        index: u64,
+        tablet_path: &Path,
+    ) -> io::Result<Option<Self>> {
+        let name = registry.tablet_name(Self::PREFIX, target_region_id, index);
+        let marker_path = registry.tablet_root().join(name);
+        if !marker_path.exists() && !tablet_path.exists() {
+            let f = fs::File::create(&marker_path)?;
+            f.sync_all()?;
+            fs::File::open(marker_path.parent().unwrap()).and_then(|d| d.sync_all())?;
+        } else if marker_path.exists() && tablet_path.exists() {
+            info!(logger, "remove incomplete merged tablet"; "path" => %tablet_path.display());
+            fs::remove_dir_all(tablet_path)?;
+        } else {
+            return Ok(None);
+        }
+        Ok(Some(Self(marker_path)))
+    }
+
+    fn defuse(self) -> io::Result<()> {
+        fs::remove_file(&self.0)?;
+        fs::File::open(self.0.parent().unwrap()).and_then(|d| d.sync_all())
+    }
 }
 
 // Source peer initiates commit merge on target peer.
@@ -172,6 +210,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         admin.mut_commit_merge().set_source(self.region().clone());
         admin.mut_commit_merge().set_commit(state.get_commit());
         admin.mut_commit_merge().set_entries(entries.into());
+        let removed_records = self.storage().region_state().get_removed_records();
+        let merged_records = self.storage().region_state().get_merged_records();
+        admin
+            .mut_commit_merge()
+            .set_removed_records(removed_records.into());
+        admin
+            .mut_commit_merge()
+            .set_merged_records(merged_records.into());
         request.set_admin_request(admin);
         // Please note that, here assumes that the unit of network isolation is store
         // rather than peer. So a quorum stores of source region should also be the
@@ -382,13 +428,17 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let mut ctx = TabletContext::new(&region, Some(index));
         ctx.flush_state = Some(self.flush_state().clone());
+        let guard = MergeInProgressGuard::new(&self.logger, reg, self.region_id(), index, &path)
+            .unwrap_or_else(|e| {
+                slog_panic!(
+                    self.logger,
+                    "fails to create MergeInProgressGuard";
+                    "path" => %path.display(),
+                    "error" => ?e
+                )
+            });
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
-        let sst_size: u64 = tablet
-            .cf_names()
-            .iter()
-            .map(|cf| tablet.get_total_sst_files_size_cf(cf).unwrap().unwrap_or(0))
-            .sum();
-        if sst_size == 0 {
+        if let Some(guard) = guard {
             tablet
                 .merge(&[&source_tablet, self.tablet()])
                 .unwrap_or_else(|e| {
@@ -399,10 +449,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         "error" => ?e
                     )
                 });
+            guard.defuse().unwrap_or_else(|e| {
+                slog_panic!(
+                    self.logger,
+                    "fails to defuse MergeInProgressGuard";
+                    "path" => %path.display(),
+                    "error" => ?e
+                )
+            });
         } else {
-            // We rely on the atomicity of merge implementation. If any file is installed,
-            // it means all files have been installed.
-            info!(self.logger, "reuse merged tablet"; "size" => sst_size);
+            info!(self.logger, "reuse merged tablet");
         }
         let merge_time = now.saturating_elapsed();
 
@@ -423,6 +479,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         state.set_state(PeerState::Normal);
         assert!(!state.has_merge_state());
         state.set_tablet_index(index);
+        for r in merge.get_removed_records() {
+            state.mut_removed_records().push(r.clone());
+        }
+        for r in merge.get_merged_records() {
+            state.mut_merged_records().push(r.clone());
+        }
         let mut merged_record = MergedRecord::default();
         merged_record.set_source_region_id(source_region.get_id());
         merged_record.set_source_epoch(source_region.get_region_epoch().clone());

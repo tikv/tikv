@@ -203,31 +203,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 target_region.get_peers()
             ));
         }
-        // TODO: pass down these records in `CommitMerge` request instead.
-        if !self
-            .storage()
-            .region_state()
-            .get_removed_records()
-            .is_empty()
-        {
-            return Err(box_err!(
-                "{}: removed_records {:?} is not empty, reject merge",
-                SlogFormat(&self.logger),
-                self.storage().region_state().get_removed_records()
-            ));
-        }
-        if !self
-            .storage()
-            .region_state()
-            .get_merged_records()
-            .is_empty()
-        {
-            return Err(box_err!(
-                "{}: merged_records {:?} is not empty, reject merge",
-                SlogFormat(&self.logger),
-                self.storage().region_state().get_merged_records()
-            ));
-        }
         Ok(())
     }
 
