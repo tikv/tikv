@@ -376,27 +376,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let path = reg.tablet_path(self.region_id(), index);
 
-        // There're several ways to make engine merge recoverable:
-        // (1) flush self, merge, advance admin flushed. If we need to replay
-        // `CommitMerge` after restart, it means the admin flushed is not persisted. It
-        // also means no other newer writes have been persisted (because
-        // unapplied `CommitMerge` rejects other writes, those writes would share the
-        // same write task as persisting admin flushed).
-        // (2) re-entrant merge. Merge will always be redo regardless of whether the
-        // merged tablet already has data.
-        //
-        // We use method 1.
-        assert!(
-            self.log_recovery()
-                .as_ref()
-                .map_or(true, |trace| trace.iter().all(|i| *i < index))
-        );
-        if path.exists() {
-            info!(self.logger, "redo merge");
-            // Redo the merge.
-            std::fs::remove_dir_all(&path).unwrap();
-        }
-
         // Avoid seqno jump back between self.tablet and the newly created tablet.
         // If we are recovering, this flush would just be a noop.
         self.tablet().flush_cfs(&[], true).unwrap();
@@ -405,16 +384,27 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let mut ctx = TabletContext::new(&region, Some(index));
         ctx.flush_state = Some(self.flush_state().clone());
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
-        tablet
-            .merge(&[&source_tablet, self.tablet()])
-            .unwrap_or_else(|e| {
-                slog_panic!(
-                    self.logger,
-                    "fails to merge tablet";
-                    "path" => %path.display(),
-                    "error" => ?e
-                )
-            });
+        let sst_size: u64 = tablet
+            .cf_names()
+            .iter()
+            .map(|cf| tablet.get_total_sst_files_size_cf(cf).unwrap().unwrap_or(0))
+            .sum();
+        if sst_size == 0 {
+            tablet
+                .merge(&[&source_tablet, self.tablet()])
+                .unwrap_or_else(|e| {
+                    slog_panic!(
+                        self.logger,
+                        "fails to merge tablet";
+                        "path" => %path.display(),
+                        "error" => ?e
+                    )
+                });
+        } else {
+            // We rely on the atomicity of merge implementation. If any file is installed,
+            // it means all files have been installed.
+            info!(self.logger, "reuse merged tablet"; "size" => sst_size);
+        }
         let merge_time = now.saturating_elapsed();
 
         info!(
