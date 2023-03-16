@@ -36,7 +36,7 @@ async fn acquire_semaphore(smp: &Arc<Semaphore>) -> Option<OwnedSemaphorePermit>
 }
 
 #[repr(transparent)]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ThrottledTlsEngineWriter(Arc<Mutex<Inner>>);
 
 pub struct GcHandle(Weak<Mutex<Inner>>);
@@ -50,12 +50,6 @@ impl GcHandle {
             }
             None => false,
         }
-    }
-}
-
-impl Default for ThrottledTlsEngineWriter {
-    fn default() -> Self {
-        Self(Arc::default())
     }
 }
 
