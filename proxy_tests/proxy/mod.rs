@@ -14,6 +14,7 @@ mod engine;
 mod fast_add_peer;
 mod ffi;
 mod flashback;
+mod ingest;
 mod normal;
 mod proxy;
 mod region;

@@ -7,7 +7,7 @@ use std::{
 
 use tikv::config::TikvConfig;
 
-use super::ProxyConfig;
+use super::common::*;
 
 #[derive(Clone, Default)]
 pub struct MockConfig {

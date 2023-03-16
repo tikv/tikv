@@ -25,15 +25,17 @@ pub use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
 };
 pub use mock_engine_store::{
-    config::Config,
     general_get_apply_state, general_get_region_local_state, get_raft_local_state, make_new_region,
-    mock_cluster::{new_put_cmd, new_request, FFIHelperSet},
-    must_get_equal, must_get_none,
-    node::NodeCluster,
-    transport_simulate::{
-        CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
+    mock_cluster::{
+        config::Config,
+        must_get_equal, must_get_none, new_put_cmd, new_request,
+        node::NodeCluster,
+        transport_simulate::{
+            CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
+        },
+        Cluster, FFIHelperSet, ProxyConfig, Simulator,
     },
-    write_kv_in_mem, Cluster, ProxyConfig, RegionStats, Simulator,
+    write_kv_in_mem, RegionStats,
 };
 pub use pd_client::PdClient;
 pub use raft::eraftpb::{ConfChangeType, MessageType};

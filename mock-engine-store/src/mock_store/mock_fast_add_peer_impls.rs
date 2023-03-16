@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use super::{
     common::*, mock_core::*, mock_engine_store_server::into_engine_store_server_wrap, mock_ffi::*,
 };
-use crate::{mock_cluster, node::NodeCluster};
+use crate::{mock_cluster, mock_cluster::node::NodeCluster};
 
 #[allow(clippy::redundant_closure_call)]
 pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
@@ -14,7 +14,7 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
     new_peer_id: u64,
 ) -> interfaces_ffi::FastAddPeerRes {
     let store = into_engine_store_server_wrap(arg1);
-    let cluster = &*(store.cluster_ptr as *const mock_cluster::Cluster<NodeCluster>);
+    let cluster_ext = &*(store.cluster_ext_ptr as *const mock_cluster::Cluster<NodeCluster>);
     let store_id = (*store.engine_store_server).id;
     (*store.engine_store_server).mutate_region_states(region_id, |e: &mut RegionStats| {
         e.fast_add_peer_count.fetch_add(1, Ordering::SeqCst);
@@ -54,7 +54,7 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
         if retry > 0 {
             std::thread::sleep(std::time::Duration::from_millis(30));
         }
-        cluster.access_ffi_helpers(&mut |guard: &mut HashMap<u64, crate::mock_cluster::FFIHelperSet>| {
+        cluster_ext.access_ffi_helpers(&mut |guard: &mut HashMap<u64, crate::mock_cluster::FFIHelperSet>| {
             debug!("recover from remote peer: preparing from {} to {}, persist and check source", from_store, store_id; "region_id" => region_id);
             let source_server = match guard.get_mut(&from_store) {
                 Some(s) => &mut s.engine_store_server,

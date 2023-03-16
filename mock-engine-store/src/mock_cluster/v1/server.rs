@@ -81,10 +81,7 @@ use transport_simulate::SimulateTransport;
 use txn_types::TxnExtraScheduler;
 
 use super::{common::*, *};
-use crate::{
-    config::Config,
-    mock_cluster::{Cluster, ProxyConfig, Simulator},
-};
+use crate::mock_cluster::{config::Config, Cluster, ProxyConfig, Simulator};
 
 type SimulateStoreTransport =
     SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, engine_rocks::RocksEngine>>;

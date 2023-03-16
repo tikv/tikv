@@ -1,9 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::proxy::*;
 use sst_importer::SstImporter;
 use test_sst_importer::gen_sst_file_with_kvs;
 
-use super::*;
+use crate::proxy::*;
 
 pub fn new_ingest_sst_cmd(meta: SstMeta) -> Request {
     let mut cmd = Request::default();
@@ -16,8 +15,7 @@ pub fn create_tmp_importer(cfg: &Config, kv_path: &str) -> (PathBuf, Arc<SstImpo
     let dir = Path::new(kv_path).join("import-sst");
     let importer = {
         Arc::new(
-            SstImporter::new(&cfg.import, dir.clone(), None, cfg.storage.api_version())
-                .unwrap(),
+            SstImporter::new(&cfg.import, dir.clone(), None, cfg.storage.api_version()).unwrap(),
         )
     };
     (dir, importer)

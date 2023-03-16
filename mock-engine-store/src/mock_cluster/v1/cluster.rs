@@ -57,7 +57,7 @@ use tikv_util::{
 use tokio::sync::oneshot;
 use txn_types::WriteBatchFlags;
 
-use super::{cluster_ext::*, common::*, config::Config, transport_simulate::Filter, util::*};
+use super::{common::*, transport_simulate::Filter, util::*};
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -240,6 +240,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             self.create_engine(None);
         }
     }
+
     pub fn start(&mut self) -> ServerResult<()> {
         self.start_with(Default::default())
     }

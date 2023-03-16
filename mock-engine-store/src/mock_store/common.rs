@@ -20,4 +20,4 @@ pub use kvproto::{
 pub use protobuf::Message;
 pub use tikv_util::{box_err, box_try, debug, error, info, warn};
 
-pub use crate::config::MockConfig;
+pub use crate::mock_cluster::config::MockConfig;

@@ -45,10 +45,10 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
 
-use crate::{
+use crate::mock_cluster::{
     config::Config,
-    mock_cluster::{Simulator, TiFlashEngine},
     transport_simulate::{Filter, SimulateTransport},
+    Simulator, TiFlashEngine,
 };
 
 pub struct ChannelTransportCore {

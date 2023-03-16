@@ -2,6 +2,8 @@
 
 use std::{cell::RefCell, pin::Pin, sync::atomic::Ordering};
 
+use engine_store_ffi::TiFlashEngine;
+
 use super::{
     common::{
         interfaces_ffi::{PageAndCppStrWithView, PageStorageInterfaces},
@@ -14,7 +16,7 @@ use super::{
     mock_snapshot_impls::*,
     mock_write_impls::*,
 };
-use crate::{mock_cluster, mock_cluster::TiFlashEngine, server::ServerCluster};
+use crate::mock_cluster;
 
 pub struct EngineStoreServer {
     pub id: u64,
@@ -106,7 +108,10 @@ pub struct EngineStoreServerWrap {
     pub engine_store_server: *mut EngineStoreServer,
     pub maybe_proxy_helper: std::option::Option<*mut RaftStoreProxyFFIHelper>,
     // Call `gen_cluster(cluster_ptr)`, and get which cluster this Server belong to.
-    pub cluster_ptr: isize,
+    // Will be removed to support v1/v2.
+    #[allow(dead_code)]
+    cluster_ptr: isize,
+    pub cluster_ext_ptr: isize,
 }
 
 pub(crate) unsafe fn load_data_from_db(store: &mut EngineStoreServer, region_id: u64) {
@@ -239,11 +244,13 @@ impl EngineStoreServerWrap {
         engine_store_server: *mut EngineStoreServer,
         maybe_proxy_helper: std::option::Option<*mut RaftStoreProxyFFIHelper>,
         cluster_ptr: isize,
+        cluster_ext_ptr: isize,
     ) -> Self {
         Self {
             engine_store_server,
             maybe_proxy_helper,
             cluster_ptr,
+            cluster_ext_ptr,
         }
     }
 }
@@ -487,14 +494,11 @@ unsafe extern "C" fn ffi_handle_safe_ts_update(
     leader_safe_ts: u64,
 ) {
     let store = into_engine_store_server_wrap(arg1);
-    let cluster = store.cluster_ptr as *const mock_cluster::Cluster<ServerCluster>;
-    assert_eq!(
-        self_safe_ts,
-        (*cluster).cluster_ext.test_data.expected_self_safe_ts
-    );
+    let cluster_ext = store.cluster_ext_ptr as *const mock_cluster::ClusterExt;
+    assert_eq!(self_safe_ts, (*cluster_ext).test_data.expected_self_safe_ts);
     assert_eq!(
         leader_safe_ts,
-        (*cluster).cluster_ext.test_data.expected_leader_safe_ts
+        (*cluster_ext).test_data.expected_leader_safe_ts
     );
 }
 
