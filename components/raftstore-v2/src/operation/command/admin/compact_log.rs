@@ -527,11 +527,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // There is no logs at RAFT_INIT_LOG_INDEX, nothing to delete.
             return None;
         }
+        assert!(
+            compact_index <= self.raft_group().raft.raft_log.committed,
+            "{}: compact_index={}, committed={}",
+            SlogFormat(&self.logger),
+            compact_index,
+            self.raft_group().raft.raft_log.committed,
+        );
         // TODO: make this debug when stable.
-        info!(self.logger, "compact log";
+        info!(
+            self.logger,
+            "compact log";
             "index" => compact_index,
             "apply_trace" => ?self.storage().apply_trace(),
-            "truncated" => ?self.entry_storage().apply_state());
+            "truncated" => ?self.entry_storage().apply_state()
+        );
         Some(compact_index)
     }
 }
