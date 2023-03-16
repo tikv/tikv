@@ -912,7 +912,7 @@ pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
 pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64) -> T {
     let mut result = T::default();
     result.merge_from_bytes(data).unwrap_or_else(|e| {
-        panic!("{} data is corrupted : {:?}. hex value: {}", tag, index, e, log_wrappers::Value::value(data));
+        panic!("{} data is corrupted : {:?}. hex value: {}", index, e, log_wrappers::Value::value(data));
     });
     result
 }
