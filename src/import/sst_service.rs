@@ -321,7 +321,7 @@ impl<E: Engine> ImportSstService<E> {
         loop {
             sleep(Duration::from_secs(10)).await;
 
-            importer.update_mem_limit(cfg.clone());
+            importer.update_config_memory_use_ratio(cfg.clone());
             importer.shrink_by_tick();
         }
     }
@@ -662,10 +662,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
-        let (rx, buf_driver) = create_stream_with_buffer(
-            stream,
-            self.cfg.read().unwrap().stream_channel_window,
-        );
+        let (rx, buf_driver) =
+            create_stream_with_buffer(stream, self.cfg.read().unwrap().stream_channel_window);
         let mut map_rx = rx.map_err(Error::from);
 
         let handle_task = async move {

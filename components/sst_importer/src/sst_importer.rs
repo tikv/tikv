@@ -48,7 +48,7 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util, Config, ConfigManager, Error, Result,
+    util, Config, ConfigManager as ImportConfigManager, Error, Result,
 };
 
 pub struct LoadedFile {
@@ -324,7 +324,7 @@ impl SstImporter {
             cached_storage,
             download_rt,
             mem_use: Arc::new(AtomicU64::new(0)),
-            mem_limit: Arc::new(AtomicU64::new(memory_limit as u64)),
+            mem_limit: Arc::new(AtomicU64::new(memory_limit)),
         })
     }
 
@@ -590,7 +590,7 @@ impl SstImporter {
         Ok(())
     }
 
-    pub fn update_mem_limit(&self, cfg_mgr: ConfigManager) {
+    pub fn update_config_memory_use_ratio(&self, cfg_mgr: ImportConfigManager) {
         let mem_ratio = cfg_mgr.read().unwrap().memory_use_ratio;
         let memory_limit = Self::calcualte_usage_mem(mem_ratio);
 
@@ -1469,6 +1469,7 @@ mod tests {
     };
     use external_storage_export::read_external_storage_info_buff;
     use file_system::File;
+    use online_config::{ConfigManager, OnlineConfig};
     use openssl::hash::{Hasher, MessageDigest};
     use tempfile::Builder;
     use test_sst_importer::*;
@@ -1976,6 +1977,49 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn test_update_config_memory_use_ratio() {
+        // create SstImpoter with default.
+        let cfg = Config {
+            memory_use_ratio: 0.3,
+            ..Default::default()
+        };
+        let import_dir = tempfile::tempdir().unwrap();
+        let importer = SstImporter::new(&cfg, import_dir, None, ApiVersion::V1).unwrap();
+        let mem_limit_old = importer.mem_limit.load(Ordering::SeqCst);
+
+        // create new config and get the diff config.
+        let cfg_new = Config {
+            memory_use_ratio: 0.1,
+            ..Default::default()
+        };
+        let change = cfg.diff(&cfg_new);
+
+        // create config manager and update config.
+        let mut cfg_mgr = ImportConfigManager::new(cfg);
+        cfg_mgr.dispatch(change).unwrap();
+        importer.update_config_memory_use_ratio(cfg_mgr);
+
+        let mem_limit_new = importer.mem_limit.load(Ordering::SeqCst);
+        assert!(mem_limit_old > mem_limit_new);
+
+        let delt = (mem_limit_old - mem_limit_new * 3) as f64 / mem_limit_old as f64;
+        assert!(delt < 0.000001)
+    }
+
+    #[test]
+    fn test_update_config_with_invalid_conifg() {
+        let cfg = Config::default();
+        let cfg_new = Config {
+            memory_use_ratio: -0.1,
+            ..Default::default()
+        };
+        let change = cfg.diff(&cfg_new);
+        let mut cfg_mgr = ImportConfigManager::new(cfg);
+        let r = cfg_mgr.dispatch(change);
+        assert!(r.is_err());
     }
 
     #[test]
