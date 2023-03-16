@@ -22,7 +22,7 @@ use crate::raft::Peer;
 
 const MERGE_SOURCE_PREFIX: &str = "merge-source";
 
-// Index is the commit index of `PrepareMergeRequest`, `commit` field of
+// `index` is the commit index of `PrepareMergeRequest`, `commit` field of
 // `CommitMergeRequest`.
 fn merge_source_path<EK>(
     registry: &TabletRegistry<EK>,

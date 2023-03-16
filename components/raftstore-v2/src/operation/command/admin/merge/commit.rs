@@ -115,7 +115,7 @@ struct MergeInProgressGuard(PathBuf);
 impl MergeInProgressGuard {
     const PREFIX: &str = "merge-in-progress";
 
-    // Index is the commit index of `CommitMergeRequest`
+    // `index` is the commit index of `CommitMergeRequest`
     fn new<EK>(
         logger: &Logger,
         registry: &TabletRegistry<EK>,
@@ -125,15 +125,16 @@ impl MergeInProgressGuard {
     ) -> io::Result<Option<Self>> {
         let name = registry.tablet_name(Self::PREFIX, target_region_id, index);
         let marker_path = registry.tablet_root().join(name);
-        if !marker_path.exists() && !tablet_path.exists() {
-            let f = fs::File::create(&marker_path)?;
-            f.sync_all()?;
-            fs::File::open(marker_path.parent().unwrap()).and_then(|d| d.sync_all())?;
-        } else if marker_path.exists() && tablet_path.exists() {
+        if !marker_path.exists() {
+            if tablet_path.exists() {
+                return Ok(None);
+            } else {
+                fs::create_dir(&marker_path)?;
+                file_system::sync_dir(marker_path.parent().unwrap())?;
+            }
+        } else if tablet_path.exists() {
             info!(logger, "remove incomplete merged tablet"; "path" => %tablet_path.display());
             fs::remove_dir_all(tablet_path)?;
-        } else {
-            return Ok(None);
         }
         Ok(Some(Self(marker_path)))
     }
@@ -207,17 +208,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .set_region_epoch(target.get_region_epoch().clone());
         let mut admin = AdminRequest::default();
         admin.set_cmd_type(AdminCmdType::CommitMerge);
-        admin.mut_commit_merge().set_source(self.region().clone());
-        admin.mut_commit_merge().set_commit(state.get_commit());
         admin.mut_commit_merge().set_entries(entries.into());
-        let removed_records = self.storage().region_state().get_removed_records();
-        let merged_records = self.storage().region_state().get_merged_records();
         admin
             .mut_commit_merge()
-            .set_removed_records(removed_records.into());
-        admin
-            .mut_commit_merge()
-            .set_merged_records(merged_records.into());
+            .set_source_state(self.storage().region_state().clone());
         request.set_admin_request(admin);
         // Please note that, here assumes that the unit of network isolation is store
         // rather than peer. So a quorum stores of source region should also be the
@@ -276,7 +270,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     fn validate_commit_merge(&self, req: &RaftCmdRequest) -> Option<bool> {
         let expected_epoch = req.get_header().get_region_epoch();
-        let source_region = req.get_admin_request().get_commit_merge().get_source();
+        let merge = req.get_admin_request().get_commit_merge();
+        assert!(merge.has_source_state() && merge.get_source_state().has_merge_state());
+        let source_region = merge.get_source_state().get_region();
         let region = self.region();
         if self
             .storage()
@@ -357,10 +353,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // Note: compared to v1, doesn't validate region state from kvdb any more.
         let reg = self.tablet_registry();
         let merge = req.get_commit_merge();
-        let source_region = merge.get_source();
-        let source_path = merge_source_path(reg, source_region.get_id(), merge.get_commit());
+        let source_state = merge.get_source_state();
+        let commit = source_state.get_merge_state().get_commit();
+        let source_region = source_state.get_region();
+        let source_path = merge_source_path(reg, source_region.get_id(), commit);
         let mut source_safe_ts = 0;
-        let now = Instant::now_coarse();
+
+        let mut start_time = Instant::now_coarse();
+        let mut wait_duration = None;
         if !source_path.exists() {
             let (tx, rx) = oneshot::channel();
             self.res_reporter().redirect_catch_up_logs(CatchUpLogs {
@@ -374,9 +374,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
                 Err(_) => {
                     if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
-                        loop {
-                            std::thread::park();
-                        }
+                        return futures::future::pending().await;
                     } else {
                         slog_panic!(
                             self.logger,
@@ -385,13 +383,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     }
                 }
             }
-        }
-        let wait_time = now.saturating_elapsed();
+            let now = Instant::now_coarse();
+            wait_duration = Some(now.saturating_duration_since(start_time));
+            start_time = now;
+        };
 
         info!(
             self.logger,
             "execute CommitMerge";
-            "commit" => merge.get_commit(),
+            "commit" => commit,
             "entries" => merge.get_entries().len(),
             "index" => index,
             "source_region" => ?source_region,
@@ -404,7 +404,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .unwrap_or_else(|e| {
                 slog_panic!(self.logger, "failed to open source checkpoint"; "err" => ?e);
             });
-        let open_time = now.saturating_elapsed();
+        let open_time = Instant::now_coarse();
 
         let mut region = self.region().clone();
         // Use a max value so that pd can ensure overlapped region has a priority.
@@ -424,7 +424,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // Avoid seqno jump back between self.tablet and the newly created tablet.
         // If we are recovering, this flush would just be a noop.
         self.tablet().flush_cfs(&[], true).unwrap();
-        let flush_time = now.saturating_elapsed();
+        let flush_time = Instant::now_coarse();
 
         let mut ctx = TabletContext::new(&region, Some(index));
         ctx.flush_state = Some(self.flush_state().clone());
@@ -460,16 +460,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         } else {
             info!(self.logger, "reuse merged tablet");
         }
-        let merge_time = now.saturating_elapsed();
+        let merge_time = Instant::now_coarse();
 
         info!(
             self.logger,
             "applied CommitMerge";
             "source_region" => ?source_region,
-            "wait" => %ReadableDuration(wait_time),
-            "open" => %ReadableDuration(open_time.saturating_sub(wait_time)),
-            "merge" => %ReadableDuration(flush_time.saturating_sub(open_time)),
-            "flush" => %ReadableDuration(merge_time.saturating_sub(flush_time)),
+            "wait" => ?wait_duration.map(|d| format!("{}", ReadableDuration(d))),
+            "open" => %ReadableDuration(open_time.saturating_duration_since(start_time)),
+            "merge" => %ReadableDuration(flush_time.saturating_duration_since(open_time)),
+            "flush" => %ReadableDuration(merge_time.saturating_duration_since(flush_time)),
         );
 
         self.set_tablet(tablet.clone());
@@ -479,12 +479,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         state.set_state(PeerState::Normal);
         assert!(!state.has_merge_state());
         state.set_tablet_index(index);
-        for r in merge.get_removed_records() {
-            state.mut_removed_records().push(r.clone());
-        }
-        for r in merge.get_merged_records() {
-            state.mut_merged_records().push(r.clone());
-        }
+        let mut removed_records: Vec<_> = state.get_removed_records().into();
+        removed_records.append(&mut source_state.get_removed_records().into());
+        state.set_removed_records(removed_records.into());
+        let mut merged_records: Vec<_> = state.get_merged_records().into();
+        merged_records.append(&mut source_state.get_merged_records().into());
+        state.set_merged_records(merged_records.into());
         let mut merged_record = MergedRecord::default();
         merged_record.set_source_region_id(source_region.get_id());
         merged_record.set_source_epoch(source_region.get_region_epoch().clone());
@@ -501,7 +501,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             AdminResponse::default(),
             AdminCmdResult::CommitMerge(CommitMergeResult {
                 index,
-                prepare_merge_index: merge.get_commit(),
+                prepare_merge_index: commit,
                 source_path,
                 region_state: self.region_state().clone(),
                 source: source_region.to_owned(),
@@ -723,9 +723,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // We could only have gotten safe ts by sending `CatchUpLogs` earlier. If we
-        // haven't, need to do it now to acknowledge that we have committed the
-        // merge, so that the source peer can destroy itself. Note that the timing is
-        // deliberately delayed after reading `store_ctx.meta` to get the source safe ts
+        // haven't, need to acknowledge that we have committed the merge, so that the
+        // source peer can destroy itself. Note that the timing is deliberately
+        // delayed after reading `store_ctx.meta` to get the source safe ts
         // before its meta gets cleaned up.
         if !acquired_source_safe_ts_before {
             let _ = store_ctx.router.force_send(
@@ -772,17 +772,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     // Called on source peer.
     pub fn on_ack_commit_merge(&mut self, index: u64, target_id: u64) {
-        if let Some(state) = self.applied_merge_state()
-            && state.get_commit() == index
-        {
-            assert_eq!(
-                state.get_target().get_id(),
-                target_id,
-                "{}",
-                SlogFormat(&self.logger)
-            );
-            self.take_merge_context();
-            self.mark_for_destroy(None);
-        }
+        // We don't check it against merge state because source peer might just restart
+        // and haven't replayed `PrepareMerge` yet.
+        info!(self.logger, "destroy self on AckCommitMerge"; "index" => index, "target_id" => target_id);
+        self.take_merge_context();
+        self.mark_for_destroy(None);
     }
 }

@@ -2733,7 +2733,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/tabokie/kvproto?branch=commit-merge-records#2f5a5ea6bc55d201fb679d13df9de2e04854fc8d"
+source = "git+https://github.com/tabokie/kvproto?branch=commit-merge-records#bd96d5e1aa202f16f53c78aab34bc9053b9d7d6a"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
