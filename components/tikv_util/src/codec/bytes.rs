@@ -513,7 +513,7 @@ mod tests {
                     desc
                 );
                 let mut longer_encoded = encoded.clone();
-                longer_encoded.extend(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
+                longer_encoded.extend([0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
                 assert!(
                     !is_encoded_from(&longer_encoded, &raw, desc),
                     "Encoded: {:?}, Raw: {:?}, desc: {}",

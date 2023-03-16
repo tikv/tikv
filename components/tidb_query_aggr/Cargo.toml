@@ -12,7 +12,7 @@ tidb_query_common = { workspace = true }
 tidb_query_datatype = { workspace = true }
 tidb_query_expr = { workspace = true }
 tikv_util = { workspace = true }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { workspace = true }
 
 [dev-dependencies]
 panic_hook = { workspace = true }

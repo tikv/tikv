@@ -1506,11 +1506,10 @@ struct TaskRange {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, marker::Unpin, time::Duration};
+    use std::{ffi::OsStr, time::Duration};
 
-    use external_storage::NoopStorage;
+    use external_storage::{ExternalData, NoopStorage};
     use futures::AsyncReadExt;
-    use futures_io::AsyncRead;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use tikv_util::{
         codec::number::NumberEncoder,
@@ -1929,16 +1928,11 @@ mod tests {
             self.inner.write(name, reader, content_length).await
         }
 
-        fn read(&self, name: &str) -> Box<dyn futures::AsyncRead + Unpin + '_> {
+        fn read(&self, name: &str) -> ExternalData<'_> {
             self.inner.read(name)
         }
 
-        fn read_part(
-            &self,
-            name: &str,
-            off: u64,
-            len: u64,
-        ) -> Box<dyn futures::AsyncRead + Unpin + '_> {
+        fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
             self.inner.read_part(name, off, len)
         }
     }
@@ -2277,11 +2271,11 @@ mod tests {
             }
         }
 
-        fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+        fn read(&self, name: &str) -> external_storage::ExternalData<'_> {
             self.s.read(name)
         }
 
-        fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        fn read_part(&self, name: &str, off: u64, len: u64) -> external_storage::ExternalData<'_> {
             self.s.read_part(name, off, len)
         }
     }

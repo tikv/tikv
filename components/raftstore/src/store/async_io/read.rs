@@ -18,6 +18,8 @@ use raft::{eraftpb::Snapshot, GetEntriesContext};
 use tikv_util::{error, info, time::Instant, worker::Runnable};
 
 use crate::store::{
+    metrics::{SNAPSHOT_KV_COUNT_HISTOGRAM, SNAPSHOT_SIZE_HISTOGRAM},
+    snap::TABLET_SNAPSHOT_VERSION,
     util,
     worker::metrics::{SNAP_COUNTER, SNAP_HISTOGRAM},
     RaftlogFetchResult, TabletSnapKey, TabletSnapManager, MAX_INIT_ENTRY_COUNT,
@@ -78,12 +80,12 @@ pub struct FetchedLogs {
     pub logs: Box<RaftlogFetchResult>,
 }
 
-pub type GenSnapRes = Option<Box<Snapshot>>;
+pub type GenSnapRes = Option<Box<(Snapshot, u64)>>;
 
 /// A router for receiving fetched result.
 pub trait AsyncReadNotifier: Send {
     fn notify_logs_fetched(&self, region_id: u64, fetched: FetchedLogs);
-    fn notify_snapshot_generated(&self, region_id: u64, res: Option<Box<Snapshot>>);
+    fn notify_snapshot_generated(&self, region_id: u64, res: GenSnapRes);
 }
 
 pub struct ReadRunner<EK, ER, N>
@@ -119,10 +121,10 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
     }
 
     fn generate_snap(&self, snap_key: &TabletSnapKey, tablet: EK) -> crate::Result<()> {
-        let checkpointer_path = self.snap_mgr().get_tablet_checkpointer_path(snap_key);
+        let checkpointer_path = self.snap_mgr().tablet_gen_path(snap_key);
         if checkpointer_path.as_path().exists() {
             // Remove the old checkpoint directly.
-            std::fs::remove_dir_all(checkpointer_path.as_path())?;
+            file_system::trash_dir_all(&checkpointer_path)?;
         }
         // Here not checkpoint to a temporary directory first, the temporary directory
         // logic already implemented in rocksdb.
@@ -215,21 +217,36 @@ where
                 // Set snapshot data.
                 let mut snap_data = RaftSnapshotData::default();
                 snap_data.set_region(region_state.get_region().clone());
+                snap_data.set_version(TABLET_SNAPSHOT_VERSION);
                 snap_data.mut_meta().set_for_balance(for_balance);
+                snap_data.set_removed_records(region_state.get_removed_records().into());
+                snap_data.set_merged_records(region_state.get_merged_records().into());
                 snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
 
                 // create checkpointer.
                 let snap_key = TabletSnapKey::from_region_snap(region_id, to_peer, &snapshot);
                 let mut res = None;
+                let total_size = tablet.get_engine_used_size().unwrap_or(0);
+                let total_keys = tablet.get_num_keys().unwrap_or(0);
                 if let Err(e) = self.generate_snap(&snap_key, tablet) {
                     error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
                     SNAP_COUNTER.generate.fail.inc();
                 } else {
+                    let elapsed = start.saturating_elapsed_secs();
                     SNAP_COUNTER.generate.success.inc();
-                    SNAP_HISTOGRAM
-                        .generate
-                        .observe(start.saturating_elapsed_secs());
-                    res = Some(Box::new(snapshot))
+                    SNAP_HISTOGRAM.generate.observe(elapsed);
+                    SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
+                    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(total_keys as f64);
+                    info!(
+                        "snapshot generated";
+                        "region_id" => region_id,
+                        "elapsed" => elapsed,
+                        "key" => ?snap_key,
+                        "for_balance" => for_balance,
+                        "total_size" => total_size,
+                        "total_keys" => total_keys,
+                    );
+                    res = Some(Box::new((snapshot, to_peer)))
                 }
 
                 self.notifier.notify_snapshot_generated(region_id, res);

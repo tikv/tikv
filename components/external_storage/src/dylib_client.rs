@@ -92,7 +92,7 @@ impl ExternalStorage for ExternalStorageClient {
         .map_err(anyhow_to_io_log_error)
     }
 
-    fn read(&self, _name: &str) -> Box<dyn AsyncRead + Unpin> {
+    fn read(&self, _name: &str) -> crate::ExternalData<'_> {
         unimplemented!("use restore instead of read")
     }
 

@@ -12,10 +12,7 @@ use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
     metapb,
 };
-use raftstore::{
-    coprocessor::{region_info_accessor::MockRegionInfoProvider, RegionInfoProvider},
-    router::RaftStoreBlackHole,
-};
+use raftstore::coprocessor::{region_info_accessor::MockRegionInfoProvider, RegionInfoProvider};
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
@@ -106,7 +103,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine, F: KvFormat> {
-    gc_worker: GcWorker<E, RaftStoreBlackHole>,
+    gc_worker: GcWorker<E>,
     store: Storage<E, MockLockManager, F>,
 }
 
@@ -123,7 +120,6 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
-            RaftStoreBlackHole,
             tx,
             config,
             Default::default(),

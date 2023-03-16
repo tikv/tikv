@@ -6,6 +6,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fmt,
     fmt::Display,
+    io::BufRead,
     option::Option,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
@@ -19,26 +20,36 @@ use engine_traits::KvEngine;
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
-    raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest},
+    raft_cmdpb::{
+        AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, RaftRequestHeader,
+    },
     raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
-use protobuf::{self, Message};
+use protobuf::{self, wire_format::WireType, CodedInputStream, Message};
 use raft::{
-    eraftpb::{self, ConfChangeType, ConfState, MessageType, Snapshot},
+    eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
     Changer, RawNode, INVALID_INDEX,
 };
-use raft_proto::ConfChangeI;
+use raft_proto::{
+    eraftpb::{ConfChange, ConfChangeV2},
+    ConfChangeI,
+};
 use tikv_util::{
-    box_err, debug, info,
+    box_err,
+    codec::number::{decode_u64, NumberEncoder},
+    debug, info,
     store::{find_peer_by_id, region},
     time::monotonic_raw_now,
     Either,
 };
 use time::{Duration, Timespec};
-use txn_types::{TimeStamp, WriteBatchFlags};
+use tokio::sync::Notify;
+use txn_types::WriteBatchFlags;
 
 use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
-use crate::{coprocessor::CoprocessorHost, store::snap::SNAPSHOT_VERSION, Error, Result};
+use crate::{
+    bytes_capacity, coprocessor::CoprocessorHost, store::snap::SNAPSHOT_VERSION, Error, Result,
+};
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
 
@@ -226,6 +237,8 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
             AdminCmdEpochState::new(true, true, false, false)
         }
+        AdminCmdType::BatchSwitchWitness => AdminCmdEpochState::new(false, true, false, true),
+        AdminCmdType::UpdateGcPeer => AdminCmdEpochState::new(false, false, false, false),
     }
 }
 
@@ -234,28 +247,45 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
 pub static NORMAL_REQ_CHECK_VER: bool = true;
 pub static NORMAL_REQ_CHECK_CONF_VER: bool = false;
 
-pub fn check_region_epoch(
+pub fn check_req_region_epoch(
     req: &RaftCmdRequest,
     region: &metapb::Region,
     include_region: bool,
 ) -> Result<()> {
-    let (check_ver, check_conf_ver) = if !req.has_admin_request() {
-        // for get/set/delete, we don't care conf_version.
-        (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
+    let admin_ty = if !req.has_admin_request() {
+        None
     } else {
-        let epoch_state = admin_cmd_epoch_lookup(req.get_admin_request().get_cmd_type());
-        (epoch_state.check_ver, epoch_state.check_conf_ver)
+        Some(req.get_admin_request().get_cmd_type())
+    };
+    check_region_epoch(req.get_header(), admin_ty, region, include_region)
+}
+
+pub fn check_region_epoch(
+    header: &RaftRequestHeader,
+    admin_ty: Option<AdminCmdType>,
+    region: &metapb::Region,
+    include_region: bool,
+) -> Result<()> {
+    let (check_ver, check_conf_ver) = match admin_ty {
+        None => {
+            // for get/set/delete, we don't care conf_version.
+            (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
+        }
+        Some(ty) => {
+            let epoch_state = admin_cmd_epoch_lookup(ty);
+            (epoch_state.check_ver, epoch_state.check_conf_ver)
+        }
     };
 
     if !check_ver && !check_conf_ver {
         return Ok(());
     }
 
-    if !req.get_header().has_region_epoch() {
+    if !header.has_region_epoch() {
         return Err(box_err!("missing epoch!"));
     }
 
-    let from_epoch = req.get_header().get_region_epoch();
+    let from_epoch = header.get_region_epoch();
     compare_region_epoch(
         from_epoch,
         region,
@@ -315,8 +345,10 @@ pub fn compare_region_epoch(
 // flashback.
 pub fn check_flashback_state(
     is_in_flashback: bool,
+    flashback_start_ts: u64,
     req: &RaftCmdRequest,
     region_id: u64,
+    skip_not_prepared: bool,
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
     if req.has_admin_request()
@@ -325,19 +357,34 @@ pub fn check_flashback_state(
     {
         return Ok(());
     }
+    // TODO: only use `flashback_start_ts` to check flashback state.
+    let is_in_flashback = is_in_flashback || flashback_start_ts > 0;
     let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
         .contains(WriteBatchFlags::FLASHBACK);
-    // If the region is in the flashback state, the only allowed request is the
-    // flashback request itself.
+    // If the region is in the flashback state:
+    //   - A request with flashback flag will be allowed.
+    //   - A read request whose `read_ts` is smaller than `flashback_start_ts` will
+    //     be allowed.
     if is_in_flashback && !is_flashback_request {
-        return Err(Error::FlashbackInProgress(region_id));
+        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+            if read_ts != 0 && read_ts < flashback_start_ts {
+                return Ok(());
+            }
+        }
+        return Err(Error::FlashbackInProgress(region_id, flashback_start_ts));
     }
     // If the region is not in the flashback state, the flashback request itself
     // should be rejected.
-    if !is_in_flashback && is_flashback_request {
+    if !is_in_flashback && is_flashback_request && !skip_not_prepared {
         return Err(Error::FlashbackNotPrepared(region_id));
     }
     Ok(())
+}
+
+pub fn encode_start_ts_into_flag_data(header: &mut RaftRequestHeader, start_ts: u64) {
+    let mut data = [0u8; 8];
+    (&mut data[..]).encode_u64(start_ts).unwrap();
+    header.set_flag_data(data.into());
 }
 
 pub fn is_region_epoch_equal(
@@ -349,8 +396,8 @@ pub fn is_region_epoch_equal(
 }
 
 #[inline]
-pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
-    let peer = req.get_header().get_peer();
+pub fn check_store_id(header: &RaftRequestHeader, store_id: u64) -> Result<()> {
+    let peer = header.get_peer();
     if peer.get_store_id() == store_id {
         Ok(())
     } else {
@@ -362,8 +409,7 @@ pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
 }
 
 #[inline]
-pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
-    let header = req.get_header();
+pub fn check_term(header: &RaftRequestHeader, term: u64) -> Result<()> {
     if header.get_term() == 0 || term <= header.get_term() + 1 {
         Ok(())
     } else {
@@ -374,8 +420,7 @@ pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
 }
 
 #[inline]
-pub fn check_peer_id(req: &RaftCmdRequest, peer_id: u64) -> Result<()> {
-    let header = req.get_header();
+pub fn check_peer_id(header: &RaftRequestHeader, peer_id: u64) -> Result<()> {
     if header.get_peer().get_id() == peer_id {
         Ok(())
     } else {
@@ -706,6 +751,157 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
     Timespec::new(sec as i64, nsec as i32)
 }
 
+// ParsedEntry wraps raft-proto `Entry` and used to avoid parsing raft command
+// from entry's data repeatedly. The parsed command may be used in multiple
+// places, so cache it at the first place.
+pub struct ParsedEntry {
+    entry: Entry,
+    cmd: Option<RaftCmdRequest>,
+    conf_change: Option<ConfChangeV2>,
+    parsed: bool,
+}
+
+impl ParsedEntry {
+    pub fn new(entry: Entry) -> ParsedEntry {
+        ParsedEntry {
+            entry,
+            cmd: None,
+            conf_change: None,
+            parsed: false,
+        }
+    }
+
+    pub fn get_entry_type(&self) -> EntryType {
+        self.entry.get_entry_type()
+    }
+
+    pub fn get_index(&self) -> u64 {
+        self.entry.get_index()
+    }
+
+    pub fn get_term(&self) -> u64 {
+        self.entry.get_term()
+    }
+
+    pub fn compute_size(&self) -> u32 {
+        self.entry.compute_size()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entry.get_data().is_empty()
+    }
+
+    pub fn bytes_capacity(&self) -> usize {
+        bytes_capacity(&self.entry.data) + bytes_capacity(&self.entry.context)
+    }
+
+    fn parse(&mut self) {
+        assert!(!self.is_empty());
+
+        let data = self.entry.get_data();
+        let index = self.entry.get_index();
+        // lazy parse the cmd from entry context
+        let conf_change = match self.entry.get_entry_type() {
+            EntryType::EntryConfChange => {
+                let conf_change: ConfChange = parse_data_at(data, index);
+                Some(conf_change.into_v2())
+            }
+            EntryType::EntryConfChangeV2 => Some(parse_data_at(data, index)),
+            EntryType::EntryNormal => {
+                self.cmd = Some(parse_data_at(data, index));
+                None
+            }
+        };
+        if let Some(conf_change) = conf_change {
+            self.cmd = Some(parse_data_at(conf_change.get_context(), index));
+            self.conf_change = Some(conf_change);
+        }
+        self.parsed = true;
+    }
+
+    pub fn get_cmd(&mut self) -> &RaftCmdRequest {
+        if !self.parsed {
+            self.parse();
+        }
+        self.cmd.as_ref().unwrap()
+    }
+
+    pub fn take_cmd(&mut self) -> RaftCmdRequest {
+        if !self.parsed {
+            self.parse();
+        }
+        self.parsed = false;
+        self.cmd.take().unwrap()
+    }
+
+    pub fn take_conf_change(&mut self) -> (ConfChangeV2, RaftCmdRequest) {
+        if !self.parsed {
+            self.parse();
+        }
+        self.parsed = false;
+        (self.conf_change.take().unwrap(), self.cmd.take().unwrap())
+    }
+
+    pub fn can_witness_skip(&self) -> bool {
+        !has_admin_request(&self.entry)
+    }
+}
+
+fn has_admin_request(entry: &Entry) -> bool {
+    // need to handle ConfChange entry type
+    if entry.get_entry_type() != EntryType::EntryNormal {
+        return true;
+    }
+
+    // HACK: check admin request field in serialized data from `RaftCmdRequest`
+    // without deserializing all. It's done by checking the existence of the
+    // field number of `admin_request`.
+    // See the encoding in `write_to_with_cached_sizes()` of `RaftCmdRequest` in
+    // `raft_cmdpb.rs` for reference.
+    let mut is = CodedInputStream::from_bytes(entry.get_data());
+    if is.eof().unwrap() {
+        return false;
+    }
+    let (mut field_number, wire_type) = is.read_tag_unpack().unwrap();
+    // Header field is of number 1
+    if field_number == 1 {
+        if wire_type != WireType::WireTypeLengthDelimited {
+            panic!("unexpected wire type");
+        }
+        let len = is.read_raw_varint32().unwrap();
+        // skip parsing the content of `Header`
+        is.consume(len as usize);
+        // read next field number
+        (field_number, _) = is.read_tag_unpack().unwrap();
+    }
+
+    // `Requests` field is of number 2 and `AdminRequest` field is of number 3.
+    // - If the next field is 2, there must be no admin request as in one
+    //   `RaftCmdRequest`, either requests or admin_request is filled.
+    // - If the next field is 3, it's exactly an admin request.
+    // - If the next field is others, neither requests nor admin_request is filled,
+    //   so there is no admin request.
+    field_number == 3
+}
+
+pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
+    if entry.get_entry_type() != EntryType::EntryNormal {
+        return RaftRequestHeader::default();
+    }
+    // request header is encoded into data
+    let mut is = CodedInputStream::from_bytes(entry.get_data());
+    if is.eof().unwrap() {
+        return RaftRequestHeader::default();
+    }
+    let (field_number, _) = is.read_tag_unpack().unwrap();
+    let t = is.read_message().unwrap();
+    // Header field is of number 1
+    if field_number != 1 {
+        panic!("unexpected field number: {} {:?}", field_number, t);
+    }
+    t
+}
+
 /// Parse data of entry `index`.
 ///
 /// # Panics
@@ -713,10 +909,10 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
 /// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
 #[inline]
-pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: &str) -> T {
+pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64) -> T {
     let mut result = T::default();
     result.merge_from_bytes(data).unwrap_or_else(|e| {
-        panic!("{} data is corrupted at {}: {:?}. hex value: {}", tag, index, e, log_wrappers::Value::value(data));
+        panic!("{} data is corrupted : {:?}. hex value: {}", tag, index, e, log_wrappers::Value::value(data));
     });
     result
 }
@@ -1178,17 +1374,23 @@ impl RegionReadProgress {
         }
     }
 
+    pub fn update_advance_resolved_ts_notify(&self, advance_notify: Arc<Notify>) {
+        self.core.lock().unwrap().advance_notify = Some(advance_notify);
+    }
+
+    pub fn notify_advance_resolved_ts(&self) {
+        if let Ok(core) = self.core.try_lock() && let Some(advance_notify) = &core.advance_notify {
+            advance_notify.notify_waiters();
+        }
+    }
+
     pub fn update_applied<E: KvEngine>(&self, applied: u64, coprocessor: &CoprocessorHost<E>) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.update_applied(applied) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
                 // No need to update leader safe ts here.
-                coprocessor.on_update_safe_ts(
-                    core.region_id,
-                    TimeStamp::new(ts).physical(),
-                    INVALID_TIMESTAMP,
-                )
+                coprocessor.on_update_safe_ts(core.region_id, ts, INVALID_TIMESTAMP)
             }
         }
     }
@@ -1230,11 +1432,7 @@ impl RegionReadProgress {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
                 // After region merge, self safe ts may decrease, so leader safe ts should be
                 // reset.
-                coprocessor.on_update_safe_ts(
-                    core.region_id,
-                    TimeStamp::new(ts).physical(),
-                    TimeStamp::new(ts).physical(),
-                )
+                coprocessor.on_update_safe_ts(core.region_id, ts, ts)
             }
         }
     }
@@ -1259,9 +1457,7 @@ impl RegionReadProgress {
                     }
                 }
             }
-            let self_phy_ts = TimeStamp::new(self.safe_ts()).physical();
-            let leader_phy_ts = TimeStamp::new(rs.get_safe_ts()).physical();
-            coprocessor.on_update_safe_ts(leader_info.region_id, self_phy_ts, leader_phy_ts)
+            coprocessor.on_update_safe_ts(leader_info.region_id, self.safe_ts(), rs.get_safe_ts())
         }
         // whether the provided `LeaderInfo` is same as ours
         core.leader_info.leader_term == leader_info.term
@@ -1351,6 +1547,8 @@ pub struct RegionReadProgressCore {
     pause: bool,
     // Discard incoming `(idx, ts)`
     discard: bool,
+    // A notify to trigger advancing resolved ts immediately.
+    advance_notify: Option<Arc<Notify>>,
 }
 
 // A helpful wrapper of `(apply_index, safe_ts)` item
@@ -1422,6 +1620,7 @@ impl RegionReadProgressCore {
             last_merge_index: 0,
             pause: is_witness,
             discard: is_witness,
+            advance_notify: None,
         }
     }
 
@@ -1612,15 +1811,58 @@ impl LatencyInspector {
     }
 }
 
+pub fn validate_split_region(
+    region_id: u64,
+    peer_id: u64,
+    region: &Region,
+    epoch: &RegionEpoch,
+    split_keys: &[Vec<u8>],
+) -> Result<()> {
+    if split_keys.is_empty() {
+        return Err(box_err!(
+            "[region {}] {} no split key is specified.",
+            region_id,
+            peer_id
+        ));
+    }
+
+    let latest_epoch = region.get_region_epoch();
+    // This is a little difference for `check_region_epoch` in region split case.
+    // Here we just need to check `version` because `conf_ver` will be update
+    // to the latest value of the peer, and then send to PD.
+    if latest_epoch.get_version() != epoch.get_version() {
+        return Err(Error::EpochNotMatch(
+            format!(
+                "[region {}] {} epoch changed {:?} != {:?}, retry later",
+                region_id, peer_id, latest_epoch, epoch
+            ),
+            vec![region.to_owned()],
+        ));
+    }
+    for key in split_keys {
+        if key.is_empty() {
+            return Err(box_err!(
+                "[region {}] {} split key should not be empty",
+                region_id,
+                peer_id
+            ));
+        }
+        check_key_in_region(key, region)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
 
+    use bytes::Bytes;
     use engine_test::kv::KvTestEngine;
     use kvproto::{
         metapb::{self, RegionEpoch},
-        raft_cmdpb::AdminRequest,
+        raft_cmdpb::{AdminRequest, CmdType, Request},
     };
+    use protobuf::Message as _;
     use raft::eraftpb::{ConfChangeType, Entry, Message, MessageType};
     use tikv_util::store::new_peer;
     use time::Duration as TimeDuration;
@@ -1697,6 +1939,67 @@ mod tests {
         // A new remote lease.
         let m1 = lease.maybe_new_remote_lease(1).unwrap();
         assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
+    }
+
+    #[test]
+    fn test_parsed_entry() {
+        let mut req = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_resource_group_name("test".to_owned());
+        req.set_header(header);
+
+        let mut entry = Entry::new();
+        entry.set_term(1);
+        entry.set_index(2);
+        entry.set_entry_type(raft::eraftpb::EntryType::EntryNormal);
+        entry.set_data(req.write_to_bytes().unwrap().into());
+
+        let mut parsed = ParsedEntry::new(entry);
+        assert_eq!(parsed.get_term(), 1);
+        assert_eq!(parsed.get_index(), 2);
+        assert_eq!(
+            parsed.get_cmd().get_header().get_resource_group_name(),
+            "test"
+        );
+
+        let mut entry = Entry::new();
+        entry.set_term(1);
+        entry.set_index(2);
+        entry.set_entry_type(raft::eraftpb::EntryType::EntryConfChangeV2);
+        let mut cc = ConfChangeV2::new();
+        let mut ccs = eraftpb::ConfChangeSingle::default();
+        ccs.set_change_type(ConfChangeType::AddNode);
+        ccs.set_node_id(3);
+        cc.set_changes(vec![ccs].into());
+        cc.set_context(req.write_to_bytes().unwrap().into());
+        entry.set_data(cc.write_to_bytes().unwrap().into());
+
+        let mut parsed = ParsedEntry::new(entry);
+        let (conf_change, cmd) = parsed.take_conf_change();
+        assert_eq!(
+            conf_change.get_changes()[0].get_change_type(),
+            ConfChangeType::AddNode
+        );
+        assert_eq!(conf_change.get_changes()[0].get_node_id(), 3);
+        assert_eq!(cmd.get_header().get_resource_group_name(), "test");
+        assert_eq!(
+            parsed.get_cmd().get_header().get_resource_group_name(),
+            "test"
+        );
+    }
+
+    #[test]
+    fn test_get_entry_header() {
+        let mut req = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_resource_group_name("test".to_owned());
+        req.set_header(header);
+        let mut entry = Entry::new();
+        entry.set_term(1);
+        entry.set_index(2);
+        entry.set_data(req.write_to_bytes().unwrap().into());
+        let header = get_entry_header(&entry);
+        assert_eq!(header.get_resource_group_name(), "test");
     }
 
     #[test]
@@ -2009,34 +2312,70 @@ mod tests {
 
     #[test]
     fn test_check_store_id() {
-        let mut req = RaftCmdRequest::default();
-        req.mut_header().mut_peer().set_store_id(1);
-        check_store_id(&req, 1).unwrap();
-        check_store_id(&req, 2).unwrap_err();
+        let mut header = RaftRequestHeader::default();
+        header.mut_peer().set_store_id(1);
+        check_store_id(&header, 1).unwrap();
+        check_store_id(&header, 2).unwrap_err();
     }
 
     #[test]
     fn test_check_peer_id() {
-        let mut req = RaftCmdRequest::default();
-        req.mut_header().mut_peer().set_id(1);
-        check_peer_id(&req, 1).unwrap();
-        check_peer_id(&req, 2).unwrap_err();
+        let mut header = RaftRequestHeader::default();
+        header.mut_peer().set_id(1);
+        check_peer_id(&header, 1).unwrap();
+        check_peer_id(&header, 2).unwrap_err();
     }
 
     #[test]
     fn test_check_term() {
-        let mut req = RaftCmdRequest::default();
-        req.mut_header().set_term(7);
-        check_term(&req, 7).unwrap();
-        check_term(&req, 8).unwrap();
+        let mut header = RaftRequestHeader::default();
+        header.set_term(7);
+        check_term(&header, 7).unwrap();
+        check_term(&header, 8).unwrap();
         // If header's term is 2 verions behind current term,
         // leadership may have been changed away.
-        check_term(&req, 9).unwrap_err();
-        check_term(&req, 10).unwrap_err();
+        check_term(&header, 9).unwrap_err();
+        check_term(&header, 10).unwrap_err();
     }
 
     #[test]
-    fn test_check_region_epoch() {
+    fn test_has_admin_request() {
+        let mut entry = Entry::new();
+        let mut req = RaftCmdRequest::default();
+        entry.set_entry_type(EntryType::EntryNormal);
+        let data = req.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(!has_admin_request(&entry));
+
+        req.mut_admin_request()
+            .set_cmd_type(AdminCmdType::CompactLog);
+        let data = req.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(has_admin_request(&entry));
+
+        let mut req = RaftCmdRequest::default();
+        let mut request = Request::default();
+        request.set_cmd_type(CmdType::Put);
+        req.set_requests(vec![request].into());
+        let data = req.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(!has_admin_request(&entry));
+
+        entry.set_entry_type(EntryType::EntryConfChange);
+        let conf_change = ConfChange::new();
+        let data = conf_change.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(has_admin_request(&entry));
+
+        entry.set_entry_type(EntryType::EntryConfChangeV2);
+        let conf_change_v2 = ConfChangeV2::new();
+        let data = conf_change_v2.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(has_admin_request(&entry));
+    }
+
+    #[test]
+    fn test_check_req_region_epoch() {
         let mut epoch = RegionEpoch::default();
         epoch.set_conf_ver(2);
         epoch.set_version(2);
@@ -2044,7 +2383,7 @@ mod tests {
         region.set_region_epoch(epoch.clone());
 
         // Epoch is required for most requests even if it's empty.
-        check_region_epoch(&RaftCmdRequest::default(), &region, false).unwrap_err();
+        check_req_region_epoch(&RaftCmdRequest::default(), &region, false).unwrap_err();
 
         // These admin commands do not require epoch.
         for ty in &[
@@ -2059,11 +2398,11 @@ mod tests {
             req.set_admin_request(admin);
 
             // It is Okay if req does not have region epoch.
-            check_region_epoch(&req, &region, false).unwrap();
+            check_req_region_epoch(&req, &region, false).unwrap();
 
             req.mut_header().set_region_epoch(epoch.clone());
-            check_region_epoch(&req, &region, true).unwrap();
-            check_region_epoch(&req, &region, false).unwrap();
+            check_req_region_epoch(&req, &region, true).unwrap();
+            check_req_region_epoch(&req, &region, false).unwrap();
         }
 
         // These admin commands requires epoch.version.
@@ -2081,7 +2420,7 @@ mod tests {
             req.set_admin_request(admin);
 
             // Error if req does not have region epoch.
-            check_region_epoch(&req, &region, false).unwrap_err();
+            check_req_region_epoch(&req, &region, false).unwrap_err();
 
             let mut stale_version_epoch = epoch.clone();
             stale_version_epoch.set_version(1);
@@ -2089,14 +2428,14 @@ mod tests {
             stale_region.set_region_epoch(stale_version_epoch.clone());
             req.mut_header()
                 .set_region_epoch(stale_version_epoch.clone());
-            check_region_epoch(&req, &stale_region, false).unwrap();
+            check_req_region_epoch(&req, &stale_region, false).unwrap();
 
             let mut latest_version_epoch = epoch.clone();
             latest_version_epoch.set_version(3);
             for epoch in &[stale_version_epoch, latest_version_epoch] {
                 req.mut_header().set_region_epoch(epoch.clone());
-                check_region_epoch(&req, &region, false).unwrap_err();
-                check_region_epoch(&req, &region, true).unwrap_err();
+                check_req_region_epoch(&req, &region, false).unwrap_err();
+                check_req_region_epoch(&req, &region, true).unwrap_err();
             }
         }
 
@@ -2117,21 +2456,21 @@ mod tests {
             req.set_admin_request(admin);
 
             // Error if req does not have region epoch.
-            check_region_epoch(&req, &region, false).unwrap_err();
+            check_req_region_epoch(&req, &region, false).unwrap_err();
 
             let mut stale_conf_epoch = epoch.clone();
             stale_conf_epoch.set_conf_ver(1);
             let mut stale_region = metapb::Region::default();
             stale_region.set_region_epoch(stale_conf_epoch.clone());
             req.mut_header().set_region_epoch(stale_conf_epoch.clone());
-            check_region_epoch(&req, &stale_region, false).unwrap();
+            check_req_region_epoch(&req, &stale_region, false).unwrap();
 
             let mut latest_conf_epoch = epoch.clone();
             latest_conf_epoch.set_conf_ver(3);
             for epoch in &[stale_conf_epoch, latest_conf_epoch] {
                 req.mut_header().set_region_epoch(epoch.clone());
-                check_region_epoch(&req, &region, false).unwrap_err();
-                check_region_epoch(&req, &region, true).unwrap_err();
+                check_req_region_epoch(&req, &region, false).unwrap_err();
+                check_req_region_epoch(&req, &region, true).unwrap_err();
             }
         }
     }

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.5.0-alpha"
+version = "6.7.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -13,6 +13,7 @@ publish = false
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+trace-tablet-lifetime = ["engine_rocks/trace-lifetime"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -38,7 +39,7 @@ cloud-azure = [
   "encryption_export/cloud-azure",
   "sst_importer/cloud-azure",
 ]
-testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport"]
+testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport"]
 test-engine-kv-rocksdb = [
   "engine_test/test-engine-kv-rocksdb"
 ]
@@ -97,8 +98,8 @@ futures-timer = "3.0"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 fxhash = "0.2.1"
 getset = "0.1"
-grpcio = { version = "0.10.3", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
-grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
+grpcio = { workspace = true }
+grpcio-health = { workspace = true }
 hex = "0.4"
 http = "0"
 hyper = { version = "0.14", features = ["full"] }
@@ -107,7 +108,7 @@ into_other = { workspace = true }
 itertools = "0.10"
 keyed_priority_queue = "0.4"
 keys = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
@@ -117,7 +118,7 @@ match-template = "0.0.1"
 memory_trace_macros = { workspace = true }
 mime = "0.3.13"
 more-asserts = "0.2"
-murmur3 = "0.5.1"
+mur3 = "0.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 notify = "4"
 num-traits = "0.2.14"
@@ -136,8 +137,10 @@ protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
+raftstore-v2 = { workspace = true }
 rand = "0.7.3"
 regex = "1.3"
+resource_control = { workspace = true }
 resource_metering = { workspace = true }
 rev_lines = "0.2.1"
 seahash = "4.1.0"
@@ -147,13 +150,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_ignored = "0.1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog = { workspace = true }
+slog-global = { workspace = true }
 smallvec = "1.4"
 sst_importer = { workspace = true }
 strum = { version = "0.20", features = ["derive"] }
 sync_wrapper = "0.1.1"
-sysinfo = "0.16"
+sysinfo = "0.26"
 tempfile = "3.0"
 thiserror = "1.0"
 tidb_query_aggr = { workspace = true }
@@ -165,23 +168,24 @@ tikv_alloc = { workspace = true }
 tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
 time = "0.1"
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { workspace = true }
 tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
-tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tokio-timer = { workspace = true }
 toml = "0.5"
 tracker = { workspace = true }
 txn_types = { workspace = true }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { workspace = true }
 
 [dev-dependencies]
 api_version = { workspace = true, features = ["testexport"] }
 example_coprocessor_plugin = { workspace = true } # should be a binary dependency
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
+raftstore = { workspace = true, features = ["testexport"] }
 reqwest = { version = "0.11", features = ["blocking"] }
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }
@@ -221,7 +225,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 # [patch.'https://github.com/pingcap/kvproto']
-# kvproto = { git = "https://github.com/your_github_id/kvproto", branch="your_branch" }
+# kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
@@ -266,6 +270,7 @@ members = [
   "components/raftstore",
   "components/raftstore-v2",
   "components/resolved_ts",
+  "components/resource_control",
   "components/resource_metering",
   "components/security",
   "components/server",
@@ -277,6 +282,8 @@ members = [
   "components/test_pd",
   "components/test_pd_client",
   "components/test_raftstore",
+  "components/test_raftstore-v2",
+  "components/test_raftstore_macro",
   "components/test_sst_importer",
   "components/test_storage",
   "components/test_util",
@@ -338,8 +345,9 @@ pd_client = { path = "components/pd_client" }
 profiler = { path = "components/profiler" }
 raft_log_engine = { path = "components/raft_log_engine" }
 raftstore = { path = "components/raftstore", default-features = false }
-raftstore_v2 = { path = "components/raftstore-v2", default-features = false }
+raftstore-v2 = { path = "components/raftstore-v2", default-features = false }
 resolved_ts = { path = "components/resolved_ts" }
+resource_control = { path = "components/resource_control" }
 resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
 server = { path = "components/server" }
@@ -351,6 +359,8 @@ example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/exampl
 test_pd = { path = "components/test_pd" }
 test_pd_client = { path = "components/test_pd_client" }
 test_raftstore = { path = "components/test_raftstore", default-features = false }
+test_raftstore-v2 = { path = "components/test_raftstore-v2", default-features = false }
+test_raftstore_macro = { path = "components/test_raftstore_macro" }
 test_sst_importer = { path = "components/test_sst_importer" }
 test_storage = { path = "components/test_storage", default-features = false }
 test_util = { path = "components/test_util" }
@@ -368,7 +378,14 @@ tipb_helper = { path = "components/tipb_helper" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
+grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
+tipb = { git = "https://github.com/pingcap/tipb.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 
 [profile.dev.package.grpcio-sys]
 debug = false

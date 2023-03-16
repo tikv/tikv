@@ -26,7 +26,7 @@ use tikv_util::{error, info, warn, worker::*};
 
 use crate::{
     channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY},
-    delegate::{Downstream, DownstreamId, DownstreamState},
+    delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
 };
 
@@ -207,7 +207,7 @@ impl ChangeData for Service {
         let (event_sink, mut event_drain) =
             channel(CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
         let peer = ctx.peer();
-        let conn = Conn::new(event_sink, peer);
+        let conn = Conn::new(event_sink, peer.clone());
         let conn_id = conn.get_id();
 
         if let Err(status) = self
@@ -217,11 +217,12 @@ impl ChangeData for Service {
                 RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, format!("{:?}", e))
             })
         {
-            error!("cdc connection initiate failed"; "error" => ?status);
-            ctx.spawn(
-                sink.fail(status)
-                    .unwrap_or_else(|e| error!("cdc failed to send error"; "error" => ?e)),
-            );
+            error!("cdc connection initiate failed";
+                "downstream" => ?peer, "error" => ?status);
+            ctx.spawn(sink.fail(status).unwrap_or_else(move |e| {
+                error!("cdc failed to send error";
+                    "downstream" => ?peer, "error" => ?e)
+            }));
             return;
         }
 
@@ -236,12 +237,29 @@ impl ChangeData for Service {
                 Err(e) => {
                     warn!("empty or invalid TiCDC version, please upgrading TiCDC";
                         "version" => request.get_header().get_ticdc_version(),
+                        "downstream" => ?peer,
                         "error" => ?e);
                     semver::Version::new(0, 0, 0)
                 }
             };
-            let downstream =
-                Downstream::new(peer.clone(), region_epoch, req_id, conn_id, req_kvapi);
+            let observed_range =
+                match ObservedRange::new(request.start_key.clone(), request.end_key.clone()) {
+                    Ok(observed_range) => observed_range,
+                    Err(e) => {
+                        warn!("cdc invalid observed start key or end key version";
+                            "downstream" => ?peer, "error" => ?e);
+                        ObservedRange::default()
+                    }
+                };
+            let downstream = Downstream::new(
+                peer.clone(),
+                region_epoch,
+                req_id,
+                conn_id,
+                req_kvapi,
+                request.filter_loop,
+                observed_range,
+            );
             let ret = scheduler
                 .schedule(Task::Register {
                     request,

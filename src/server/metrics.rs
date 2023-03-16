@@ -51,7 +51,6 @@ make_auto_flush_static_metric! {
         raw_compare_and_swap,
         raw_checksum,
         unsafe_destroy_range,
-        physical_scan_lock,
         register_lock_observer,
         check_lock_observer,
         remove_lock_observer,
@@ -71,7 +70,6 @@ make_auto_flush_static_metric! {
         gc_keys,
         raw_gc_keys,
         unsafe_destroy_range,
-        physical_scan_lock,
         validate_config,
         orphan_versions,
     }
@@ -207,6 +205,12 @@ lazy_static! {
         "tikv_grpc_msg_fail_total",
         "Total number of handle grpc message failure",
         &["type"]
+    )
+    .unwrap();
+    pub static ref GRPC_RESOURCE_GROUP_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_grpc_resource_group_total",
+        "Total number of handle grpc message for each resource group",
+        &["name"]
     )
     .unwrap();
     pub static ref GRPC_PROXY_MSG_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(

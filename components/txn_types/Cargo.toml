@@ -11,9 +11,9 @@ codec = { workspace = true }
 collections = { workspace = true }
 error_code = { workspace = true }
 farmhash = "1.1.5"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 log_wrappers = { workspace = true }
-slog = "2.3"
+slog = { workspace = true }
 thiserror = "1.0"
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }

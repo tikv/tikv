@@ -12,6 +12,7 @@ use std::{
 };
 
 use derive_more::{Add, AddAssign};
+use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
 use tikv_util::mpsc;
 
 use crate::*;
@@ -22,6 +23,20 @@ pub enum Message {
     Loop(usize),
     /// `Runner` will call the callback directly.
     Callback(Box<dyn FnOnce(&Handler, &mut Runner) + Send + 'static>),
+    /// group name, write bytes
+    Resource(String, u64),
+}
+
+impl ResourceMetered for Message {
+    fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
+        match self {
+            Message::Resource(group_name, bytes) => {
+                resource_ctl.consume(group_name.as_bytes(), ResourceConsumeType::IoBytes(*bytes));
+                Some(group_name.to_owned())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A simple runner used for benchmarking only.
@@ -102,6 +117,7 @@ impl Handler {
                     }
                 }
                 Ok(Message::Callback(cb)) => cb(self, r),
+                Ok(Message::Resource(..)) => {}
                 Err(_) => break,
             }
         }

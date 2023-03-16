@@ -19,7 +19,7 @@ use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
     brpb::*,
     encryptionpb::EncryptionMethod,
-    kvrpcpb::{ApiVersion, Context, IsolationLevel},
+    kvrpcpb::{ApiVersion, Context, IsolationLevel, KeyRange},
     metapb::*,
 };
 use online_config::OnlineConfig;
@@ -59,6 +59,7 @@ const BACKUP_BATCH_LIMIT: usize = 1024;
 struct Request {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
+    sub_ranges: Vec<KeyRange>,
     start_ts: TimeStamp,
     end_ts: TimeStamp,
     limiter: Limiter,
@@ -70,6 +71,7 @@ struct Request {
     compression_type: CompressionType,
     compression_level: i32,
     cipher: CipherInfo,
+    replica_read: bool,
 }
 
 /// Backup Task.
@@ -119,6 +121,7 @@ impl Task {
             request: Request {
                 start_key: req.get_start_key().to_owned(),
                 end_key: req.get_end_key().to_owned(),
+                sub_ranges: req.get_sub_ranges().to_owned(),
                 start_ts: req.get_start_version().into(),
                 end_ts: req.get_end_version().into(),
                 backend: req.get_storage_backend().clone(),
@@ -129,6 +132,7 @@ impl Task {
                 cf,
                 compression_type: req.get_compression_type(),
                 compression_level: req.get_compression_level(),
+                replica_read: req.get_replica_read(),
                 cipher: req.cipher_info.unwrap_or_else(|| {
                     let mut cipher = CipherInfo::default();
                     cipher.set_cipher_type(EncryptionMethod::Plaintext);
@@ -151,9 +155,10 @@ pub struct BackupRange {
     start_key: Option<Key>,
     end_key: Option<Key>,
     region: Region,
-    leader: Peer,
+    peer: Peer,
     codec: KeyValueCodec,
     cf: CfName,
+    uses_replica_read: bool,
 }
 
 /// The generic saveable writer. for generic `InMemBackupFiles`.
@@ -302,34 +307,45 @@ impl BackupRange {
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
-        ctx.set_peer(self.leader.clone());
+        ctx.set_peer(self.peer.clone());
+        ctx.set_replica_read(self.uses_replica_read);
+        ctx.set_isolation_level(IsolationLevel::Si);
 
-        // Update max_ts and check the in-memory lock table before getting the snapshot
-        concurrency_manager.update_max_ts(backup_ts);
-        concurrency_manager
-            .read_range_check(
-                self.start_key.as_ref(),
-                self.end_key.as_ref(),
-                |key, lock| {
-                    Lock::check_ts_conflict(
-                        Cow::Borrowed(lock),
-                        key,
-                        backup_ts,
-                        &Default::default(),
-                        IsolationLevel::Si,
-                    )
-                },
-            )
-            .map_err(MvccError::from)
-            .map_err(TxnError::from)?;
-
-        // Currently backup always happens on the leader, so we don't need
-        // to set key ranges and start ts to check.
-        assert!(!ctx.get_replica_read());
-        let snap_ctx = SnapContext {
+        let mut snap_ctx = SnapContext {
             pb_ctx: &ctx,
+            allowed_in_flashback: self.region.is_in_flashback,
             ..Default::default()
         };
+        if self.uses_replica_read {
+            snap_ctx.start_ts = Some(backup_ts);
+            let mut key_range = KeyRange::default();
+            if let Some(start_key) = self.start_key.as_ref() {
+                key_range.set_start_key(start_key.clone().into_encoded());
+            }
+            if let Some(end_key) = self.end_key.as_ref() {
+                key_range.set_end_key(end_key.clone().into_encoded());
+            }
+            snap_ctx.key_ranges = vec![key_range];
+        } else {
+            // Update max_ts and check the in-memory lock table before getting the snapshot
+            concurrency_manager.update_max_ts(backup_ts);
+            concurrency_manager
+                .read_range_check(
+                    self.start_key.as_ref(),
+                    self.end_key.as_ref(),
+                    |key, lock| {
+                        Lock::check_ts_conflict(
+                            Cow::Borrowed(lock),
+                            key,
+                            backup_ts,
+                            &Default::default(),
+                            IsolationLevel::Si,
+                        )
+                    },
+                )
+                .map_err(MvccError::from)
+                .map_err(TxnError::from)?;
+        }
 
         let start_snapshot = Instant::now();
         let snapshot = match engine.snapshot(snap_ctx) {
@@ -537,7 +553,8 @@ impl BackupRange {
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
-        ctx.set_peer(self.leader.clone());
+        ctx.set_peer(self.peer.clone());
+
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
             ..Default::default()
@@ -676,6 +693,8 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
 /// The progress of a backup task
 pub struct Progress<R: RegionInfoProvider> {
     store_id: u64,
+    ranges: Vec<(Option<Key>, Option<Key>)>,
+    next_index: usize,
     next_start: Option<Key>,
     end_key: Option<Key>,
     region_info: R,
@@ -685,7 +704,7 @@ pub struct Progress<R: RegionInfoProvider> {
 }
 
 impl<R: RegionInfoProvider> Progress<R> {
-    fn new(
+    fn new_with_range(
         store_id: u64,
         next_start: Option<Key>,
         end_key: Option<Key>,
@@ -693,21 +712,48 @@ impl<R: RegionInfoProvider> Progress<R> {
         codec: KeyValueCodec,
         cf: CfName,
     ) -> Self {
-        Progress {
+        let ranges = vec![(next_start, end_key)];
+        Self::new_with_ranges(store_id, ranges, region_info, codec, cf)
+    }
+
+    fn new_with_ranges(
+        store_id: u64,
+        ranges: Vec<(Option<Key>, Option<Key>)>,
+        region_info: R,
+        codec: KeyValueCodec,
+        cf: CfName,
+    ) -> Self {
+        let mut prs = Progress {
             store_id,
-            next_start,
-            end_key,
+            ranges,
+            next_index: 0,
+            next_start: None,
+            end_key: None,
             region_info,
             finished: false,
             codec,
             cf,
+        };
+        prs.try_next();
+        prs
+    }
+
+    /// try the next range. If all the ranges are consumed,
+    /// set self.finish true.
+    fn try_next(&mut self) {
+        if self.ranges.len() > self.next_index {
+            (self.next_start, self.end_key) = self.ranges[self.next_index].clone();
+
+            self.next_index += 1;
+        } else {
+            self.finished = true;
         }
     }
 
     /// Forward the progress by `ranges` BackupRanges
     ///
     /// The size of the returned BackupRanges should <= `ranges`
-    fn forward(&mut self, limit: usize) -> Vec<BackupRange> {
+    fn forward(&mut self, limit: usize, replica_read: bool) -> Vec<BackupRange> {
         if self.finished {
             return Vec::new();
         }
@@ -737,18 +783,20 @@ impl<R: RegionInfoProvider> Progress<R> {
                             break;
                         }
                     }
-                    if info.role == StateRole::Leader {
+                    let peer = find_peer(region, store_id).unwrap().to_owned();
+                    // Raft peer role has to match the replica read flag.
+                    if replica_read || info.role == StateRole::Leader {
                         let ekey = get_min_end_key(end_key.as_ref(), region);
                         let skey = get_max_start_key(start_key.as_ref(), region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
-                        let leader = find_peer(region, store_id).unwrap().to_owned();
                         let backup_range = BackupRange {
                             start_key: skey,
                             end_key: ekey,
                             region: region.clone(),
-                            leader,
+                            peer,
                             codec,
                             cf: cf_name,
+                            uses_replica_read: info.role != StateRole::Leader,
                         };
                         tx.send(backup_range).unwrap();
                         count += 1;
@@ -770,11 +818,12 @@ impl<R: RegionInfoProvider> Progress<R> {
             // region, we need to set the `finished` flag here in case
             // we run with `next_start` set to None
             if b.region.get_end_key().is_empty() || b.end_key == self.end_key {
-                self.finished = true;
+                self.try_next();
+            } else {
+                self.next_start = b.end_key.clone();
             }
-            self.next_start = b.end_key.clone();
         } else {
-            self.finished = true;
+            self.try_next();
         }
         branges
     }
@@ -874,7 +923,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // (See https://tokio.rs/tokio/tutorial/shared-state)
                     // Use &mut and mark the type for making rust-analyzer happy.
                     let progress: &mut Progress<_> = &mut prs.lock().unwrap();
-                    let batch = progress.forward(batch_size);
+                    let batch = progress.forward(batch_size, request.replica_read);
                     if batch.is_empty() {
                         return;
                     }
@@ -958,6 +1007,39 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         });
     }
 
+    fn get_progress_by_req(
+        &self,
+        request: &Request,
+        codec: KeyValueCodec,
+    ) -> Arc<Mutex<Progress<R>>> {
+        if request.sub_ranges.is_empty() {
+            let start_key = codec.encode_backup_key(request.start_key.clone());
+            let end_key = codec.encode_backup_key(request.end_key.clone());
+            Arc::new(Mutex::new(Progress::new_with_range(
+                self.store_id,
+                start_key,
+                end_key,
+                self.region_info.clone(),
+                codec,
+                request.cf,
+            )))
+        } else {
+            let mut ranges = Vec::with_capacity(request.sub_ranges.len());
+            for k in &request.sub_ranges {
+                let start_key = codec.encode_backup_key(k.start_key.clone());
+                let end_key = codec.encode_backup_key(k.end_key.clone());
+                ranges.push((start_key, end_key));
+            }
+            Arc::new(Mutex::new(Progress::new_with_ranges(
+                self.store_id,
+                ranges,
+                self.region_info.clone(),
+                codec,
+                request.cf,
+            )))
+        }
+    }
+
     pub fn handle_backup_task(&self, task: Task) {
         let Task { request, resp } = task;
         let codec = KeyValueCodec::new(request.is_raw_kv, self.api_version, request.dst_api_ver);
@@ -996,17 +1078,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 return;
             }
         }
-        let start_key = codec.encode_backup_key(request.start_key.clone());
-        let end_key = codec.encode_backup_key(request.end_key.clone());
 
-        let prs = Arc::new(Mutex::new(Progress::new(
-            self.store_id,
-            start_key,
-            end_key,
-            self.region_info.clone(),
-            codec,
-            request.cf,
-        )));
+        let prs = self.get_progress_by_req(&request, codec);
+
         let backend = match create_storage(&request.backend, self.get_config()) {
             Ok(backend) => backend,
             Err(err) => {
@@ -1022,7 +1096,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let backend = Arc::<dyn ExternalStorage>::from(backend);
         let concurrency = self.config_manager.0.read().unwrap().num_threads;
         self.pool.borrow_mut().adjust_with(concurrency);
-        // make the buffer small enough to implement back pressure.
         let (tx, rx) = async_channel::bounded(1);
         for _ in 0..concurrency {
             self.spawn_backup_worker(
@@ -1249,6 +1322,38 @@ pub mod tests {
                 map.create_region(r, StateRole::Leader);
             }
         }
+        pub fn add_region(
+            &self,
+            id: u64,
+            mut start_key: Vec<u8>,
+            mut end_key: Vec<u8>,
+            peer_role: metapb::PeerRole,
+            state_role: StateRole,
+        ) {
+            let mut region = metapb::Region::default();
+            region.set_id(id);
+            if !start_key.is_empty() {
+                if self.need_encode_key {
+                    start_key = Key::from_raw(&start_key).into_encoded();
+                } else {
+                    start_key = Key::from_encoded(start_key).into_encoded();
+                }
+            }
+            if !end_key.is_empty() {
+                if self.need_encode_key {
+                    end_key = Key::from_raw(&end_key).into_encoded();
+                } else {
+                    end_key = Key::from_encoded(end_key).into_encoded();
+                }
+            }
+            region.set_start_key(start_key);
+            region.set_end_key(end_key);
+            let mut new_peer = new_peer(1, 1);
+            new_peer.set_role(peer_role);
+            region.mut_peers().push(new_peer);
+            let mut map = self.regions.lock().unwrap();
+            map.create_region(region, state_role);
+        }
         fn canecl_on_seek(&mut self, cancel: Arc<AtomicBool>) {
             self.cancel = Some(cancel);
         }
@@ -1279,7 +1384,7 @@ pub mod tests {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[
+            .cfs([
                 engine_traits::CF_DEFAULT,
                 engine_traits::CF_LOCK,
                 engine_traits::CF_WRITE,
@@ -1384,17 +1489,9 @@ pub mod tests {
         // Test seek backup range.
         let test_seek_backup_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
-                let start_key = if start_key.is_empty() {
-                    None
-                } else {
-                    Some(Key::from_raw(start_key))
-                };
-                let end_key = if end_key.is_empty() {
-                    None
-                } else {
-                    Some(Key::from_raw(end_key))
-                };
-                let mut prs = Progress::new(
+                let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
+                let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
+                let mut prs = Progress::new_with_range(
                     endpoint.store_id,
                     start_key,
                     end_key,
@@ -1406,7 +1503,7 @@ pub mod tests {
                 let mut ranges = Vec::with_capacity(expect.len());
                 while ranges.len() != expect.len() {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = prs.forward(n);
+                    let mut r = prs.forward(n, false);
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
 
@@ -1446,6 +1543,7 @@ pub mod tests {
                     request: Request {
                         start_key: start_key.to_vec(),
                         end_key: end_key.to_vec(),
+                        sub_ranges: Vec::new(),
                         start_ts: 1.into(),
                         end_ts: 1.into(),
                         backend,
@@ -1457,6 +1555,7 @@ pub mod tests {
                         compression_type: CompressionType::Unknown,
                         compression_level: 0,
                         cipher: CipherInfo::default(),
+                        replica_read: false,
                     },
                     resp: tx,
                 };
@@ -1509,6 +1608,292 @@ pub mod tests {
         for (start_key, end_key, ranges) in case {
             test_seek_backup_range(start_key, end_key, ranges.clone());
             test_handle_backup_task_range(start_key, end_key, ranges);
+        }
+    }
+
+    #[test]
+    fn test_backup_replica_read() {
+        let (_tmp, endpoint) = new_endpoint();
+
+        endpoint.region_info.add_region(
+            1,
+            b"".to_vec(),
+            b"1".to_vec(),
+            metapb::PeerRole::Voter,
+            StateRole::Leader,
+        );
+        endpoint.region_info.add_region(
+            2,
+            b"1".to_vec(),
+            b"2".to_vec(),
+            metapb::PeerRole::Voter,
+            StateRole::Follower,
+        );
+        endpoint.region_info.add_region(
+            3,
+            b"2".to_vec(),
+            b"3".to_vec(),
+            metapb::PeerRole::Learner,
+            StateRole::Follower,
+        );
+
+        let tmp = TempDir::new().unwrap();
+        let backend = make_local_backend(tmp.path());
+
+        let (tx, rx) = unbounded();
+        let mut ranges = vec![];
+        let key_range = KeyRange {
+            start_key: b"".to_vec(),
+            end_key: b"3".to_vec(),
+            ..Default::default()
+        };
+        ranges.push(key_range);
+        let read_leader_task = Task {
+            request: Request {
+                start_key: b"1".to_vec(),
+                end_key: b"2".to_vec(),
+                sub_ranges: ranges.clone(),
+                start_ts: 1.into(),
+                end_ts: 1.into(),
+                backend: backend.clone(),
+                limiter: Limiter::new(f64::INFINITY),
+                cancel: Arc::default(),
+                is_raw_kv: false,
+                dst_api_ver: ApiVersion::V1,
+                cf: engine_traits::CF_DEFAULT,
+                compression_type: CompressionType::Unknown,
+                compression_level: 0,
+                cipher: CipherInfo::default(),
+                replica_read: false,
+            },
+            resp: tx,
+        };
+        endpoint.handle_backup_task(read_leader_task);
+        let resps: Vec<_> = block_on(rx.collect());
+        assert_eq!(resps.len(), 1);
+        for a in &resps {
+            assert_eq!(a.get_start_key(), b"");
+            assert_eq!(a.get_end_key(), b"1");
+        }
+
+        let (tx, rx) = unbounded();
+        let replica_read_task = Task {
+            request: Request {
+                start_key: b"".to_vec(),
+                end_key: b"3".to_vec(),
+                sub_ranges: ranges.clone(),
+                start_ts: 1.into(),
+                end_ts: 1.into(),
+                backend,
+                limiter: Limiter::new(f64::INFINITY),
+                cancel: Arc::default(),
+                is_raw_kv: false,
+                dst_api_ver: ApiVersion::V1,
+                cf: engine_traits::CF_DEFAULT,
+                compression_type: CompressionType::Unknown,
+                compression_level: 0,
+                cipher: CipherInfo::default(),
+                replica_read: true,
+            },
+            resp: tx,
+        };
+        endpoint.handle_backup_task(replica_read_task);
+        let resps: Vec<_> = block_on(rx.collect());
+        let expected: Vec<(&[u8], &[u8])> = vec![(b"", b"1"), (b"1", b"2"), (b"2", b"3")];
+        assert_eq!(resps.len(), 3);
+        for a in &resps {
+            assert!(
+                expected
+                    .iter()
+                    .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
+                "{:?} {:?}",
+                resps,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_seek_ranges() {
+        let (_tmp, endpoint) = new_endpoint();
+
+        endpoint.region_info.set_regions(vec![
+            (b"".to_vec(), b"1".to_vec(), 1),
+            (b"1".to_vec(), b"2".to_vec(), 2),
+            (b"3".to_vec(), b"4".to_vec(), 3),
+            (b"7".to_vec(), b"9".to_vec(), 4),
+            (b"9".to_vec(), b"".to_vec(), 5),
+        ]);
+        // Test seek backup range.
+        let test_seek_backup_ranges =
+            |sub_ranges: Vec<(&[u8], &[u8])>, expect: Vec<(&[u8], &[u8])>| {
+                let mut ranges = Vec::with_capacity(sub_ranges.len());
+                for &(start_key, end_key) in &sub_ranges {
+                    let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
+                    let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
+                    ranges.push((start_key, end_key));
+                }
+                let mut prs = Progress::new_with_ranges(
+                    endpoint.store_id,
+                    ranges,
+                    endpoint.region_info.clone(),
+                    KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
+                    engine_traits::CF_DEFAULT,
+                );
+
+                let mut ranges = Vec::with_capacity(expect.len());
+                while ranges.len() != expect.len() {
+                    let n = (rand::random::<usize>() % 3) + 1;
+                    let mut r = prs.forward(n, false);
+                    // The returned backup ranges should <= n
+                    assert!(r.len() <= n);
+
+                    if r.is_empty() {
+                        // if return a empty vec then the progress is finished
+                        assert_eq!(
+                            ranges.len(),
+                            expect.len(),
+                            "got {:?}, expect {:?}",
+                            ranges,
+                            expect
+                        );
+                    }
+                    ranges.append(&mut r);
+                }
+
+                for (a, b) in ranges.into_iter().zip(expect) {
+                    assert_eq!(
+                        a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        b.0
+                    );
+                    assert_eq!(
+                        a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        b.1
+                    );
+                }
+            };
+
+        // Test whether responses contain correct range.
+        #[allow(clippy::blocks_in_if_conditions)]
+        let test_handle_backup_task_ranges =
+            |sub_ranges: Vec<(&[u8], &[u8])>, expect: Vec<(&[u8], &[u8])>| {
+                let tmp = TempDir::new().unwrap();
+                let backend = make_local_backend(tmp.path());
+                let (tx, rx) = unbounded();
+
+                let mut ranges = Vec::with_capacity(sub_ranges.len());
+                for &(start_key, end_key) in &sub_ranges {
+                    let key_range = KeyRange {
+                        start_key: start_key.to_vec(),
+                        end_key: end_key.to_vec(),
+                        ..Default::default()
+                    };
+                    ranges.push(key_range);
+                }
+                let task = Task {
+                    request: Request {
+                        start_key: b"1".to_vec(),
+                        end_key: b"2".to_vec(),
+                        sub_ranges: ranges,
+                        start_ts: 1.into(),
+                        end_ts: 1.into(),
+                        backend,
+                        limiter: Limiter::new(f64::INFINITY),
+                        cancel: Arc::default(),
+                        is_raw_kv: false,
+                        dst_api_ver: ApiVersion::V1,
+                        cf: engine_traits::CF_DEFAULT,
+                        compression_type: CompressionType::Unknown,
+                        compression_level: 0,
+                        cipher: CipherInfo::default(),
+                        replica_read: false,
+                    },
+                    resp: tx,
+                };
+                endpoint.handle_backup_task(task);
+                let resps: Vec<_> = block_on(rx.collect());
+                for a in &resps {
+                    assert!(
+                        expect
+                            .iter()
+                            .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
+                        "{:?} {:?}",
+                        resps,
+                        expect
+                    );
+                }
+                assert_eq!(resps.len(), expect.len());
+            };
+
+        // Backup range from case.0 to case.1,
+        // the case.2 is the expected results.
+        type Case<'a> = (Vec<(&'a [u8], &'a [u8])>, Vec<(&'a [u8], &'a [u8])>);
+
+        let case: Vec<Case<'_>> = vec![
+            (
+                vec![(b"", b"1"), (b"1", b"2")],
+                vec![(b"", b"1"), (b"1", b"2")],
+            ),
+            (
+                vec![(b"", b"2"), (b"3", b"4")],
+                vec![(b"", b"1"), (b"1", b"2"), (b"3", b"4")],
+            ),
+            (
+                vec![(b"7", b"8"), (b"8", b"9")],
+                vec![(b"7", b"8"), (b"8", b"9")],
+            ),
+            (
+                vec![(b"8", b"9"), (b"6", b"8")],
+                vec![(b"8", b"9"), (b"7", b"8")],
+            ),
+            (
+                vec![(b"8", b"85"), (b"88", b"89"), (b"7", b"8")],
+                vec![(b"8", b"85"), (b"88", b"89"), (b"7", b"8")],
+            ),
+            (
+                vec![(b"8", b"85"), (b"", b"35"), (b"88", b"89"), (b"7", b"8")],
+                vec![
+                    (b"8", b"85"),
+                    (b"", b"1"),
+                    (b"1", b"2"),
+                    (b"3", b"35"),
+                    (b"88", b"89"),
+                    (b"7", b"8"),
+                ],
+            ),
+            (vec![(b"", b"1")], vec![(b"", b"1")]),
+            (vec![(b"", b"2")], vec![(b"", b"1"), (b"1", b"2")]),
+            (vec![(b"1", b"2")], vec![(b"1", b"2")]),
+            (vec![(b"1", b"3")], vec![(b"1", b"2")]),
+            (vec![(b"1", b"4")], vec![(b"1", b"2"), (b"3", b"4")]),
+            (vec![(b"4", b"5")], vec![]),
+            (vec![(b"4", b"6")], vec![]),
+            (vec![(b"4", b"6"), (b"6", b"7")], vec![]),
+            (vec![(b"2", b"3"), (b"4", b"6"), (b"6", b"7")], vec![]),
+            (vec![(b"2", b"7")], vec![(b"3", b"4")]),
+            (vec![(b"7", b"8")], vec![(b"7", b"8")]),
+            (
+                vec![(b"3", b"")],
+                vec![(b"3", b"4"), (b"7", b"9"), (b"9", b"")],
+            ),
+            (vec![(b"5", b"")], vec![(b"7", b"9"), (b"9", b"")]),
+            (vec![(b"7", b"")], vec![(b"7", b"9"), (b"9", b"")]),
+            (vec![(b"8", b"91")], vec![(b"8", b"9"), (b"9", b"91")]),
+            (vec![(b"8", b"")], vec![(b"8", b"9"), (b"9", b"")]),
+            (
+                vec![(b"", b"")],
+                vec![
+                    (b"", b"1"),
+                    (b"1", b"2"),
+                    (b"3", b"4"),
+                    (b"7", b"9"),
+                    (b"9", b""),
+                ],
+            ),
+        ];
+        for (ranges, expect_ranges) in case {
+            test_seek_backup_ranges(ranges.clone(), expect_ranges.clone());
+            test_handle_backup_task_ranges(ranges, expect_ranges);
         }
     }
 

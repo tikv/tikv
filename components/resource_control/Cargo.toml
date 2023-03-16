@@ -1,0 +1,32 @@
+[package]
+name = "resource_control"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[features]
+failpoints = ["fail/failpoints"]
+
+[dependencies]
+byteorder = "1.2"
+collections = { workspace = true }
+crossbeam = "0.8"
+crossbeam-skiplist = "0.1"
+dashmap = "5.1"
+fail = "0.5"
+futures = { version = "0.3" }
+kvproto = { workspace = true }
+lazy_static = "1.0"
+online_config = { workspace = true }
+parking_lot = "0.12"
+pd_client = { workspace = true }
+pin-project = "1.0"
+prometheus = { version = "0.13", features = ["nightly"] }
+protobuf = { version = "2.8", features = ["bytes"] }
+serde = { version = "1.0", features = ["derive"] }
+slog = { workspace = true }
+slog-global = { workspace = true }
+test_pd = { workspace = true }
+test_pd_client = { workspace = true }
+tikv_util = { workspace = true }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }

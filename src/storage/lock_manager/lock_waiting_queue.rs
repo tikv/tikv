@@ -57,7 +57,6 @@
 use std::{
     future::Future,
     pin::Pin,
-    result::Result,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
@@ -65,7 +64,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dashmap;
+use dashmap::{self, mapref::entry::Entry as DashMapEntry};
 use futures_util::compat::Future01CompatExt;
 use keyed_priority_queue::KeyedPriorityQueue;
 use kvproto::kvrpcpb;
@@ -75,17 +74,16 @@ use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    errors::SharedError,
-    lock_manager::{LockManager, LockWaitToken},
+    lock_manager::{
+        lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
+        KeyLockWaitInfo, LockDigest, LockManager, LockWaitToken, UpdateWaitForEvent,
+    },
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
-    txn::Error as TxnError,
-    types::{PessimisticLockKeyResult, PessimisticLockParameters},
-    Error as StorageError,
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+    types::PessimisticLockParameters,
+    Error as StorageError, ErrorInner as StorageErrorInner,
 };
-
-pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send + 'static>;
-pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockKeyResult>;
 
 /// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
 /// and contains the request's parameters.
@@ -93,7 +91,11 @@ pub struct LockWaitEntry {
     pub key: Key,
     pub lock_hash: u64,
     pub parameters: PessimisticLockParameters,
+    // `parameters` provides parameter for a request, but `should_not_exist` is specified key-wise.
+    // Put it in a separated field.
+    pub should_not_exist: bool,
     pub lock_wait_token: LockWaitToken,
+    pub req_states: Arc<LockWaitContextSharedState>,
     pub legacy_wake_up_index: Option<usize>,
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
 }
@@ -245,15 +247,26 @@ impl<L: LockManager> LockWaitQueues<L> {
         current_lock: kvrpcpb::LockInfo,
     ) {
         let mut new_key = false;
-        let mut key_state = self
-            .inner
-            .queue_map
-            .entry(lock_wait_entry.key.clone())
-            .or_insert_with(|| {
-                new_key = true;
-                KeyLockWaitState::new()
-            });
-        key_state.current_lock = current_lock;
+
+        let map_entry = self.inner.queue_map.entry(lock_wait_entry.key.clone());
+
+        // If it's not the first time the request is put into the queue, the request
+        // might be canceled from outside when the entry is temporarily absent
+        // in the queue. In this case, the cancellation operation is not done.
+        // Do it here. For details about this corner case, see document of
+        // `LockWaitContext::is_canceled` field.
+        if lock_wait_entry.req_states.is_canceled() {
+            self.on_push_canceled_entry(lock_wait_entry, map_entry);
+            return;
+        }
+
+        let mut key_state = map_entry.or_insert_with(|| {
+            new_key = true;
+            KeyLockWaitState::new()
+        });
+        if !current_lock.key.is_empty() {
+            key_state.current_lock = current_lock;
+        }
 
         if lock_wait_entry.legacy_wake_up_index.is_none() {
             lock_wait_entry.legacy_wake_up_index = Some(key_state.value().legacy_wake_up_index);
@@ -272,6 +285,32 @@ impl<L: LockManager> LockWaitQueues<L> {
         if new_key {
             LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.inc()
         }
+    }
+
+    fn on_push_canceled_entry(
+        &self,
+        lock_wait_entry: Box<LockWaitEntry>,
+        key_state: DashMapEntry<'_, Key, KeyLockWaitState, impl std::hash::BuildHasher>,
+    ) {
+        let mut err = lock_wait_entry.req_states.get_external_error();
+
+        if let DashMapEntry::Occupied(key_state_entry) = key_state {
+            if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                MvccError(box MvccErrorInner::KeyIsLocked(lock_info)),
+            )))) = &mut err
+            {
+                // Update the lock info in the error to the latest if possible.
+                let latest_lock_info = &key_state_entry.get().current_lock;
+                if !latest_lock_info.key.is_empty() {
+                    *lock_info = latest_lock_info.clone();
+                }
+            }
+        }
+
+        // `key_state` is dropped here, so the mutex in the queue map is released.
+
+        let cb = lock_wait_entry.key_cb.unwrap().into_inner();
+        cb(Err(err.into()), true);
     }
 
     /// Dequeues the head of the lock waiting queue of the specified key,
@@ -434,6 +473,8 @@ impl<L: LockManager> LockWaitQueues<L> {
             prev_delay_ms = current_delay_ms;
         }
 
+        fail_point!("lock_waiting_queue_before_delayed_notify_all");
+
         self.delayed_notify_all(&key, notify_id)
     }
 
@@ -520,7 +561,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                     reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
                 },
             )));
-            cb(Err(e.into()));
+            cb(Err(e.into()), false);
         }
 
         // Return the item to be woken up in resumable way.
@@ -556,6 +597,36 @@ impl<L: LockManager> LockWaitQueues<L> {
         }
 
         result
+    }
+
+    pub fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) {
+        let mut update_wait_for_events = vec![];
+        for lock_info in lock_info {
+            let key = Key::from_raw(lock_info.get_key());
+            if let Some(mut key_state) = self.inner.queue_map.get_mut(&key) {
+                key_state.current_lock = lock_info;
+                update_wait_for_events.reserve(key_state.queue.len());
+                for (&token, entry) in key_state.queue.iter() {
+                    let event = UpdateWaitForEvent {
+                        token,
+                        start_ts: entry.parameters.start_ts,
+                        is_first_lock: entry.parameters.is_first_lock,
+                        wait_info: KeyLockWaitInfo {
+                            key: key.clone(),
+                            lock_digest: LockDigest {
+                                ts: key_state.current_lock.lock_version.into(),
+                                hash: entry.lock_hash,
+                            },
+                            lock_info: key_state.current_lock.clone(),
+                        },
+                    };
+                    update_wait_for_events.push(event);
+                }
+            }
+        }
+        if !update_wait_for_events.is_empty() {
+            self.inner.lock_mgr.update_wait_for(update_wait_for_events);
+        }
     }
 
     /// Gets the count of entries currently waiting in queues.
@@ -609,9 +680,10 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        errors::SharedError,
         lock_manager::{lock_wait_context::LockWaitContext, MockLockManager, WaitTimeout},
         txn::ErrorInner as TxnErrorInner,
-        ErrorInner as StorageErrorInner, StorageCallback,
+        ErrorInner as StorageErrorInner, PessimisticLockKeyResult, StorageCallback,
     };
 
     struct TestLockWaitEntryHandle {
@@ -687,6 +759,7 @@ mod tests {
                 min_commit_ts: 0.into(),
                 check_existence: false,
                 is_first_lock: false,
+                lock_only_if_exists: false,
                 allow_lock_with_conflict: false,
             };
 
@@ -697,9 +770,13 @@ mod tests {
                 key,
                 lock_hash,
                 parameters,
+                should_not_exist: false,
                 lock_wait_token: token,
+                req_states: dummy_ctx.get_shared_states().clone(),
                 legacy_wake_up_index: None,
-                key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
+                key_cb: Some(SyncWrapper::new(Box::new(move |res, _| {
+                    tx.send(res).unwrap()
+                }))),
             });
 
             let cancel_callback = dummy_ctx.get_callback_for_cancellation();
@@ -836,11 +913,11 @@ mod tests {
     }
 
     fn expect_write_conflict(
-        err: &StorageErrorInner,
+        err: &StorageError,
         expect_conflict_start_ts: impl Into<TimeStamp>,
         expect_conflict_commit_ts: impl Into<TimeStamp>,
     ) {
-        match err {
+        match &*err.0 {
             StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
                 box MvccErrorInner::WriteConflict {
                     conflict_start_ts,
@@ -1157,5 +1234,45 @@ mod tests {
         );
         queues.must_not_contain_key(b"k1");
         assert_eq!(queues.entry_count(), 0);
+    }
+
+    #[bench]
+    fn bench_update_lock_wait_empty(b: &mut test::Bencher) {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        queues.mock_lock_wait(b"k1", 5, 6, false);
+
+        let mut lock_info = kvrpcpb::LockInfo::default();
+        let key = b"t\x00\x00\x00\x00\x00\x00\x00\x01_r\x00\x00\x00\x00\x00\x00\x00\x01";
+        lock_info.set_key(key.to_vec());
+        lock_info.set_primary_lock(key.to_vec());
+        lock_info.set_lock_version(10);
+        lock_info.set_lock_for_update_ts(10);
+        let lock_info = vec![lock_info];
+
+        b.iter(|| {
+            queues.update_lock_wait(lock_info.clone());
+        });
+    }
+
+    #[bench]
+    fn bench_update_lock_wait_queue_len_512(b: &mut test::Bencher) {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+
+        let key = b"t\x00\x00\x00\x00\x00\x00\x00\x01_r\x00\x00\x00\x00\x00\x00\x00\x01";
+
+        for i in 0..512 {
+            queues.mock_lock_wait(key, 15 + i, 10, true);
+        }
+
+        let mut lock_info = kvrpcpb::LockInfo::default();
+        lock_info.set_key(key.to_vec());
+        lock_info.set_primary_lock(key.to_vec());
+        lock_info.set_lock_version(10);
+        lock_info.set_lock_for_update_ts(10);
+        let lock_info = vec![lock_info];
+
+        b.iter(|| {
+            queues.update_lock_wait(lock_info.clone());
+        });
     }
 }

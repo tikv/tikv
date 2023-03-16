@@ -8,6 +8,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::FutureExt;
+use grpcio::Environment;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -17,7 +18,10 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::RaftStoreRouter,
+    store::RegionReadProgressRegistry,
 };
+use resolved_ts::LeadershipResolver;
+use security::SecurityManager;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
@@ -42,7 +46,7 @@ use crate::{
     annotate,
     checkpoint_manager::{
         BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
-        GetCheckpointResult, RegionIdWithVersion,
+        GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
     errors::{Error, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
@@ -52,7 +56,7 @@ use crate::{
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
-    subscription_track::SubscriptionTracer,
+    subscription_track::{ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, StopWatch, Work},
 };
@@ -89,7 +93,6 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     failover_time: Option<Instant>,
     // We holds the config before, even it is useless for now,
     // however probably it would be useful in the future.
-    #[allow(dead_code)]
     config: BackupStreamConfig,
     checkpoint_mgr: CheckpointManager,
 }
@@ -112,6 +115,10 @@ where
         router: RT,
         pd_client: Arc<PDC>,
         concurrency_manager: ConcurrencyManager,
+        // Required by Leadership Resolver.
+        env: Arc<Environment>,
+        region_read_progress: RegionReadProgressRegistry,
+        security_mgr: Arc<SecurityManager>,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
         let pool = create_tokio_runtime((config.num_threads / 2).max(1), "backup-stream")
@@ -148,6 +155,14 @@ where
         let initial_scan_throughput_quota = Limiter::new(limit);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         let subs = SubscriptionTracer::default();
+        let leadership_resolver = LeadershipResolver::new(
+            store_id,
+            Arc::clone(&pd_client) as _,
+            env,
+            security_mgr,
+            region_read_progress,
+            Duration::from_secs(60),
+        );
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
             InitialDataLoader::new(
                 router.clone(),
@@ -163,9 +178,12 @@ where
             meta_client.clone(),
             pd_client.clone(),
             ((config.num_threads + 1) / 2).max(1),
+            leadership_resolver,
         );
         pool.spawn(op_loop);
-        Endpoint {
+        let mut checkpoint_mgr = CheckpointManager::default();
+        pool.spawn(checkpoint_mgr.spawn_subscription_mgr());
+        let ep = Endpoint {
             meta_client,
             range_router,
             scheduler,
@@ -183,8 +201,10 @@ where
             region_operator,
             failover_time: None,
             config,
-            checkpoint_mgr: Default::default(),
-        }
+            checkpoint_mgr,
+        };
+        ep.pool.spawn(ep.min_ts_worker());
+        ep
     }
 }
 
@@ -271,7 +291,22 @@ where
         meta_client: MetadataClient<S>,
         scheduler: Scheduler<Task>,
     ) -> Result<()> {
-        let tasks = meta_client.get_tasks().await?;
+        let tasks;
+        loop {
+            let r = meta_client.get_tasks().await;
+            match r {
+                Ok(t) => {
+                    tasks = t;
+                    break;
+                }
+                Err(e) => {
+                    e.report("failed to get backup stream task");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            }
+        }
+
         for task in tasks.inner {
             info!("backup stream watch task"; "task" => ?task);
             if task.is_paused {
@@ -315,19 +350,21 @@ where
             let mut watcher = match watcher {
                 Ok(w) => w,
                 Err(e) => {
-                    e.report("failed to start watch pause");
+                    e.report("failed to start watch task");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
             };
+            info!("start watching the task changes."; "from_rev" => %revision_new);
 
             loop {
                 if let Some(event) = watcher.stream.next().await {
-                    info!("backup stream watch event from etcd"; "event" => ?event);
+                    info!("backup stream watch task from etcd"; "event" => ?event);
 
                     let revision = meta_client.get_reversion().await;
                     if let Ok(r) = revision {
                         revision_new = r;
+                        info!("update the revision"; "revision" => revision_new);
                     }
 
                     match event {
@@ -369,13 +406,15 @@ where
                     continue;
                 }
             };
+            info!("start watching the pausing events."; "from_rev" => %revision_new);
 
             loop {
                 if let Some(event) = watcher.stream.next().await {
-                    info!("backup stream watch event from etcd"; "event" => ?event);
+                    info!("backup stream watch pause from etcd"; "event" => ?event);
                     let revision = meta_client.get_reversion().await;
                     if let Ok(r) = revision {
                         revision_new = r;
+                        info!("update the revision"; "revision" => revision_new);
                     }
 
                     match event {
@@ -725,7 +764,7 @@ where
             let mut resolved = get_rts.await?;
             let mut new_rts = resolved.global_checkpoint();
             fail::fail_point!("delay_on_flush");
-            flush_ob.before(resolved.take_region_checkpoints()).await;
+            flush_ob.before(resolved.take_resolve_result()).await;
             if let Some(rewritten_rts) = flush_ob.rewrite_resolved_ts(&task).await {
                 info!("rewriting resolved ts"; "old" => %new_rts, "new" => %rewritten_rts);
                 new_rts = rewritten_rts.min(new_rts);
@@ -881,17 +920,31 @@ where
         }
     }
 
+    fn min_ts_worker(&self) -> future![()] {
+        let sched = self.scheduler.clone();
+        let interval = self.config.min_ts_interval.0;
+        async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                try_send!(
+                    sched,
+                    Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve)
+                );
+            }
+        }
+    }
+
     pub fn handle_region_checkpoints_op(&mut self, op: RegionCheckpointOperation) {
         match op {
-            RegionCheckpointOperation::Update(u) => {
-                // Let's clear all stale checkpoints first.
-                // Or they may slow down the global checkpoint.
-                self.checkpoint_mgr.clear();
-                for (region, checkpoint) in u {
-                    debug!("setting region checkpoint"; "region" => %region.get_id(), "ts" => %checkpoint);
-                    self.checkpoint_mgr
-                        .update_region_checkpoint(&region, checkpoint)
-                }
+            RegionCheckpointOperation::Resolved {
+                checkpoints,
+                start_time,
+            } => {
+                self.checkpoint_mgr.resolve_regions(checkpoints);
+                metrics::MIN_TS_RESOLVE_DURATION.observe(start_time.saturating_elapsed_secs());
+            }
+            RegionCheckpointOperation::Flush => {
+                self.checkpoint_mgr.flush();
             }
             RegionCheckpointOperation::Get(g, cb) => {
                 let _guard = self.pool.handle().enter();
@@ -910,6 +963,45 @@ where
                         })
                         .collect()),
                 }
+            }
+            RegionCheckpointOperation::Subscribe(sub) => {
+                let fut = self.checkpoint_mgr.add_subscriber(sub);
+                self.pool.spawn(async move {
+                    if let Err(err) = fut.await {
+                        err.report("adding subscription");
+                    }
+                });
+            }
+            RegionCheckpointOperation::PrepareMinTsForResolve => {
+                let min_ts = self.pool.block_on(self.prepare_min_ts());
+                let start_time = Instant::now();
+                // We need to reschedule the `Resolve` task to queue, because the subscription
+                // is asynchronous -- there may be transactions committed before
+                // the min_ts we prepared but haven't been observed yet.
+                try_send!(
+                    self.scheduler,
+                    Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolve {
+                        min_ts,
+                        start_time
+                    })
+                );
+            }
+            RegionCheckpointOperation::Resolve { min_ts, start_time } => {
+                let sched = self.scheduler.clone();
+                try_send!(
+                    self.scheduler,
+                    Task::ModifyObserve(ObserveOp::ResolveRegions {
+                        callback: Box::new(move |mut resolved| {
+                            let t =
+                                Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolved {
+                                    checkpoints: resolved.take_resolve_result(),
+                                    start_time,
+                                });
+                            try_send!(sched, t);
+                        }),
+                        min_ts
+                    })
+                );
             }
         }
     }
@@ -955,15 +1047,34 @@ pub enum RegionSet {
 }
 
 pub enum RegionCheckpointOperation {
-    Update(Vec<(Region, TimeStamp)>),
+    Flush,
+    PrepareMinTsForResolve,
+    Resolve {
+        min_ts: TimeStamp,
+        start_time: Instant,
+    },
+    Resolved {
+        checkpoints: Vec<ResolveResult>,
+        start_time: Instant,
+    },
     Get(RegionSet, Box<dyn FnOnce(Vec<GetCheckpointResult>) + Send>),
+    Subscribe(Subscription),
 }
 
 impl fmt::Debug for RegionCheckpointOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Update(arg0) => f.debug_tuple("Update").field(arg0).finish(),
+            Self::Flush => f.debug_tuple("Flush").finish(),
             Self::Get(arg0, _) => f.debug_tuple("Get").field(arg0).finish(),
+
+            Self::Subscribe(_) => f.debug_tuple("Subscription").finish(),
+            Self::Resolved { checkpoints, .. } => {
+                f.debug_tuple("Resolved").field(checkpoints).finish()
+            }
+            Self::PrepareMinTsForResolve => f.debug_tuple("PrepareMinTsForResolve").finish(),
+            Self::Resolve { min_ts, .. } => {
+                f.debug_struct("Resolve").field("min_ts", min_ts).finish()
+            }
         }
     }
 }
@@ -1047,12 +1158,21 @@ pub enum ObserveOp {
 impl std::fmt::Debug for ObserveOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Start { region } => f.debug_struct("Start").field("region", region).finish(),
-            Self::Stop { region } => f.debug_struct("Stop").field("region", region).finish(),
-            Self::Destroy { region } => f.debug_struct("Destroy").field("region", region).finish(),
+            Self::Start { region } => f
+                .debug_struct("Start")
+                .field("region", &utils::debug_region(region))
+                .finish(),
+            Self::Stop { region } => f
+                .debug_struct("Stop")
+                .field("region", &utils::debug_region(region))
+                .finish(),
+            Self::Destroy { region } => f
+                .debug_struct("Destroy")
+                .field("region", &utils::debug_region(region))
+                .finish(),
             Self::RefreshResolver { region } => f
                 .debug_struct("RefreshResolver")
-                .field("region", region)
+                .field("region", &utils::debug_region(region))
                 .finish(),
             Self::NotifyFailToStartObserve {
                 region,
@@ -1060,7 +1180,7 @@ impl std::fmt::Debug for ObserveOp {
                 err,
             } => f
                 .debug_struct("NotifyFailToStartObserve")
-                .field("region", region)
+                .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
                 .finish(),
@@ -1132,7 +1252,7 @@ impl Task {
                 ObserveOp::NotifyFailToStartObserve { .. } => "modify_observe.retry",
                 ObserveOp::ResolveRegions { .. } => "modify_observe.resolve",
             },
-            Task::ForceFlush(_) => "force_flush",
+            Task::ForceFlush(..) => "force_flush",
             Task::FatalError(..) => "fatal_error",
             Task::Sync(..) => "sync",
             Task::MarkFailover(_) => "mark_failover",
@@ -1155,5 +1275,43 @@ where
 
     fn run(&mut self, task: Task) {
         self.run_task(task)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use engine_rocks::RocksEngine;
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use test_raftstore::MockRaftStoreRouter;
+    use tikv_util::worker::dummy_scheduler;
+
+    use crate::{
+        checkpoint_manager::tests::MockPdClient, endpoint, endpoint::Endpoint, metadata::test, Task,
+    };
+
+    #[tokio::test]
+    async fn test_start() {
+        let cli = test::test_meta_cli();
+        let (sched, mut rx) = dummy_scheduler();
+        let task = test::simple_task("simple_3");
+        cli.insert_task_with_range(&task, &[]).await.unwrap();
+
+        fail::cfg("failed_to_get_tasks", "1*return").unwrap();
+        Endpoint::<_, MockRegionInfoProvider, RocksEngine, MockRaftStoreRouter, MockPdClient>::start_and_watch_tasks(cli, sched).await.unwrap();
+        fail::remove("failed_to_get_tasks");
+
+        let _t1 = rx.recv().unwrap();
+        let t2 = rx.recv().unwrap();
+
+        match t2 {
+            Task::WatchTask(t) => match t {
+                endpoint::TaskOp::AddTask(t) => {
+                    assert_eq!(t.info, task.info);
+                    assert!(!t.is_paused);
+                }
+                _ => panic!("not match TaskOp type"),
+            },
+            _ => panic!("not match Task type {:?}", t2),
+        }
     }
 }

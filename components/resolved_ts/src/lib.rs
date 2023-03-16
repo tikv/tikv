@@ -27,8 +27,6 @@ mod observer;
 pub use observer::*;
 mod advance;
 pub use advance::*;
-mod sinker;
-pub use sinker::*;
 mod endpoint;
 pub use endpoint::*;
 mod errors;

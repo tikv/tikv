@@ -384,8 +384,8 @@ impl FromStr for ReadableDuration {
         if dur.is_sign_negative() {
             return Err("duration should be positive.".to_owned());
         }
-        let secs = dur as u64 / SECOND as u64;
-        let micros = (dur as u64 % SECOND as u64) as u32 * 1_000;
+        let secs = dur as u64 / SECOND;
+        let micros = (dur as u64 % SECOND) as u32 * 1_000;
         Ok(ReadableDuration(Duration::new(secs, micros)))
     }
 }
@@ -814,7 +814,7 @@ mod check_data_dir {
                 }
                 let ent = &*ent;
                 let cur_dir = CStr::from_ptr(ent.mnt_dir).to_str().unwrap();
-                if path.starts_with(&cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
+                if path.starts_with(cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
                     fs.tp = CStr::from_ptr(ent.mnt_type).to_str().unwrap().to_owned();
                     fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
                     fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
@@ -844,7 +844,7 @@ mod check_data_dir {
         let block_dir = "/sys/block";
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {
-            let dir = fs::read_dir(&block_dir).map_err(|e| {
+            let dir = fs::read_dir(block_dir).map_err(|e| {
                 ConfigError::FileSystem(format!(
                     "{}: read block dir {:?} failed: {:?}",
                     op, block_dir, e
@@ -1554,7 +1554,7 @@ impl RaftDataStateMachine {
                 fs::remove_dir_all(&trash).unwrap();
             } else {
                 info!("Removing file"; "path" => %path.display());
-                fs::remove_file(&path).unwrap();
+                fs::remove_file(path).unwrap();
                 Self::sync_dir(path.parent().unwrap());
             }
         }
@@ -1571,11 +1571,11 @@ impl RaftDataStateMachine {
         if !path.exists() || !path.is_dir() {
             return false;
         }
-        fs::read_dir(&path).unwrap().next().is_some()
+        fs::read_dir(path).unwrap().next().is_some()
     }
 
     fn sync_dir(dir: &Path) {
-        fs::File::open(&dir).and_then(|d| d.sync_all()).unwrap();
+        fs::File::open(dir).and_then(|d| d.sync_all()).unwrap();
     }
 }
 
@@ -1789,8 +1789,8 @@ mod tests {
         ensure_dir_exist(&format!("{}", tmp_dir.to_path_buf().join("dir").display())).unwrap();
         let nodes: &[&str] = if cfg!(target_os = "linux") {
             std::os::unix::fs::symlink(
-                &tmp_dir.to_path_buf().join("dir"),
-                &tmp_dir.to_path_buf().join("symlink"),
+                tmp_dir.to_path_buf().join("dir"),
+                tmp_dir.to_path_buf().join("symlink"),
             )
             .unwrap();
             &["non_existing", "dir", "symlink"]
@@ -2116,10 +2116,10 @@ yyy = 100
                 let source_file = source.join("file");
                 let target_file = target.join("file");
                 if !target.exists() {
-                    fs::create_dir_all(&target).unwrap();
+                    fs::create_dir_all(target).unwrap();
                     check();
                 }
-                fs::copy(&source_file, &target_file).unwrap();
+                fs::copy(source_file, target_file).unwrap();
                 check();
                 state.after_dump_data_with_check(&check);
             }
@@ -2130,14 +2130,14 @@ yyy = 100
             if dst.exists() {
                 fs::remove_dir_all(dst)?;
             }
-            fs::create_dir_all(&dst)?;
+            fs::create_dir_all(dst)?;
             for entry in fs::read_dir(src)? {
                 let entry = entry?;
                 let ty = entry.file_type()?;
                 if ty.is_dir() {
                     copy_dir(&entry.path(), &dst.join(entry.file_name()))?;
                 } else {
-                    fs::copy(entry.path(), &dst.join(entry.file_name()))?;
+                    fs::copy(entry.path(), dst.join(entry.file_name()))?;
                 }
             }
             Ok(())
@@ -2151,7 +2151,7 @@ yyy = 100
         fs::create_dir_all(&target).unwrap();
         // Write some data into source.
         let source_file = source.join("file");
-        File::create(&source_file).unwrap();
+        File::create(source_file).unwrap();
 
         let backup = dir.path().join("backup");
 

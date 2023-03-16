@@ -6,7 +6,7 @@ use ::tracker::{get_tls_tracker_token, with_tls_tracker};
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
-use tikv_kv::{with_tls_engine, Engine};
+use tikv_kv::Engine;
 use tikv_util::time::{self, Duration, Instant};
 use txn_types::Key;
 
@@ -67,7 +67,7 @@ pub struct Tracker<E: Engine> {
     total_process_time: Duration,
     total_storage_stats: Statistics,
     slow_log_threshold: Duration,
-    scan_process_time_ms: u64,
+    scan_process_time_ns: u64,
 
     pub buckets: Option<Arc<BucketMeta>>,
 
@@ -96,7 +96,7 @@ impl<E: Engine> Tracker<E> {
             total_suspend_time: Duration::default(),
             total_process_time: Duration::default(),
             total_storage_stats: Statistics::default(),
-            scan_process_time_ms: 0,
+            scan_process_time_ns: 0,
             slow_log_threshold,
             req_ctx,
             buckets: None,
@@ -147,7 +147,9 @@ impl<E: Engine> Tracker<E> {
             _ => unreachable!(),
         }
 
-        self.with_perf_context(|perf_context| perf_context.start_observe());
+        self.with_perf_context(|perf_context| {
+            perf_context.start_observe();
+        });
         self.current_stage = TrackerState::ItemBegan(now);
     }
 
@@ -160,7 +162,7 @@ impl<E: Engine> Tracker<E> {
                 self.total_storage_stats.add(&storage_stats);
             }
             self.with_perf_context(|perf_context| {
-                perf_context.report_metrics(&[get_tls_tracker_token()])
+                perf_context.report_metrics(&[get_tls_tracker_token()]);
             });
             self.current_stage = TrackerState::ItemFinished(now);
         } else {
@@ -173,7 +175,7 @@ impl<E: Engine> Tracker<E> {
     }
 
     pub fn collect_scan_process_time(&mut self, exec_summary: ExecSummary) {
-        self.scan_process_time_ms = (exec_summary.time_processed_ns / 1000000) as u64;
+        self.scan_process_time_ns = exec_summary.time_processed_ns as u64;
     }
 
     /// Get current item's ExecDetail according to previous collected metrics.
@@ -181,7 +183,7 @@ impl<E: Engine> Tracker<E> {
     /// WARN: TRY BEST NOT TO USE THIS FUNCTION.
     pub fn get_item_exec_details(&self) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
         if let TrackerState::ItemFinished(_) = self.current_stage {
-            self.exec_details(self.item_process_time)
+            self.exec_details(self.item_process_time, self.item_suspend_time)
         } else {
             unreachable!()
         }
@@ -192,27 +194,39 @@ impl<E: Engine> Tracker<E> {
     pub fn get_exec_details(&self) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
         if let TrackerState::ItemFinished(_) = self.current_stage {
             // TODO: Separate process time and suspend time
-            self.exec_details(self.total_process_time + self.total_suspend_time)
+            self.exec_details(self.total_process_time, self.total_suspend_time)
         } else {
             unreachable!()
         }
     }
 
-    fn exec_details(&self, measure: Duration) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
+    fn exec_details(
+        &self,
+        process_time: Duration,
+        suspend_time: Duration,
+    ) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
         // For compatibility, ExecDetails field is still filled.
         let mut exec_details = kvrpcpb::ExecDetails::default();
 
+        // TimeDetail is deprecated, we only keep it for backward compatibility.
         let mut td = kvrpcpb::TimeDetail::default();
-        td.set_process_wall_time_ms(time::duration_to_ms(measure));
+        td.set_process_wall_time_ms(time::duration_to_ms(process_time));
         td.set_wait_wall_time_ms(time::duration_to_ms(self.wait_time));
-        td.set_kv_read_wall_time_ms(self.scan_process_time_ms);
+        td.set_kv_read_wall_time_ms(self.scan_process_time_ns / 1_000_000);
         exec_details.set_time_detail(td.clone());
 
         let detail = self.total_storage_stats.scan_detail();
         exec_details.set_scan_detail(detail);
 
+        let mut td_v2 = kvrpcpb::TimeDetailV2::default();
+        td_v2.set_process_wall_time_ns(process_time.as_nanos() as u64);
+        td_v2.set_process_suspend_wall_time_ns(suspend_time.as_nanos() as u64);
+        td_v2.set_wait_wall_time_ns(self.wait_time.as_nanos() as u64);
+        td_v2.set_kv_read_wall_time_ns(self.scan_process_time_ns);
+
         let mut exec_details_v2 = kvrpcpb::ExecDetailsV2::default();
         exec_details_v2.set_time_detail(td);
+        exec_details_v2.set_time_detail_v2(td_v2);
 
         let mut detail_v2 = ScanDetailV2::default();
         detail_v2.set_processed_versions(self.total_storage_stats.write.processed_keys as u64);
@@ -379,13 +393,11 @@ impl<E: Engine> Tracker<E> {
         };
         tls_cell.with(|c| {
             let mut c = c.borrow_mut();
-            let perf_context = c.get_or_insert_with(|| unsafe {
-                with_tls_engine::<E, _, _>(|engine| {
-                    Box::new(engine.kv_engine().unwrap().get_perf_context(
-                        PerfLevel::Uninitialized,
-                        PerfContextKind::Coprocessor(self.req_ctx.tag.get_str()),
-                    ))
-                })
+            let perf_context = c.get_or_insert_with(|| {
+                Box::new(E::Local::get_perf_context(
+                    PerfLevel::Uninitialized,
+                    PerfContextKind::Coprocessor(self.req_ctx.tag.get_str()),
+                )) as Box<dyn PerfContext>
             });
             f(perf_context)
         })

@@ -10,9 +10,48 @@ use std::{
 
 use crossbeam::{
     channel::{SendError, TryRecvError},
-    queue::SegQueue,
+    queue::{ArrayQueue, SegQueue},
 };
 use futures::{task::AtomicWaker, Stream, StreamExt};
+
+enum QueueType<T> {
+    Unbounded(SegQueue<T>),
+    Bounded(ArrayQueue<T>),
+}
+
+impl<T> QueueType<T> {
+    fn len(&self) -> usize {
+        match self {
+            QueueType::Unbounded(q) => q.len(),
+            QueueType::Bounded(q) => q.len(),
+        }
+    }
+
+    fn bounded(cap: usize) -> QueueType<T> {
+        QueueType::Bounded(ArrayQueue::new(cap))
+    }
+
+    fn unbounded() -> QueueType<T> {
+        QueueType::Unbounded(SegQueue::new())
+    }
+
+    fn push_back(&self, t: T) -> Result<(), SendError<T>> {
+        match self {
+            QueueType::Unbounded(q) => {
+                q.push(t);
+                Ok(())
+            }
+            QueueType::Bounded(q) => q.push(t).map_err(SendError),
+        }
+    }
+
+    fn pop_front(&self) -> Option<T> {
+        match self {
+            QueueType::Unbounded(q) => q.pop(),
+            QueueType::Bounded(q) => q.pop(),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub enum WakePolicy {
@@ -21,7 +60,7 @@ pub enum WakePolicy {
 }
 
 struct Queue<T> {
-    queue: SegQueue<T>,
+    queue: QueueType<T>,
     waker: AtomicWaker,
     liveness: AtomicUsize,
     policy: WakePolicy,
@@ -62,9 +101,9 @@ impl<T: Send> Sender<T> {
     pub fn send_with(&self, t: T, policy: WakePolicy) -> Result<(), SendError<T>> {
         let queue = unsafe { &*self.queue };
         if queue.liveness.load(Ordering::Acquire) & RECEIVER_COUNT_BASE != 0 {
-            queue.queue.push(t);
+            let res = queue.queue.push_back(t);
             queue.wake(policy);
-            return Ok(());
+            return res;
         }
         Err(SendError(t))
     }
@@ -110,12 +149,12 @@ impl<T: Send> Stream for Receiver<T> {
     #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let queue = unsafe { &*self.queue };
-        if let Some(t) = queue.queue.pop() {
+        if let Some(t) = queue.queue.pop_front() {
             return Poll::Ready(Some(t));
         }
         queue.waker.register(cx.waker());
         // In case the message is pushed right before registering waker.
-        if let Some(t) = queue.queue.pop() {
+        if let Some(t) = queue.queue.pop_front() {
             return Poll::Ready(Some(t));
         }
         if queue.liveness.load(Ordering::Acquire) & !RECEIVER_COUNT_BASE != 0 {
@@ -129,7 +168,7 @@ impl<T: Send> Receiver<T> {
     #[inline]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
         let queue = unsafe { &*self.queue };
-        if let Some(t) = queue.queue.pop() {
+        if let Some(t) = queue.queue.pop_front() {
             return Ok(t);
         }
         if queue.liveness.load(Ordering::Acquire) & !RECEIVER_COUNT_BASE != 0 {
@@ -156,9 +195,19 @@ impl<T> Drop for Receiver<T> {
 
 unsafe impl<T: Send> Send for Receiver<T> {}
 
+#[inline]
 pub fn unbounded<T>(policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
+    with_queue(QueueType::unbounded(), policy)
+}
+
+#[inline]
+pub fn bounded<T>(cap: usize, policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
+    with_queue(QueueType::bounded(cap), policy)
+}
+
+fn with_queue<T>(queue: QueueType<T>, policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
     let queue = Box::into_raw(Box::new(Queue {
-        queue: SegQueue::new(),
+        queue,
         waker: AtomicWaker::new(),
         liveness: AtomicUsize::new(SENDER_COUNT_BASE | RECEIVER_COUNT_BASE),
         policy,
@@ -429,5 +478,14 @@ mod tests {
         tx1.send(SetOnDrop::default()).unwrap_err();
         drop(tx1);
         assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_bounded() {
+        let (tx, mut rx) = super::bounded(1, WakePolicy::Immediately);
+        tx.send(1).unwrap();
+        tx.send(2).unwrap_err();
+        assert_eq!(rx.try_recv().unwrap(), 1);
+        rx.try_recv().unwrap_err();
     }
 }

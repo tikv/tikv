@@ -419,6 +419,7 @@ mod tests {
                 need_old_value: false,
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
+                txn_source: 0,
             },
             Mutation::make_put(k1.clone(), b"v4".to_vec()),
             &None,

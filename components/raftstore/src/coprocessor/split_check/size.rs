@@ -1,10 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    marker::PhantomData,
-    sync::{Arc, Mutex},
-};
-
 use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
@@ -17,7 +12,7 @@ use super::{
     },
     calc_split_keys_count, Host,
 };
-use crate::store::{CasualMessage, CasualRouter};
+use crate::coprocessor::dispatcher::StoreHandle;
 
 pub struct Checker {
     max_size: u64,
@@ -116,29 +111,19 @@ where
 }
 
 #[derive(Clone)]
-pub struct SizeCheckObserver<C, E> {
-    router: Arc<Mutex<C>>,
-    _phantom: PhantomData<E>,
+pub struct SizeCheckObserver<C> {
+    router: C,
 }
 
-impl<C: CasualRouter<E>, E> SizeCheckObserver<C, E>
-where
-    E: KvEngine,
-{
-    pub fn new(router: C) -> SizeCheckObserver<C, E> {
-        SizeCheckObserver {
-            router: Arc::new(Mutex::new(router)),
-            _phantom: PhantomData,
-        }
+impl<C: StoreHandle> SizeCheckObserver<C> {
+    pub fn new(router: C) -> SizeCheckObserver<C> {
+        SizeCheckObserver { router }
     }
 }
 
-impl<C: Send, E: Send> Coprocessor for SizeCheckObserver<C, E> {}
+impl<C: Send> Coprocessor for SizeCheckObserver<C> {}
 
-impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
-where
-    E: KvEngine,
-{
+impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for SizeCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -164,7 +149,7 @@ where
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
                     host.cfg.region_max_size().0,
-                    host.cfg.region_split_size.0,
+                    host.cfg.region_split_size().0,
                     host.cfg.batch_split_limit,
                     policy,
                 )));
@@ -173,18 +158,10 @@ where
         };
 
         // send it to raftstore to update region approximate size
-        let res = CasualMessage::RegionApproximateSize { size: region_size };
-        if let Err(e) = self.router.lock().unwrap().send(region_id, res) {
-            warn!(
-                "failed to send approximate region size";
-                "region_id" => region_id,
-                "err" => %e,
-                "error_code" => %e.error_code(),
-            );
-        }
+        self.router.update_approximate_size(region_id, region_size);
 
         let need_bucket_checker =
-            host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0;
+            host.cfg.enable_region_bucket() && region_size >= 2 * host.cfg.region_bucket_size.0;
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
 
         let need_split_region = region_size >= host.cfg.region_max_size().0;
@@ -209,7 +186,7 @@ where
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 host.cfg.region_max_size().0,
-                host.cfg.region_split_size.0,
+                host.cfg.region_split_size().0,
                 host.cfg.batch_split_limit,
                 policy,
             )));
@@ -256,7 +233,7 @@ pub fn get_approximate_split_keys(
 
 #[cfg(test)]
 pub mod tests {
-    use std::{iter, sync::mpsc, u64};
+    use std::{assert_matches::assert_matches, iter, sync::mpsc, u64};
 
     use collections::HashSet;
     use engine_test::{
@@ -276,30 +253,31 @@ pub mod tests {
 
     use super::{Checker, *};
     use crate::{
-        coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker},
-        store::{BucketRange, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask},
+        coprocessor::{
+            dispatcher::SchedTask, Config, CoprocessorHost, ObserverContext, SplitChecker,
+        },
+        store::{BucketRange, KeyEntry, SplitCheckRunner, SplitCheckTask},
     };
 
     fn must_split_at_impl(
-        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        rx: &mpsc::Receiver<SchedTask>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
         ignore_split_keys: bool,
     ) {
         loop {
             match rx.try_recv() {
-                Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
-                | Ok((region_id, CasualMessage::RegionApproximateKeys { .. })) => {
+                Ok(SchedTask::UpdateApproximateKeys { region_id, .. })
+                | Ok(SchedTask::UpdateApproximateSize { region_id, .. })
+                | Ok(SchedTask::RefreshRegionBuckets { region_id, .. }) => {
                     assert_eq!(region_id, exp_region.get_id());
                 }
-                Ok((
+                Ok(SchedTask::AskSplit {
                     region_id,
-                    CasualMessage::SplitRegion {
-                        region_epoch,
-                        split_keys,
-                        ..
-                    },
-                )) => {
+                    region_epoch,
+                    split_keys,
+                    ..
+                }) => {
                     assert_eq!(region_id, exp_region.get_id());
                     assert_eq!(&region_epoch, exp_region.get_region_epoch());
                     if !ignore_split_keys {
@@ -307,14 +285,13 @@ pub mod tests {
                     }
                     break;
                 }
-                Ok((_region_id, CasualMessage::RefreshRegionBuckets { .. })) => {}
                 others => panic!("expect split check result, but got {:?}", others),
             }
         }
     }
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        rx: &mpsc::Receiver<SchedTask>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {
@@ -322,50 +299,36 @@ pub mod tests {
     }
 
     pub fn must_split_with(
-        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        rx: &mpsc::Receiver<SchedTask>,
         exp_region: &Region,
         exp_split_keys_count: usize,
     ) {
         loop {
             match rx.try_recv() {
-                Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
-                | Ok((region_id, CasualMessage::RegionApproximateKeys { .. })) => {
+                Ok(SchedTask::UpdateApproximateSize { region_id, .. })
+                | Ok(SchedTask::UpdateApproximateKeys { region_id, .. })
+                | Ok(SchedTask::RefreshRegionBuckets { region_id, .. }) => {
                     assert_eq!(region_id, exp_region.get_id());
                 }
-                Ok((
+                Ok(SchedTask::AskSplit {
                     region_id,
-                    CasualMessage::SplitRegion {
-                        region_epoch,
-                        split_keys,
-                        ..
-                    },
-                )) => {
+                    region_epoch,
+                    split_keys,
+                    ..
+                }) => {
                     assert_eq!(region_id, exp_region.get_id());
                     assert_eq!(&region_epoch, exp_region.get_region_epoch());
                     assert_eq!(split_keys.len(), exp_split_keys_count);
                     break;
                 }
-                Ok((_region_id, CasualMessage::RefreshRegionBuckets { .. })) => {}
                 others => panic!("expect split check result, but got {:?}", others),
             }
         }
     }
 
-    pub fn must_generate_buckets(
-        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
-        exp_buckets_keys: &[Vec<u8>],
-    ) {
+    pub fn must_generate_buckets(rx: &mpsc::Receiver<SchedTask>, exp_buckets_keys: &[Vec<u8>]) {
         loop {
-            if let Ok((
-                _,
-                CasualMessage::RefreshRegionBuckets {
-                    region_epoch: _,
-                    mut buckets,
-                    bucket_ranges: _,
-                    ..
-                },
-            )) = rx.try_recv()
-            {
+            if let Ok(SchedTask::RefreshRegionBuckets { mut buckets, .. }) = rx.try_recv() {
                 let mut i = 0;
                 if !exp_buckets_keys.is_empty() {
                     let bucket = buckets.pop().unwrap();
@@ -383,23 +346,14 @@ pub mod tests {
     }
 
     pub fn must_generate_buckets_approximate(
-        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        rx: &mpsc::Receiver<SchedTask>,
         bucket_range: Option<BucketRange>,
         min_leap: i32,
         max_leap: i32,
         mvcc: bool,
     ) {
         loop {
-            if let Ok((
-                _,
-                CasualMessage::RefreshRegionBuckets {
-                    region_epoch: _,
-                    mut buckets,
-                    bucket_ranges: _,
-                    ..
-                },
-            )) = rx.try_recv()
-            {
+            if let Ok(SchedTask::RefreshRegionBuckets { mut buckets, .. }) = rx.try_recv() {
                 let bucket_keys = buckets.pop().unwrap().keys;
                 if let Some(bucket_range) = bucket_range {
                     assert!(!bucket_keys.is_empty());
@@ -466,7 +420,7 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
             region_max_size: Some(ReadableSize(100)),
-            region_split_size: ReadableSize(60),
+            region_split_size: Some(ReadableSize(60)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
@@ -489,12 +443,7 @@ pub mod tests {
             None,
         ));
         // size has not reached the max_size 100 yet.
-        match rx.try_recv() {
-            Ok((region_id, CasualMessage::RegionApproximateSize { .. })) => {
-                assert_eq!(region_id, region.get_id());
-            }
-            others => panic!("expect recv empty, but got {:?}", others),
-        }
+        assert_matches!(rx.try_recv(), Ok(SchedTask::UpdateApproximateSize { region_id, .. }) if region_id == region.get_id());
 
         for i in 7..11 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
@@ -596,11 +545,11 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
             region_max_size: Some(ReadableSize(50000)),
-            region_split_size: ReadableSize(50000),
+            region_split_size: Some(ReadableSize(50000)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
-            enable_region_bucket: true,
+            enable_region_bucket: Some(true),
             region_bucket_size: ReadableSize(3000),
             region_size_threshold_for_approximate: ReadableSize(50000),
             ..Default::default()
@@ -722,11 +671,11 @@ pub mod tests {
         let (tx, _rx) = mpsc::sync_channel(100);
         let mut cfg = Config {
             region_max_size: Some(ReadableSize(50000)),
-            region_split_size: ReadableSize(50000),
+            region_split_size: Some(ReadableSize(50000)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
-            enable_region_bucket: true,
+            enable_region_bucket: Some(true),
             region_bucket_size: ReadableSize(1), // minimal bucket size
             region_size_threshold_for_approximate: ReadableSize(500000000),
             // follow split region's check policy, not force to use approximate
@@ -787,7 +736,7 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
             region_max_size: Some(ReadableSize(100)),
-            region_split_size: ReadableSize(60),
+            region_split_size: Some(ReadableSize(60)),
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,

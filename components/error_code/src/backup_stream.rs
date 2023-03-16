@@ -41,12 +41,17 @@ define_error_codes! {
     ),
     RAFTREQ => ("RaftReq",
         "Error happened when sending raft command.",
-        "This is an internal error, please ask the community for help."
+        "This is an internal error, most of them are happen while initial scanning and can be simply retried."
     ),
     RAFTSTORE => ("RaftStore",
         "Error happened reported from raft store.",
         "This is an internal error, please ask the community for help."
     ),
+    GRPC => ("gRPC",
+        "Error happened during executing gRPC",
+        "This error is often relative to the network, please check the network connection and network config, say, TLS config."
+    ),
+
     OTHER => ("Unknown",
         "Some random error happens.",
         "This is an generic error, please check the error message for further information."

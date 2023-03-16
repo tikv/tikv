@@ -138,9 +138,20 @@ pub fn init() -> Result<(), String> {
     ThreadId::current()
         .fetch_io_bytes()
         .map_err(|e| format!("failed to fetch I/O bytes from proc: {}", e))?;
+    // Manually initialize the sentinel so that `fetch_io_bytes` doesn't miss any
+    // thread.
+    LOCAL_IO_STATS.get_or(|| CachePadded::new(Mutex::new(LocalIoStats::current())));
+    tikv_util::sys::thread::hook_thread_start(Box::new(|| {
+        LOCAL_IO_STATS.get_or(|| CachePadded::new(Mutex::new(LocalIoStats::current())));
+    }));
     Ok(())
 }
 
+/// Bind I/O type for the current thread.
+/// Following calls to the [`file_system`](crate) APIs would be throttled and
+/// recorded via this information.
+/// Generally, when you are creating new threads playing with the local disks,
+/// you should call this before doing so.
 pub fn set_io_type(new_io_type: IoType) {
     IO_TYPE.with(|io_type| {
         if io_type.get() != new_io_type {
@@ -174,11 +185,13 @@ mod tests {
     use std::{
         io::{Read, Write},
         os::unix::fs::OpenOptionsExt,
+        sync::mpsc,
     };
 
     use libc::O_DIRECT;
     use maligned::{AsBytes, AsBytesMut, A512};
     use tempfile::{tempdir, tempdir_in};
+    use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
     use crate::{OpenOptions, WithIoType};
@@ -225,7 +238,7 @@ mod tests {
             .write(true)
             .create(true)
             .custom_flags(O_DIRECT)
-            .open(&file_path)
+            .open(file_path)
             .unwrap();
         let w = vec![A512::default(); 8];
         let base_local_bytes = id.fetch_io_bytes().unwrap();
@@ -236,6 +249,61 @@ mod tests {
             let local_bytes = id.fetch_io_bytes().unwrap();
             assert_eq!(i * 4096 + base_local_bytes.write, local_bytes.write);
         }
+    }
+
+    #[test]
+    fn test_fetch_all_io_bytes() {
+        let tmp = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
+
+        init().unwrap();
+
+        let file_path = tmp.path().join("test_fetch_all_io_bytes_1.txt");
+        let (tx1, rx1) = mpsc::sync_channel(0);
+        let t1 = std::thread::Builder::new()
+            .spawn_wrapper(move || {
+                set_io_type(IoType::ForegroundWrite);
+                let mut f = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .custom_flags(O_DIRECT)
+                    .open(file_path)
+                    .unwrap();
+                let w = vec![A512::default(); 8];
+                f.write_all(w.as_bytes()).unwrap();
+                f.sync_all().unwrap();
+                tx1.send(()).unwrap();
+                tx1.send(()).unwrap();
+            })
+            .unwrap();
+
+        let file_path = tmp.path().join("test_fetch_all_io_bytes_2.txt");
+        let (tx2, rx2) = mpsc::sync_channel(0);
+        let t2 = std::thread::Builder::new()
+            .spawn_wrapper(move || {
+                let mut f = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .custom_flags(O_DIRECT)
+                    .open(file_path)
+                    .unwrap();
+                let w = vec![A512::default(); 8];
+                f.write_all(w.as_bytes()).unwrap();
+                f.sync_all().unwrap();
+                tx2.send(()).unwrap();
+                tx2.send(()).unwrap();
+            })
+            .unwrap();
+
+        rx1.recv().unwrap();
+        rx2.recv().unwrap();
+        let bytes = fetch_io_bytes();
+        assert_eq!(bytes[IoType::ForegroundWrite as usize].write, 4096);
+        assert_eq!(bytes[IoType::Other as usize].write, 4096);
+
+        rx1.recv().unwrap();
+        rx2.recv().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
     }
 
     #[bench]

@@ -62,7 +62,7 @@ gag = "1.0"
 grpcio = { workspace = true }
 hex = "0.4"
 keys = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { workspace = true }
@@ -78,8 +78,8 @@ regex = "1"
 security = { workspace = true }
 serde_json = "1.0"
 server = { workspace = true }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog = { workspace = true }
+slog-global = { workspace = true }
 structopt = "0.3"
 tempfile = "3.0"
 tikv = { workspace = true }

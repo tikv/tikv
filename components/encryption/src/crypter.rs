@@ -275,7 +275,7 @@ mod tests {
         let crypter = AesGcmCrypter::new(&key, iv);
         let (ciphertext, gcm_tag) = crypter.encrypt(&pt).unwrap();
         assert_eq!(ciphertext, ct, "{}", hex::encode(&ciphertext));
-        assert_eq!(gcm_tag.0.to_vec(), tag, "{}", hex::encode(&gcm_tag.0));
+        assert_eq!(gcm_tag.0.to_vec(), tag, "{}", hex::encode(gcm_tag.0));
         let plaintext = crypter.decrypt(&ct, gcm_tag).unwrap();
         assert_eq!(plaintext, pt, "{}", hex::encode(&plaintext));
 

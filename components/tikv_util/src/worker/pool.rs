@@ -376,8 +376,11 @@ impl Worker {
         let mut interval = GLOBAL_TIMER_HANDLE
             .interval(std::time::Instant::now(), interval)
             .compat();
+        let stop = self.stop.clone();
         self.remote.spawn(async move {
-            while let Some(Ok(_)) = interval.next().await {
+            while !stop.load(Ordering::Relaxed)
+                && let Some(Ok(_)) = interval.next().await
+            {
                 func();
             }
         });
@@ -391,12 +394,22 @@ impl Worker {
         let mut interval = GLOBAL_TIMER_HANDLE
             .interval(std::time::Instant::now(), interval)
             .compat();
+        let stop = self.stop.clone();
         self.remote.spawn(async move {
-            while let Some(Ok(_)) = interval.next().await {
+            while !stop.load(Ordering::Relaxed)
+                && let Some(Ok(_)) = interval.next().await
+            {
                 let fut = func();
                 fut.await;
             }
         });
+    }
+
+    pub fn spawn_async_task<F>(&self, f: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.remote.spawn(f);
     }
 
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {

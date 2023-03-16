@@ -186,7 +186,7 @@ pub fn integer_signed_lower_bound(tp: FieldTypeTp) -> i64 {
 /// `truncate_binary` truncates a buffer to the specified length.
 #[inline]
 pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
-    if flen != crate::UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
+    if flen != crate::UNSPECIFIED_LENGTH && s.len() > flen as usize {
         s.truncate(flen as usize);
     }
 }
@@ -431,7 +431,7 @@ impl ToInt for Decimal {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_i64();
-        let err = Error::truncated_wrong_val("DECIMAL", &dec);
+        let err = Error::truncated_wrong_val("DECIMAL", dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
         r.to_int(ctx, tp)
     }
@@ -440,7 +440,7 @@ impl ToInt for Decimal {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_u64();
-        let err = Error::truncated_wrong_val("DECIMAL", &dec);
+        let err = Error::truncated_wrong_val("DECIMAL", dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
         r.to_uint(ctx, tp)
     }
@@ -639,7 +639,7 @@ pub fn produce_dec_with_specified_tp(
             // select (cast 111 as decimal(1)) causes a warning in MySQL.
             ctx.handle_overflow_err(Error::overflow(
                 "Decimal",
-                &format!("({}, {})", flen, decimal),
+                format!("({}, {})", flen, decimal),
             ))?;
             dec = max_or_min_dec(dec.is_negative(), flen as u8, decimal as u8)
         } else if frac != decimal {
@@ -648,7 +648,7 @@ pub fn produce_dec_with_specified_tp(
                 .round(decimal as i8, RoundMode::HalfEven)
                 .into_result_with_overflow_err(
                     ctx,
-                    Error::overflow("Decimal", &format!("({}, {})", flen, decimal)),
+                    Error::overflow("Decimal", format!("({}, {})", flen, decimal)),
                 )?;
             if !rounded.is_zero() && frac > decimal && rounded != old {
                 if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
@@ -811,7 +811,7 @@ impl ConvertTo<f64> for &[u8] {
             .map_err(|err| -> Error { box_err!("Parse '{}' to float err: {:?}", vs, err) })?;
         // The `parse` will return Ok(inf) if the float string literal out of range
         if val.is_infinite() {
-            ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
+            ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", vs))?;
             if val.is_sign_negative() {
                 return Ok(f64::MIN);
             } else {
@@ -1036,7 +1036,7 @@ fn exp_float_str_to_int_str<'a>(
         // And the intCnt may contain the len of `+/-`,
         // so here we use 21 here as the early detection.
         ctx.warnings
-            .append_warning(Error::overflow("BIGINT", &valid_float));
+            .append_warning(Error::overflow("BIGINT", valid_float));
         return Cow::Borrowed(valid_float);
     }
     if int_cnt <= 0 {

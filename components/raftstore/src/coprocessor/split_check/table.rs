@@ -238,8 +238,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        coprocessor::{Config, CoprocessorHost},
-        store::{CasualMessage, SplitCheckRunner, SplitCheckTask},
+        coprocessor::{dispatcher::SchedTask, Config, CoprocessorHost},
+        store::{SplitCheckRunner, SplitCheckTask},
     };
 
     /// Composes table record and index prefix: `t[table_id]`.
@@ -326,7 +326,7 @@ mod tests {
             split_region_on_table: true,
             // Try to "disable" size split.
             region_max_size: Some(ReadableSize::gb(2)),
-            region_split_size: ReadableSize::gb(1),
+            region_split_size: Some(ReadableSize::gb(1)),
             // Try to "disable" keys split
             region_max_keys: Some(2000000000),
             region_split_keys: Some(1000000000),
@@ -353,9 +353,9 @@ mod tests {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     loop {
                         match rx.try_recv() {
-                            Ok((_, CasualMessage::RegionApproximateSize { .. }))
-                            | Ok((_, CasualMessage::RegionApproximateKeys { .. })) => (),
-                            Ok((_, CasualMessage::SplitRegion { split_keys, .. })) => {
+                            Ok(SchedTask::UpdateApproximateSize { .. })
+                            | Ok(SchedTask::UpdateApproximateKeys { .. }) => (),
+                            Ok(SchedTask::AskSplit { split_keys, .. }) => {
                                 assert_eq!(split_keys, vec![key.into_encoded()]);
                                 break;
                             }
@@ -365,8 +365,8 @@ mod tests {
                 } else {
                     loop {
                         match rx.try_recv() {
-                            Ok((_, CasualMessage::RegionApproximateSize { .. }))
-                            | Ok((_, CasualMessage::RegionApproximateKeys { .. })) => (),
+                            Ok(SchedTask::UpdateApproximateSize { .. })
+                            | Ok(SchedTask::UpdateApproximateKeys { .. }) => (),
                             Err(mpsc::TryRecvError::Empty) => {
                                 break;
                             }

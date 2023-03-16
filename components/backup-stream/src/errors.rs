@@ -6,6 +6,7 @@ use std::{
 
 use error_code::ErrorCodeExt;
 use etcd_client::Error as EtcdError;
+use grpcio::Error as GrpcError;
 use kvproto::{errorpb::Error as StoreError, metapb::*};
 use pd_client::Error as PdError;
 use protobuf::ProtobufError;
@@ -18,8 +19,10 @@ use crate::{endpoint::Task, metrics};
 
 #[derive(ThisError, Debug)]
 pub enum Error {
+    #[error("gRPC meet error {0}")]
+    Grpc(#[from] GrpcError),
     #[error("Etcd meet error {0}")]
-    Etcd(#[from] EtcdError),
+    Etcd(#[from] EtcdErrorExt),
     #[error("Protobuf meet error {0}")]
     Protobuf(#[from] ProtobufError),
     #[error("No such task {task_name:?}")]
@@ -49,6 +52,22 @@ pub enum Error {
     Other(#[from] Box<dyn StdError + Send + Sync + 'static>),
 }
 
+impl From<EtcdError> for Error {
+    fn from(value: EtcdError) -> Self {
+        Self::Etcd(value.into())
+    }
+}
+
+#[derive(ThisError, Debug)]
+pub enum EtcdErrorExt {
+    #[error("{0}")]
+    Normal(#[from] EtcdError),
+    #[error("the watch canceled")]
+    WatchCanceled,
+    #[error("the required revision has been compacted, current is {current}")]
+    RevisionCompacted { current: i64 },
+}
+
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> error_code::ErrorCode {
         use error_code::backup_stream::*;
@@ -66,6 +85,7 @@ impl ErrorCodeExt for Error {
             Error::Other(_) => OTHER,
             Error::RaftStore(_) => RAFTSTORE,
             Error::ObserveCanceled(..) => OBSERVE_CANCELED,
+            Error::Grpc(_) => GRPC,
         }
     }
 }
@@ -112,6 +132,22 @@ where
             context: context(),
             inner_error: Box::new(err.into()),
         })
+    }
+}
+
+pub trait ReportableResult {
+    fn report_if_err(self, context: impl ToString);
+}
+
+impl<E> ReportableResult for StdResult<(), E>
+where
+    Error: From<E>,
+{
+    #[inline(always)]
+    fn report_if_err(self, context: impl ToString) {
+        if let Err(err) = self {
+            Error::from(err).report(context.to_string())
+        }
     }
 }
 

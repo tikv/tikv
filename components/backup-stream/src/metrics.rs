@@ -155,4 +155,15 @@ lazy_static! {
         &["stage"]
     )
     .unwrap();
+    pub static ref LOST_LEADER_REGION: IntCounter = register_int_counter!(
+        "tikv_log_backup_lost_leader_region",
+        "The regions that lost leadership during resolving"
+    )
+    .unwrap();
+    pub static ref MIN_TS_RESOLVE_DURATION: Histogram = register_histogram!(
+        "tikv_log_backup_resolve_duration_sec",
+        "The duration of resolving.",
+        exponential_buckets(0.001, 2.0, 16).unwrap()
+    )
+    .unwrap();
 }

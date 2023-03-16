@@ -21,6 +21,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::fsm::ChangeObserver,
 };
+use resolved_ts::LeadershipResolver;
 use tikv::storage::Statistics;
 use tikv_util::{box_err, debug, info, time::Instant, warn, worker::Scheduler};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -37,7 +38,7 @@ use crate::{
     metrics,
     observer::BackupStreamObserver,
     router::{Router, TaskSelector},
-    subscription_track::SubscriptionTracer,
+    subscription_track::{ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, Work},
     Task,
@@ -57,7 +58,7 @@ struct ScanCmd {
 
 /// The response of requesting resolve the new checkpoint of regions.
 pub struct ResolvedRegions {
-    items: Vec<(Region, TimeStamp)>,
+    items: Vec<ResolveResult>,
     checkpoint: TimeStamp,
 }
 
@@ -66,7 +67,7 @@ impl ResolvedRegions {
     /// Note: Maybe we can compute the global checkpoint internal and getting
     /// the interface clear. However we must take the `min_ts` or we cannot
     /// provide valid global checkpoint if there isn't any region checkpoint.
-    pub fn new(checkpoint: TimeStamp, checkpoints: Vec<(Region, TimeStamp)>) -> Self {
+    pub fn new(checkpoint: TimeStamp, checkpoints: Vec<ResolveResult>) -> Self {
         Self {
             items: checkpoints,
             checkpoint,
@@ -74,7 +75,16 @@ impl ResolvedRegions {
     }
 
     /// take the region checkpoints from the structure.
+    #[deprecated = "please use `take_resolve_result` instead."]
     pub fn take_region_checkpoints(&mut self) -> Vec<(Region, TimeStamp)> {
+        std::mem::take(&mut self.items)
+            .into_iter()
+            .map(|x| (x.region, x.checkpoint))
+            .collect()
+    }
+
+    /// take the resolve result from this struct.
+    pub fn take_resolve_result(&mut self) -> Vec<ResolveResult> {
         std::mem::take(&mut self.items)
     }
 
@@ -165,7 +175,7 @@ impl ScanCmd {
         } = self;
         let begin = Instant::now_coarse();
         let stat = initial_scan.do_initial_scan(region, *last_checkpoint, handle.clone())?;
-        info!("initial scanning of leader transforming finished!"; "takes" => ?begin.saturating_elapsed(), "region" => %region.get_id(), "from_ts" => %last_checkpoint);
+        info!("initial scanning finished!"; "takes" => ?begin.saturating_elapsed(), "from_ts" => %last_checkpoint, utils::slog_region(region));
         utils::record_cf_stat("lock", &stat.lock);
         utils::record_cf_stat("write", &stat.write);
         utils::record_cf_stat("default", &stat.data);
@@ -281,7 +291,7 @@ impl ScanPoolHandle {
 }
 
 /// The default channel size.
-const MESSAGE_BUFFER_SIZE: usize = 4096;
+const MESSAGE_BUFFER_SIZE: usize = 32768;
 
 /// The operator for region subscription.
 /// It make a queue for operations over the `SubscriptionTracer`, generally,
@@ -351,6 +361,7 @@ where
         meta_cli: MetadataClient<S>,
         pd_client: Arc<PDC>,
         scan_pool_size: usize,
+        leader_checker: LeadershipResolver,
     ) -> (Self, future![()])
     where
         E: KvEngine,
@@ -370,7 +381,7 @@ where
             scan_pool_handle: Arc::new(scan_pool_handle),
             scans: CallbackWaitGroup::new(),
         };
-        let fut = op.clone().region_operator_loop(rx);
+        let fut = op.clone().region_operator_loop(rx, leader_checker);
         (op, fut)
     }
 
@@ -390,7 +401,11 @@ where
     }
 
     /// the handler loop.
-    async fn region_operator_loop(self, mut message_box: Receiver<ObserveOp>) {
+    async fn region_operator_loop(
+        self,
+        mut message_box: Receiver<ObserveOp>,
+        mut leader_checker: LeadershipResolver,
+    ) {
         while let Some(op) = message_box.recv().await {
             info!("backup stream: on_modify_observe"; "op" => ?op);
             match op {
@@ -414,7 +429,7 @@ where
                             true,
                             false,
                         )
-                        .map_err(|err| warn!("check epoch and stop failed."; "err" => %err))
+                        .map_err(|err| warn!("check epoch and stop failed."; utils::slog_region(region), "err" => %err))
                         .is_ok()
                     });
                 }
@@ -449,17 +464,20 @@ where
                 }
                 ObserveOp::ResolveRegions { callback, min_ts } => {
                     let now = Instant::now();
-                    let timedout = self.wait(Duration::from_secs(30)).await;
+                    let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
                         warn!("waiting for initial scanning done timed out, forcing progress!"; 
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
-                    let cps = self.subs.resolve_with(min_ts);
-                    let min_region = cps.iter().min_by_key(|(_, rts)| rts);
+                    let regions = leader_checker
+                        .resolve(self.subs.current_regions(), min_ts)
+                        .await;
+                    let cps = self.subs.resolve_with(min_ts, regions);
+                    let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts
                     // safely.
-                    let rts = min_region.map(|(_, rts)| *rts).unwrap_or(min_ts);
-                    info!("getting checkpoint"; "defined_by_region" => ?min_region.map(|r| r.0.get_id()), "checkpoint" => %rts);
+                    let rts = min_region.map(|rs| rs.checkpoint).unwrap_or(min_ts);
+                    info!("getting checkpoint"; "defined_by_region" => ?min_region);
                     self.subs.warn_if_gap_too_huge(rts);
                     callback(ResolvedRegions::new(rts, cps));
                 }
@@ -583,7 +601,7 @@ where
             exists = true;
             let should_remove = old.handle().id == handle.id;
             if !should_remove {
-                warn!("stale retry command"; "region" => ?region, "handle" => ?handle, "old_handle" => ?old.handle());
+                warn!("stale retry command"; utils::slog_region(&region), "handle" => ?handle, "old_handle" => ?old.handle());
             }
             should_remove
         });

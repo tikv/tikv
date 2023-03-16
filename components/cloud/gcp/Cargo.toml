@@ -11,10 +11,10 @@ futures-util = { version = "0.3", default-features = false, features = ["io"] }
 http = "0.2.0"
 hyper = "0.14"
 hyper-tls = "0.5"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+kvproto = { workspace = true }
+slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog-global = { workspace = true }
 tame-gcs = { version = "0.10", features = ["async-multipart"] }
 tame-oauth = "0.4.7"
 tikv_util = { workspace = true }

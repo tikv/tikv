@@ -18,11 +18,11 @@ pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = "2.8"
 raftstore = { workspace = true }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog = { workspace = true }
+slog-global = { workspace = true }
 tikv_util = { workspace = true }
 
 [dev-dependencies]
 engine_test = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 tempfile = "3.0"

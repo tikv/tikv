@@ -22,7 +22,7 @@ use batch_system::{
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
+use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
     CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
     RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
@@ -42,6 +42,7 @@ use kvproto::{
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
+use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -66,14 +67,11 @@ use time::{self, Timespec};
 
 use crate::{
     bytes_capacity,
-    coprocessor::{
-        split_observer::SplitObserver, BoxAdminObserver, CoprocessorHost, RegionChangeEvent,
-        RegionChangeReason,
-    },
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
         async_io::{
             read::{ReadRunner, ReadTask},
-            write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+            write::{StoreWriters, StoreWritersContext, Worker as WriteWorker, WriteMsg},
             write_router::WriteSenders,
         },
         config::Config,
@@ -109,13 +107,21 @@ use crate::{
 type Key = Vec<u8>;
 
 pub const PENDING_MSG_CAP: usize = 100;
-const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
+pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
     pub raft_engine: ER,
     pub capacity: u64,
+}
+
+/// A trait that provide the meta information that can be accessed outside
+/// of raftstore.
+pub trait StoreRegionMeta: Send {
+    fn store_id(&self) -> u64;
+    fn region_read_progress(&self) -> &RegionReadProgressRegistry;
+    fn search_region(&self, start_key: &[u8], end_key: &[u8], visitor: impl FnMut(&Region));
 }
 
 pub struct StoreMeta {
@@ -155,6 +161,34 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
+}
+
+impl StoreRegionMeta for StoreMeta {
+    #[inline]
+    fn store_id(&self) -> u64 {
+        self.store_id.unwrap()
+    }
+
+    #[inline]
+    fn search_region(&self, start_key: &[u8], end_key: &[u8], mut visitor: impl FnMut(&Region)) {
+        let start_key = data_key(start_key);
+        for (_, id) in self
+            .region_ranges
+            .range((Excluded(start_key), Unbounded::<Vec<u8>>))
+        {
+            let region = &self.regions[id];
+            if end_key.is_empty() || end_key > region.get_start_key() {
+                visitor(region);
+            } else {
+                break;
+            }
+        }
+    }
+
+    #[inline]
+    fn region_read_progress(&self) -> &RegionReadProgressRegistry {
+        &self.region_read_progress
+    }
 }
 
 impl StoreMeta {
@@ -561,6 +595,11 @@ where
             self.cfg.check_long_uncommitted_interval.0;
         self.tick_batch[PeerTick::CheckPeersAvailability as usize].wait_duration =
             self.cfg.check_peers_availability_interval.0;
+        self.tick_batch[PeerTick::RequestSnapshot as usize].wait_duration =
+            self.cfg.check_request_snapshot_interval.0;
+        // TODO: make it reasonable
+        self.tick_batch[PeerTick::RequestVoterReplicatedIndex as usize].wait_duration =
+            self.cfg.raft_log_gc_tick_interval.0 * 2;
     }
 }
 
@@ -699,7 +738,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .raft_metrics
             .event_time
             .get(tick.tag())
-            .observe(duration_to_sec(elapsed) as f64);
+            .observe(duration_to_sec(elapsed));
         slow_log!(
             elapsed,
             "[store {}] handle timeout {:?}",
@@ -714,6 +753,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
+                    if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
+                        continue;
+                    }
                     if let Err(e) = self.on_raft_message(msg) {
                         if matches!(&e, Error::RegionNotRegistered { .. }) {
                             // This may happen in normal cases when add-peer runs slowly
@@ -767,7 +809,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .raft_metrics
             .event_time
             .store_msg
-            .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
+            .observe(timer.saturating_elapsed_secs());
     }
 
     fn start(&mut self, store: metapb::Store) {
@@ -865,6 +907,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             self.poll_ctx.update_ticks_timeout();
             update_cfg(&incoming.store_batch_system);
         }
+        // update store writers if necessary
+        self.poll_ctx.write_senders.refresh();
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
@@ -1010,13 +1054,20 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
         } else {
-            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-            if let Err(err) =
-                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+            // Use the valid size of async-ios for generating `writer_id` when the local
+            // senders haven't been updated by `poller.begin().
+            let writer_id = rand::random::<usize>()
+                % std::cmp::min(
+                    self.poll_ctx.cfg.store_io_pool_size,
+                    self.poll_ctx.write_senders.size(),
+                );
+            if let Err(err) = self.poll_ctx.write_senders[writer_id].try_send(
+                WriteMsg::LatencyInspect {
                     send_time: write_begin,
                     inspector: latency_inspect,
-                })
-            {
+                },
+                0,
+            ) {
                 warn!("send latency inspecting to write workers failed"; "err" => ?err);
             }
         }
@@ -1170,6 +1221,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
                 region,
+                local_state.get_state() == PeerState::Unavailable,
             ));
             peer.peer.init_replication_mode(&mut replication_state);
             if local_state.get_state() == PeerState::Merging {
@@ -1210,6 +1262,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
                 &region,
+                false,
             )?;
             peer.peer.init_replication_mode(&mut replication_state);
             peer.schedule_applying_snapshot();
@@ -1296,7 +1349,7 @@ where
 
     fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
         let sync_write_worker = if self.write_senders.is_empty() {
-            let (_, rx) = unbounded();
+            let (_, rx) = unbounded(None);
             Some(WriteWorker::new(
                 self.store.get_id(),
                 "sync-writer".to_string(),
@@ -1338,14 +1391,14 @@ where
             ready_count: 0,
             has_ready: false,
             current_time: None,
-            raft_perf_context: self
-                .engines
-                .raft
-                .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
-            kv_perf_context: self
-                .engines
-                .kv
-                .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
+            raft_perf_context: ER::get_perf_context(
+                self.cfg.value().perf_level,
+                PerfContextKind::RaftstoreStore,
+            ),
+            kv_perf_context: EK::get_perf_context(
+                self.cfg.value().perf_level,
+                PerfContextKind::RaftstoreStore,
+            ),
             tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
@@ -1467,7 +1520,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mgr: SnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        mut coprocessor_host: CoprocessorHost<EK>,
+        coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         background_worker: Worker,
@@ -1480,13 +1533,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
-
-        // TODO load coprocessors from configuration
-        coprocessor_host
-            .registry
-            .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
-
-        let purge_worker = if engines.raft.need_manual_purge() {
+        let purge_worker = if engines.raft.need_manual_purge()
+            && !cfg.value().raft_engine_purge_interval.0.is_zero()
+        {
             let worker = Worker::new("purge-worker");
             let raft_clone = engines.raft.clone();
             let router_clone = self.router();
@@ -1692,6 +1741,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let refresh_config_runner = RefreshConfigRunner::new(
+            StoreWritersContext {
+                store_id: store.get_id(),
+                notifier: self.router.clone(),
+                raft_engine: raft_builder.engines.raft.clone(),
+                kv_engine: Some(raft_builder.engines.kv.clone()),
+                transfer: raft_builder.trans.clone(),
+                cfg: raft_builder.cfg.clone(),
+            },
+            self.store_writers.clone(),
             self.apply_router.router.clone(),
             self.router.router.clone(),
             self.apply_system.build_pool_state(apply_builder),
@@ -1705,7 +1763,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             Arc::clone(&pd_client),
             self.router.clone(),
             workers.pd_worker.scheduler(),
-            cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
             concurrency_manager,
             snap_mgr,
@@ -1760,11 +1817,21 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
 pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
     cfg: &Config,
+    resource_manager: &Option<Arc<ResourceGroupManager>>,
 ) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
-    let (apply_router, apply_system) = create_apply_batch_system(cfg);
-    let (router, system) =
-        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
+    let (apply_router, apply_system) = create_apply_batch_system(
+        cfg,
+        resource_manager
+            .as_ref()
+            .map(|m| m.derive_controller("apply".to_owned(), false)),
+    );
+    let (router, system) = batch_system::create_system(
+        &cfg.store_batch_system,
+        store_tx,
+        store_fsm,
+        None, // Do not do priority scheduling for store batch system
+    );
     let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
         system,
@@ -1772,7 +1839,11 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         apply_router,
         apply_system,
         router: raft_router.clone(),
-        store_writers: StoreWriters::default(),
+        store_writers: StoreWriters::new(
+            resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("store-writer".to_owned(), false)),
+        ),
     };
     (raft_router, system)
 }
@@ -2393,6 +2464,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let snap_stats = self.ctx.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
+        stats.set_snapshot_stats(snap_stats.stats.into());
+
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["sending"])
             .set(snap_stats.sending_count as i64);
@@ -2408,14 +2481,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .global_stat
                 .stat
                 .engine_total_bytes_written
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         stats.set_keys_written(
             self.ctx
                 .global_stat
                 .stat
                 .engine_total_keys_written
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
 
         stats.set_is_busy(
@@ -2423,7 +2496,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .global_stat
                 .stat
                 .is_busy
-                .swap(false, Ordering::SeqCst),
+                .swap(false, Ordering::Relaxed),
         );
 
         let mut query_stats = QueryStats::default();
@@ -2432,21 +2505,21 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .global_stat
                 .stat
                 .engine_total_query_put
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         query_stats.set_delete(
             self.ctx
                 .global_stat
                 .stat
                 .engine_total_query_delete
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         query_stats.set_delete_range(
             self.ctx
                 .global_stat
                 .stat
                 .engine_total_query_delete_range
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         stats.set_query_stats(query_stats);
 
@@ -2880,6 +2953,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.raftlog_fetch_scheduler.clone(),
             self.ctx.engines.clone(),
             &region,
+            false,
         ) {
             Ok((sender, peer)) => (sender, peer),
             Err(e) => {

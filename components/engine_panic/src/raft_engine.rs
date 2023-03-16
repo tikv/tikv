@@ -47,11 +47,27 @@ impl RaftEngineReadOnly for PanicEngine {
         panic!()
     }
 
-    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+    fn get_region_state(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<RegionLocalState>> {
         panic!()
     }
 
-    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+    fn get_apply_state(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+    ) -> Result<Option<RaftApplyState>> {
+        panic!()
+    }
+
+    fn get_flushed_index(&self, raft_group_id: u64, cf: &str) -> Result<Option<u64>> {
+        panic!()
+    }
+
+    fn get_dirty_mark(&self, raft_group_id: u64, tablet_index: u64) -> Result<bool> {
         panic!()
     }
 
@@ -108,15 +124,16 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
+    fn gc(&self, raft_group_id: u64, from: u64, to: u64, batch: &mut Self::LogBatch) -> Result<()> {
         panic!()
     }
 
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        panic!()
-    }
-
-    fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
+    fn delete_all_but_one_states_before(
+        &self,
+        raft_group_id: u64,
+        apply_index: u64,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()> {
         panic!()
     }
 
@@ -132,10 +149,6 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn reset_statistics(&self) {
-        panic!()
-    }
-
     fn dump_stats(&self) -> Result<String> {
         panic!()
     }
@@ -144,7 +157,7 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
+    fn get_engine_path(&self) -> &str {
         panic!()
     }
 
@@ -155,18 +168,15 @@ impl RaftEngine for PanicEngine {
     {
         panic!()
     }
-
-    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
-        panic!()
-    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
-    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
-        panic!()
-    }
-
-    fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64) {
+    fn append(
+        &mut self,
+        raft_group_id: u64,
+        overwrite_to: Option<u64>,
+        entries: Vec<Entry>,
+    ) -> Result<()> {
         panic!()
     }
 
@@ -198,11 +208,39 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+    fn put_region_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_index: u64,
+        state: &RegionLocalState,
+    ) -> Result<()> {
         panic!()
     }
 
-    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+    fn put_apply_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_index: u64,
+        state: &RaftApplyState,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_flushed_index(
+        &mut self,
+        raft_group_id: u64,
+        cf: &str,
+        tablet_index: u64,
+        apply_index: u64,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_dirty_mark(&mut self, raft_group_id: u64, tablet_index: u64, dirty: bool) -> Result<()> {
+        panic!()
+    }
+
+    fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {
         panic!()
     }
 }

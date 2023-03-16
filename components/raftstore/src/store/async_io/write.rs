@@ -14,20 +14,23 @@ use std::{
 };
 
 use collections::HashMap;
-use crossbeam::channel::{bounded, Receiver, Sender, TryRecvError};
+use crossbeam::channel::TryRecvError;
 use engine_traits::{
     KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use kvproto::raft_serverpb::{
-    PeerState, RaftApplyState, RaftLocalState, RaftMessage, RegionLocalState,
-};
+use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
+use parking_lot::Mutex;
 use protobuf::Message;
 use raft::eraftpb::Entry;
+use resource_control::{
+    channel::{bounded, Receiver},
+    ResourceConsumeType, ResourceController, ResourceMetered,
+};
 use tikv_util::{
     box_err,
-    config::{Tracker, VersionTrack},
+    config::{ReadableSize, Tracker, VersionTrack},
     debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
@@ -35,15 +38,15 @@ use tikv_util::{
     warn,
 };
 
-use super::write_router::WriteSenders;
+use super::write_router::{SharedSenders, WriteSenders};
 use crate::{
     store::{
         config::Config,
-        entry_storage::first_index,
         fsm::RaftRouter,
         local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics, TimeTracker},
         metrics::*,
         transport::Transport,
+        util,
         util::LatencyInspector,
         PeerMsg,
     },
@@ -54,6 +57,7 @@ const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const KV_WB_DEFAULT_SIZE: usize = 16 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
 const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
+const RAFT_WB_SPLIT_SIZE: usize = ReadableSize::gb(1).0 as usize;
 
 /// Notify the event to the specified region.
 pub trait PersistedNotifier: Clone + Send + 'static {
@@ -88,22 +92,24 @@ where
 ///
 /// For now, applying snapshot needs to persist some extra states. For v1,
 /// these states are written to KvEngine. For v2, they are written to
-/// RaftEngine.
+/// RaftEngine. Although in v2 these states are also written to raft engine,
+/// but we have to use `ExtraState` as they should be written as the last
+/// updates.
 // TODO: perhaps we should always pass states instead of a write batch even
 // for v1.
-pub enum ExtraWrite<W> {
+pub enum ExtraWrite<W, L> {
     None,
     V1(W),
-    V2(ExtraStates),
+    V2(L),
 }
 
-impl<W: WriteBatch> ExtraWrite<W> {
+impl<W: WriteBatch, L: RaftLogBatch> ExtraWrite<W, L> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         match self {
             ExtraWrite::None => true,
             ExtraWrite::V1(w) => w.is_empty(),
-            _ => false,
+            ExtraWrite::V2(l) => l.is_empty(),
         }
     }
 
@@ -112,7 +118,7 @@ impl<W: WriteBatch> ExtraWrite<W> {
         match self {
             ExtraWrite::None => 0,
             ExtraWrite::V1(w) => w.data_size(),
-            ExtraWrite::V2(m) => mem::size_of_val(m),
+            ExtraWrite::V2(l) => l.persist_size(),
         }
     }
 
@@ -139,18 +145,33 @@ impl<W: WriteBatch> ExtraWrite<W> {
     }
 
     #[inline]
-    pub fn set_v2(&mut self, extra_states: ExtraStates) {
-        if let ExtraWrite::V1(_) = self {
+    pub fn ensure_v2(&mut self, log_batch: impl FnOnce() -> L) -> &mut L {
+        if let ExtraWrite::None = self {
+            *self = ExtraWrite::V2(log_batch());
+        } else if let ExtraWrite::V1(_) = self {
             unreachable!("v1 and v2 are mixed used");
-        } else {
-            *self = ExtraWrite::V2(extra_states);
+        }
+        match self {
+            ExtraWrite::V2(l) => l,
+            _ => unreachable!(),
         }
     }
 
     #[inline]
-    pub fn v2_mut(&mut self) -> Option<&mut ExtraStates> {
-        if let ExtraWrite::V2(m) = self {
-            Some(m)
+    pub fn merge_v2(&mut self, log_batch: L) {
+        if let ExtraWrite::None = self {
+            *self = ExtraWrite::V2(log_batch);
+        } else if let ExtraWrite::V1(_) = self {
+            unreachable!("v1 and v2 are mixed used");
+        } else if let ExtraWrite::V2(l) = self {
+            l.merge(log_batch).unwrap();
+        }
+    }
+
+    #[inline]
+    pub fn v2_mut(&mut self) -> Option<&mut L> {
+        if let ExtraWrite::V2(l) = self {
+            Some(l)
         } else {
             None
         }
@@ -169,12 +190,15 @@ where
     ready_number: u64,
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
-    pub entries: Vec<Entry>,
-    pub cut_logs: Option<(u64, u64)>,
+    // called after writing to kvdb and raftdb.
+    pub persisted_cbs: Vec<Box<dyn FnOnce() + Send>>,
+    overwrite_to: Option<u64>,
+    entries: Vec<Entry>,
     pub raft_state: Option<RaftLocalState>,
-    pub extra_write: ExtraWrite<EK::WriteBatch>,
+    pub extra_write: ExtraWrite<EK::WriteBatch, ER::LogBatch>,
     pub messages: Vec<RaftMessage>,
     pub trackers: Vec<TimeTracker>,
+    pub has_snapshot: bool,
 }
 
 impl<EK, ER> WriteTask<EK, ER>
@@ -189,21 +213,33 @@ where
             ready_number,
             send_time: Instant::now(),
             raft_wb: None,
+            overwrite_to: None,
             entries: vec![],
-            cut_logs: None,
             raft_state: None,
             extra_write: ExtraWrite::None,
             messages: vec![],
             trackers: vec![],
+            persisted_cbs: Vec::new(),
+            has_snapshot: false,
         }
     }
 
     pub fn has_data(&self) -> bool {
         !(self.raft_state.is_none()
             && self.entries.is_empty()
-            && self.cut_logs.is_none()
             && self.extra_write.is_empty()
             && self.raft_wb.as_ref().map_or(true, |wb| wb.is_empty()))
+    }
+
+    /// Append continous entries.
+    ///
+    /// All existing entries with same index will be overwritten. If
+    /// `overwrite_to` is set to a larger value, then entries in
+    /// `[entries.last().get_index(), overwrite_to)` will be deleted. If
+    /// entries is empty, nothing will be deleted.
+    pub fn set_append(&mut self, overwrite_to: Option<u64>, entries: Vec<Entry>) {
+        self.entries = entries;
+        self.overwrite_to = overwrite_to;
     }
 
     #[inline]
@@ -238,6 +274,38 @@ where
         inspector: Vec<LatencyInspector>,
     },
     Shutdown,
+    #[cfg(test)]
+    Pause(std::sync::mpsc::Receiver<()>),
+}
+
+impl<EK, ER> ResourceMetered for WriteMsg<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
+        match self {
+            WriteMsg::WriteTask(t) => {
+                let mut dominant_group = "".to_owned();
+                let mut max_write_bytes = 0;
+                for entry in &t.entries {
+                    let header = util::get_entry_header(entry);
+                    let group_name = header.get_resource_group_name().to_owned();
+                    let write_bytes = entry.compute_size() as u64;
+                    resource_ctl.consume(
+                        group_name.as_bytes(),
+                        ResourceConsumeType::IoBytes(write_bytes),
+                    );
+                    if write_bytes > max_write_bytes {
+                        dominant_group = group_name;
+                        max_write_bytes = write_bytes;
+                    }
+                }
+                Some(dominant_group)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl<EK, ER> fmt::Debug for WriteMsg<EK, ER>
@@ -254,61 +322,33 @@ where
             ),
             WriteMsg::Shutdown => write!(fmt, "WriteMsg::Shutdown"),
             WriteMsg::LatencyInspect { .. } => write!(fmt, "WriteMsg::LatencyInspect"),
+            #[cfg(test)]
+            WriteMsg::Pause(_) => write!(fmt, "WriteMsg::Pause"),
         }
     }
 }
 
-/// These states are set only in raftstore V2.
-#[derive(Default)]
-pub struct ExtraStates {
-    apply_state: RaftApplyState,
-    region_state: Option<RegionLocalState>,
-    // Set only want to destroy the raft group in write worker.
-    raft_state: Option<RaftLocalState>,
-}
-
-impl ExtraStates {
-    #[inline]
-    pub fn new(apply_state: RaftApplyState) -> Self {
-        Self {
-            apply_state,
-            region_state: None,
-            raft_state: None,
-        }
-    }
-
-    #[inline]
-    pub fn set_region_state(&mut self, region_state: RegionLocalState) {
-        self.region_state = Some(region_state);
-    }
-
-    #[inline]
-    pub fn set_raft_state(&mut self, raft_state: RaftLocalState) {
-        self.raft_state = Some(raft_state);
-    }
-}
-
-pub enum ExtraBatchWrite<W> {
+pub enum ExtraBatchWrite<W, L> {
     None,
     V1(W),
-    V2(HashMap<u64, ExtraStates>),
+    V2(L),
 }
 
-impl<W: WriteBatch> ExtraBatchWrite<W> {
+impl<W: WriteBatch, L: RaftLogBatch> ExtraBatchWrite<W, L> {
     #[inline]
     fn clear(&mut self) {
         match self {
             ExtraBatchWrite::None => {}
             ExtraBatchWrite::V1(w) => w.clear(),
-            ExtraBatchWrite::V2(m) => m.clear(),
+            // No clear in in `RaftLogBatch`.
+            ExtraBatchWrite::V2(_) => *self = ExtraBatchWrite::None,
         }
     }
 
     /// Merge the extra_write with this batch.
     ///
     /// If there is any new states inserted, return the size of the state.
-    fn merge(&mut self, region_id: u64, extra_write: &mut ExtraWrite<W>) -> usize {
-        let mut inserted = false;
+    fn merge(&mut self, extra_write: &mut ExtraWrite<W, L>) {
         match mem::replace(extra_write, ExtraWrite::None) {
             ExtraWrite::None => (),
             ExtraWrite::V1(wb) => match self {
@@ -316,35 +356,11 @@ impl<W: WriteBatch> ExtraBatchWrite<W> {
                 ExtraBatchWrite::V1(kv_wb) => kv_wb.merge(wb).unwrap(),
                 ExtraBatchWrite::V2(_) => unreachable!("v2 and v1 are mixed used"),
             },
-            ExtraWrite::V2(extra_states) => match self {
-                ExtraBatchWrite::None => {
-                    let mut map = HashMap::default();
-                    map.insert(region_id, extra_states);
-                    *self = ExtraBatchWrite::V2(map);
-                    inserted = true;
-                }
+            ExtraWrite::V2(lb) => match self {
+                ExtraBatchWrite::None => *self = ExtraBatchWrite::V2(lb),
                 ExtraBatchWrite::V1(_) => unreachable!("v2 and v1 are mixed used"),
-                ExtraBatchWrite::V2(extra_states_map) => match extra_states_map.entry(region_id) {
-                    collections::HashMapEntry::Occupied(mut slot) => {
-                        slot.get_mut().apply_state = extra_states.apply_state;
-                        if let Some(region_state) = extra_states.region_state {
-                            slot.get_mut().region_state = Some(region_state);
-                        }
-                        if let Some(raft_state) = extra_states.raft_state {
-                            slot.get_mut().raft_state = Some(raft_state);
-                        }
-                    }
-                    collections::HashMapEntry::Vacant(slot) => {
-                        slot.insert(extra_states);
-                        inserted = true;
-                    }
-                },
+                ExtraBatchWrite::V2(raft_wb) => raft_wb.merge(lb).unwrap(),
             },
-        };
-        if inserted {
-            std::mem::size_of::<ExtraStates>()
-        } else {
-            0
         }
     }
 }
@@ -355,14 +371,20 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub raft_wb: ER::LogBatch,
-    // Write raft state once for a region everytime writing to disk
+    // When a single batch becomes too large, we uses multiple batches each containing atomic
+    // writes.
+    pub raft_wbs: Vec<ER::LogBatch>,
+    // Write states once for a region everytime writing to disk.
+    // These states only corresponds to entries inside `raft_wbs.last()`. States for other write
+    // batches must be inlined early.
     pub raft_states: HashMap<u64, RaftLocalState>,
-    pub extra_batch_write: ExtraBatchWrite<EK::WriteBatch>,
+    pub extra_batch_write: ExtraBatchWrite<EK::WriteBatch, ER::LogBatch>,
     pub state_size: usize,
     pub tasks: Vec<WriteTask<EK, ER>>,
+    pub persisted_cbs: Vec<Box<dyn FnOnce() + Send>>,
     // region_id -> (peer_id, ready_number)
     pub readies: HashMap<u64, (u64, u64)>,
+    pub(crate) raft_wb_split_size: usize,
 }
 
 impl<EK, ER> WriteTaskBatch<EK, ER>
@@ -372,43 +394,61 @@ where
 {
     fn new(raft_wb: ER::LogBatch) -> Self {
         Self {
-            raft_wb,
+            raft_wbs: vec![raft_wb],
             raft_states: HashMap::default(),
             extra_batch_write: ExtraBatchWrite::None,
             state_size: 0,
             tasks: vec![],
+            persisted_cbs: vec![],
             readies: HashMap::default(),
+            raft_wb_split_size: RAFT_WB_SPLIT_SIZE,
+        }
+    }
+
+    #[inline]
+    fn flush_states_to_raft_wb(&mut self) {
+        let wb = self.raft_wbs.last_mut().unwrap();
+        for (region_id, state) in self.raft_states.drain() {
+            wb.put_raft_state(region_id, &state).unwrap();
+        }
+        self.state_size = 0;
+        if let ExtraBatchWrite::V2(_) = self.extra_batch_write {
+            let ExtraBatchWrite::V2(lb) = mem::replace(&mut self.extra_batch_write, ExtraBatchWrite::None) else { unreachable!() };
+            wb.merge(lb).unwrap();
         }
     }
 
     /// Add write task to this batch
-    fn add_write_task(&mut self, mut task: WriteTask<EK, ER>) {
+    fn add_write_task(&mut self, raft_engine: &ER, mut task: WriteTask<EK, ER>) {
         if let Err(e) = task.valid() {
             panic!("task is not valid: {:?}", e);
         }
-        if let Some(raft_wb) = task.raft_wb.take() {
-            self.raft_wb.merge(raft_wb).unwrap();
+
+        if self.raft_wb_split_size > 0
+            && self.raft_wbs.last().unwrap().persist_size() >= self.raft_wb_split_size
+        {
+            self.flush_states_to_raft_wb();
+            self.raft_wbs
+                .push(raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE));
         }
 
-        let entries = std::mem::take(&mut task.entries);
-        self.raft_wb.append(task.region_id, entries).unwrap();
-        if let Some((from, to)) = task.cut_logs {
-            self.raft_wb.cut_logs(task.region_id, from, to);
+        let raft_wb = self.raft_wbs.last_mut().unwrap();
+        if let Some(wb) = task.raft_wb.take() {
+            raft_wb.merge(wb).unwrap();
         }
+        raft_wb
+            .append(
+                task.region_id,
+                task.overwrite_to,
+                std::mem::take(&mut task.entries),
+            )
+            .unwrap();
 
-        if let Some(raft_state) = task.raft_state.take() {
-            if self
-                .raft_states
-                .insert(task.region_id, raft_state)
-                .is_none()
-            {
-                self.state_size += std::mem::size_of::<RaftLocalState>();
-            }
+        if let Some(raft_state) = task.raft_state.take()
+            && self.raft_states.insert(task.region_id, raft_state).is_none() {
+            self.state_size += std::mem::size_of::<RaftLocalState>();
         }
-
-        self.state_size += self
-            .extra_batch_write
-            .merge(task.region_id, &mut task.extra_write);
+        self.extra_batch_write.merge(&mut task.extra_write);
 
         if let Some(prev_readies) = self
             .readies
@@ -430,7 +470,9 @@ where
                 );
             }
         }
-
+        for v in task.persisted_cbs.drain(..) {
+            self.persisted_cbs.push(v);
+        }
         self.tasks.push(task);
     }
 
@@ -451,48 +493,24 @@ where
 
     #[inline]
     fn get_raft_size(&self) -> usize {
-        self.state_size + self.raft_wb.persist_size()
+        self.state_size
+            + self
+                .raft_wbs
+                .iter()
+                .map(|wb| wb.persist_size())
+                .sum::<usize>()
     }
 
-    fn before_write_to_db(&mut self, engine: &ER, metrics: &StoreWriteMetrics) {
-        // Put raft state to raft writebatch
-        for (region_id, state) in self.raft_states.drain() {
-            self.raft_wb.put_raft_state(region_id, &state).unwrap();
-        }
-        if let ExtraBatchWrite::V2(extra_states_map) = &mut self.extra_batch_write {
-            for (region_id, state) in extra_states_map.drain() {
-                let mut tombstone = false;
-                if let Some(region_state) = state.region_state {
-                    if region_state.get_state() == PeerState::Tombstone {
-                        tombstone = true;
-                        engine
-                            .clean(
-                                region_id,
-                                first_index(&state.apply_state),
-                                state.raft_state.as_ref().unwrap(),
-                                &mut self.raft_wb,
-                            )
-                            .unwrap();
-                    }
-                    self.raft_wb
-                        .put_region_state(region_id, &region_state)
-                        .unwrap();
-                }
-                if !tombstone {
-                    self.raft_wb
-                        .put_apply_state(region_id, &state.apply_state)
-                        .unwrap();
-                }
-            }
-        }
-        self.state_size = 0;
+    fn before_write_to_db(&mut self, metrics: &StoreWriteMetrics) {
+        self.flush_states_to_raft_wb();
         if metrics.waterfall_metrics {
             let now = std::time::Instant::now();
-            for task in &self.tasks {
-                for tracker in &task.trackers {
+            for task in &mut self.tasks {
+                for tracker in &mut task.trackers {
                     tracker.observe(now, &metrics.wf_before_write, |t| {
                         &mut t.metrics.wf_before_write_nanos
                     });
+                    tracker.reset(now);
                 }
             }
         }
@@ -508,6 +526,12 @@ where
                     });
                 }
             }
+        }
+    }
+
+    fn after_write_all(&mut self) {
+        for hook in mem::take(&mut self.persisted_cbs) {
+            hook();
         }
     }
 
@@ -566,7 +590,7 @@ where
     ) -> Self {
         let batch = WriteTaskBatch::new(raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE));
         let perf_context =
-            raft_engine.get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
+            ER::get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
         let cfg_tracker = cfg.clone().tracker(tag.clone());
         Self {
             store_id,
@@ -657,12 +681,16 @@ where
             } => {
                 self.pending_latency_inspect.push((send_time, inspector));
             }
+            #[cfg(test)]
+            WriteMsg::Pause(rx) => {
+                let _ = rx.recv();
+            }
         }
         false
     }
 
     pub fn handle_write_task(&mut self, task: WriteTask<EK, ER>) {
-        self.batch.add_write_task(task);
+        self.batch.add_write_task(&self.raft_engine, task);
     }
 
     pub fn write_to_db(&mut self, notify: bool) {
@@ -672,8 +700,7 @@ where
 
         let timer = Instant::now();
 
-        self.batch
-            .before_write_to_db(&self.raft_engine, &self.metrics);
+        self.batch.before_write_to_db(&self.metrics);
 
         fail_point!("raft_before_save");
 
@@ -706,31 +733,32 @@ where
                 write_kv_time = duration_to_sec(now.saturating_elapsed());
                 STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(write_kv_time);
             }
-
             self.batch.after_write_to_kv_db(&self.metrics);
         }
-
         fail_point!("raft_between_save");
 
         let mut write_raft_time = 0f64;
-        if !self.batch.raft_wb.is_empty() {
+        if !self.batch.raft_wbs[0].is_empty() {
             fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
 
             let now = Instant::now();
             self.perf_context.start_observe();
-            self.raft_engine
-                .consume_and_shrink(
-                    &mut self.batch.raft_wb,
-                    true,
-                    RAFT_WB_SHRINK_SIZE,
-                    RAFT_WB_DEFAULT_SIZE,
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "store {}: {} failed to write to raft engine: {:?}",
-                        self.store_id, self.tag, e
-                    );
-                });
+            for i in 0..self.batch.raft_wbs.len() {
+                self.raft_engine
+                    .consume_and_shrink(
+                        &mut self.batch.raft_wbs[i],
+                        true,
+                        RAFT_WB_SHRINK_SIZE,
+                        RAFT_WB_DEFAULT_SIZE,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "store {}: {} failed to write to raft engine: {:?}",
+                            self.store_id, self.tag, e
+                        );
+                    });
+            }
+            self.batch.raft_wbs.truncate(1);
             let trackers: Vec<_> = self
                 .batch
                 .tasks
@@ -745,6 +773,13 @@ where
         fail_point!("raft_after_save");
 
         self.batch.after_write_to_raft_db(&self.metrics);
+
+        fail_point!(
+            "async_write_before_cb",
+            !self.batch.persisted_cbs.is_empty(),
+            |_| ()
+        );
+        self.batch.after_write_all();
 
         fail_point!("raft_before_follower_send");
 
@@ -849,20 +884,41 @@ where
     }
 }
 
+#[derive(Clone)]
+pub struct StoreWritersContext<EK, ER, T, N>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: Transport + 'static,
+    N: PersistedNotifier,
+{
+    pub store_id: u64,
+    pub raft_engine: ER,
+    pub kv_engine: Option<EK>,
+    pub transfer: T,
+    pub notifier: N,
+    pub cfg: Arc<VersionTrack<Config>>,
+}
+
+#[derive(Clone)]
 pub struct StoreWriters<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    writers: Vec<Sender<WriteMsg<EK, ER>>>,
-    handlers: Vec<JoinHandle<()>>,
+    resource_ctl: Option<Arc<ResourceController>>,
+    /// Mailboxes for sending raft messages to async ios.
+    writers: Arc<VersionTrack<SharedSenders<EK, ER>>>,
+    /// Background threads for handling asynchronous messages.
+    handlers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Default for StoreWriters<EK, ER> {
-    fn default() -> Self {
+impl<EK: KvEngine, ER: RaftEngine> StoreWriters<EK, ER> {
+    pub fn new(resource_ctl: Option<Arc<ResourceController>>) -> Self {
         Self {
-            writers: vec![],
-            handlers: vec![],
+            resource_ctl,
+            writers: Arc::new(VersionTrack::default()),
+            handlers: Arc::new(Mutex::new(vec![])),
         }
     }
 }
@@ -886,43 +942,102 @@ where
         cfg: &Arc<VersionTrack<Config>>,
     ) -> Result<()> {
         let pool_size = cfg.value().store_io_pool_size;
-        for i in 0..pool_size {
-            let tag = format!("store-writer-{}", i);
-            let (tx, rx) = bounded(cfg.value().store_io_notify_capacity);
-            let mut worker = Worker::new(
-                store_id,
-                tag.clone(),
-                raft_engine.clone(),
-                kv_engine.clone(),
-                rx,
-                notifier.clone(),
-                trans.clone(),
-                cfg,
-            );
-            info!("starting store writer {}", i);
-            let t = thread::Builder::new()
-                .name(thd_name!(tag))
-                .spawn_wrapper(move || {
-                    worker.run();
-                })?;
-            self.writers.push(tx);
-            self.handlers.push(t);
+        if pool_size > 0 {
+            self.increase_to(
+                pool_size,
+                StoreWritersContext {
+                    store_id,
+                    notifier: notifier.clone(),
+                    raft_engine,
+                    kv_engine,
+                    transfer: trans.clone(),
+                    cfg: cfg.clone(),
+                },
+            )?;
         }
         Ok(())
     }
 
     pub fn shutdown(&mut self) {
-        assert_eq!(self.writers.len(), self.handlers.len());
-        for (i, handler) in self.handlers.drain(..).enumerate() {
+        let mut handlers = self.handlers.lock();
+        let writers = self.writers.value().get();
+        assert_eq!(writers.len(), handlers.len());
+        for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
-            self.writers[i].send(WriteMsg::Shutdown).unwrap();
+            writers[i].send(WriteMsg::Shutdown, 0).unwrap();
             handler.join().unwrap();
         }
+    }
+
+    #[inline]
+    /// Returns the valid size of store writers.
+    pub fn size(&self) -> usize {
+        self.writers.value().get().len()
+    }
+
+    pub fn decrease_to(&mut self, size: usize) -> Result<()> {
+        // Only update logical version of writers but not destroying the workers, so
+        // that peers that are still using the writer_id (because there're
+        // unpersisted tasks) can proceed to finish their tasks. After the peer
+        // gets rescheduled, it will use a new writer_id within the new
+        // capacity, specified by refreshed `store-io-pool-size`.
+        //
+        // TODO: find an elegant way to effectively free workers.
+        assert_eq!(self.writers.value().get().len(), self.handlers.lock().len());
+        self.writers
+            .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
+                assert!(writers.get().len() > size);
+                Ok(())
+            })?;
+        Ok(())
+    }
+
+    pub fn increase_to<T: Transport + 'static, N: PersistedNotifier>(
+        &mut self,
+        size: usize,
+        writer_meta: StoreWritersContext<EK, ER, T, N>,
+    ) -> Result<()> {
+        let mut handlers = self.handlers.lock();
+        let current_size = self.writers.value().get().len();
+        assert_eq!(current_size, handlers.len());
+        let resource_ctl = self.resource_ctl.clone();
+        self.writers
+            .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
+                let mut cached_senders = writers.get();
+                for i in current_size..size {
+                    let tag = format!("store-writer-{}", i);
+                    let (tx, rx) = bounded(
+                        resource_ctl.clone(),
+                        writer_meta.cfg.value().store_io_notify_capacity,
+                    );
+                    let mut worker = Worker::new(
+                        writer_meta.store_id,
+                        tag.clone(),
+                        writer_meta.raft_engine.clone(),
+                        writer_meta.kv_engine.clone(),
+                        rx,
+                        writer_meta.notifier.clone(),
+                        writer_meta.transfer.clone(),
+                        &writer_meta.cfg,
+                    );
+                    info!("starting store writer {}", i);
+                    let t =
+                        thread::Builder::new()
+                            .name(thd_name!(tag))
+                            .spawn_wrapper(move || {
+                                worker.run();
+                            })?;
+                    cached_senders.push(tx);
+                    handlers.push(t);
+                }
+                writers.set(cached_senders);
+                Ok(())
+            })?;
+        Ok(())
     }
 }
 
 /// Used for test to write task to kv db and raft db.
-#[cfg(test)]
 pub fn write_to_db_for_test<EK, ER>(
     engines: &engine_traits::Engines<EK, ER>,
     task: WriteTask<EK, ER>,
@@ -931,8 +1046,9 @@ pub fn write_to_db_for_test<EK, ER>(
     ER: RaftEngine,
 {
     let mut batch = WriteTaskBatch::new(engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE));
-    batch.add_write_task(task);
-    batch.before_write_to_db(&engines.raft, &StoreWriteMetrics::new(false));
+    batch.add_write_task(&engines.raft, task);
+    let metrics = StoreWriteMetrics::new(false);
+    batch.before_write_to_db(&metrics);
     if let ExtraBatchWrite::V1(kv_wb) = &mut batch.extra_batch_write {
         if !kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
@@ -942,14 +1058,15 @@ pub fn write_to_db_for_test<EK, ER>(
             });
         }
     }
-    if !batch.raft_wb.is_empty() {
-        engines
-            .raft
-            .consume(&mut batch.raft_wb, true)
-            .unwrap_or_else(|e| {
+    if !batch.raft_wbs[0].is_empty() {
+        for wb in &mut batch.raft_wbs {
+            engines.raft.consume(wb, true).unwrap_or_else(|e| {
                 panic!("test failed to write to raft engine: {:?}", e);
             });
+        }
     }
+    batch.after_write_to_raft_db(&metrics);
+    batch.after_write_all();
 }
 
 #[cfg(test)]

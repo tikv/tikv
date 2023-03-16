@@ -514,10 +514,10 @@ where
                     self.extremum = value.copied()
                 }
             } else {
-                let v1 = self.extremum.map(|x| x as i64);
-                let v2 = value.map(|x| *x as i64);
+                let v1: Option<i64> = self.extremum;
+                let v2: Option<i64> = value.copied();
                 if v1.cmp(&v2) == E::ORD {
-                    self.extremum = value.copied()
+                    self.extremum = v2;
                 }
             }
         }

@@ -14,7 +14,7 @@ use tikv_util::{
     sys::SysQuota,
 };
 
-use crate::config::{BLOCK_CACHE_RATE, MIN_BLOCK_CACHE_SHARD_SIZE};
+use crate::config::{BLOCK_CACHE_RATE, MIN_BLOCK_CACHE_SHARD_SIZE, RAFTSTORE_V2_BLOCK_CACHE_RATE};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -29,6 +29,15 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
+const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EngineType {
+    RaftKv,
+    #[serde(alias = "partitioned-raft-kv")]
+    RaftKv2,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -36,6 +45,8 @@ const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 pub struct Config {
     #[online_config(skip)]
     pub data_dir: String,
+    #[online_config(skip)]
+    pub engine: EngineType,
     // Replaced by `GcConfig.ratio_threshold`. Keep it for backward compatibility.
     #[online_config(skip)]
     pub gc_ratio_threshold: f64,
@@ -49,6 +60,8 @@ pub struct Config {
     #[online_config(skip)]
     // Reserve disk space to make tikv would have enough space to compact when disk is full.
     pub reserve_space: ReadableSize,
+    #[online_config(skip)]
+    pub reserve_raft_space: ReadableSize,
     #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
     #[online_config(skip)]
@@ -72,16 +85,18 @@ impl Default for Config {
         let cpu_num = SysQuota::cpu_cores_quota();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
+            engine: EngineType::RaftKv,
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if cpu_num >= 16.0 {
                 8
             } else {
-                std::cmp::max(1, std::cmp::min(4, cpu_num as usize))
+                cpu_num.clamp(1., 4.) as usize
             },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
+            reserve_raft_space: ReadableSize::gb(DEFAULT_RESERVED_RAFT_SPACE_GB),
             enable_async_apply_prewrite: false,
             api_version: 1,
             enable_ttl: false,
@@ -190,7 +205,7 @@ impl Default for FlowControlConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct BlockCacheConfig {
     #[online_config(skip)]
-    pub shared: bool,
+    pub shared: Option<bool>,
     pub capacity: Option<ReadableSize>,
     #[online_config(skip)]
     pub num_shard_bits: i32,
@@ -205,7 +220,7 @@ pub struct BlockCacheConfig {
 impl Default for BlockCacheConfig {
     fn default() -> BlockCacheConfig {
         BlockCacheConfig {
-            shared: true,
+            shared: None,
             capacity: None,
             num_shard_bits: 6,
             strict_capacity_limit: false,
@@ -225,14 +240,18 @@ impl BlockCacheConfig {
         }
     }
 
-    pub fn build_shared_cache(&self) -> Option<Cache> {
-        if !self.shared {
-            return None;
+    pub fn build_shared_cache(&self, engine_type: EngineType) -> Cache {
+        if self.shared == Some(false) {
+            warn!("storage.block-cache.shared is deprecated, cache is always shared.");
         }
         let capacity = match self.capacity {
             None => {
                 let total_mem = SysQuota::memory_limit_in_bytes();
-                ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
+                if engine_type == EngineType::RaftKv2 {
+                    ((total_mem as f64) * RAFTSTORE_V2_BLOCK_CACHE_RATE) as usize
+                } else {
+                    ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
+                }
             }
             Some(c) => c.0 as usize,
         };
@@ -244,7 +263,7 @@ impl BlockCacheConfig {
         if let Some(allocator) = self.new_memory_allocator() {
             cache_opts.set_memory_allocator(allocator);
         }
-        Some(Cache::new_lru_cache(cache_opts))
+        Cache::new_lru_cache(cache_opts)
     }
 
     fn new_memory_allocator(&self) -> Option<MemoryAllocator> {

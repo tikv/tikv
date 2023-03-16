@@ -23,7 +23,9 @@ use kvproto::{
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    store::{config::Config as RaftstoreConfig, util::is_vote_msg, Callback, PeerMsg},
+    store::{
+        config::Config as RaftstoreConfig, util::is_vote_msg, Callback, PeerMsg, WriteResponse,
+    },
     Result,
 };
 use test_raftstore::*;
@@ -175,7 +177,7 @@ fn gen_split_region() -> (Region, Region, Region) {
     let region_split_size = 30000;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
-    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
 
     let mut range = 1..;
     cluster.run();
@@ -268,7 +270,7 @@ impl Filter for PrevoteRangeFilter {
 #[test]
 fn test_split_not_to_split_existing_region() {
     let mut cluster = new_node_cluster(0, 4);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
@@ -341,7 +343,7 @@ fn test_split_not_to_split_existing_region() {
 #[test]
 fn test_split_not_to_split_existing_tombstone_region() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
@@ -409,7 +411,7 @@ fn test_split_not_to_split_existing_tombstone_region() {
 #[test]
 fn test_split_continue_when_destroy_peer_after_mem_check() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
@@ -496,7 +498,7 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
 #[test]
 fn test_split_should_split_existing_same_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
@@ -549,7 +551,7 @@ fn test_split_should_split_existing_same_uninitialied_peer() {
 #[test]
 fn test_split_not_to_split_existing_different_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
+    configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
@@ -1103,4 +1105,34 @@ fn test_split_store_channel_full() {
     let region = pd_client.get_region(b"k1").unwrap();
     assert_ne!(region.id, 1);
     fail::remove(sender_fp);
+}
+
+#[test]
+fn test_split_during_cluster_shutdown() {
+    // test case for raftstore-v2
+    use test_raftstore_v2::*;
+
+    let test_split = |split_fp| {
+        let count = 1;
+        let mut cluster = new_server_cluster(0, count);
+        cluster.run();
+        cluster.must_put(b"k1", b"v1");
+        cluster.must_put(b"k2", b"v2");
+        cluster.must_put(b"k3", b"v3");
+        fail::cfg_callback(split_fp, move || {
+            // After one second, mailboxes will be cleared in shutdown
+            thread::sleep(Duration::from_secs(1));
+        })
+        .unwrap();
+
+        let pd_client = cluster.pd_client.clone();
+        let region = pd_client.get_region(b"k2").unwrap();
+        let c = Box::new(move |_write_resp: WriteResponse| {});
+        cluster.split_region(&region, b"k2", Callback::write(c));
+
+        cluster.shutdown();
+    };
+
+    test_split("before_cluster_shutdown1");
+    test_split("before_cluster_shutdown2");
 }

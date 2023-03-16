@@ -66,7 +66,7 @@ fn start_raftstore(
     ApplyRouter<RocksEngine>,
     RaftBatchSystem<RocksEngine, RocksEngine>,
 ) {
-    let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
+    let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store, &None);
     let engines = create_tmp_engine(dir);
     let host = CoprocessorHost::default();
     let importer = {
@@ -76,7 +76,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SstImporter::new(&cfg.import, &p, None, cfg.storage.api_version()).unwrap())
+        Arc::new(SstImporter::new(&cfg.import, p, None, cfg.storage.api_version()).unwrap())
     };
     let snap_mgr = {
         let p = dir
@@ -141,18 +141,18 @@ where
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
+fn new_changes(cfgs: Vec<(&str, &str)>) -> std::collections::HashMap<String, String> {
+    std::collections::HashMap::from_iter(
+        cfgs.into_iter()
+            .map(|kv| (kv.0.to_owned(), kv.1.to_owned())),
+    )
+}
+
 #[test]
 fn test_update_raftstore_config() {
     let (mut config, _dir) = TikvConfig::with_tmp().unwrap();
     config.validate().unwrap();
     let (cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
-
-    let new_changes = |cfgs: Vec<(&str, &str)>| {
-        std::collections::HashMap::from_iter(
-            cfgs.into_iter()
-                .map(|kv| (kv.0.to_owned(), kv.1.to_owned())),
-        )
-    };
 
     // dispatch updated config
     let change = new_changes(vec![
@@ -223,4 +223,59 @@ fn test_update_raftstore_config() {
     validate_store_cfg(&raft_store);
 
     system.shutdown();
+}
+
+#[test]
+fn test_update_raftstore_io_config() {
+    // Test update raftstore configurations on io settings.
+    // Start from SYNC mode.
+    {
+        let (mut resize_config, _dir) = TikvConfig::with_tmp().unwrap();
+        resize_config.validate().unwrap();
+        let (cfg_controller, _, _, mut system) = start_raftstore(resize_config, &_dir);
+
+        // not allowed to resize from SYNC mode to ASYNC mode
+        let resize_store_writers_cfg = vec![("raftstore.store-io-pool-size", "2")];
+        assert!(
+            cfg_controller
+                .update(new_changes(resize_store_writers_cfg))
+                .is_err()
+        );
+        system.shutdown();
+    }
+    // Start from ASYNC mode.
+    {
+        let (mut resize_config, _dir) = TikvConfig::with_tmp().unwrap();
+        resize_config.raft_store.store_io_pool_size = 2;
+        resize_config.validate().unwrap();
+        let (cfg_controller, _, _, mut system) = start_raftstore(resize_config, &_dir);
+
+        // not allowed to resize from ASYNC mode to SYNC mode
+        let resize_store_writers_cfg = vec![("raftstore.store-io-pool-size", "0")];
+        assert!(
+            cfg_controller
+                .update(new_changes(resize_store_writers_cfg))
+                .is_err()
+        );
+        system.shutdown();
+    }
+    // Modify the size of async-ios.
+    {
+        let (mut resize_config, _dir) = TikvConfig::with_tmp().unwrap();
+        resize_config.raft_store.store_io_pool_size = 2;
+        resize_config.validate().unwrap();
+        let (cfg_controller, _, _, mut system) = start_raftstore(resize_config, &_dir);
+
+        // resize the count of ios to 1 by decreasing.
+        let resize_store_writers_cfg = vec![("raftstore.store-io-pool-size", "1")];
+        cfg_controller
+            .update(new_changes(resize_store_writers_cfg))
+            .unwrap();
+        // resize the count of ios to 4 by increasing.
+        let resize_store_writers_cfg = vec![("raftstore.store-io-pool-size", "4")];
+        cfg_controller
+            .update(new_changes(resize_store_writers_cfg))
+            .unwrap();
+        system.shutdown();
+    }
 }

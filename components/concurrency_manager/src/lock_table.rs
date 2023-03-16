@@ -158,9 +158,9 @@ mod test {
         assert_eq!(counter.load(Ordering::SeqCst), 100);
     }
 
-    fn ts_check(lock: &Lock, ts: u64) -> Result<(), Lock> {
+    fn ts_check(lock: &Lock, ts: u64) -> Result<(), Box<Lock>> {
         if lock.ts.into_inner() < ts {
-            Err(lock.clone())
+            Err(Box::new(lock.clone()))
         } else {
             Ok(())
         }
@@ -193,7 +193,10 @@ mod test {
         lock_table.check_key(&key_k, |l| ts_check(l, 5)).unwrap();
 
         // lock does not pass check_fn
-        assert_eq!(lock_table.check_key(&key_k, |l| ts_check(l, 20)), Err(lock));
+        assert_eq!(
+            lock_table.check_key(&key_k, |l| ts_check(l, 20)),
+            Err(Box::new(lock))
+        );
     }
 
     #[tokio::test]
@@ -247,13 +250,13 @@ mod test {
         // first lock does not pass check_fn
         assert_eq!(
             lock_table.check_range(Some(&Key::from_raw(b"a")), None, |_, l| ts_check(l, 25)),
-            Err(lock_k)
+            Err(Box::new(lock_k))
         );
 
         // first lock passes check_fn but the second does not
         assert_eq!(
             lock_table.check_range(None, None, |_, l| ts_check(l, 15)),
-            Err(lock_l)
+            Err(Box::new(lock_l))
         );
     }
 

@@ -7,4 +7,4 @@ publish = false
 [dependencies]
 codec = { workspace = true }
 tidb_query_datatype = { workspace = true }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { workspace = true }

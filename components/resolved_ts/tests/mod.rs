@@ -4,7 +4,6 @@ use std::{sync::*, time::Duration};
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::{executor::block_on, stream, SinkExt};
 use grpcio::{ChannelBuilder, ClientUnaryReceiver, Environment, Result, WriteFlags};
 use kvproto::{
@@ -28,8 +27,8 @@ pub fn init() {
 
 pub struct TestSuite {
     pub cluster: Cluster<ServerCluster>,
-    pub endpoints: HashMap<u64, LazyWorker<Task<RocksSnapshot>>>,
-    pub obs: HashMap<u64, Observer<RocksEngine>>,
+    pub endpoints: HashMap<u64, LazyWorker<Task>>,
+    pub obs: HashMap<u64, Observer>,
     tikv_cli: HashMap<u64, TikvClient>,
     import_cli: HashMap<u64, ImportSstClient>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
@@ -41,7 +40,7 @@ impl TestSuite {
     pub fn new(count: usize) -> Self {
         let mut cluster = new_server_cluster(1, count);
         // Increase the Raft tick interval to make this test case running reliably.
-        configure_for_lease_read(&mut cluster, Some(100), None);
+        configure_for_lease_read(&mut cluster.cfg, Some(100), None);
         Self::with_cluster(count, cluster)
     }
 
@@ -88,7 +87,6 @@ impl TestSuite {
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
-                resolved_ts::DummySinker::new(),
             );
             concurrency_managers.insert(*id, cm);
             worker.start(rts_endpoint);

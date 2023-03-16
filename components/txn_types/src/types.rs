@@ -192,6 +192,16 @@ impl Key {
         Ok(number::decode_u64_desc(&mut ts)?.into())
     }
 
+    /// Decode the timestamp from a ts encoded key and return in bytes.
+    #[inline]
+    pub fn decode_ts_bytes_from(key: &[u8]) -> Result<&[u8], codec::Error> {
+        let len = key.len();
+        if len < number::U64_SIZE {
+            return Err(codec::Error::KeyLength);
+        }
+        Ok(&key[key.len() - number::U64_SIZE..])
+    }
+
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to
     /// the encoded user key `user_key`.
     ///
@@ -512,6 +522,19 @@ impl OldValue {
 // MutationType is the type of mutation of the current write.
 pub type OldValues = HashMap<Key, (OldValue, Option<MutationType>)>;
 
+pub fn insert_old_value_if_resolved(
+    old_values: &mut OldValues,
+    key: Key,
+    start_ts: TimeStamp,
+    old_value: OldValue,
+    mutation_type: Option<MutationType>,
+) {
+    if old_value.resolved() {
+        let key = key.append_ts(start_ts);
+        old_values.insert(key, (old_value, mutation_type));
+    }
+}
+
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
 pub struct TxnExtra {
@@ -519,8 +542,8 @@ pub struct TxnExtra {
     // Marks that this transaction is a 1PC transaction. RaftKv should set this flag
     // in the raft command request.
     pub one_pc: bool,
-    // Marks that this transaction is a flashback transaction.
-    pub for_flashback: bool,
+    // Marks that this transaction is allowed in the flashback state.
+    pub allowed_in_flashback: bool,
 }
 
 impl TxnExtra {
@@ -681,7 +704,7 @@ mod tests {
             let shorter_encoded = Key::from_encoded_slice(&encoded.0[..encoded_len - 9]);
             assert!(!shorter_encoded.is_encoded_from(&raw));
             let mut longer_encoded = encoded.as_encoded().clone();
-            longer_encoded.extend(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
+            longer_encoded.extend([0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
             let longer_encoded = Key::from_encoded(longer_encoded);
             assert!(!longer_encoded.is_encoded_from(&raw));
 

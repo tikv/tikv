@@ -19,13 +19,15 @@ use backup_stream::{
     },
     observer::BackupStreamObserver,
     router::Router,
-    Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
+    Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Service, Task,
 };
-use futures::{executor::block_on, AsyncWriteExt, Future};
-use grpcio::ChannelBuilder;
+use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
+use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},
     kvrpcpb::*,
+    logbackuppb::{SubscribeFlushEventRequest, SubscribeFlushEventResponse},
+    logbackuppb_grpc::{create_log_backup, LogBackupClient},
     tikvpb::*,
 };
 use pd_client::PdClient;
@@ -156,6 +158,8 @@ impl SuiteBuilder {
             },
             obs: Default::default(),
             tikv_cli: Default::default(),
+            log_backup_cli: Default::default(),
+            servers: Default::default(),
             env: Arc::new(grpcio::Environment::new(1)),
             cluster,
 
@@ -172,6 +176,8 @@ impl SuiteBuilder {
         cfg_f(&mut cfg);
         for id in 1..=(n as u64) {
             suite.start_endpoint(id, cfg.clone());
+            let cli = suite.start_log_backup_client_on(id);
+            suite.log_backup_cli.insert(id, cli);
         }
         // We must wait until the endpoints get ready to watching the metastore, or some
         // modifies may be lost. Either make Endpoint::with_client wait until watch did
@@ -222,8 +228,11 @@ pub struct Suite {
     meta_store: ErrorStore<SlashEtcStore>,
     cluster: Cluster<ServerCluster>,
     tikv_cli: HashMap<u64, TikvClient>,
+    log_backup_cli: HashMap<u64, LogBackupClient>,
     obs: HashMap<u64, BackupStreamObserver>,
     env: Arc<grpcio::Environment>,
+    // The place to make services live as long as suite.
+    servers: Vec<Server>,
 
     temp_files: TempDir,
     flushed_files: TempDir,
@@ -263,6 +272,64 @@ impl Suite {
         worker
     }
 
+    /// create a subscription stream. this has simply asserted no error, because
+    /// in theory observing flushing should not emit error. change that if
+    /// needed.
+    fn flush_stream(
+        &self,
+        panic_while_fail: bool,
+    ) -> impl Stream<Item = (u64, SubscribeFlushEventResponse)> {
+        let streams = self
+            .log_backup_cli
+            .iter()
+            .map(|(id, cli)| {
+                let stream = cli
+                    .subscribe_flush_event(&{
+                        let mut r = SubscribeFlushEventRequest::default();
+                        r.set_client_id(format!("test-{}", id));
+                        r
+                    })
+                    .unwrap_or_else(|err| panic!("failed to subscribe on {} because {}", id, err));
+                let id = *id;
+                stream.filter_map(move |x| {
+                    futures::future::ready(match x {
+                        Ok(x) => Some((id, x)),
+                        Err(err) => {
+                            if panic_while_fail {
+                                panic!("failed to rec from {} because {}", id, err)
+                            } else {
+                                println!("[WARN] failed to rec from {} because {}", id, err);
+                                None
+                            }
+                        }
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+
+        futures::stream::select_all(streams)
+    }
+
+    fn start_log_backup_client_on(&mut self, id: u64) -> LogBackupClient {
+        let endpoint = self
+            .endpoints
+            .get(&id)
+            .expect("must register endpoint first");
+
+        let serv = Service::new(endpoint.scheduler());
+        let builder =
+            ServerBuilder::new(self.env.clone()).register_service(create_log_backup(serv));
+        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        server.start();
+        let (_, port) = server.bind_addrs().next().unwrap();
+        let addr = format!("127.0.0.1:{}", port);
+        let channel = ChannelBuilder::new(self.env.clone()).connect(&addr);
+        println!("connecting channel to {} for store {}", addr, id);
+        let client = LogBackupClient::new(channel);
+        self.servers.push(server);
+        client
+    }
+
     fn start_endpoint(&mut self, id: u64, mut cfg: BackupStreamConfig) {
         let cluster = &mut self.cluster;
         let worker = self.endpoints.get_mut(&id).unwrap();
@@ -283,6 +350,13 @@ impl Suite {
             raft_router,
             cluster.pd_client.clone(),
             cm,
+            Arc::clone(&self.env),
+            cluster.store_metas[&id]
+                .lock()
+                .unwrap()
+                .region_read_progress
+                .clone(),
+            Arc::clone(&sim.security_mgr),
         );
         worker.start(endpoint);
     }
@@ -402,6 +476,7 @@ impl Suite {
     }
 
     fn force_flush_files(&self, task: &str) {
+        // TODO: use the callback to make the test more stable.
         self.run(|| Task::ForceFlush(task.to_owned()));
         self.sync();
     }
@@ -476,7 +551,7 @@ impl Suite {
                     decoder.close().await.unwrap();
                     let content = decoder.into_inner();
 
-                    let mut iter = EventIterator::new(content);
+                    let mut iter = EventIterator::new(&content);
                     loop {
                         if !iter.valid() {
                             break;
@@ -747,8 +822,11 @@ mod test {
         errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
         RegionSet, Task,
     };
+    use futures::{Stream, StreamExt};
     use pd_client::PdClient;
+    use test_raftstore::IsolationFilterFactory;
     use tikv_util::{box_err, defer, info, HandyRwLock};
+    use tokio::time::timeout;
     use txn_types::{Key, TimeStamp};
 
     use crate::{
@@ -1173,5 +1251,152 @@ mod test {
             expected_tso,
             checkpoint
         );
+    }
+
+    async fn collect_all_current<T>(
+        mut s: impl Stream<Item = T> + Unpin,
+        max_gap: Duration,
+    ) -> Vec<T> {
+        let mut r = vec![];
+        while let Ok(Some(x)) = timeout(max_gap, s.next()).await {
+            r.push(x);
+        }
+        r
+    }
+
+    async fn collect_current<T>(mut s: impl Stream<Item = T> + Unpin, goal: usize) -> Vec<T> {
+        let mut r = vec![];
+        while let Ok(Some(x)) = timeout(Duration::from_secs(10), s.next()).await {
+            r.push(x);
+            if r.len() >= goal {
+                return r;
+            }
+        }
+        r
+    }
+
+    #[test]
+    fn subscribe_flushing() {
+        let mut suite = super::SuiteBuilder::new_named("sub_flush").build();
+        let stream = suite.flush_stream(true);
+        for i in 1..10 {
+            let split_key = make_split_key_at_record(1, i * 20);
+            suite.must_split(&split_key);
+            suite.must_shuffle_leader(suite.cluster.get_region_id(&split_key));
+        }
+
+        let round1 = run_async_test(suite.write_records(0, 128, 1));
+        suite.must_register_task(1, "sub_flush");
+        let round2 = run_async_test(suite.write_records(256, 128, 1));
+        suite.sync();
+        suite.force_flush_files("sub_flush");
+
+        let mut items = run_async_test(async {
+            collect_current(
+                stream.flat_map(|(_, r)| futures::stream::iter(r.events.into_iter())),
+                10,
+            )
+            .await
+        });
+
+        items.sort_by(|x, y| x.start_key.cmp(&y.start_key));
+
+        println!("{:?}", items);
+        assert_eq!(items.len(), 10);
+
+        assert_eq!(items.first().unwrap().start_key, Vec::<u8>::default());
+        for w in items.windows(2) {
+            let a = &w[0];
+            let b = &w[1];
+            assert!(a.checkpoint > 512);
+            assert!(b.checkpoint > 512);
+            assert_eq!(a.end_key, b.start_key);
+        }
+        assert_eq!(items.last().unwrap().end_key, Vec::<u8>::default());
+
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(|x| x.as_slice()),
+        ));
+    }
+
+    #[test]
+    fn resolved_follower() {
+        let mut suite = super::SuiteBuilder::new_named("r").build();
+        let round1 = run_async_test(suite.write_records(0, 128, 1));
+        suite.must_register_task(1, "r");
+        suite.run(|| Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve));
+        suite.sync();
+        std::thread::sleep(Duration::from_secs(1));
+
+        let leader = suite.cluster.leader_of_region(1).unwrap();
+        suite.must_shuffle_leader(1);
+        let round2 = run_async_test(suite.write_records(256, 128, 1));
+        suite
+            .endpoints
+            .get(&leader.store_id)
+            .unwrap()
+            .scheduler()
+            .schedule(Task::ForceFlush("r".to_owned()))
+            .unwrap();
+        suite.sync();
+        std::thread::sleep(Duration::from_secs(1));
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.iter().map(|x| x.as_slice()),
+        ));
+        assert!(suite.global_checkpoint() > 256);
+        suite.force_flush_files("r");
+        suite.wait_for_flush();
+        assert!(suite.global_checkpoint() > 512);
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(|x| x.as_slice()),
+        ));
+    }
+
+    #[test]
+    fn network_partition() {
+        let mut suite = super::SuiteBuilder::new_named("network_partition")
+            .nodes(3)
+            .build();
+        let stream = suite.flush_stream(true);
+        suite.must_register_task(1, "network_partition");
+        let leader = suite.cluster.leader_of_region(1).unwrap();
+        let round1 = run_async_test(suite.write_records(0, 64, 1));
+
+        suite
+            .cluster
+            .add_send_filter(IsolationFilterFactory::new(leader.store_id));
+        suite.cluster.reset_leader_of_region(1);
+        suite
+            .cluster
+            .must_wait_for_leader_expire(leader.store_id, 1);
+        let leader2 = suite.cluster.leader_of_region(1).unwrap();
+        assert_ne!(leader.store_id, leader2.store_id, "leader not switched.");
+        let ts = suite.tso();
+        suite.must_kv_prewrite(
+            1,
+            vec![mutation(make_record_key(1, 778), b"generator".to_vec())],
+            make_record_key(1, 778),
+            ts,
+        );
+        suite.sync();
+        suite.force_flush_files("network_partition");
+        suite.wait_for_flush();
+
+        let cps = run_async_test(collect_all_current(stream, Duration::from_secs(2)));
+        assert!(
+            cps.iter()
+                .flat_map(|(_s, cp)| cp.events.iter().map(|resp| resp.checkpoint))
+                .all(|cp| cp <= ts.into_inner()),
+            "ts={} cps={:?}",
+            ts,
+            cps
+        );
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.iter().map(|k| k.as_slice()),
+        ))
     }
 }

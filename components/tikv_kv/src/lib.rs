@@ -5,8 +5,10 @@
 //! [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
+#![feature(bound_map)]
 #![feature(min_specialization)]
-#![feature(generic_associated_types)]
+#![feature(type_alias_impl_trait)]
+#![feature(associated_type_defaults)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -17,6 +19,7 @@ mod btree_engine;
 mod cursor;
 pub mod metrics;
 mod mock_engine;
+mod raft_extension;
 mod raftstore_impls;
 mod rocksdb_engine;
 mod stats;
@@ -36,17 +39,18 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use futures::prelude::*;
+use futures::{compat::Future01CompatExt, future::BoxFuture, prelude::*};
 use into_other::IntoOther;
 use kvproto::{
     errorpb::Error as ErrorHeader,
+    import_sstpb::SstMeta,
     kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange},
     raft_cmdpb,
 };
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
-use tikv_util::{deadline::Deadline, escape, time::ThreadReadId};
+use tikv_util::{deadline::Deadline, escape, time::ThreadReadId, timer::GLOBAL_TIMER_HANDLE};
 use tracker::with_tls_tracker;
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 
@@ -54,6 +58,7 @@ pub use self::{
     btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot},
     cursor::{Cursor, CursorBuilder},
     mock_engine::{ExpectedWrite, MockEngineBuilder},
+    raft_extension::{FakeExtension, RaftExtension},
     rocksdb_engine::{RocksEngine, RocksSnapshot},
     stats::{
         CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
@@ -62,9 +67,10 @@ pub use self::{
 };
 
 pub const SEEK_BOUND: u64 = 8;
-const DEFAULT_TIMEOUT_SECS: u64 = 5;
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
+pub type OnAppliedCb = Box<dyn FnOnce(&mut Result<()>) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
 
@@ -75,6 +81,7 @@ pub enum Modify {
     PessimisticLock(Key, PessimisticLock),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
+    Ingest(Box<SstMeta>),
 }
 
 impl Modify {
@@ -83,7 +90,7 @@ impl Modify {
             Modify::Delete(cf, _) => cf,
             Modify::Put(cf, ..) => cf,
             Modify::PessimisticLock(..) => &CF_LOCK,
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) | Modify::Ingest(_) => unreachable!(),
         };
         let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
 
@@ -91,7 +98,7 @@ impl Modify {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) | Modify::Ingest(_) => unreachable!(),
         }
     }
 
@@ -100,7 +107,7 @@ impl Modify {
             Modify::Delete(_, ref k) => k,
             Modify::Put(_, ref k, _) => k,
             Modify::PessimisticLock(ref k, _) => k,
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) | Modify::Ingest(_) => unreachable!(),
         }
     }
 }
@@ -146,6 +153,10 @@ impl From<Modify> for raft_cmdpb::Request {
                 req.set_cmd_type(raft_cmdpb::CmdType::DeleteRange);
                 req.set_delete_range(delete_range);
             }
+            Modify::Ingest(sst) => {
+                req.set_cmd_type(raft_cmdpb::CmdType::IngestSst);
+                req.mut_ingest_sst().set_sst(*sst);
+            }
         };
         req
     }
@@ -153,7 +164,7 @@ impl From<Modify> for raft_cmdpb::Request {
 
 // For test purpose only.
 // It's used to simulate observer actions in `rocksdb_engine`. See
-// `RocksEngine::async_write_ext()`.
+// `RocksEngine::async_write()`.
 impl From<raft_cmdpb::Request> for Modify {
     fn from(mut req: raft_cmdpb::Request) -> Modify {
         let name_to_cf = |name: &str| -> Option<CfName> {
@@ -186,6 +197,10 @@ impl From<raft_cmdpb::Request> for Modify {
                     delete_range.get_notify_only(),
                 )
             }
+            raft_cmdpb::CmdType::IngestSst => {
+                let sst = req.mut_ingest_sst().take_sst();
+                Modify::Ingest(Box::new(sst))
+            }
             _ => {
                 unimplemented!()
             }
@@ -215,6 +230,7 @@ pub struct WriteData {
     pub extra: TxnExtra,
     pub deadline: Option<Deadline>,
     pub disk_full_opt: DiskFullOpt,
+    pub avoid_batch: bool,
 }
 
 impl WriteData {
@@ -224,6 +240,7 @@ impl WriteData {
             extra,
             deadline: None,
             disk_full_opt: DiskFullOpt::NotAllowedOnFull,
+            avoid_batch: false,
         }
     }
 
@@ -246,20 +263,61 @@ impl WriteData {
     pub fn set_disk_full_opt(&mut self, level: DiskFullOpt) {
         self.disk_full_opt = level
     }
+
+    /// Underlying engine may batch up several requests to increase throughput.
+    ///
+    /// If external correctness depends on isolation of requests, you may need
+    /// to set this flag to true.
+    pub fn set_avoid_batch(&mut self, avoid_batch: bool) {
+        self.avoid_batch = avoid_batch
+    }
+}
+
+/// Events that can subscribed from the `WriteSubscriber`.
+#[derive(Debug)]
+pub enum WriteEvent {
+    Proposed,
+    Committed,
+    /// The write is either aborted or applied.
+    Finished(Result<()>),
+}
+
+impl WriteEvent {
+    pub const EVENT_PROPOSED: u8 = 1;
+    pub const EVENT_COMMITTED: u8 = 1 << 1;
+    pub const ALL_EVENTS: u8 = Self::EVENT_PROPOSED | Self::EVENT_COMMITTED;
+    pub const BASIC_EVENT: u8 = 0;
+
+    #[inline]
+    pub fn event_capacity(subscribed: u8) -> usize {
+        1 + Self::subscribed_proposed(subscribed) as usize
+            + Self::subscribed_committed(subscribed) as usize
+    }
+
+    #[inline]
+    pub fn subscribed_proposed(ev: u8) -> bool {
+        ev & Self::EVENT_PROPOSED != 0
+    }
+
+    #[inline]
+    pub fn subscribed_committed(ev: u8) -> bool {
+        ev & Self::EVENT_COMMITTED != 0
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
-    // When start_ts is None and `stale_read` is true, it means acquire a snapshot without any
-    // consistency guarantee.
+    // When `start_ts` is None and `stale_read` is true, it means acquire a snapshot without any
+    // consistency guarantee. This filed is also used to check if a read is allowed in the
+    // flashback.
     pub start_ts: Option<TimeStamp>,
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
-    // Marks that this read is a FlashbackToVersionReadPhase.
-    pub for_flashback: bool,
+    // Marks that this snapshot request is allowed in the flashback state.
+    pub allowed_in_flashback: bool,
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -273,47 +331,78 @@ pub trait Engine: Send + Clone + 'static {
     /// Currently, only multi-rocksdb version will return `None`.
     fn kv_engine(&self) -> Option<Self::Local>;
 
+    type RaftExtension: raft_extension::RaftExtension = FakeExtension;
+    /// Get the underlying raft extension.
+    fn raft_extension(&self) -> Self::RaftExtension {
+        unimplemented!()
+    }
+
     /// Write modifications into internal local engine directly.
     ///
     /// region_modifies records each region's modifications.
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;
 
-    fn async_snapshot(&mut self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
+    type SnapshotRes: Future<Output = Result<Self::Snap>> + Send + 'static;
+    /// Get a snapshot asynchronously.
+    ///
+    /// Note the snapshot is queried immediately no matter whether the returned
+    /// future is polled or not.
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
 
     /// Precheck request which has write with it's context.
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
         Ok(())
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
-
-    /// Writes data to the engine asynchronously with some extensions.
+    type WriteRes: Stream<Item = WriteEvent> + Unpin + Send + 'static;
+    /// Writes data to the engine asynchronously.
     ///
-    /// When the write request is proposed successfully, the `proposed_cb` is
-    /// invoked. When the write request is finished, the `write_cb` is invoked.
-    fn async_write_ext(
+    /// You can subscribe special events like `EVENT_PROPOSED` and
+    /// `EVENT_COMMITTED`.
+    ///
+    /// `on_applied` is called right in the processing thread before being
+    /// fed to the stream.
+    ///
+    /// Note the write is started no matter whether the returned stream is
+    /// polled or not.
+    fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: Callback<()>,
-        _proposed_cb: Option<ExtCallback>,
-        _committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        self.async_write(ctx, batch, write_cb)
-    }
+        subscribed: u8,
+        on_applied: Option<OnAppliedCb>,
+    ) -> Self::WriteRes;
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
-        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_op!(|cb| self.async_write(ctx, batch, cb), timeout)
-            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
+        let f = write(self, ctx, batch, None);
+        let timeout = GLOBAL_TIMER_HANDLE
+            .delay(Instant::now() + DEFAULT_TIMEOUT)
+            .compat();
+
+        futures::executor::block_on(async move {
+            futures::select! {
+                res = f.fuse() => {
+                    if let Some(res) = res {
+                        return res;
+                    }
+                },
+                _ = timeout.fuse() => (),
+            };
+            Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))
+        })
     }
 
     fn release_snapshot(&mut self) {}
 
     fn snapshot(&mut self, ctx: SnapContext<'_>) -> Result<Self::Snap> {
-        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_op!(|cb| self.async_snapshot(ctx, cb), timeout)
-            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
+        let deadline = Instant::now() + DEFAULT_TIMEOUT;
+        let timeout = GLOBAL_TIMER_HANDLE.delay(deadline).compat();
+        futures::executor::block_on(async move {
+            futures::select! {
+                res = self.async_snapshot(ctx).fuse() => res,
+                _ = timeout.fuse() => Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT))),
+            }
+        })
     }
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
@@ -348,6 +437,23 @@ pub trait Engine: Send + Clone + 'static {
     // Some engines have a `TxnExtraScheduler`. This method is to send the extra
     // to the scheduler.
     fn schedule_txn_extra(&self, _txn_extra: TxnExtra) {}
+
+    /// Mark the start of flashback.
+    // It's an infrequent API, use trait object for simplicity.
+    fn start_flashback(&self, _ctx: &Context, _start_ts: u64) -> BoxFuture<'static, Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
+
+    /// Mark the end of flashback.
+    // It's an infrequent API, use trait object for simplicity.
+    fn end_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
+
+    /// Application may operate on local engine directly, the method is to hint
+    /// the engine there is probably a notable difference in range, so
+    /// engine may update its statistics.
+    fn hint_change_in_range(&self, _start_key: Vec<u8>, _end_key: Vec<u8>) {}
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in
@@ -405,6 +511,10 @@ pub trait SnapshotExt {
     }
 
     fn get_term(&self) -> Option<NonZeroU64> {
+        None
+    }
+
+    fn get_region_id(&self) -> Option<u64> {
         None
     }
 
@@ -587,15 +697,10 @@ pub fn snapshot<E: Engine>(
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let begin = Instant::now();
-    let (callback, future) =
-        tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
-    let val = engine.async_snapshot(ctx, callback);
+    let val = engine.async_snapshot(ctx);
     // make engine not cross yield point
     async move {
-        val?; // propagate error
-        let result = future
-            .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
-            .await?;
+        let result = val.await;
         with_tls_tracker(|tracker| {
             tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
         });
@@ -604,12 +709,22 @@ pub fn snapshot<E: Engine>(
     }
 }
 
-pub fn drop_snapshot_callback<E: Engine>() -> Result<E::Snap> {
-    let bt = backtrace::Backtrace::new();
-    warn!("async snapshot callback is dropped"; "backtrace" => ?bt);
-    let mut err = ErrorHeader::default();
-    err.set_message("async snapshot callback is dropped".to_string());
-    Err(Error::from(ErrorInner::Request(err)))
+pub fn write<E: Engine>(
+    engine: &E,
+    ctx: &Context,
+    batch: WriteData,
+    on_applied: Option<OnAppliedCb>,
+) -> impl std::future::Future<Output = Option<Result<()>>> {
+    let mut res = engine.async_write(ctx, batch, WriteEvent::BASIC_EVENT, on_applied);
+    async move {
+        loop {
+            match res.next().await {
+                Some(WriteEvent::Finished(res)) => return Some(res),
+                Some(_) => (),
+                None => return None,
+            }
+        }
+    }
 }
 
 /// Write modifications into a `BaseRocksEngine` instance.
@@ -655,6 +770,9 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
                 } else {
                     Ok(())
                 }
+            }
+            Modify::Ingest(_) => {
+                unimplemented!("IngestSST is not implemented for local engine yet.")
             }
         };
         // TODO: turn the error into an engine error.

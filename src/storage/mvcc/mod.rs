@@ -706,6 +706,16 @@ pub mod tests {
         assert_eq!(ts, commit_ts.into());
     }
 
+    pub fn must_get_txn_source<E: Engine>(engine: &mut E, key: &[u8], ts: u64, txn_source: u64) {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = SnapshotReader::new(TimeStamp::from(ts), snapshot, true);
+        let write = reader
+            .get_write(&Key::from_raw(key), TimeStamp::from(ts))
+            .unwrap()
+            .unwrap();
+        assert_eq!(write.txn_source, txn_source);
+    }
+
     pub fn must_get_commit_ts_none<E: Engine>(
         engine: &mut E,
         key: &[u8],

@@ -29,7 +29,7 @@ futures-executor = "0.3"
 futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true, optional = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 lazy_static = "1.3"
 libloading = { optional = true, version = "0.7.0" }
 openssl = "0.10"
@@ -37,9 +37,9 @@ prometheus = { version = "0.13", default-features = false, features = ["nightly"
 protobuf = { optional = true, version = "2" }
 rand = "0.8"
 rusoto_core = "0.46.0"
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog-global = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "fs", "process"] }

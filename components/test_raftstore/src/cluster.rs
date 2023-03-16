@@ -12,11 +12,11 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
-    WriteBatchExt, CF_DEFAULT, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SyncMutable,
+    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on};
@@ -46,6 +46,7 @@ use raftstore::{
     },
     Error, Result,
 };
+use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::server::Result as ServerResult;
@@ -80,6 +81,7 @@ pub trait Simulator {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -170,8 +172,11 @@ pub struct Cluster<T: Simulator> {
     group_props: HashMap<u64, GroupProperties>,
     pub sst_workers: Vec<LazyWorker<String>>,
     pub sst_workers_map: HashMap<u64, usize>,
+    pub kv_statistics: Vec<Arc<RocksStatistics>>,
+    pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -205,6 +210,9 @@ impl<T: Simulator> Cluster<T> {
             pd_client,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
+            resource_manager: Some(Arc::new(ResourceGroupManager::default())),
+            kv_statistics: vec![],
+            raft_statistics: vec![],
         }
     }
 
@@ -240,12 +248,14 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
-        let (engines, key_manager, dir, sst_worker) =
+        let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
             create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
         self.sst_workers.push(sst_worker);
+        self.kv_statistics.push(kv_statistics);
+        self.raft_statistics.push(raft_statistics);
     }
 
     pub fn create_engines(&mut self) {
@@ -269,7 +279,8 @@ impl<T: Simulator> Cluster<T> {
 
         // Try start new nodes.
         for _ in 0..self.count - self.engines.len() {
-            let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+            let (router, system) =
+                create_raft_batch_system(&self.cfg.raft_store, &self.resource_manager);
             self.create_engine(Some(router.clone()));
 
             let engines = self.dbs.last().unwrap().clone();
@@ -288,6 +299,7 @@ impl<T: Simulator> Cluster<T> {
                 key_mgr.clone(),
                 router,
                 system,
+                &self.resource_manager,
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
@@ -302,7 +314,8 @@ impl<T: Simulator> Cluster<T> {
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
             let db = &engine.kv;
-            db.compact_range(CF_DEFAULT, None, None, false, 1).unwrap();
+            db.compact_range_cf(CF_DEFAULT, None, None, false, 1)
+                .unwrap();
         }
     }
 
@@ -338,7 +351,8 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
         let key_mgr = self.key_managers_map[&node_id].clone();
-        let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+        let (router, system) =
+            create_raft_batch_system(&self.cfg.raft_store, &self.resource_manager);
         let mut cfg = self.cfg.clone();
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
@@ -358,9 +372,16 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
-        self.sim
-            .wl()
-            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system)?;
+        self.sim.wl().run_node(
+            node_id,
+            cfg,
+            engines,
+            store_meta,
+            key_mgr,
+            router,
+            system,
+            &self.resource_manager,
+        )?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -368,12 +389,17 @@ impl<T: Simulator> Cluster<T> {
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
         self.group_props[&node_id].mark_shutdown();
+        // Simulate shutdown behavior of server shutdown. It's not enough to just set
+        // the map above as current thread may also query properties during shutdown.
+        let previous_prop = tikv_util::thread_group::current_properties();
+        tikv_util::thread_group::set_properties(Some(self.group_props[&node_id].clone()));
         match self.sim.write() {
             Ok(mut sim) => sim.stop_node(node_id),
             Err(_) => safe_panic!("failed to acquire write lock."),
         }
         self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
+        tikv_util::thread_group::set_properties(previous_prop);
     }
 
     pub fn get_engine(&self, node_id: u64) -> RocksEngine {
@@ -1202,7 +1228,7 @@ impl<T: Simulator> Cluster<T> {
         self.get_engine(store_id)
             .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &key)
             .unwrap()
-            .unwrap()
+            .unwrap_or_default()
     }
 
     pub fn get_raft_local_state(&self, region_id: u64, store_id: u64) -> Option<RaftLocalState> {
@@ -1309,6 +1335,18 @@ impl<T: Simulator> Cluster<T> {
         kv_wb.write().unwrap();
     }
 
+    pub fn add_send_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        self.sim.wl().add_send_filter(node_id, filter);
+    }
+
+    pub fn clear_send_filter_on_node(&mut self, node_id: u64) {
+        self.sim.wl().clear_send_filters(node_id);
+    }
+
+    pub fn add_recv_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        self.sim.wl().add_recv_filter(node_id, filter);
+    }
+
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
@@ -1316,6 +1354,10 @@ impl<T: Simulator> Cluster<T> {
                 sim.add_send_filter(node_id, filter);
             }
         }
+    }
+
+    pub fn clear_recv_filter_on_node(&mut self, node_id: u64) {
+        self.sim.wl().clear_recv_filters(node_id);
     }
 
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
@@ -1796,6 +1838,10 @@ impl<T: Simulator> Cluster<T> {
         ctx
     }
 
+    pub fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
+        self.sim.rl().get_router(node_id)
+    }
+
     pub fn refresh_region_bucket_keys(
         &mut self,
         region: &metapb::Region,
@@ -1873,11 +1919,48 @@ impl<T: Simulator> Cluster<T> {
         .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
+
+    pub fn scan<F>(
+        &self,
+        store_id: u64,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        f: F,
+    ) -> engine_traits::Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> engine_traits::Result<bool>,
+    {
+        self.engines[&store_id]
+            .kv
+            .scan(cf, start_key, end_key, fill_cache, f)?;
+
+        Ok(())
+    }
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
     fn drop(&mut self) {
         test_util::clear_failpoints();
         self.shutdown();
+    }
+}
+
+pub trait RawEngine: Peekable<DbVector = RocksDbVector> + SyncMutable {
+    fn region_local_state(&self, region_id: u64)
+    -> engine_traits::Result<Option<RegionLocalState>>;
+
+    fn raft_apply_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        unimplemented!()
+    }
+}
+
+impl RawEngine for RocksEngine {
+    fn region_local_state(
+        &self,
+        region_id: u64,
+    ) -> engine_traits::Result<Option<RegionLocalState>> {
+        self.get_msg_cf(CF_RAFT, &keys::region_state_key(region_id))
     }
 }

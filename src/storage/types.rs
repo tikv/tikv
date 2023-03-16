@@ -131,6 +131,7 @@ pub struct PrewriteResult {
     pub one_pc_commit_ts: TimeStamp,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(Default))]
 pub struct PessimisticLockParameters {
     pub pb_ctx: kvrpcpb::Context,
@@ -143,6 +144,7 @@ pub struct PessimisticLockParameters {
     pub min_commit_ts: TimeStamp,
     pub check_existence: bool,
     pub is_first_lock: bool,
+    pub lock_only_if_exists: bool,
 
     /// Whether it's allowed for an pessimistic lock request to acquire the lock
     /// even there is write conflict (i.e. the latest version's `commit_ts` is
@@ -221,7 +223,13 @@ impl PessimisticLockKeyResult {
     }
 
     pub fn assert_empty(&self) {
-        assert!(matches!(self, Self::Empty));
+        match self {
+            Self::Empty => (),
+            x => panic!(
+                "pessimistic lock key result not match, expected Empty, got {:?}",
+                x
+            ),
+        }
     }
 
     #[cfg(test)]
@@ -269,7 +277,6 @@ impl PessimisticLockKeyResult {
         assert!(matches!(self, Self::Waiting));
     }
 
-    #[cfg(test)]
     pub fn unwrap_err(&self) -> SharedError {
         match self {
             Self::Failed(e) => e.clone(),
@@ -295,6 +302,48 @@ impl PessimisticLockResults {
 
     pub fn push(&mut self, key_res: PessimisticLockKeyResult) {
         self.0.push(key_res);
+    }
+
+    pub fn into_pb(self) -> (Vec<kvrpcpb::PessimisticLockKeyResult>, Option<SharedError>) {
+        let mut error = None;
+        let res = self
+            .0
+            .into_iter()
+            .map(|res| {
+                let mut res_pb = kvrpcpb::PessimisticLockKeyResult::default();
+                match res {
+                    PessimisticLockKeyResult::Empty => {
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultNormal)
+                    }
+                    PessimisticLockKeyResult::Value(v) => {
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultNormal);
+                        res_pb.set_existence(v.is_some());
+                        res_pb.set_value(v.unwrap_or_default());
+                    }
+                    PessimisticLockKeyResult::Existence(e) => {
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultNormal);
+                        res_pb.set_existence(e);
+                    }
+                    PessimisticLockKeyResult::LockedWithConflict { value, conflict_ts } => {
+                        res_pb.set_type(
+                            kvrpcpb::PessimisticLockKeyResultType::LockResultLockedWithConflict,
+                        );
+                        res_pb.set_existence(value.is_some());
+                        res_pb.set_value(value.unwrap_or_default());
+                        res_pb.set_locked_with_conflict_ts(conflict_ts.into_inner());
+                    }
+                    PessimisticLockKeyResult::Waiting => unreachable!(),
+                    PessimisticLockKeyResult::Failed(e) => {
+                        if error.is_none() {
+                            error = Some(e)
+                        }
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockResultFailed);
+                    }
+                }
+                res_pb
+            })
+            .collect();
+        (res, error)
     }
 
     pub fn into_legacy_values_and_not_founds(self) -> (Vec<Value>, Vec<bool>) {

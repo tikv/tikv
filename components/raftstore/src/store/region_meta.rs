@@ -60,7 +60,7 @@ pub struct RaftHardState {
     pub commit: u64,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub enum RaftStateRole {
     Follower,
     Candidate,
@@ -93,6 +93,8 @@ pub struct RaftStatus {
     pub applied: u64,
     pub voters: HashMap<u64, RaftProgress>,
     pub learners: HashMap<u64, RaftProgress>,
+    pub last_index: u64,
+    pub persisted_index: u64,
 }
 
 impl<'a> From<raft::Status<'a>> for RaftStatus {
@@ -126,6 +128,8 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
             applied,
             voters,
             learners,
+            last_index: 0,
+            persisted_index: 0,
         }
     }
 }
@@ -178,12 +182,27 @@ pub struct RegionPeer {
     pub id: u64,
     pub store_id: u64,
     pub role: RaftPeerRole,
+    pub is_witness: bool,
 }
 
 impl PartialEq<metapb::Peer> for RegionPeer {
     #[inline]
     fn eq(&self, other: &metapb::Peer) -> bool {
-        self.id == other.id && self.store_id == other.store_id && self.role == other.role
+        // May not be sufficent, but always correct.
+        let s: metapb::Peer = (*self).into();
+        s == *other
+    }
+}
+
+impl From<RegionPeer> for metapb::Peer {
+    fn from(p: RegionPeer) -> Self {
+        metapb::Peer {
+            id: p.id,
+            store_id: p.store_id,
+            role: p.role.into(),
+            is_witness: p.is_witness,
+            ..Default::default()
+        }
     }
 }
 
@@ -235,6 +254,8 @@ impl RegionMeta {
         apply_state: &raft_serverpb::RaftApplyState,
         group_state: GroupState,
         raft_status: Status<'_>,
+        last_index: u64,
+        persisted_index: u64,
     ) -> Self {
         let region = local_state.get_region();
         let epoch = region.get_region_epoch();
@@ -247,6 +268,7 @@ impl RegionMeta {
                 id: peer.get_id(),
                 store_id: peer.get_store_id(),
                 role: peer.get_role().into(),
+                is_witness: peer.is_witness,
             });
         }
         let merge_state = if local_state.has_merge_state() {
@@ -254,10 +276,13 @@ impl RegionMeta {
         } else {
             None
         };
+        let mut raft_status: RaftStatus = raft_status.into();
+        raft_status.last_index = last_index;
+        raft_status.persisted_index = persisted_index;
 
         Self {
             group_state,
-            raft_status: raft_status.into(),
+            raft_status,
             raft_apply: RaftApplyState {
                 applied_index: apply_state.get_applied_index(),
                 commit_index: apply_state.get_commit_index(),

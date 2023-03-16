@@ -4,6 +4,7 @@ use std::path::Path;
 
 use encryption::DataKeyManager;
 use engine_traits::EncryptionKeyManager;
+use external_storage_export::ExternalStorage;
 use file_system::File;
 
 use super::Result;
@@ -62,6 +63,13 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
         key_manager.link_file(path, clone)?;
     }
     Ok(())
+}
+
+pub fn url_for<E: ExternalStorage>(storage: &E) -> String {
+    storage
+        .url()
+        .map(|url| url.to_string())
+        .unwrap_or_else(|err| format!("ErrUrl({})", err))
 }
 
 #[cfg(test)]

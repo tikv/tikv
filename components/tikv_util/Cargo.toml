@@ -19,6 +19,7 @@ collections = { workspace = true }
 cpu-time = "1.0.0"
 crc32fast = "1.2"
 crossbeam = "0.8"
+crossbeam-skiplist = "0.1"
 derive_more = "0.99.3"
 error_code = { workspace = true }
 fail = "0.5"
@@ -26,16 +27,18 @@ futures = { version = "0.3", features = ["compat", "thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true }
 http = "0.2.0"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 lazy_static = "1.3"
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { workspace = true }
+mnt = "0.3.1"
 nix = "0.24"
 num-traits = "0.2"
 num_cpus = "1"
 online_config = { workspace = true }
 openssl = "0.10"
+parking_lot_core = "0.9.1"
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
@@ -44,21 +47,21 @@ rand = "0.8"
 rusoto_core = "0.46.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog = { workspace = true }
 slog-async = "2.3"
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog-global = { workspace = true }
 slog-json = "2.3"
 slog-term = "2.4"
-sysinfo = "0.16"
+sysinfo = "0.26"
 thiserror = "1.0"
 tikv_alloc = { workspace = true }
 time = "0.1"
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-executor = "0.1"
-tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tokio-timer = { workspace = true }
 tracker = { workspace = true }
 url = "2"
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }

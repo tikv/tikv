@@ -89,4 +89,16 @@ impl LogBackup for Service {
         ));
         try_send!(self.endpoint, t);
     }
+
+    fn subscribe_flush_event(
+        &mut self,
+        _ctx: grpcio::RpcContext<'_>,
+        _req: kvproto::logbackuppb::SubscribeFlushEventRequest,
+        sink: grpcio::ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>,
+    ) {
+        try_send!(
+            self.endpoint,
+            Task::RegionCheckpointsOp(RegionCheckpointOperation::Subscribe(sink))
+        );
+    }
 }

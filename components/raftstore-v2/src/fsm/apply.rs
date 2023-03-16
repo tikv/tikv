@@ -1,30 +1,29 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    task::{Context, Poll},
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{KvEngine, TabletFactory};
-use futures::{Future, StreamExt};
+use engine_traits::{FlushState, KvEngine, TabletRegistry};
+use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
-use raftstore::store::ReadTask;
+use pd_client::BucketStat;
+use raftstore::store::{Config, ReadTask};
 use slog::Logger;
+use sst_importer::SstImporter;
 use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
+    timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
 
 use crate::{
+    operation::DataTrace,
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
-    tablet::CachedTablet,
 };
 
 /// A trait for reporting apply result.
@@ -37,7 +36,7 @@ pub trait ApplyResReporter {
 impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for Mailbox<F, S> {
     fn report(&self, apply_res: ApplyRes) {
         // TODO: check shutdown.
-        self.force_send(PeerMsg::ApplyRes(apply_res)).unwrap();
+        let _ = self.force_send(PeerMsg::ApplyRes(apply_res));
     }
 }
 
@@ -61,22 +60,32 @@ pub struct ApplyFsm<EK: KvEngine, R> {
 
 impl<EK: KvEngine, R> ApplyFsm<EK, R> {
     pub fn new(
+        cfg: &Config,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
-        remote_tablet: CachedTablet<EK>,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        flush_state: Arc<FlushState>,
+        log_recovery: Option<Box<DataTrace>>,
+        applied_term: u64,
+        buckets: Option<BucketStat>,
+        sst_importer: Arc<SstImporter>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
         let apply = Apply::new(
+            cfg,
             peer,
             region_state,
             res_reporter,
-            remote_tablet,
-            tablet_factory,
+            tablet_registry,
             read_scheduler,
+            flush_state,
+            log_recovery,
+            applied_term,
+            buckets,
+            sst_importer,
             logger,
         );
         (
@@ -92,18 +101,37 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
 impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
     pub async fn handle_all_tasks(&mut self) {
         loop {
-            let mut task = match self.receiver.next().await {
-                Some(t) => t,
-                None => return,
+            let timeout = GLOBAL_TIMER_HANDLE
+                .delay(Instant::now() + Duration::from_secs(10))
+                .compat();
+            let res = futures::select! {
+                res = self.receiver.next().fuse() => res,
+                _ = timeout.fuse() => None,
+            };
+            self.apply.on_start_apply();
+            let mut task = match res {
+                Some(r) => r,
+                None => {
+                    self.apply.release_memory();
+                    match self.receiver.next().await {
+                        Some(t) => t,
+                        None => return,
+                    }
+                }
             };
             loop {
                 match task {
                     // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
                     ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
+                    ApplyTask::UnsafeWrite(raw_write) => self.apply.apply_unsafe_write(raw_write),
+                    ApplyTask::ManualFlush => self.apply.on_manual_flush().await,
+                    ApplyTask::RefreshBucketStat(bucket_meta) => {
+                        self.apply.on_refresh_buckets(bucket_meta)
+                    }
                 }
 
-                // TODO: yield after some time.
+                self.apply.maybe_flush().await;
 
                 // Perhaps spin sometime?
                 match self.receiver.try_recv() {
@@ -112,7 +140,8 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     Err(TryRecvError::Disconnected) => return,
                 }
             }
-            self.apply.flush();
+            let written_bytes = self.apply.flush();
+            self.apply.maybe_reschedule(written_bytes).await;
         }
     }
 }

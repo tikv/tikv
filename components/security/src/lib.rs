@@ -18,8 +18,6 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
     ServerCredentialsFetcher,
 };
-#[cfg(feature = "tonic")]
-use tonic::transport::{channel::ClientTlsConfig, Certificate, Identity};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -70,9 +68,26 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<dyn Error>> {
 
 type CertResult = Result<(Vec<u8>, Vec<u8>, Vec<u8>), Box<dyn Error>>;
 
+type Pem = Box<[u8]>;
+
+pub struct Secret(pub Pem);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Secret").finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct ClientSuite {
+    pub ca: Pem,
+    pub client_cert: Pem,
+    pub client_key: Secret,
+}
+
 impl SecurityConfig {
     /// Validates ca, cert and private key.
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&self, raftstore_v2: bool) -> Result<(), Box<dyn Error>> {
         check_key_file("ca key", &self.ca_path)?;
         check_key_file("cert key", &self.cert_path)?;
         check_key_file("private key", &self.key_path)?;
@@ -81,6 +96,12 @@ impl SecurityConfig {
             && (self.ca_path.is_empty() || self.cert_path.is_empty() || self.key_path.is_empty())
         {
             return Err("ca, cert and private key should be all configured.".into());
+        }
+        if raftstore_v2
+            && self.encryption.data_encryption_method
+                != kvproto::encryptionpb::EncryptionMethod::Plaintext
+        {
+            return Err("encryption is not supported for partitioned-raft-kv".into());
         }
 
         Ok(())
@@ -124,21 +145,13 @@ impl SecurityManager {
         })
     }
 
-    #[cfg(feature = "tonic")]
-    /// Make a tonic tls config via the config.
-    pub fn tonic_tls_config(&self) -> Option<ClientTlsConfig> {
-        let (ca, cert, key) = self.cfg.load_certs().unwrap_or_default();
-        if ca.is_empty() && cert.is_empty() && key.is_empty() {
-            return None;
-        }
-        let mut cfg = ClientTlsConfig::new();
-        if !ca.is_empty() {
-            cfg = cfg.ca_certificate(Certificate::from_pem(ca));
-        }
-        if !cert.is_empty() && !key.is_empty() {
-            cfg = cfg.identity(Identity::from_pem(cert, key));
-        }
-        Some(cfg)
+    pub fn client_suite(&self) -> Result<ClientSuite, Box<dyn Error>> {
+        let (ca, cert, key) = self.cfg.load_certs()?;
+        Ok(ClientSuite {
+            ca: ca.into_boxed_slice(),
+            client_cert: cert.into_boxed_slice(),
+            client_key: Secret(key.into_boxed_slice()),
+        })
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
@@ -182,6 +195,10 @@ impl SecurityManager {
                 CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
             )
         }
+    }
+
+    pub fn get_config(&self) -> &SecurityConfig {
+        &self.cfg
     }
 }
 
@@ -287,7 +304,7 @@ mod tests {
     fn test_security() {
         let cfg = SecurityConfig::default();
         // default is disable secure connection.
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
         let mgr = SecurityManager::new(&cfg).unwrap();
         assert!(mgr.cfg.ca_path.is_empty());
         assert!(mgr.cfg.cert_path.is_empty());
@@ -296,7 +313,7 @@ mod tests {
         let assert_cfg = |c: fn(&mut SecurityConfig), valid: bool| {
             let mut invalid_cfg = cfg.clone();
             c(&mut invalid_cfg);
-            assert_eq!(invalid_cfg.validate().is_ok(), valid);
+            assert_eq!(invalid_cfg.validate(false).is_ok(), valid);
         };
 
         // invalid path should be rejected.
@@ -317,18 +334,18 @@ mod tests {
             .iter()
             .enumerate()
         {
-            fs::write(f, &[id as u8]).unwrap();
+            fs::write(f, [id as u8]).unwrap();
         }
 
         let mut c = cfg.clone();
         c.cert_path = format!("{}", example_cert.display());
         c.key_path = format!("{}", example_key.display());
         // incomplete configuration.
-        c.validate().unwrap_err();
+        c.validate(false).unwrap_err();
 
         // data should be loaded from file after validating.
         c.ca_path = format!("{}", example_ca.display());
-        c.validate().unwrap();
+        c.validate(false).unwrap();
 
         let (ca, cert, key) = c.load_certs().unwrap_or_default();
         assert_eq!(ca, vec![0]);

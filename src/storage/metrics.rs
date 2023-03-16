@@ -11,7 +11,7 @@ use pd_client::BucketMeta;
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{util::build_key_range, ReadStats};
-use tikv_kv::{with_tls_engine, Engine};
+use tikv_kv::Engine;
 use tracker::get_tls_tracker_token;
 
 use crate::{
@@ -126,6 +126,7 @@ make_auto_flush_static_metric! {
         batch_get_command,
         prewrite,
         acquire_pessimistic_lock,
+        acquire_pessimistic_lock_resumed,
         commit,
         cleanup,
         rollback,
@@ -347,12 +348,10 @@ where
     tls_cell.with(|c| {
         let mut c = c.borrow_mut();
         let perf_context = c.get_or_insert_with(|| {
-            with_tls_engine(|engine: &mut E| {
-                Box::new(engine.kv_engine().unwrap().get_perf_context(
-                    PerfLevel::Uninitialized,
-                    PerfContextKind::Storage(cmd.get_str()),
-                ))
-            })
+            Box::new(E::Local::get_perf_context(
+                PerfLevel::Uninitialized,
+                PerfContextKind::Storage(cmd.get_str()),
+            )) as Box<dyn PerfContext>
         });
         perf_context.start_observe();
         let res = f();

@@ -385,7 +385,7 @@ impl parse::Parse for RpnFnAttr {
             ));
         }
 
-        if !is_varg && !is_raw_varg && (min_args != None || max_args != None) {
+        if !is_varg && !is_raw_varg && (min_args.is_some() || max_args.is_some()) {
             return Err(Error::new_spanned(
                 config_items,
                 "`min_args` or `max_args` is only available when `varg` or `raw_varg` presents",
