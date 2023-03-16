@@ -203,6 +203,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 target_region.get_peers()
             ));
         }
+        // TODO: pass down these records in `CommitMerge` request instead.
+        if !self
+            .storage()
+            .region_state()
+            .get_removed_records()
+            .is_empty()
+        {
+            return Err(box_err!(
+                "{}: removed_records {:?} is not empty, reject merge",
+                SlogFormat(&self.logger),
+                self.storage().region_state().get_removed_records()
+            ));
+        }
+        if !self
+            .storage()
+            .region_state()
+            .get_merged_records()
+            .is_empty()
+        {
+            return Err(box_err!(
+                "{}: merged_records {:?} is not empty, reject merge",
+                SlogFormat(&self.logger),
+                self.storage().region_state().get_merged_records()
+            ));
+        }
         Ok(())
     }
 
@@ -428,7 +453,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         log_index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
-        println!("apply_prepare_merge");
         PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
 
         let prepare_merge = req.get_prepare_merge();
@@ -502,7 +526,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         res: PrepareMergeResult,
     ) {
-        println!("on_apply_res_prepare_merge");
         let region = res.region_state.get_region().clone();
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();

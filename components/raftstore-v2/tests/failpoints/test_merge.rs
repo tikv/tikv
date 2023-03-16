@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use engine_traits::Peekable;
+use engine_traits::{Peekable, CF_DEFAULT};
+use futures::executor::block_on;
+use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 use tikv_util::store::new_peer;
 
 use crate::cluster::{merge_helper::merge_region, split_helper::split_region, Cluster};
@@ -32,11 +34,26 @@ fn test_restart_resume() {
     );
     let region_2_id = region_2.get_id();
 
-    // Drop raft writes.
-    fail::cfg_callback("apply_before_commit_merge", || {
+    let router2 = std::sync::Mutex::new(router.clone());
+    fail::cfg_callback("apply_before_commit_merge", move || {
+        // We must commit another entry to persist committed index.
+        let router2 = router2.lock().unwrap();
+        let header = Box::new(router2.new_request_for(region_2_id).take_header());
+        let mut put = SimpleWriteEncoder::with_capacity(64);
+        put.put(
+            CF_DEFAULT,
+            format!("k{}k", region_1_id + 1).as_bytes(),
+            b"v1",
+        );
+        let (msg, mut sub) = PeerMsg::simple_write(header, put.encode());
+        router2.send(region_1_id, msg).unwrap();
+        block_on(sub.wait_committed());
+
+        // Drop further raft writes, especially the persist of admin flushed.
         fail::cfg("raft_before_save_on_store_1", "return").unwrap()
     })
     .unwrap();
+
     let region_2 = merge_region(router, region_1, peer_1, region_2);
     let new_epoch = region_2.get_region_epoch();
     {

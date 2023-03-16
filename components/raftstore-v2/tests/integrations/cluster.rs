@@ -67,6 +67,7 @@ pub fn check_skip_wal(path: &str) {
     assert!(found, "no WAL found in {}", path);
 }
 
+#[derive(Clone)]
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
