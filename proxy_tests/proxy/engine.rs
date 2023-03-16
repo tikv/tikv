@@ -26,27 +26,23 @@ mod pagestorage {
             .unwrap();
         assert!(v == &[0x03, 0x04, 0x05]);
 
-        iter_ffi_helpers(
-            &cluster,
-            Some(vec![1]),
-            &mut |_, _, ffi: &mut FFIHelperSet| {
-                // Will add 0x02 to kv inputs in PageStorage.
-                // See `add_kv_engine_prefix`.
-                let actual_key = vec![0x02, 0x01, 0x09];
-                let guard = ffi.engine_store_server.page_storage.data.read();
-                assert!(guard.as_ref().expect("read").get(&actual_key).is_some());
-                assert_eq!(
-                    guard
-                        .as_ref()
-                        .expect("read")
-                        .get(&actual_key)
-                        .unwrap()
-                        .data
-                        .as_slice(),
-                    &[0x03, 0x04, 0x05]
-                );
-            },
-        );
+        iter_ffi_helpers(&cluster, Some(vec![1]), &mut |_, ffi: &mut FFIHelperSet| {
+            // Will add 0x02 to kv inputs in PageStorage.
+            // See `add_kv_engine_prefix`.
+            let actual_key = vec![0x02, 0x01, 0x09];
+            let guard = ffi.engine_store_server.page_storage.data.read();
+            assert!(guard.as_ref().expect("read").get(&actual_key).is_some());
+            assert_eq!(
+                guard
+                    .as_ref()
+                    .expect("read")
+                    .get(&actual_key)
+                    .unwrap()
+                    .data
+                    .as_slice(),
+                &[0x03, 0x04, 0x05]
+            );
+        });
         cluster.shutdown();
     }
 }

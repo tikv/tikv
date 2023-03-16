@@ -147,7 +147,7 @@ fn simple_fast_add_peer(
         iter_ffi_helpers(
             &cluster,
             Some(vec![1]),
-            &mut |_, _, ffi: &mut FFIHelperSet| unsafe {
+            &mut |_, ffi: &mut FFIHelperSet| unsafe {
                 let server = ffi.engine_store_server.as_mut();
                 server.write_to_db_by_region_id(1, "persist for up-to-date snapshot".to_string());
             },
@@ -228,7 +228,7 @@ fn simple_fast_add_peer(
             iter_ffi_helpers(
                 &cluster,
                 Some(vec![3]),
-                &mut |_, _, _ffi: &mut FFIHelperSet| {
+                &mut |_, _ffi: &mut FFIHelperSet| {
                     // Not actually the case, since we allow handling
                     // MsgAppend multiple times.
                     // So the following fires when:
@@ -259,17 +259,13 @@ fn simple_fast_add_peer(
     });
     std::thread::sleep(std::time::Duration::from_millis(1000));
     // Assert the peer removing succeeed.
-    iter_ffi_helpers(
-        &cluster,
-        Some(vec![3]),
-        &mut |_, _, ffi: &mut FFIHelperSet| {
-            let server = &ffi.engine_store_server;
-            assert!(!server.kvstore.contains_key(&1));
-            (*ffi.engine_store_server).mutate_region_states(1, |e: &mut RegionStats| {
-                e.fast_add_peer_count.store(0, Ordering::SeqCst);
-            });
-        },
-    );
+    iter_ffi_helpers(&cluster, Some(vec![3]), &mut |_, ffi: &mut FFIHelperSet| {
+        let server = &ffi.engine_store_server;
+        assert!(!server.kvstore.contains_key(&1));
+        (*ffi.engine_store_server).mutate_region_states(1, |e: &mut RegionStats| {
+            e.fast_add_peer_count.store(0, Ordering::SeqCst);
+        });
+    });
     cluster.must_put(b"k5", b"v5");
     // These failpoints make sure we will cause again a fast path.
     if source_type == SourceType::InvalidSource {
@@ -285,15 +281,11 @@ fn simple_fast_add_peer(
         find_peer_by_id(states.in_disk_region_state.get_region(), 4).is_some()
     });
     // If we re-add peer, we can still go fast path.
-    iter_ffi_helpers(
-        &cluster,
-        Some(vec![3]),
-        &mut |_, _, ffi: &mut FFIHelperSet| {
-            (*ffi.engine_store_server).mutate_region_states(1, |e: &mut RegionStats| {
-                assert!(e.fast_add_peer_count.load(Ordering::SeqCst) > 0);
-            });
-        },
-    );
+    iter_ffi_helpers(&cluster, Some(vec![3]), &mut |_, ffi: &mut FFIHelperSet| {
+        (*ffi.engine_store_server).mutate_region_states(1, |e: &mut RegionStats| {
+            assert!(e.fast_add_peer_count.load(Ordering::SeqCst) > 0);
+        });
+    });
     cluster.must_put(b"k6", b"v6");
     check_key(
         &cluster,

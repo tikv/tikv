@@ -33,7 +33,7 @@ fn test_delete_snapshot_after_apply() {
         .collect::<Vec<_>>();
     tikv_util::info!("engine_2 is {}", eng_ids[1]);
     let engine_2 = cluster.get_engine(eng_ids[1]);
-    must_get_none(&engine_2, first_key);
+    must_get_none(engine_2, first_key);
     // add peer (engine_2,engine_2) to region 1.
 
     fail::cfg("on_ob_pre_handle_snapshot_delete", "return").unwrap();
@@ -61,7 +61,7 @@ fn test_delete_snapshot_after_apply() {
         );
         let engine_2 = cluster.get_engine(eng_ids[1]);
         // now snapshot must be applied on peer engine_2
-        must_get_equal(&engine_2, first_key, first_value.as_slice());
+        must_get_equal(engine_2, first_key, first_value.as_slice());
     }
 
     fail::remove("apply_pending_snapshot");
@@ -84,10 +84,10 @@ fn test_basic_snapshot() {
     cluster.must_put(b"k1", b"v");
 
     let engine_2 = cluster.get_engine(2);
-    must_get_none(&engine_2, b"k1");
+    must_get_none(engine_2, b"k1");
     // add peer (engine_2,engine_2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
-    must_get_equal(&engine_2, b"k1", b"v");
+    must_get_equal(engine_2, b"k1", b"v");
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn test_huge_snapshot(is_multi: bool) {
         .collect::<Vec<_>>();
     tikv_util::info!("engine_2 is {}", eng_ids[1]);
     let engine_2 = cluster.get_engine(eng_ids[1]);
-    must_get_none(&engine_2, first_key);
+    must_get_none(engine_2, first_key);
     // add peer (engine_2,engine_2) to region 1.
     pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
 
@@ -150,21 +150,21 @@ fn test_huge_snapshot(is_multi: bool) {
         );
         let engine_2 = cluster.get_engine(eng_ids[1]);
         // now snapshot must be applied on peer engine_2
-        must_get_equal(&engine_2, first_key, first_value.as_slice());
+        must_get_equal(engine_2, first_key, first_value.as_slice());
 
         // engine 3 will not exec post apply snapshot.
         fail::cfg("on_ob_post_apply_snapshot", "pause").unwrap();
 
         tikv_util::info!("engine_3 is {}", eng_ids[2]);
         let engine_3 = cluster.get_engine(eng_ids[2]);
-        must_get_none(&engine_3, first_key);
+        must_get_none(engine_3, first_key);
         pd_client.must_add_peer(r1, new_peer(eng_ids[2], eng_ids[2]));
 
         std::thread::sleep(std::time::Duration::from_millis(500));
         // We have not apply pre handled snapshot,
         // we can't be sure if it exists in only get from memory too, since pre handle
         // snapshot is async.
-        must_get_none(&engine_3, first_key);
+        must_get_none(engine_3, first_key);
         fail::remove("on_ob_post_apply_snapshot");
 
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -341,7 +341,7 @@ fn test_split_merge() {
 
     assert_eq!(r1.get_id(), r3_new.get_id());
 
-    iter_ffi_helpers(&cluster, None, &mut |id: u64, _, ffi: &mut FFIHelperSet| {
+    iter_ffi_helpers(&cluster, None, &mut |id: u64, ffi: &mut FFIHelperSet| {
         let server = &ffi.engine_store_server;
         if !server.kvstore.contains_key(&r1_new.get_id()) {
             panic!("node {} has no region {}", id, r1_new.get_id())
@@ -364,7 +364,7 @@ fn test_split_merge() {
     let _r1_new2 = cluster.get_region(b"k1");
     let r3_new2 = cluster.get_region(b"k3");
 
-    iter_ffi_helpers(&cluster, None, &mut |id: u64, _, ffi: &mut FFIHelperSet| {
+    iter_ffi_helpers(&cluster, None, &mut |id: u64, ffi: &mut FFIHelperSet| {
         let server = &ffi.engine_store_server;
 
         // The left region is removed

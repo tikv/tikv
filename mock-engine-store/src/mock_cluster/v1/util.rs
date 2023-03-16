@@ -1,13 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{sync::Arc, thread, time::Duration};
+use std::sync::Arc;
 
 use encryption::DataKeyManager;
 use engine_store_ffi::TiFlashEngine;
-use engine_traits::{Engines, Peekable};
+use engine_traits::Engines;
 use file_system::IoRateLimiter;
 use raftstore::store::RaftRouter;
 use tempfile::TempDir;
-use tikv_util::{debug, escape};
 
 use super::{common::*, Cluster, Simulator};
 
@@ -105,46 +104,4 @@ pub fn create_tiflash_test_engine(
     let engines = Engines::new(engine, raft_engine);
 
     (engines, key_manager, dir)
-}
-
-pub fn must_get(engine: &engine_rocks::RocksEngine, cf: &str, key: &[u8], value: Option<&[u8]>) {
-    for _ in 1..300 {
-        let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
-        if let (Some(value), Some(res)) = (value, res.as_ref()) {
-            assert_eq!(value, &res[..]);
-            return;
-        }
-        if value.is_none() && res.is_none() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
-    let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
-    if value.is_none() && res.is_none()
-        || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
-    {
-        return;
-    }
-    panic!(
-        "can't get value {:?} for key {}",
-        value.map(escape),
-        log_wrappers::hex_encode_upper(key)
-    )
-}
-
-pub fn must_get_equal(engine: &engine_rocks::RocksEngine, key: &[u8], value: &[u8]) {
-    must_get(engine, "default", key, Some(value));
-}
-
-pub fn must_get_none(engine: &engine_rocks::RocksEngine, key: &[u8]) {
-    must_get(engine, "default", key, None);
-}
-
-pub fn must_get_cf_equal(engine: &engine_rocks::RocksEngine, cf: &str, key: &[u8], value: &[u8]) {
-    must_get(engine, cf, key, Some(value));
-}
-
-pub fn must_get_cf_none(engine: &engine_rocks::RocksEngine, cf: &str, key: &[u8]) {
-    must_get(engine, cf, key, None);
 }

@@ -28,12 +28,15 @@ pub use mock_engine_store::{
     general_get_apply_state, general_get_region_local_state, get_raft_local_state, make_new_region,
     mock_cluster::{
         config::Config,
-        must_get_equal, must_get_none, new_put_cmd, new_request,
-        node::NodeCluster,
-        transport_simulate::{
-            CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
+        v1::{
+            must_get_equal, must_get_none, new_put_cmd, new_request,
+            node::NodeCluster,
+            transport_simulate::{
+                CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
+            },
+            Cluster, Simulator,
         },
-        Cluster, FFIHelperSet, ProxyConfig, Simulator,
+        ClusterExt, FFIHelperSet, ProxyConfig,
     },
     write_kv_in_mem, RegionStats,
 };
@@ -76,10 +79,18 @@ pub struct States {
     pub ident: StoreIdent,
 }
 
-pub fn iter_ffi_helpers<C: Simulator<engine_store_ffi::TiFlashEngine>>(
+pub fn iter_engine_ffi_helpers<C: Simulator<engine_store_ffi::TiFlashEngine>>(
     cluster: &Cluster<C>,
     store_ids: Option<Vec<u64>>,
     f: &mut dyn FnMut(u64, &engine_store_ffi::TiFlashEngine, &mut FFIHelperSet) -> (),
+) {
+    cluster.iter_engine_ffi_helpers(store_ids, f);
+}
+
+pub fn iter_ffi_helpers<C: Simulator<engine_store_ffi::TiFlashEngine>>(
+    cluster: &Cluster<C>,
+    store_ids: Option<Vec<u64>>,
+    f: &mut dyn FnMut(u64, &mut FFIHelperSet) -> (),
 ) {
     cluster.iter_ffi_helpers(store_ids, f);
 }
@@ -90,7 +101,7 @@ pub fn maybe_collect_states(
     store_ids: Option<Vec<u64>>,
 ) -> HashMap<u64, States> {
     let mut prev_state: HashMap<u64, States> = HashMap::default();
-    iter_ffi_helpers(
+    iter_engine_ffi_helpers(
         cluster,
         store_ids,
         &mut |id: u64, engine: &engine_store_ffi::TiFlashEngine, ffi: &mut FFIHelperSet| {
@@ -176,7 +187,7 @@ pub fn new_mock_cluster_snap(id: u64, count: usize) -> (Cluster<NodeCluster>, Ar
 }
 
 pub fn must_get_mem(
-    cluster: &Cluster<NodeCluster>,
+    cluster_ext: &ClusterExt,
     node_id: u64,
     region_id: u64,
     key: &[u8],
@@ -187,24 +198,20 @@ pub fn must_get_mem(
     for _ in 1..300 {
         let mut ok = false;
         {
-            iter_ffi_helpers(
-                &cluster,
-                Some(vec![node_id]),
-                &mut |_, _, ffi: &mut FFIHelperSet| {
-                    let server = &ffi.engine_store_server;
-                    // If the region not exists in the node, will return None.
-                    let res = server.get_mem(region_id, cf, &key.to_vec());
-                    if let (Some(value), Some(last_res)) = (value, res) {
-                        assert_eq!(value, &last_res[..]);
-                        ok = true;
-                        return;
-                    }
-                    if value.is_none() && last_res.is_none() {
-                        ok = true;
-                        return;
-                    }
-                },
-            );
+            cluster_ext.iter_ffi_helpers(Some(vec![node_id]), &mut |_, ffi: &mut FFIHelperSet| {
+                let server = &ffi.engine_store_server;
+                // If the region not exists in the node, will return None.
+                let res = server.get_mem(region_id, cf, &key.to_vec());
+                if let (Some(value), Some(last_res)) = (value, res) {
+                    assert_eq!(value, &last_res[..]);
+                    ok = true;
+                    return;
+                }
+                if value.is_none() && last_res.is_none() {
+                    ok = true;
+                    return;
+                }
+            });
         }
         if ok {
             return;
@@ -306,9 +313,9 @@ pub fn check_key(
         match in_mem {
             Some(b) => {
                 if b {
-                    must_get_mem(cluster, id, region_id, k, Some(v));
+                    must_get_mem(&cluster.cluster_ext, id, region_id, k, Some(v));
                 } else {
-                    must_get_mem(cluster, id, region_id, k, None);
+                    must_get_mem(&cluster.cluster_ext, id, region_id, k, None);
                 }
             }
             None => (),
@@ -700,7 +707,7 @@ pub fn stop_tiflash_node(cluster: &mut Cluster<NodeCluster>, node_id: u64) {
         iter_ffi_helpers(
             &cluster,
             Some(vec![node_id]),
-            &mut |_, _, ffi: &mut FFIHelperSet| {
+            &mut |_, ffi: &mut FFIHelperSet| {
                 let server = &mut ffi.engine_store_server;
                 server.stop();
             },
@@ -714,7 +721,7 @@ pub fn restart_tiflash_node(cluster: &mut Cluster<NodeCluster>, node_id: u64) {
         iter_ffi_helpers(
             &cluster,
             Some(vec![node_id]),
-            &mut |_, _, ffi: &mut FFIHelperSet| {
+            &mut |_, ffi: &mut FFIHelperSet| {
                 let server = &mut ffi.engine_store_server;
                 server.restore();
             },

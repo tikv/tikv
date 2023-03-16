@@ -200,6 +200,35 @@ impl ClusterExt {
             .unwrap()
             .insert(node_id, ffi_helper_set);
     }
+
+    pub fn iter_ffi_helpers(
+        &self,
+        store_ids: Option<Vec<u64>>,
+        f: &mut dyn FnMut(u64, &mut FFIHelperSet),
+    ) -> Vec<u64> {
+        let ids = match store_ids {
+            Some(ids) => ids,
+            None => self
+                .ffi_helper_set
+                .lock()
+                .expect("lock error")
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+        };
+        for id in ids.iter() {
+            let id = *id;
+            let lock = self.ffi_helper_set.lock();
+            match lock {
+                Ok(mut l) => {
+                    let ffiset = l.get_mut(&id).unwrap();
+                    f(id, ffiset);
+                }
+                Err(_) => std::process::exit(1),
+            }
+        }
+        ids
+    }
 }
 
 static mut GLOBAL_ENGINE_HELPER_SET: Option<EngineHelperSet> = None;

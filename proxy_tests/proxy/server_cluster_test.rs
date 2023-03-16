@@ -8,7 +8,7 @@ use collections::HashMap;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
-use mock_engine_store::mock_cluster::{
+use mock_engine_store::mock_cluster::v1::{
     server::{new_server_cluster, ServerCluster},
     *,
 };
@@ -154,7 +154,7 @@ fn test_pprof() {
     iter_ffi_helpers(
         &cluster,
         Some(vec![id]),
-        &mut |_, _, ffiset: &mut FFIHelperSet| {
+        &mut |_, ffiset: &mut FFIHelperSet| {
             let router = cluster.sim.rl().get_router(store_id);
             assert!(router.is_some());
             status_server = Some(

@@ -24,8 +24,10 @@ use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
         config::RaftstoreConfigManager,
+        copy_snapshot,
         fsm::{store::StoreMeta, RaftBatchSystem, RaftRouter},
-        SnapManagerBuilder, *,
+        AutoSplitController, Callback, LocalReader, RaftCmdExtraOpts, SnapEntry, SnapKey,
+        SnapManager, SnapManagerBuilder, SplitCheckRunner, StoreMetaDelegate, Transport,
     },
     Result,
 };
@@ -45,10 +47,10 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
 
-use crate::mock_cluster::{
-    config::Config,
+use super::{
+    common::*,
     transport_simulate::{Filter, SimulateTransport},
-    Simulator, TiFlashEngine,
+    Simulator,
 };
 
 pub struct ChannelTransportCore {

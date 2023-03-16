@@ -31,7 +31,7 @@ fn test_handle_destroy() {
     iter_ffi_helpers(
         &cluster,
         Some(vec![eng_ids[1]]),
-        &mut |_, _, ffi: &mut FFIHelperSet| {
+        &mut |_, ffi: &mut FFIHelperSet| {
             let server = &ffi.engine_store_server;
             assert!(server.kvstore.contains_key(&region_id));
         },
@@ -53,7 +53,7 @@ fn test_handle_destroy() {
     iter_ffi_helpers(
         &cluster,
         Some(vec![eng_ids[1]]),
-        &mut |_, _, ffi: &mut FFIHelperSet| {
+        &mut |_, ffi: &mut FFIHelperSet| {
             let server = &ffi.engine_store_server;
             assert!(!server.kvstore.contains_key(&region_id));
         },
@@ -79,7 +79,7 @@ fn test_get_region_local_state() {
         iter_ffi_helpers(
             &cluster,
             None,
-            &mut |_id: u64, _, ffi_set: &mut FFIHelperSet| {
+            &mut |_id: u64, ffi_set: &mut FFIHelperSet| {
                 let f = ffi_set.proxy_helper.fn_get_region_local_state.unwrap();
                 let mut state = kvproto::raft_serverpb::RegionLocalState::default();
                 let mut error_msg = mock_engine_store::RawCppStringPtrGuard::default();
@@ -380,7 +380,7 @@ fn recover_from_peer(cluster: &Cluster<NodeCluster>, from: u64, to: u64, region_
     iter_ffi_helpers(
         cluster,
         Some(vec![from]),
-        &mut |_, _, ffi: &mut FFIHelperSet| {
+        &mut |_, ffi: &mut FFIHelperSet| {
             let server = &mut ffi.engine_store_server;
             maybe_source_region = server.kvstore.get(&region_id).cloned();
         },
@@ -393,7 +393,7 @@ fn recover_from_peer(cluster: &Cluster<NodeCluster>, from: u64, to: u64, region_
     iter_ffi_helpers(
         cluster,
         Some(vec![to]),
-        &mut |id: u64, _, ffi: &mut FFIHelperSet| {
+        &mut |id: u64, ffi: &mut FFIHelperSet| {
             let server = &mut ffi.engine_store_server;
             assert!(server.kvstore.get(&region_id).is_none());
 
@@ -618,7 +618,7 @@ fn test_add_delayed_started_learner_snapshot() {
     iter_ffi_helpers(
         &cluster,
         Some(vec![5]),
-        &mut |_: u64, _, ffi: &mut FFIHelperSet| {
+        &mut |_: u64, ffi: &mut FFIHelperSet| {
             (*ffi.engine_store_server).mutate_region_states(1, |e: &mut RegionStats| {
                 assert_eq!(e.pre_handle_count.load(Ordering::SeqCst), 1);
             });

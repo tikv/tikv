@@ -175,12 +175,12 @@ mod restart {
 
         let engine_2 = cluster.get_engine(eng_ids[1]);
         pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
-        must_get_equal(&engine_2, first_key, first_value.as_slice());
+        must_get_equal(engine_2, first_key, first_value.as_slice());
 
         fail::cfg("apply_pending_snapshot", "return").unwrap();
         tikv_util::info!("engine_3 is {}", eng_ids[2]);
         let engine_3 = cluster.get_engine(eng_ids[2]);
-        must_get_none(&engine_3, first_key);
+        must_get_none(engine_3, first_key);
         pd_client.must_add_peer(r1, new_peer(eng_ids[2], eng_ids[2]));
 
         std::thread::sleep(std::time::Duration::from_millis(1000));
@@ -259,7 +259,7 @@ mod restart {
         fail::cfg("on_ob_post_apply_snapshot", "return").unwrap();
 
         let engine_2 = cluster.get_engine(eng_ids[1]);
-        must_get_none(&engine_2, first_key);
+        must_get_none(engine_2, first_key);
         // add peer (engine_2,engine_2) to region 1.
         pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
 

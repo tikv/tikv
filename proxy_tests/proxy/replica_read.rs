@@ -200,7 +200,7 @@ fn test_read_index() {
         iter_ffi_helpers(
             &cluster,
             Some(vec![*id]),
-            &mut |_, _, ffi_helper: &mut FFIHelperSet| {
+            &mut |_, ffi_helper: &mut FFIHelperSet| {
                 let mut request = kvproto::kvrpcpb::ReadIndexRequest::default();
 
                 {

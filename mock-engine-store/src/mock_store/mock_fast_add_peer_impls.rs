@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use super::{
     common::*, mock_core::*, mock_engine_store_server::into_engine_store_server_wrap, mock_ffi::*,
 };
-use crate::{mock_cluster, mock_cluster::node::NodeCluster};
+use crate::mock_cluster;
 
 #[allow(clippy::redundant_closure_call)]
 pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
@@ -14,7 +14,7 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
     new_peer_id: u64,
 ) -> interfaces_ffi::FastAddPeerRes {
     let store = into_engine_store_server_wrap(arg1);
-    let cluster_ext = &*(store.cluster_ext_ptr as *const mock_cluster::Cluster<NodeCluster>);
+    let cluster_ext = &*(store.cluster_ext_ptr as *const mock_cluster::ClusterExt);
     let store_id = (*store.engine_store_server).id;
     (*store.engine_store_server).mutate_region_states(region_id, |e: &mut RegionStats| {
         e.fast_add_peer_count.fetch_add(1, Ordering::SeqCst);
