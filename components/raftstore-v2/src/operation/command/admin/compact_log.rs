@@ -291,7 +291,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         old_tablet: EK,
         new_tablet_index: u64,
     ) {
-        info!(self.logger,
+        info!(
+            self.logger,
             "record tombstone tablet";
             "prev_tablet_path" => old_tablet.path(),
             "new_tablet_index" => new_tablet_index
@@ -317,7 +318,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         old_tablet: PathBuf,
         new_tablet_index: u64,
     ) {
-        info!(self.logger,
+        info!(
+            self.logger,
             "record tombstone tablet";
             "prev_tablet_path" => old_tablet.display(),
             "new_tablet_index" => new_tablet_index
