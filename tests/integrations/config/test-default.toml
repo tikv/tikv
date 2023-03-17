@@ -39,6 +39,7 @@
 [raftdb.defaultcf]
 
 [raft-engine]
+enable-log-recycle = true # Enable by default
 
 [security]
 
