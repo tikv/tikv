@@ -451,19 +451,22 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         builder.build_multi_level_pool()
     };
     let time_slice_inspector = Arc::new(TimeSliceInspector::new(&unified_read_pool_name));
-    (ReadPool::Yatp {
-        pool,
-        running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
-            .with_label_values(&[&unified_read_pool_name]),
-        running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
-            .with_label_values(&[&unified_read_pool_name]),
-        max_tasks: config
-            .max_tasks_per_worker
-            .saturating_mul(config.max_thread_count),
-        pool_size: config.max_thread_count,
-        resource_ctl,
-        time_slice_inspector,
-    }, unified_read_pool_name)
+    (
+        ReadPool::Yatp {
+            pool,
+            running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
+                .with_label_values(&[&unified_read_pool_name]),
+            running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
+                .with_label_values(&[&unified_read_pool_name]),
+            max_tasks: config
+                .max_tasks_per_worker
+                .saturating_mul(config.max_thread_count),
+            pool_size: config.max_thread_count,
+            resource_ctl,
+            time_slice_inspector,
+        },
+        unified_read_pool_name,
+    )
 }
 
 impl From<Vec<FuturePool>> for ReadPool {
@@ -949,7 +952,8 @@ mod tests {
         let count_metric = |name: &str| -> u64 {
             let mut sum = 0;
             for i in 0..=2 {
-                let hist = yatp::metrics::TASK_POLL_DURATION.with_label_values(&[name, &format!("{}", i)]);
+                let hist =
+                    yatp::metrics::TASK_POLL_DURATION.with_label_values(&[name, &format!("{}", i)]);
                 sum += hist.get_sample_count();
             }
             sum
@@ -958,7 +962,8 @@ mod tests {
         for control in [false, true] {
             let resource_manager = if control {
                 let resource_manager = ResourceGroupManager::default();
-                let resource_ctl = resource_manager.derive_controller("test_yatp_task_poll_duration_metric".into(), true);
+                let resource_ctl = resource_manager
+                    .derive_controller("test_yatp_task_poll_duration_metric".into(), true);
                 Some(resource_ctl)
             } else {
                 None
@@ -972,8 +977,13 @@ mod tests {
 
             let engine = TestEngineBuilder::new().build().unwrap();
 
-            let (pool, name) =
-                build_yatp_read_pool(&config, DummyReporter, engine, resource_manager, CleanupMethod::InPlace);
+            let (pool, name) = build_yatp_read_pool(
+                &config,
+                DummyReporter,
+                engine,
+                resource_manager,
+                CleanupMethod::InPlace,
+            );
 
             let gen_task = || {
                 let (tx, rx) = oneshot::channel::<()>();
