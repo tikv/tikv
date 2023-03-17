@@ -54,7 +54,7 @@ use crate::{
     operation::{SharedReadTablet, SPLIT_PREFIX},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{pd, tablet_gc},
+    worker::{pd, tablet_flush, tablet_gc},
     Error, Result,
 };
 
@@ -465,6 +465,7 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub pd: Scheduler<pd::Task>,
     pub tablet_gc: Scheduler<tablet_gc::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
+    pub tablet_flush: Scheduler<tablet_flush::Task>,
 
     // Following is not maintained by raftstore itself.
     pub split_check: Scheduler<SplitCheckTask>,
@@ -488,6 +489,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     tablet_gc: Worker,
     async_write: StoreWriters<EK, ER>,
     purge: Option<Worker>,
+    tablet_flush: Worker,
 
     // Following is not maintained by raftstore itself.
     background: Worker,
@@ -501,6 +503,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
             tablet_gc: Worker::new("tablet-gc-worker"),
             async_write: StoreWriters::new(None),
             purge,
+            tablet_flush: Worker::new("tablet_flush-worker"),
             background,
         }
     }
@@ -510,6 +513,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         self.async_read.stop();
         self.pd.stop();
         self.tablet_gc.stop();
+        self.tablet_flush.stop();
         if let Some(w) = self.purge {
             w.stop();
         }
@@ -628,12 +632,18 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
+        let tablet_flush_scheduler = workers.tablet_flush.start(
+            "tablet-flush-worker",
+            tablet_flush::Runner::new(router.clone(), tablet_registry.clone(), self.logger.clone()),
+        );
+
         let schedulers = Schedulers {
             read: read_scheduler,
             pd: workers.pd.scheduler(),
             tablet_gc: tablet_gc_scheduler,
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
+            tablet_flush: tablet_flush_scheduler,
         };
 
         let builder = StorePollerBuilder::new(

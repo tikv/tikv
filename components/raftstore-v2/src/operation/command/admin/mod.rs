@@ -15,7 +15,11 @@ use merge::prepare::PrepareMergeResult;
 pub use merge::MergeContext;
 use protobuf::Message;
 use raftstore::{
-    store::{cmd_resp, fsm::apply, msg::ErrorCallback},
+    store::{
+        cmd_resp,
+        fsm::{apply, apply::validate_batch_split},
+        msg::ErrorCallback,
+    },
     Error,
 };
 use slog::info;
@@ -118,7 +122,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdType::Split => Err(box_err!(
                     "Split is deprecated. Please use BatchSplit instead."
                 )),
-                AdminCmdType::BatchSplit => self.propose_split(ctx, req),
+                AdminCmdType::BatchSplit => {
+                    if let Err(err) = validate_batch_split(req.get_admin_request(), self.region()) {
+                        Err(err)
+                    } else {
+                        if !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+                            .contains(WriteBatchFlags::SPLIT_SECOND_PHASE)
+                        {
+                            if self.tablet_being_flushed() {
+                                return;
+                            }
+
+                            self.set_tablet_being_flushed(true);
+                            ctx.schedulers
+                                .tablet_flush
+                                .schedule(crate::TabletFlushTask::TabletFlush {
+                                    req,
+                                    applied_index: self.storage().apply_state().get_applied_index(),
+                                    ch,
+                                })
+                                .unwrap(); // todo
+                            return;
+                        }
+
+                        self.set_tablet_being_flushed(false);
+                        self.propose_split(ctx, req)
+                    }
+                }
                 AdminCmdType::TransferLeader => {
                     // Containing TRANSFER_LEADER_PROPOSAL flag means the this transfer leader
                     // request should be proposed to the raft group
