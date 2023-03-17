@@ -75,7 +75,7 @@ where
     pending_write_msgs: Vec<WriteMsg<EK, ER>>,
     /// The scheduling priority of the last msg, only valid when priority
     /// scheduling is enabled
-    last_msg_priority: Option<yatp::queue::priority::Priority>,
+    last_msg_priority: Option<u64>,
 }
 
 impl<EK, ER> WriteRouter<EK, ER>
@@ -103,6 +103,10 @@ where
         last_unpersisted: Option<u64>,
         msg: WriteMsg<EK, ER>,
     ) {
+        if last_unpersisted.is_none() {
+            // reset when there is no pending write
+            self.last_msg_priority = None;
+        }
         if self.should_send(ctx, last_unpersisted) {
             self.send(ctx, msg);
         } else {

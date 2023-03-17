@@ -5,7 +5,7 @@ use std::{cell::RefCell, sync::Arc};
 use collections::HashMap;
 use crossbeam::channel::{self, RecvError, SendError, TryRecvError, TrySendError};
 use kvproto::kvrpcpb::CommandPri;
-use tikv_util::mpsc::priority_queue::{self, Priority};
+use tikv_util::mpsc::priority_queue;
 
 use crate::{ResourceConsumeType, ResourceController};
 
@@ -87,7 +87,7 @@ impl<T: Send + 'static> Sender<T> {
     // It's used to make sure messages from one peer are sent in order.
     // The returned value is the priority that the message sent with. It is
     // calculated by resource controller and compared with `low_bound`.
-    pub fn send(&self, m: T, low_bound: Option<Priority>) -> Result<Option<Priority>, SendError<T>> {
+    pub fn send(&self, m: T, low_bound: Option<u64>) -> Result<Option<u64>, SendError<T>> {
         match self {
             Sender::Vanilla(sender) => sender.send(m).map(|_| None),
             Sender::Priority {
@@ -96,13 +96,9 @@ impl<T: Send + 'static> Sender<T> {
                 last_msg_group,
             } => {
                 let p = resource_ctl
-                            .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
-                // TODO: pass different command priority
+                    .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
                 let priority = if let Some(low_bound) = low_bound {
-                    std::cmp::max(
-                        p, 
-                        low_bound,
-                    )
+                    std::cmp::max(p, low_bound)
                 } else {
                     p
                 };
@@ -111,7 +107,7 @@ impl<T: Send + 'static> Sender<T> {
         }
     }
 
-    pub fn try_send(&self, m: T, low_bound: Option<Priority>) -> Result<Option<Priority>, TrySendError<T>> {
+    pub fn try_send(&self, m: T, low_bound: Option<u64>) -> Result<Option<u64>, TrySendError<T>> {
         match self {
             Sender::Vanilla(sender) => sender.try_send(m).map(|_| None),
             Sender::Priority {
@@ -120,12 +116,9 @@ impl<T: Send + 'static> Sender<T> {
                 last_msg_group,
             } => {
                 let p = resource_ctl
-                .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
+                    .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
                 let priority = if let Some(low_bound) = low_bound {
-                    std::cmp::max(
-                        p, 
-                        low_bound,
-                    )
+                    std::cmp::max(p, low_bound)
                 } else {
                     p
                 };

@@ -55,7 +55,7 @@ where
         // TODO: close it explicitly once it's supported.
         // Magic number, actually any number greater than poll pool size works.
         for _ in 0..256 {
-            let _ = self.sender.send(FsmTypes::Empty,None); 
+            let _ = self.sender.send(FsmTypes::Empty, None);
             let _ = self.low_sender.send(FsmTypes::Empty, None);
         }
     }

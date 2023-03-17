@@ -14,7 +14,7 @@ use kvproto::{
     resource_manager::{GroupMode, ResourceGroup},
 };
 use tikv_util::info;
-use yatp::queue::priority::{Priority, TaskPriorityProvider};
+use yatp::queue::priority::TaskPriorityProvider;
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
@@ -26,6 +26,12 @@ pub const MIN_PRIORITY_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_RESOURCE_GROUP_NAME: &str = "default";
 /// default value of max RU quota.
 const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
+
+#[cfg(test)]
+const LOW_PRIORITY: u32 = 1;
+const MEDIUM_PRIORITY: u32 = 8;
+#[cfg(test)]
+const HIGH_PRIORITY: u32 = 16;
 
 pub enum ResourceConsumeType {
     CpuTime(Duration),
@@ -159,7 +165,11 @@ impl ResourceController {
             last_min_vt: AtomicU64::new(0),
         };
         // add the "default" resource group
-        controller.add_resource_group(DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(), 0, 1);
+        controller.add_resource_group(
+            DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(),
+            0,
+            MEDIUM_PRIORITY,
+        );
         controller
     }
 
@@ -174,7 +184,7 @@ impl ResourceController {
         }
     }
 
-    fn add_resource_group(&self, name: Vec<u8>, ru_quota: u64, group_priority: u64) {
+    fn add_resource_group(&self, name: Vec<u8>, ru_quota: u64, group_priority: u32) {
         let mut max_ru_quota = self.max_ru_quota.lock().unwrap();
         if ru_quota > *max_ru_quota {
             *max_ru_quota = ru_quota;
@@ -214,7 +224,11 @@ impl ResourceController {
     fn remove_resource_group(&self, name: &[u8]) {
         // do not remove the default resource group, reset to default setting instead.
         if DEFAULT_RESOURCE_GROUP_NAME.as_bytes() == name {
-            self.add_resource_group(DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(), 0, 1);
+            self.add_resource_group(
+                DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(),
+                0,
+                MEDIUM_PRIORITY,
+            );
             return;
         }
         self.resource_consumptions.remove(name);
@@ -266,7 +280,7 @@ impl ResourceController {
         self.last_min_vt.store(max_vt, Ordering::Relaxed);
     }
 
-    pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> Priority {
+    pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
         let level = match pri {
             CommandPri::Low => 2,
             CommandPri::Normal => 1,
@@ -277,16 +291,28 @@ impl ResourceController {
 }
 
 impl TaskPriorityProvider for ResourceController {
-    fn priority_of(&self, extras: &yatp::queue::Extras) -> Priority {
+    fn priority_of(&self, extras: &yatp::queue::Extras) -> u64 {
         self.resource_group(extras.metadata())
             .get_priority(extras.current_level() as usize)
     }
 }
 
+fn concat_priority_vt(mut group_priority: u32, vt: u64) -> u64 {
+    assert!(group_priority <= 16);
+    // map 0 to medium priority(default priority)
+    if group_priority == 0 {
+        group_priority = MEDIUM_PRIORITY;
+    }
+    // map group_priority from [1, 16] to [0, 15] to limit it 4 bits and get bitwise
+    // negation to replace leading 4 bits of vt. So that the priority is ordered in
+    // the descending order by group_priority first, then by vt in ascending order.
+    vt | (!((group_priority - 1) as u64) << 60)
+}
+
 struct GroupPriorityTracker {
     // the ru setting of this group.
     ru_quota: u64,
-    group_priority: u64,
+    group_priority: u32,
     weight: u64,
     virtual_time: AtomicU64,
     // the constant delta value for each `get_priority` call,
@@ -294,7 +320,7 @@ struct GroupPriorityTracker {
 }
 
 impl GroupPriorityTracker {
-    fn get_priority(&self, level: usize) -> Priority {
+    fn get_priority(&self, level: usize) -> u64 {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
         let vt = (if self.vt_delta_for_get > 0 {
             self.virtual_time
@@ -303,10 +329,7 @@ impl GroupPriorityTracker {
         } else {
             self.virtual_time.load(Ordering::Relaxed)
         }) + task_extra_priority;
-        Priority {
-            priority: self.group_priority,
-            vt,
-        }
+        concat_priority_vt(self.group_priority, vt)
     }
 
     #[inline]
@@ -336,8 +359,8 @@ pub(crate) mod tests {
 
     use super::*;
 
-    pub fn new_resource_group_ru(name: String, ru: u64) -> ResourceGroup {
-        new_resource_group(name, true, ru, ru)
+    pub fn new_resource_group_ru(name: String, ru: u64, group_priority: u32) -> ResourceGroup {
+        new_resource_group(name, true, ru, ru, group_priority)
     }
 
     pub fn new_resource_group(
@@ -345,6 +368,7 @@ pub(crate) mod tests {
         is_ru_mode: bool,
         read_tokens: u64,
         write_tokens: u64,
+        group_priority: u32,
     ) -> ResourceGroup {
         use kvproto::resource_manager::{GroupRawResourceSettings, GroupRequestUnitSettings};
 
@@ -356,6 +380,7 @@ pub(crate) mod tests {
             GroupMode::RawMode
         };
         group.set_mode(mode);
+        group.set_priority(group_priority);
         if is_ru_mode {
             assert!(read_tokens == write_tokens);
             let mut ru_setting = GroupRequestUnitSettings::new();
@@ -383,7 +408,7 @@ pub(crate) mod tests {
     fn test_resource_group() {
         let resource_manager = ResourceGroupManager::default();
 
-        let group1 = new_resource_group_ru("TEST".into(), 100);
+        let group1 = new_resource_group_ru("TEST".into(), 100, 0);
         resource_manager.add_resource_group(group1);
 
         assert!(resource_manager.get_resource_group("test1").is_none());
@@ -400,7 +425,7 @@ pub(crate) mod tests {
         drop(group);
         assert_eq!(resource_manager.resource_groups.len(), 1);
 
-        let group1 = new_resource_group_ru("Test".into(), 200);
+        let group1 = new_resource_group_ru("Test".into(), 200, LOW_PRIORITY);
         resource_manager.add_resource_group(group1);
         let group = resource_manager.get_resource_group("test").unwrap();
         assert_eq!(
@@ -412,10 +437,11 @@ pub(crate) mod tests {
                 .get_fill_rate(),
             200
         );
+        assert_eq!(group.value().get_priority(), 1);
         drop(group);
         assert_eq!(resource_manager.resource_groups.len(), 1);
 
-        let group2 = new_resource_group_ru("test2".into(), 400);
+        let group2 = new_resource_group_ru("test2".into(), 400, 0);
         resource_manager.add_resource_group(group2);
         assert_eq!(resource_manager.resource_groups.len(), 2);
 
@@ -430,17 +456,26 @@ pub(crate) mod tests {
 
         let mut extras1 = Extras::single_level();
         extras1.set_metadata("test".as_bytes().to_owned());
-        assert_eq!(resource_ctl.priority_of(&extras1), 25_000);
+        assert_eq!(
+            resource_ctl.priority_of(&extras1),
+            concat_priority_vt(LOW_PRIORITY, 25_000)
+        );
         assert_eq!(group1.current_vt(), 25_000);
 
         let mut extras2 = Extras::single_level();
         extras2.set_metadata("test2".as_bytes().to_owned());
-        assert_eq!(resource_ctl.priority_of(&extras2), 12_500);
+        assert_eq!(
+            resource_ctl.priority_of(&extras2),
+            concat_priority_vt(MEDIUM_PRIORITY, 12_500)
+        );
         assert_eq!(group2.current_vt(), 12_500);
 
         let mut extras3 = Extras::single_level();
         extras3.set_metadata("unknown_group".as_bytes().to_owned());
-        assert_eq!(resource_ctl.priority_of(&extras3), 50);
+        assert_eq!(
+            resource_ctl.priority_of(&extras3),
+            concat_priority_vt(MEDIUM_PRIORITY, 50)
+        );
         assert_eq!(
             resource_ctl
                 .resource_group("default".as_bytes())
@@ -476,7 +511,7 @@ pub(crate) mod tests {
         drop(group2);
 
         // test add 1 new resource group
-        let new_group = new_resource_group_ru("new_group".into(), 500);
+        let new_group = new_resource_group_ru("new_group".into(), 500, HIGH_PRIORITY);
         resource_manager.add_resource_group(new_group);
 
         assert_eq!(resource_ctl.resource_consumptions.len(), 4);
@@ -491,7 +526,7 @@ pub(crate) mod tests {
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
 
-        let group1 = new_resource_group_ru("test1".into(), 5000);
+        let group1 = new_resource_group_ru("test1".into(), 5000, 0);
         resource_manager.add_resource_group(group1);
         assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 20);
         assert_eq!(
@@ -500,7 +535,7 @@ pub(crate) mod tests {
         );
 
         // add a resource group with big ru
-        let group1 = new_resource_group_ru("test2".into(), 50000);
+        let group1 = new_resource_group_ru("test2".into(), 50000, 0);
         resource_manager.add_resource_group(group1);
         assert_eq!(*resource_ctl.max_ru_quota.lock().unwrap(), 50000);
         assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 100);
@@ -524,10 +559,10 @@ pub(crate) mod tests {
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
 
         for i in 0..5 {
-            let group1 = new_resource_group_ru(format!("test{}", i), 100);
+            let group1 = new_resource_group_ru(format!("test{}", i), 100, 0);
             resource_manager.add_resource_group(group1);
             // add a resource group with big ru
-            let group1 = new_resource_group_ru(format!("group{}", i), 100);
+            let group1 = new_resource_group_ru(format!("group{}", i), 100, 0);
             resource_manager.add_resource_group(group1);
         }
         assert_eq!(resource_manager.get_all_resource_groups().len(), 10);
@@ -547,5 +582,21 @@ pub(crate) mod tests {
             resource_ctl_write.resource_group("group2".as_bytes()).key(),
             "default".as_bytes()
         );
+    }
+
+    #[test]
+    fn test_concat_priority_vt() {
+        let v1 = concat_priority_vt(0, 1000);
+        let v2 = concat_priority_vt(0, 1111);
+        assert!(v1 < v2);
+
+        let v3 = concat_priority_vt(LOW_PRIORITY, 1000);
+        assert!(v1 < v3);
+
+        let v4 = concat_priority_vt(MEDIUM_PRIORITY, 1111);
+        assert_eq!(v2, v4);
+
+        let v5 = concat_priority_vt(HIGH_PRIORITY, 10);
+        assert!(v5 < v1);
     }
 }
