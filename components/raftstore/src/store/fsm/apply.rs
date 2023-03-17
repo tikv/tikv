@@ -3741,7 +3741,7 @@ impl<EK: KvEngine> ResourceMetered for Msg<EK> {
                             ResourceConsumeType::IoBytes(write_bytes),
                         );
                         if write_bytes > max_write_bytes {
-                            dominant_group = group_name.to_owned();
+                            dominant_group = group_name;
                             max_write_bytes = write_bytes;
                         }
                     });
