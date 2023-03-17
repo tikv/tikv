@@ -258,7 +258,12 @@ fn main() {
                     debug_executor.dump_value(&cf, key);
                 }
                 Cmd::Raft { cmd: subcmd } => match subcmd {
-                    RaftCmd::Log { region, index, key } => {
+                    RaftCmd::Log {
+                        region,
+                        index,
+                        key,
+                        binary,
+                    } => {
                         let (id, index) = if let Some(key) = key.as_deref() {
                             keys::decode_raft_log_key(&unescape(key)).unwrap()
                         } else {
@@ -266,7 +271,7 @@ fn main() {
                             let index = index.unwrap();
                             (id, index)
                         };
-                        debug_executor.dump_raft_log(id, index);
+                        debug_executor.dump_raft_log(id, index, binary);
                     }
                     RaftCmd::Region {
                         regions,
