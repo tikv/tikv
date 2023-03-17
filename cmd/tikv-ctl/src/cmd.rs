@@ -582,6 +582,8 @@ pub enum RaftCmd {
             help = RAW_KEY_HINT,
         )]
         key: Option<String>,
+        #[structopt(short = "b")]
+        binary: bool,
     },
     /// print region info
     Region {

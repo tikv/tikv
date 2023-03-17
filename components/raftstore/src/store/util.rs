@@ -690,7 +690,13 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
 pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: &str) -> T {
     let mut result = T::default();
     result.merge_from_bytes(data).unwrap_or_else(|e| {
-        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
+        panic!(
+            "{} data is corrupted at {}: {:?}. hex value: {}",
+            tag,
+            index,
+            e,
+            log_wrappers::Value::value(data)
+        );
     });
     result
 }
