@@ -22,6 +22,7 @@ use raftstore::{
         cmd_resp,
         fsm::{apply, apply::validate_batch_split},
         msg::ErrorCallback,
+        Transport,
     },
     Error,
 };
@@ -50,7 +51,7 @@ pub enum AdminCmdResult {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
-    pub fn on_admin_command<T>(
+    pub fn on_admin_command<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
@@ -149,9 +150,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 })
                                 .unwrap(); // todo
 
-                            let peers = self.region().get_peers();
+                            let peers = self.region().get_peers().to_vec();
                             for p in peers {
-                                if p == self.peer() {
+                                if p == *self.peer() {
                                     continue;
                                 }
                                 let mut msg = RaftMessage::default();
@@ -165,7 +166,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 flush_memtable.set_region_id(region_id);
                                 extra_msg.set_flush_memtable(flush_memtable);
 
-                                let _ = ctx.router.send_raft_message(Box::new(msg));
+                                self.send_raft_message(ctx, msg);
                             }
 
                             return;
