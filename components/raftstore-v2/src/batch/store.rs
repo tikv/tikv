@@ -51,7 +51,7 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    operation::{SharedReadTablet, SPLIT_PREFIX},
+    operation::{SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
     worker::{pd, tablet_gc},
@@ -406,14 +406,16 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             if prefix == SPLIT_PREFIX {
                 file_system::remove_dir_all(&path)?;
                 continue;
-            }
-            if prefix.is_empty() {
+            } else if prefix == MERGE_IN_PROGRESS_PREFIX || prefix == MERGE_SOURCE_PREFIX {
+                continue;
+            } else if prefix.is_empty() {
                 // Stale split data can be deleted.
                 if fsm.peer().storage().tablet_index() > tablet_index {
                     file_system::remove_dir_all(&path)?;
                 }
+            } else {
+                warn!(self.logger, "unexpected tablet prefix"; "path" => %path.display());
             }
-            // TODO: handle other prefix
         }
         // TODO: list all available tablets and destroy those which are not in the
         // peers.

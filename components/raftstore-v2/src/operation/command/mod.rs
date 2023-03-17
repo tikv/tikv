@@ -64,7 +64,8 @@ mod write;
 
 pub use admin::{
     report_split_init_finish, temp_split_path, AdminCmdResult, CatchUpLogs, CompactLogContext,
-    MergeContext, RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit, SPLIT_PREFIX,
+    MergeContext, RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit,
+    MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
 use pd_client::{BucketMeta, BucketStat};

@@ -11,8 +11,11 @@ use compact_log::CompactLogResult;
 use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
-pub use merge::{commit::CatchUpLogs, MergeContext};
 use merge::{commit::CommitMergeResult, prepare::PrepareMergeResult};
+pub use merge::{
+    commit::{CatchUpLogs, MERGE_IN_PROGRESS_PREFIX},
+    MergeContext, MERGE_SOURCE_PREFIX,
+};
 use protobuf::Message;
 use raftstore::{
     store::{cmd_resp, fsm::apply, msg::ErrorCallback},

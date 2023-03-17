@@ -20,7 +20,7 @@ use tikv_util::box_err;
 
 use crate::raft::Peer;
 
-const MERGE_SOURCE_PREFIX: &str = "merge-source";
+pub const MERGE_SOURCE_PREFIX: &str = "merge-source";
 
 // `index` is the commit index of `PrepareMergeRequest`, `commit` field of
 // `CommitMergeRequest`.

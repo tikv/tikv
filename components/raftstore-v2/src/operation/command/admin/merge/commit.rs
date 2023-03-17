@@ -110,11 +110,11 @@ pub struct CatchUpLogs {
     tx: oneshot::Sender<u64>,
 }
 
+pub const MERGE_IN_PROGRESS_PREFIX: &str = "merge-in-progress";
+
 struct MergeInProgressGuard(PathBuf);
 
 impl MergeInProgressGuard {
-    const PREFIX: &str = "merge-in-progress";
-
     // `index` is the commit index of `CommitMergeRequest`
     fn new<EK>(
         logger: &Logger,
@@ -123,7 +123,7 @@ impl MergeInProgressGuard {
         index: u64,
         tablet_path: &Path,
     ) -> io::Result<Option<Self>> {
-        let name = registry.tablet_name(Self::PREFIX, target_region_id, index);
+        let name = registry.tablet_name(MERGE_IN_PROGRESS_PREFIX, target_region_id, index);
         let marker_path = registry.tablet_root().join(name);
         if !marker_path.exists() {
             if tablet_path.exists() {
@@ -140,8 +140,8 @@ impl MergeInProgressGuard {
     }
 
     fn defuse(self) -> io::Result<()> {
-        fs::remove_file(&self.0)?;
-        fs::File::open(self.0.parent().unwrap()).and_then(|d| d.sync_all())
+        fs::remove_dir(&self.0)?;
+        file_system::sync_dir(self.0.parent().unwrap())
     }
 }
 
