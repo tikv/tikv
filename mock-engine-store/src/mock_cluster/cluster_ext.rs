@@ -73,7 +73,7 @@ impl ClusterExt {
                 )),
                 None => None,
             },
-            engine_store_ffi::ffi::RaftStoreProxyEngine::from_tiflash_engine(engines.kv.clone()),
+            None,
         ));
 
         let proxy_ref = proxy.as_ref();
@@ -91,13 +91,8 @@ impl ClusterExt {
         ));
 
         let engine_store_server_helper_ptr = &*engine_store_server_helper as *const _ as isize;
-        proxy
-            .kv_engine()
-            .write()
-            .unwrap()
-            .as_mut()
-            .unwrap()
-            .set_engine_store_server_helper(engine_store_server_helper_ptr);
+        // We don't set helper ptr inside `raftstore_proxy_engine`.
+        // Delay that to `create_ffi_helper_set`.
         let ffi_helper_set = FFIHelperSet {
             proxy,
             proxy_helper,
@@ -146,15 +141,7 @@ impl ClusterExt {
 
         // We can not use moved or cloned engines any more.
         let (helper_ptr, engine_store_hub) = {
-            let helper_ptr = ffi_helper_set
-                .proxy
-                .kv_engine()
-                .write()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .engine_store_server_helper();
-
+            let helper_ptr = ffi_helper_set.engine_store_server_helper_ptr;
             let helper = engine_store_ffi::ffi::gen_engine_store_server_helper(helper_ptr);
             let engine_store_hub = Arc::new(engine_store_ffi::engine::TiFlashEngineStoreHub {
                 engine_store_server_helper: helper,
@@ -171,7 +158,6 @@ impl ClusterExt {
             Some(engine_store_hub),
             Some(proxy_config_set),
         );
-
         ffi_helper_set.proxy.set_kv_engine(
             engine_store_ffi::ffi::RaftStoreProxyEngine::from_tiflash_engine(engines.kv.clone()),
         );

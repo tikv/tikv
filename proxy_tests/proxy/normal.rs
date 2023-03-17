@@ -7,7 +7,7 @@ use proxy_server::config::{
 };
 use tikv::config::{TikvConfig, LAST_CONFIG_FILE};
 
-use crate::proxy::*;
+use crate::utils::*;
 
 mod store {
     use super::*;
@@ -195,7 +195,7 @@ mod restart {
                 None,
                 Some(vec![eng_ids[0], eng_ids[1]]),
             );
-            let new_states = maybe_collect_states(&cluster, r1, None);
+            let new_states = maybe_collect_states(&cluster.cluster_ext, r1, None);
             // engine_3 has not applied snapshot.
             assert!(new_states.get(&eng_ids[2]).is_none());
             // engine_2 has applied snapshot.

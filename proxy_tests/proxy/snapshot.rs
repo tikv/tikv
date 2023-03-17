@@ -1,5 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::proxy::*;
+use crate::utils::*;
 
 // This is a panic while panic test, which we can not handle.
 // This double panic is due to:
@@ -41,7 +41,7 @@ fn test_delete_snapshot_after_apply() {
 
     std::thread::sleep(std::time::Duration::from_millis(1000));
     // Note there is no region 1 on engine_2.
-    let new_states = maybe_collect_states(&cluster, r1, None);
+    let new_states = maybe_collect_states(&cluster.cluster_ext, r1, None);
     assert!(new_states.get(&eng_ids[1]).is_none());
 
     // assert_eq!(new_states.get(&eng_ids[1]).unwrap().in_disk_region_state.

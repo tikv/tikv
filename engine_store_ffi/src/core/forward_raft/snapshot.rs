@@ -103,8 +103,8 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 region_id,
                 |info: MapEntry<u64, Arc<CachedRegionInfo>>| match info {
                     MapEntry::Occupied(o) => {
-                        let is_first_snapsot = !o.get().inited_or_fallback.load(Ordering::SeqCst);
-                        if is_first_snapsot {
+                        let is_first_snapshot = !o.get().inited_or_fallback.load(Ordering::SeqCst);
+                        if is_first_snapshot {
                             info!("fast path: prehandle first snapshot {}:{} {}", self.store_id, region_id, peer_id;
                                 "snap_key" => ?snap_key,
                                 "region_id" => region_id,
@@ -207,8 +207,8 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 region_id,
                 |info: MapEntry<u64, Arc<CachedRegionInfo>>| match info {
                     MapEntry::Occupied(mut o) => {
-                        let is_first_snapsot = !o.get().inited_or_fallback.load(Ordering::SeqCst);
-                        if is_first_snapsot {
+                        let is_first_snapshot = !o.get().inited_or_fallback.load(Ordering::SeqCst);
+                        if is_first_snapshot {
                             let last = o.get().snapshot_inflight.load(Ordering::SeqCst);
                             let total = o.get().fast_add_peer_start.load(Ordering::SeqCst);
                             let current = SystemTime::now()

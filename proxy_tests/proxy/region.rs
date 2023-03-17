@@ -3,7 +3,7 @@ use std::iter::FromIterator;
 
 use collections::HashSet;
 
-use crate::proxy::*;
+use crate::utils::*;
 
 #[test]
 fn test_handle_destroy() {
@@ -295,7 +295,7 @@ fn later_bootstrap_learner_peer(
     already_learner_count: usize,
 ) {
     // Check if the voters has correct learner peer.
-    let new_states = maybe_collect_states(&cluster, 1, Some(vec![1, 2, 3]));
+    let new_states = maybe_collect_states(&cluster.cluster_ext, 1, Some(vec![1, 2, 3]));
     assert_eq!(new_states.len(), 3);
     for i in new_states.keys() {
         assert_eq!(
@@ -354,7 +354,7 @@ fn test_add_delayed_started_learner_by_joint() {
     cluster.must_put(b"k4", b"v4");
     check_key(&cluster, b"k4", b"v4", Some(true), None, None);
 
-    let new_states = maybe_collect_states(&cluster, 1, None);
+    let new_states = maybe_collect_states(&cluster.cluster_ext, 1, None);
     assert_eq!(new_states.len(), 5);
     for i in new_states.keys() {
         assert_eq!(
@@ -428,7 +428,7 @@ fn recover_from_peer(cluster: &Cluster<NodeCluster>, from: u64, to: u64, region_
         },
     );
     {
-        let prev_states = maybe_collect_states(cluster, region_id, None);
+        let prev_states = maybe_collect_states(&cluster.cluster_ext, region_id, None);
         assert_eq!(
             prev_states.get(&from).unwrap().in_disk_apply_state,
             prev_states.get(&to).unwrap().in_disk_apply_state
@@ -505,7 +505,7 @@ fn test_add_delayed_started_learner_no_snapshot() {
     );
 
     // Check if every node has the correct configuation.
-    let new_states = maybe_collect_states(&cluster, 1, Some(vec![1, 2, 3, 5]));
+    let new_states = maybe_collect_states(&cluster.cluster_ext, 1, Some(vec![1, 2, 3, 5]));
     assert_eq!(new_states.len(), 4);
     for i in new_states.keys() {
         assert_eq!(
@@ -565,7 +565,7 @@ fn test_add_delayed_started_learner_snapshot() {
     // up.
     {
         must_put_and_check_key(&mut cluster, 21, 25, Some(true), None, Some(vec![1, 2, 3]));
-        let prev_states = maybe_collect_states(&cluster, 1, Some(vec![4]));
+        let prev_states = maybe_collect_states(&cluster.cluster_ext, 1, Some(vec![4]));
         assert!(
             force_compact_log(&mut cluster, b"k1", Some(vec![1, 2, 3]))
                 > prev_states
@@ -600,7 +600,7 @@ fn test_add_delayed_started_learner_snapshot() {
     );
 
     // Check if every node has the correct configuation.
-    let new_states = maybe_collect_states(&cluster, 1, Some(vec![1, 2, 3, 5]));
+    let new_states = maybe_collect_states(&cluster.cluster_ext, 1, Some(vec![1, 2, 3, 5]));
     assert_eq!(new_states.len(), 4);
     for i in new_states.keys() {
         assert_eq!(

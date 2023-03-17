@@ -14,9 +14,10 @@ use mock_engine_store::mock_cluster::v1::{
 };
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
-static INIT: Once = Once::new();
-use crate::proxy::{iter_ffi_helpers, FFIHelperSet};
 
+use crate::utils::{iter_ffi_helpers, FFIHelperSet};
+
+static INIT: Once = Once::new();
 pub fn init() {
     INIT.call_once(test_util::setup_for_ci);
 }

@@ -24,18 +24,6 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         }
     }
 
-    pub fn iter_engine_ffi_helpers(
-        &self,
-        store_ids: Option<Vec<u64>>,
-        f: &mut dyn FnMut(u64, &engine_store_ffi::TiFlashEngine, &mut FFIHelperSet),
-    ) {
-        self.cluster_ext
-            .iter_ffi_helpers(store_ids, &mut |id: u64, ffi: &mut FFIHelperSet| {
-                let engine = self.get_tiflash_engine(id);
-                f(id, engine, ffi);
-            });
-    }
-
     pub fn access_ffi_helpers(&self, f: &mut dyn FnMut(&mut HashMap<u64, FFIHelperSet>)) {
         self.cluster_ext.access_ffi_helpers(f)
     }

@@ -2,7 +2,7 @@
 
 use engine_traits::WriteBatchExt;
 
-use crate::proxy::*;
+use crate::utils::*;
 
 mod pagestorage {
     use super::*;
