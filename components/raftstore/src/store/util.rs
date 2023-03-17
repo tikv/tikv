@@ -6,7 +6,6 @@ use std::{
     collections::{HashMap, VecDeque},
     fmt,
     fmt::Display,
-    io::BufRead,
     option::Option,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
@@ -25,15 +24,12 @@ use kvproto::{
     },
     raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
-use protobuf::{self, wire_format::WireType, CodedInputStream, Message};
+use protobuf::{self, CodedInputStream, Message};
 use raft::{
     eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
     Changer, RawNode, INVALID_INDEX,
 };
-use raft_proto::{
-    eraftpb::{ConfChange, ConfChangeV2},
-    ConfChangeI,
-};
+use raft_proto::ConfChangeI;
 use tikv_util::{
     box_err,
     codec::number::{decode_u64, NumberEncoder},
@@ -47,9 +43,7 @@ use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 
 use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
-use crate::{
-    bytes_capacity, coprocessor::CoprocessorHost, store::snap::SNAPSHOT_VERSION, Error, Result,
-};
+use crate::{coprocessor::CoprocessorHost, store::snap::SNAPSHOT_VERSION, Error, Result};
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
 
@@ -751,139 +745,6 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
     Timespec::new(sec as i64, nsec as i32)
 }
 
-// ParsedEntry wraps raft-proto `Entry` and used to avoid parsing raft command
-// from entry's data repeatedly. The parsed command may be used in multiple
-// places, so cache it at the first place.
-pub struct ParsedEntry {
-    entry: Entry,
-    cmd: Option<RaftCmdRequest>,
-    conf_change: Option<ConfChangeV2>,
-    parsed: bool,
-}
-
-impl ParsedEntry {
-    pub fn new(entry: Entry) -> ParsedEntry {
-        ParsedEntry {
-            entry,
-            cmd: None,
-            conf_change: None,
-            parsed: false,
-        }
-    }
-
-    pub fn get_entry_type(&self) -> EntryType {
-        self.entry.get_entry_type()
-    }
-
-    pub fn get_index(&self) -> u64 {
-        self.entry.get_index()
-    }
-
-    pub fn get_term(&self) -> u64 {
-        self.entry.get_term()
-    }
-
-    pub fn compute_size(&self) -> u32 {
-        self.entry.compute_size()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entry.get_data().is_empty()
-    }
-
-    pub fn bytes_capacity(&self) -> usize {
-        bytes_capacity(&self.entry.data) + bytes_capacity(&self.entry.context)
-    }
-
-    fn parse(&mut self) {
-        assert!(!self.is_empty());
-
-        let data = self.entry.get_data();
-        let index = self.entry.get_index();
-        // lazy parse the cmd from entry context
-        let conf_change = match self.entry.get_entry_type() {
-            EntryType::EntryConfChange => {
-                let conf_change: ConfChange = parse_data_at(data, index);
-                Some(conf_change.into_v2())
-            }
-            EntryType::EntryConfChangeV2 => Some(parse_data_at(data, index)),
-            EntryType::EntryNormal => {
-                self.cmd = Some(parse_data_at(data, index));
-                None
-            }
-        };
-        if let Some(conf_change) = conf_change {
-            self.cmd = Some(parse_data_at(conf_change.get_context(), index));
-            self.conf_change = Some(conf_change);
-        }
-        self.parsed = true;
-    }
-
-    pub fn get_cmd(&mut self) -> &RaftCmdRequest {
-        if !self.parsed {
-            self.parse();
-        }
-        self.cmd.as_ref().unwrap()
-    }
-
-    pub fn take_cmd(&mut self) -> RaftCmdRequest {
-        if !self.parsed {
-            self.parse();
-        }
-        self.parsed = false;
-        self.cmd.take().unwrap()
-    }
-
-    pub fn take_conf_change(&mut self) -> (ConfChangeV2, RaftCmdRequest) {
-        if !self.parsed {
-            self.parse();
-        }
-        self.parsed = false;
-        (self.conf_change.take().unwrap(), self.cmd.take().unwrap())
-    }
-
-    pub fn can_witness_skip(&self) -> bool {
-        !has_admin_request(&self.entry)
-    }
-}
-
-fn has_admin_request(entry: &Entry) -> bool {
-    // need to handle ConfChange entry type
-    if entry.get_entry_type() != EntryType::EntryNormal {
-        return true;
-    }
-
-    // HACK: check admin request field in serialized data from `RaftCmdRequest`
-    // without deserializing all. It's done by checking the existence of the
-    // field number of `admin_request`.
-    // See the encoding in `write_to_with_cached_sizes()` of `RaftCmdRequest` in
-    // `raft_cmdpb.rs` for reference.
-    let mut is = CodedInputStream::from_bytes(entry.get_data());
-    if is.eof().unwrap() {
-        return false;
-    }
-    let (mut field_number, wire_type) = is.read_tag_unpack().unwrap();
-    // Header field is of number 1
-    if field_number == 1 {
-        if wire_type != WireType::WireTypeLengthDelimited {
-            panic!("unexpected wire type");
-        }
-        let len = is.read_raw_varint32().unwrap();
-        // skip parsing the content of `Header`
-        is.consume(len as usize);
-        // read next field number
-        (field_number, _) = is.read_tag_unpack().unwrap();
-    }
-
-    // `Requests` field is of number 2 and `AdminRequest` field is of number 3.
-    // - If the next field is 2, there must be no admin request as in one
-    //   `RaftCmdRequest`, either requests or admin_request is filled.
-    // - If the next field is 3, it's exactly an admin request.
-    // - If the next field is others, neither requests nor admin_request is filled,
-    //   so there is no admin request.
-    field_number == 3
-}
-
 pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
     if entry.get_entry_type() != EntryType::EntryNormal {
         return RaftRequestHeader::default();
@@ -909,10 +770,10 @@ pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
 /// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
 #[inline]
-pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64) -> T {
+pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: &str) -> T {
     let mut result = T::default();
     result.merge_from_bytes(data).unwrap_or_else(|e| {
-        panic!("{} data is corrupted : {:?}", index, e);
+        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
     });
     result
 }
@@ -1856,11 +1717,10 @@ pub fn validate_split_region(
 mod tests {
     use std::thread;
 
-    use bytes::Bytes;
     use engine_test::kv::KvTestEngine;
     use kvproto::{
         metapb::{self, RegionEpoch},
-        raft_cmdpb::{AdminRequest, CmdType, Request},
+        raft_cmdpb::AdminRequest,
     };
     use protobuf::Message as _;
     use raft::eraftpb::{ConfChangeType, Entry, Message, MessageType};
@@ -1939,53 +1799,6 @@ mod tests {
         // A new remote lease.
         let m1 = lease.maybe_new_remote_lease(1).unwrap();
         assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
-    }
-
-    #[test]
-    fn test_parsed_entry() {
-        let mut req = RaftCmdRequest::default();
-        let mut header = RaftRequestHeader::default();
-        header.set_resource_group_name("test".to_owned());
-        req.set_header(header);
-
-        let mut entry = Entry::new();
-        entry.set_term(1);
-        entry.set_index(2);
-        entry.set_entry_type(raft::eraftpb::EntryType::EntryNormal);
-        entry.set_data(req.write_to_bytes().unwrap().into());
-
-        let mut parsed = ParsedEntry::new(entry);
-        assert_eq!(parsed.get_term(), 1);
-        assert_eq!(parsed.get_index(), 2);
-        assert_eq!(
-            parsed.get_cmd().get_header().get_resource_group_name(),
-            "test"
-        );
-
-        let mut entry = Entry::new();
-        entry.set_term(1);
-        entry.set_index(2);
-        entry.set_entry_type(raft::eraftpb::EntryType::EntryConfChangeV2);
-        let mut cc = ConfChangeV2::new();
-        let mut ccs = eraftpb::ConfChangeSingle::default();
-        ccs.set_change_type(ConfChangeType::AddNode);
-        ccs.set_node_id(3);
-        cc.set_changes(vec![ccs].into());
-        cc.set_context(req.write_to_bytes().unwrap().into());
-        entry.set_data(cc.write_to_bytes().unwrap().into());
-
-        let mut parsed = ParsedEntry::new(entry);
-        let (conf_change, cmd) = parsed.take_conf_change();
-        assert_eq!(
-            conf_change.get_changes()[0].get_change_type(),
-            ConfChangeType::AddNode
-        );
-        assert_eq!(conf_change.get_changes()[0].get_node_id(), 3);
-        assert_eq!(cmd.get_header().get_resource_group_name(), "test");
-        assert_eq!(
-            parsed.get_cmd().get_header().get_resource_group_name(),
-            "test"
-        );
     }
 
     #[test]
@@ -2336,42 +2149,6 @@ mod tests {
         // leadership may have been changed away.
         check_term(&header, 9).unwrap_err();
         check_term(&header, 10).unwrap_err();
-    }
-
-    #[test]
-    fn test_has_admin_request() {
-        let mut entry = Entry::new();
-        let mut req = RaftCmdRequest::default();
-        entry.set_entry_type(EntryType::EntryNormal);
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(!has_admin_request(&entry));
-
-        req.mut_admin_request()
-            .set_cmd_type(AdminCmdType::CompactLog);
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(has_admin_request(&entry));
-
-        let mut req = RaftCmdRequest::default();
-        let mut request = Request::default();
-        request.set_cmd_type(CmdType::Put);
-        req.set_requests(vec![request].into());
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(!has_admin_request(&entry));
-
-        entry.set_entry_type(EntryType::EntryConfChange);
-        let conf_change = ConfChange::new();
-        let data = conf_change.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(has_admin_request(&entry));
-
-        entry.set_entry_type(EntryType::EntryConfChangeV2);
-        let conf_change_v2 = ConfChangeV2::new();
-        let data = conf_change_v2.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(has_admin_request(&entry));
     }
 
     #[test]
