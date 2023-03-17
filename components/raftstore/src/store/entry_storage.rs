@@ -30,7 +30,11 @@ use super::{
     metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM,
 };
-use crate::{bytes_capacity, store::ReadTask, Result};
+use crate::{
+    bytes_capacity,
+    store::{util::ParsedEntry, ReadTask},
+    Result,
+};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -54,7 +58,7 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
 pub struct CachedEntries {
     pub range: Range<u64>,
     // Entries and dangle size for them. `dangle` means not in entry cache.
-    entries: Arc<Mutex<(Vec<Entry>, usize)>>,
+    entries: Arc<Mutex<(Vec<ParsedEntry>, usize)>>,
 }
 
 impl CachedEntries {
@@ -64,21 +68,24 @@ impl CachedEntries {
         let end = entries.last().map(|x| x.index).unwrap() + 1;
         let range = Range { start, end };
         CachedEntries {
-            entries: Arc::new(Mutex::new((entries, 0))),
+            entries: Arc::new(Mutex::new((
+                entries.into_iter().map(|e| ParsedEntry::new(e)).collect(),
+                0,
+            ))),
             range,
         }
     }
 
-    pub fn iter_entries(&self, mut f: impl FnMut(&Entry)) {
-        let entries = self.entries.lock().unwrap();
-        for entry in &entries.0 {
+    pub fn iter_entries_mut(&self, mut f: impl FnMut(&mut ParsedEntry)) {
+        let mut entries = self.entries.lock().unwrap();
+        for entry in &mut entries.0 {
             f(entry);
         }
     }
 
     /// Take cached entries and dangle size for them. `dangle` means not in
     /// entry cache.
-    pub fn take_entries(&self) -> (Vec<Entry>, usize) {
+    pub fn take_entries(&self) -> (Vec<ParsedEntry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
     }
 }
@@ -325,8 +332,8 @@ impl EntryCache {
         let dangle_size = {
             let mut guard = entries.entries.lock().unwrap();
 
-            let last_idx = guard.0.last().map(|e| e.index).unwrap();
-            let cache_front = match self.cache.front().map(|e| e.index) {
+            let last_idx = guard.0.last().map(|e| e.get_index()).unwrap();
+            let cache_front = match self.cache.front().map(|e| e.get_index()) {
                 Some(i) => i,
                 None => u64::MAX,
             };
@@ -334,7 +341,10 @@ impl EntryCache {
             let dangle_range = if last_idx < cache_front {
                 // All entries are not in entry cache.
                 0..guard.0.len()
-            } else if let Ok(i) = guard.0.binary_search_by(|e| e.index.cmp(&cache_front)) {
+            } else if let Ok(i) = guard
+                .0
+                .binary_search_by(|e| e.get_index().cmp(&cache_front))
+            {
                 // Some entries are in entry cache.
                 0..i
             } else {
@@ -344,7 +354,7 @@ impl EntryCache {
 
             let mut size = 0;
             for e in &guard.0[dangle_range] {
-                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+                size += e.bytes_capacity();
             }
             guard.1 = size;
             size
@@ -960,7 +970,12 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                 .raft_engine
                 .get_entry(self.region_id, idx)
                 .unwrap()
-                .unwrap()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "region_id={}, peer_id={}, idx={idx}",
+                        self.region_id, self.peer_id
+                    )
+                })
                 .get_term())
         }
     }
