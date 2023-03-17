@@ -74,7 +74,7 @@ impl SchedPool {
         pool_size: usize,
         reporter: R,
         feature_gate: FeatureGate,
-        resource_ctl: Option<Arc<ResourceController>>,
+        _resource_ctl: Option<Arc<ResourceController>>,
     ) -> Self {
         let builder = |pool_size: usize, name_prefix: &str| {
             let engine = Arc::new(Mutex::new(engine.clone()));
