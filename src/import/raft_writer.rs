@@ -36,7 +36,7 @@ async fn acquire_semaphore(smp: &Arc<Semaphore>) -> Option<SemaphorePermit<'_>> 
 }
 
 #[derive(Clone, Default)]
-pub struct ThrottledTlsEngineWriter(Arc<Mutex<Inner>>);
+pub(crate) struct ThrottledTlsEngineWriter(Arc<Mutex<Inner>>);
 
 impl ThrottledTlsEngineWriter {
     /// Write into the thread local storage engine.
@@ -104,14 +104,9 @@ impl ThrottledTlsEngineWriter {
             return false;
         }
 
-        self.gc();
-        true
-    }
-
-    fn gc(&self) {
         let mut this = self.0.lock().unwrap();
-
-        this.sems.retain(|_, v| Arc::strong_count(v) > 1)
+        this.sems.retain(|_, v| Arc::strong_count(v) > 1);
+        true
     }
 
     #[cfg(test)]

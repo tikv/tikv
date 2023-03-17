@@ -39,7 +39,7 @@ use tikv_util::{
 use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
-use super::{make_rpc_error, raft_applier, LocalTablets};
+use super::{make_rpc_error, raft_writer, LocalTablets};
 use crate::{
     import::duplicate_detect::DuplicateDetector,
     server::CONFIG_ROCKSDB_GAUGE,
@@ -47,7 +47,7 @@ use crate::{
 };
 
 /// The concurrency of sending raft request for every `apply` requests.
-/// This value `4` would mainly influence the speed of applying a huge file:
+/// This value `16` would mainly influence the speed of applying a huge file:
 /// when we downloading the files into disk, loading all of them into memory may
 /// lead to OOM. This would be able to back-pressure them.
 /// (only log files greater than 16 * 7M = 112M would be throttled by this.)
@@ -112,7 +112,7 @@ pub struct ImportSstService<E: Engine> {
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
 
-    applier: raft_applier::ThrottledTlsEngineWriter,
+    applier: raft_writer::ThrottledTlsEngineWriter,
 }
 
 struct RequestCollector {
@@ -305,7 +305,7 @@ impl<E: Engine> ImportSstService<E> {
             importer.start_switch_mode_check(threads.handle(), tablet.clone());
         }
         threads.spawn(Self::tick(importer.clone()));
-        let applier = raft_applier::ThrottledTlsEngineWriter::default();
+        let applier = raft_writer::ThrottledTlsEngineWriter::default();
         let gc_handle = applier.clone();
         threads.spawn(async move {
             while gc_handle.try_gc() {
@@ -479,7 +479,7 @@ impl<E: Engine> ImportSstService<E> {
     async fn apply_imp(
         mut req: ApplyRequest,
         importer: Arc<SstImporter>,
-        handle: raft_applier::ThrottledTlsEngineWriter,
+        handle: raft_writer::ThrottledTlsEngineWriter,
         limiter: Limiter,
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {

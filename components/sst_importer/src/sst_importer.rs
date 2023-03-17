@@ -159,8 +159,7 @@ pub struct SstImporter {
 
     cached_storage: CacheMap<StorageBackend>,
     // We need to keep reference to the runtime so background tasks won't be dropped.
-    #[allow(dead_code)]
-    download_rt: Runtime,
+    _download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: Arc<AtomicU64>,
     mem_limit: ReadableSize,
@@ -204,7 +203,7 @@ impl SstImporter {
             compression_types: HashMap::with_capacity(2),
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
-            download_rt,
+            _download_rt: download_rt,
             mem_use: Arc::new(AtomicU64::new(0)),
             mem_limit: ReadableSize(memory_limit as u64),
         })
@@ -379,7 +378,7 @@ impl SstImporter {
         speed_limiter: &Limiter,
         restore_config: external_storage_export::RestoreConfig,
     ) -> Result<()> {
-        self.download_rt
+        self._download_rt
             .block_on(self.async_download_file_from_external_storage(
                 file_length,
                 src_file_name,
@@ -972,7 +971,7 @@ impl SstImporter {
         speed_limiter: Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
-        self.download_rt.block_on(self.download_ext(
+        self._download_rt.block_on(self.download_ext(
             meta,
             backend,
             name,
