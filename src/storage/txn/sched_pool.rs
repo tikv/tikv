@@ -102,19 +102,20 @@ impl SchedPool {
                     tls_flush(&reporter);
                 })
         };
-        if let Some(ref r) = resource_ctl {
-            SchedPool::Priority {
-                worker_pool: builder(pool_size, "sched-worker-pool")
-                    .build_priority_future_pool(r.clone()),
-                resource_ctl: r.clone(),
-            }
-        } else {
-            SchedPool::Vanilla {
-                worker_pool: builder(pool_size, "sched-worker-pool").build_future_pool(),
-                high_worker_pool: builder(std::cmp::max(1, pool_size / 2), "sched-high-pri-pool")
-                    .build_future_pool(),
-            }
+        // FIXME: for performance issue, disable priority pool temporarily
+        // if let Some(ref r) = resource_ctl {
+        //     SchedPool::Priority {
+        //         worker_pool: builder(pool_size, "sched-worker-pool")
+        //             .build_priority_future_pool(r.clone()),
+        //         resource_ctl: r.clone(),
+        //     }
+        // } else {
+        SchedPool::Vanilla {
+            worker_pool: builder(pool_size, "sched-worker-pool").build_future_pool(),
+            high_worker_pool: builder(std::cmp::max(1, pool_size / 2), "sched-high-pri-pool")
+                .build_future_pool(),
         }
+        // }
     }
 
     pub fn spawn(
