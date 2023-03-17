@@ -393,6 +393,10 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 continue;
             }
             let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
+            // Keep the checkpoint even if source is destroyed.
+            if prefix == MERGE_SOURCE_PREFIX {
+                continue;
+            }
             let fsm = match peers.get(&region_id) {
                 Some((_, fsm)) => fsm,
                 None => {
@@ -406,7 +410,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             if prefix == SPLIT_PREFIX {
                 file_system::remove_dir_all(&path)?;
                 continue;
-            } else if prefix == MERGE_IN_PROGRESS_PREFIX || prefix == MERGE_SOURCE_PREFIX {
+            } else if prefix == MERGE_IN_PROGRESS_PREFIX {
                 continue;
             } else if prefix.is_empty() {
                 // Stale split data can be deleted.

@@ -483,10 +483,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         state.set_state(PeerState::Normal);
         assert!(!state.has_merge_state());
         state.set_tablet_index(index);
-        let mut removed_records: Vec<_> = state.get_removed_records().into();
+        let mut removed_records: Vec<_> = state.take_removed_records().into();
         removed_records.append(&mut source_state.get_removed_records().into());
         state.set_removed_records(removed_records.into());
-        let mut merged_records: Vec<_> = state.get_merged_records().into();
+        let mut merged_records: Vec<_> = state.take_merged_records().into();
         merged_records.append(&mut source_state.get_merged_records().into());
         state.set_merged_records(merged_records.into());
         let mut merged_record = MergedRecord::default();
