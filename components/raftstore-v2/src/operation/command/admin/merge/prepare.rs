@@ -245,7 +245,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if entry.get_data().is_empty() {
                 continue;
             }
-            let cmd: RaftCmdRequest = util::parse_data_at(entry.get_data(), entry.get_index());
+            let cmd: RaftCmdRequest =
+                util::parse_data_at(entry.get_data(), entry.get_index(), "tag");
             if !cmd.has_admin_request() {
                 continue;
             }
