@@ -7,7 +7,7 @@ use std::{
 };
 
 use online_config::{self, OnlineConfig};
-use tikv_util::config::ReadableDuration;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -74,7 +74,7 @@ impl online_config::ConfigManager for ConfigManager {
             "change" => ?change,
         );
 
-        let mut cfg = self.0.read().unwrap().clone();
+        let mut cfg = self.rl().clone();
         cfg.update(change)?;
 
         if let Err(e) = cfg.validate() {
@@ -85,7 +85,7 @@ impl online_config::ConfigManager for ConfigManager {
             return Err(e);
         }
 
-        *self.write().unwrap() = cfg;
+        *self.wl() = cfg;
         Ok(())
     }
 }

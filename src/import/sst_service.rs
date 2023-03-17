@@ -35,6 +35,7 @@ use tikv_util::{
     future::create_stream_with_buffer,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
+    HandyRwLock,
 };
 use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
@@ -321,7 +322,7 @@ impl<E: Engine> ImportSstService<E> {
         loop {
             sleep(Duration::from_secs(10)).await;
 
-            importer.update_config_memory_use_ratio(cfg.clone());
+            importer.update_config_memory_use_ratio(&cfg);
             importer.shrink_by_tick();
         }
     }
@@ -551,10 +552,8 @@ macro_rules! impl_write {
         ) {
             let import = self.importer.clone();
             let tablets = self.tablets.clone();
-            let (rx, buf_driver) = create_stream_with_buffer(
-                stream,
-                self.cfg.0.as_ref().read().unwrap().stream_channel_window,
-            );
+            let (rx, buf_driver) =
+                create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
             let mut rx = rx.map_err(Error::from);
 
             let timer = Instant::now_coarse();
@@ -663,7 +662,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
         let (rx, buf_driver) =
-            create_stream_with_buffer(stream, self.cfg.read().unwrap().stream_channel_window);
+            create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
         let mut map_rx = rx.map_err(Error::from);
 
         let handle_task = async move {

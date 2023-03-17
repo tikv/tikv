@@ -38,6 +38,7 @@ use tikv_util::{
     },
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
+    HandyRwLock,
 };
 use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, TimeStamp, WriteRef};
@@ -590,8 +591,8 @@ impl SstImporter {
         Ok(())
     }
 
-    pub fn update_config_memory_use_ratio(&self, cfg_mgr: ImportConfigManager) {
-        let mem_ratio = cfg_mgr.read().unwrap().memory_use_ratio;
+    pub fn update_config_memory_use_ratio(&self, cfg_mgr: &ImportConfigManager) {
+        let mem_ratio = cfg_mgr.rl().memory_use_ratio;
         let memory_limit = Self::calcualte_usage_mem(mem_ratio);
 
         if self.mem_limit.load(Ordering::SeqCst) != memory_limit {
@@ -2000,13 +2001,17 @@ mod tests {
         // create config manager and update config.
         let mut cfg_mgr = ImportConfigManager::new(cfg);
         cfg_mgr.dispatch(change).unwrap();
-        importer.update_config_memory_use_ratio(cfg_mgr);
+        importer.update_config_memory_use_ratio(&cfg_mgr);
 
         let mem_limit_new = importer.mem_limit.load(Ordering::SeqCst);
         assert!(mem_limit_old > mem_limit_new);
-
-        let delt = (mem_limit_old - mem_limit_new * 3) as f64 / mem_limit_old as f64;
-        assert!(delt < 0.000001)
+        assert_eq!(
+            mem_limit_old / 3,
+            mem_limit_new,
+            "mem_limit_old / 3 = {} mem_limit_new = {}",
+            mem_limit_old / 3,
+            mem_limit_new
+        );
     }
 
     #[test]
