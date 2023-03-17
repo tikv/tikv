@@ -306,9 +306,9 @@ impl<E: Engine> ImportSstService<E> {
         }
         threads.spawn(Self::tick(importer.clone()));
         let applier = raft_applier::ThrottledTlsEngineWriter::default();
-        let gc_handle = applier.gc_handle();
+        let gc_handle = applier.clone();
         threads.spawn(async move {
-            while gc_handle.gc() {
+            while gc_handle.try_gc() {
                 tokio::time::sleep(Duration::from_secs(300)).await;
             }
         });

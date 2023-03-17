@@ -4,7 +4,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Mutex},
 };
 
 use futures::{Stream, StreamExt};
@@ -12,7 +12,7 @@ use kvproto::kvrpcpb::Context;
 use sst_importer::metrics::{APPLIER_ENGINE_REQUEST_DURATION, APPLIER_EVENT, IMPORTER_APPLY_BYTES};
 use tikv_kv::{with_tls_engine, Engine, WriteData, WriteEvent};
 use tikv_util::{fut, time::Instant};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::storage;
 
@@ -27,31 +27,16 @@ async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> sto
 
 const MAX_CONCURRENCY_PER_REGION: usize = 16;
 
-async fn acquire_semaphore(smp: &Arc<Semaphore>) -> Option<OwnedSemaphorePermit> {
-    if let Ok(pmt) = Arc::clone(smp).try_acquire_owned() {
+async fn acquire_semaphore(smp: &Arc<Semaphore>) -> Option<SemaphorePermit<'_>> {
+    if let Ok(pmt) = smp.try_acquire() {
         return Some(pmt);
     }
     APPLIER_EVENT.with_label_values(&["raft-throttled"]).inc();
-    Arc::clone(smp).acquire_owned().await.ok()
+    smp.acquire().await.ok()
 }
 
-#[repr(transparent)]
 #[derive(Clone, Default)]
 pub struct ThrottledTlsEngineWriter(Arc<Mutex<Inner>>);
-
-pub struct GcHandle(Weak<Mutex<Inner>>);
-
-impl GcHandle {
-    pub fn gc(&self) -> bool {
-        match Weak::upgrade(&self.0) {
-            Some(x) => {
-                ThrottledTlsEngineWriter(x).gc();
-                true
-            }
-            None => false,
-        }
-    }
-}
 
 impl ThrottledTlsEngineWriter {
     /// Write into the thread local storage engine.
@@ -108,14 +93,25 @@ impl ThrottledTlsEngineWriter {
         }
     }
 
+    /// try to trigger a run of GC.
+    ///
+    /// # Returns
+    ///
+    /// If we still need to do keep doing GC (there are other references to the
+    /// handle), return `true`, otherwise `false`.
+    pub fn try_gc(&self) -> bool {
+        if Arc::strong_count(&self.0) == 1 {
+            return false;
+        }
+
+        self.gc();
+        true
+    }
+
     fn gc(&self) {
         let mut this = self.0.lock().unwrap();
 
         this.sems.retain(|_, v| Arc::strong_count(v) > 1)
-    }
-
-    pub fn gc_handle(&self) -> GcHandle {
-        GcHandle(Arc::downgrade(&self.0))
     }
 
     #[cfg(test)]
@@ -434,11 +430,11 @@ mod test {
             fut2.await;
         });
 
-        let hnd = suite.handle.gc_handle();
-        assert!(hnd.gc());
+        let hnd = suite.handle.clone();
+        assert!(hnd.try_gc());
         assert_eq!(suite.handle.inspect_worker(), 0);
 
         drop(suite);
-        assert!(!hnd.gc());
+        assert!(!hnd.try_gc());
     }
 }
