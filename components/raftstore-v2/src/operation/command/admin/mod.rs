@@ -10,7 +10,10 @@ pub use compact_log::CompactLogContext;
 use compact_log::CompactLogResult;
 use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
+use kvproto::{
+    raft_cmdpb::{AdminCmdType, RaftCmdRequest},
+    raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
+};
 use merge::prepare::PrepareMergeResult;
 pub use merge::MergeContext;
 use protobuf::Message;
@@ -133,15 +136,38 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 return;
                             }
 
+                            let region_id = self.region().get_id();
                             self.set_tablet_being_flushed(true);
                             ctx.schedulers
                                 .tablet_flush
                                 .schedule(crate::TabletFlushTask::TabletFlush {
-                                    req,
+                                    region_id,
+                                    req: Some(req),
+                                    is_leader: true,
                                     applied_index: self.storage().apply_state().get_applied_index(),
-                                    ch,
+                                    ch: Some(ch),
                                 })
                                 .unwrap(); // todo
+
+                            let peers = self.region().get_peers();
+                            for p in peers {
+                                if p == self.peer() {
+                                    continue;
+                                }
+                                let mut msg = RaftMessage::default();
+                                msg.set_region_id(region_id);
+                                msg.set_from_peer(self.peer().clone());
+                                msg.set_to_peer(p.clone());
+                                msg.set_region_epoch(self.region().get_region_epoch().clone());
+                                let extra_msg = msg.mut_extra_msg();
+                                extra_msg.set_type(ExtraMessageType::MsgFlushMemtable);
+                                let mut flush_memtable = FlushMemtable::new();
+                                flush_memtable.set_region_id(region_id);
+                                extra_msg.set_flush_memtable(flush_memtable);
+
+                                let _ = ctx.router.send_raft_message(Box::new(msg));
+                            }
+
                             return;
                         }
 

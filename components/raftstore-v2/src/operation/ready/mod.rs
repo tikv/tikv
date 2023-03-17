@@ -213,7 +213,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.on_gc_peer_request(ctx, &msg);
                     return;
                 }
-                _ => (),
+                ExtraMessageType::MsgFlushMemtable => {
+                    let region_epoch = msg.as_ref().get_region_epoch();
+                    if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
+                        return;
+                    }
+                    ctx.schedulers
+                        .tablet_flush
+                        .schedule(crate::TabletFlushTask::TabletFlush {
+                            region_id: self.region().get_id(),
+                            req: None,
+                            is_leader: false,
+                            applied_index: self.storage().apply_state().get_applied_index(),
+                            ch: None,
+                        })
+                        .unwrap(); // todo
+                    return;
+                }
+                _ => {}
             }
         }
         if !msg.has_region_epoch() {
