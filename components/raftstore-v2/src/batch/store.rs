@@ -414,6 +414,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     file_system::remove_dir_all(&path)?;
                 }
             } else {
+                debug_assert!(false, "unexpected tablet prefix: {}", path.display());
                 warn!(self.logger, "unexpected tablet prefix"; "path" => %path.display());
             }
         }

@@ -145,6 +145,10 @@ impl MergeInProgressGuard {
     }
 }
 
+fn commit_of_merge(r: &CommitMergeRequest) -> u64 {
+    r.get_source_state().get_merge_state().get_commit()
+}
+
 // Source peer initiates commit merge on target peer.
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // Called after applying `PrepareMerge`.
@@ -256,11 +260,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             Some(false) => {
                 let commit_merge = req.get_admin_request().get_commit_merge();
-                let source_id = commit_merge.get_source().get_id();
+                let source_id = commit_merge.get_source_state().get_region().get_id();
                 let _ = store_ctx.router.force_send(
                     source_id,
                     PeerMsg::RejectCommitMerge {
-                        index: commit_merge.get_commit(),
+                        index: commit_of_merge(commit_merge),
                     },
                 );
             }
@@ -353,10 +357,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // Note: compared to v1, doesn't validate region state from kvdb any more.
         let reg = self.tablet_registry();
         let merge = req.get_commit_merge();
+        let merge_commit = commit_of_merge(merge);
         let source_state = merge.get_source_state();
-        let commit = source_state.get_merge_state().get_commit();
         let source_region = source_state.get_region();
-        let source_path = merge_source_path(reg, source_region.get_id(), commit);
+        let source_path = merge_source_path(reg, source_region.get_id(), merge_commit);
         let mut source_safe_ts = 0;
 
         let mut start_time = Instant::now_coarse();
@@ -391,7 +395,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         info!(
             self.logger,
             "execute CommitMerge";
-            "commit" => commit,
+            "commit" => merge_commit,
             "entries" => merge.get_entries().len(),
             "index" => index,
             "source_region" => ?source_region,
@@ -501,7 +505,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             AdminResponse::default(),
             AdminCmdResult::CommitMerge(CommitMergeResult {
                 index,
-                prepare_merge_index: commit,
+                prepare_merge_index: merge_commit,
                 source_path,
                 region_state: self.region_state().clone(),
                 source: source_region.to_owned(),
@@ -521,7 +525,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         catch_up_logs: CatchUpLogs,
     ) {
-        let source_id = catch_up_logs.merge.get_source().get_id();
+        let source_id = catch_up_logs.merge.get_source_state().get_region().get_id();
         assert_eq!(catch_up_logs.target_region_id, self.region_id());
         let _ = store_ctx
             .router
@@ -534,7 +538,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut catch_up_logs: CatchUpLogs,
     ) {
-        let source_id = catch_up_logs.merge.get_source().get_id();
+        let source_id = catch_up_logs.merge.get_source_state().get_region().get_id();
         if source_id != self.region_id() {
             slog_panic!(
                 self.logger,
@@ -577,7 +581,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     fn catch_up_logs_ready(&self, catch_up_logs: &CatchUpLogs) -> bool {
         if let Some(state) = self.applied_merge_state()
-            && state.get_commit() == catch_up_logs.merge.get_commit()
+            && state.get_commit() == commit_of_merge(&catch_up_logs.merge)
         {
             assert_eq!(
                 state.get_target().get_id(),
@@ -591,18 +595,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
+        let merge_commit = commit_of_merge(merge);
         if entries.is_empty() {
             // Though the entries is empty, it is possible that one source peer has caught
             // up the logs but commit index is not updated. If other source peers are
             // already destroyed, so the raft group will not make any progress, namely the
             // source peer can not get the latest commit index anymore.
             // Here update the commit index to let source apply rest uncommitted entries.
-            return if merge.get_commit() > self.raft_group().raft.raft_log.committed {
-                self.raft_group_mut()
-                    .raft
-                    .raft_log
-                    .commit_to(merge.get_commit());
-                Some(merge.get_commit())
+            return if merge_commit > self.raft_group().raft.raft_log.committed {
+                self.raft_group_mut().raft.raft_log.commit_to(merge_commit);
+                Some(merge_commit)
             } else {
                 None
             };
@@ -614,7 +616,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.logger,
             "append merge entries";
             "log_index" => log_idx,
-            "merge_commit" => merge.get_commit(),
+            "merge_commit" => merge_commit,
             "commit_index" => self.raft_group().raft.raft_log.committed,
         );
         if log_idx < self.raft_group().raft.raft_log.committed {
@@ -650,7 +652,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group_mut()
             .raft
             .raft_log
-            .maybe_append(log_idx, log_term, merge.get_commit(), entries)
+            .maybe_append(log_idx, log_term, merge_commit, entries)
             .map(|(_, last_index)| last_index)
     }
 
