@@ -391,6 +391,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         log_index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
+        fail_point!(
+            "on_apply_batch_split",
+            self.peer().get_store_id() == 3,
+            |_| { unreachable!() }
+        );
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let region = self.region();
@@ -603,7 +608,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
         self.storage_mut().set_has_dirty_data(true);
-        let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
+
+        fail_point!("before_cluster_shutdown1");
+        let mailbox = {
+            match store_ctx.router.mailbox(self.region_id()) {
+                Some(mailbox) => mailbox,
+                None => {
+                    // None means the node is shutdown concurrently and thus the
+                    // mailboxes in router have been cleared
+                    assert!(
+                        store_ctx.router.is_shutdown(),
+                        "{} router should have been closed",
+                        SlogFormat(&self.logger)
+                    );
+                    return;
+                }
+            }
+        };
         let tablet_index = res.tablet_index;
         let _ = store_ctx
             .schedulers
@@ -641,16 +662,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             match store_ctx.router.force_send(new_region_id, split_init) {
                 Ok(_) => {}
                 Err(SendError(PeerMsg::SplitInit(msg))) => {
-                    store_ctx
+                    fail_point!("before_cluster_shutdown2", |_| {});
+                    if let Err(e) = store_ctx
                         .router
                         .force_send_control(StoreMsg::SplitInit(msg))
-                        .unwrap_or_else(|e| {
-                            slog_panic!(
-                                self.logger,
-                                "fails to send split peer intialization msg to store";
-                                "error" => ?e,
-                            )
-                        });
+                    {
+                        if store_ctx.router.is_shutdown() {
+                            return;
+                        }
+                        slog_panic!(
+                            self.logger,
+                            "fails to send split peer intialization msg to store";
+                            "error" => ?e,
+                        );
+                    }
                 }
                 _ => unreachable!(),
             }
@@ -672,7 +697,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         mut split_init: Box<SplitInit>,
     ) {
         let region_id = split_init.region.id;
-        if self.storage().is_initialized() && self.persisted_index() >= RAFT_INIT_LOG_INDEX {
+        let peer_id = split_init
+            .region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == self.peer().get_store_id())
+            .unwrap()
+            .get_id();
+
+        // If peer_id in `split_init` is less than the current peer_id, the conf change
+        // for the peer should have occurred and we should just report finish to
+        // the source region of this out of dated peer initialization.
+        if self.storage().is_initialized() && self.persisted_index() >= RAFT_INIT_LOG_INDEX
+            || peer_id < self.peer().get_id()
+        {
             // Race with split operation. The tablet created by split will eventually be
             // deleted. We don't trim it.
             report_split_init_finish(store_ctx, split_init.derived_region_id, region_id, true);
@@ -731,7 +769,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             } else {
                 // None means the node is shutdown concurrently and thus the
                 // mailboxes in router have been cleared
-                assert!(store_ctx.router.is_shutdown());
+                assert!(
+                    store_ctx.router.is_shutdown(),
+                    "{} router should have been closed",
+                    SlogFormat(&self.logger)
+                );
                 return;
             }
         }

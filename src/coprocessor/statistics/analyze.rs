@@ -376,6 +376,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
 
         let mut is_drained = false;
         let mut collector = self.new_collector();
+        let mut ctx = EvalContext::default();
         while !is_drained {
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             let mut read_size: usize = 0;
@@ -400,7 +401,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         columns_slice[i].encode(
                             *logical_row,
                             &self.columns_info[i],
-                            &mut EvalContext::default(),
+                            &mut ctx,
                             &mut column_vals[i],
                         )?;
                         if self.columns_info[i].as_accessor().is_string_like() {
@@ -408,7 +409,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                                 TT, match self.columns_info[i].as_accessor().collation()? {
                                     Collation::TT => {
                                         let mut mut_val = &column_vals[i][..];
-                                        let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.columns_info[i])?;
+                                        let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &self.columns_info[i])?;
                                         if decoded_val == Datum::Null {
                                             collation_key_vals[i].clone_from(&column_vals[i]);
                                         } else {
@@ -449,6 +450,24 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .get(ThrottleType::analyze_full_sampling)
                     .inc_by(quota_delay.as_micros() as u64);
             }
+        }
+        for i in 0..self.column_groups.len() {
+            let offsets = self.column_groups[i].get_column_offsets();
+            if offsets.len() != 1 {
+                continue;
+            }
+            // For the single-column group, its fm_sketch is the same as that of the
+            // corresponding column. Hence, we don't maintain its fm_sketch in
+            // collect_column_group. We just copy the corresponding column's fm_sketch after
+            // iterating all rows. Also, we can directly copy total_size and null_count.
+            let col_pos = offsets[0] as usize;
+            let col_group_pos = self.columns_info.len() + i;
+            collector.mut_base().fm_sketches[col_group_pos] =
+                collector.mut_base().fm_sketches[col_pos].clone();
+            collector.mut_base().null_count[col_group_pos] =
+                collector.mut_base().null_count[col_pos];
+            collector.mut_base().total_sizes[col_group_pos] =
+                collector.mut_base().total_sizes[col_pos];
         }
         Ok(AnalyzeSamplingResult::new(collector))
     }
@@ -527,37 +546,29 @@ impl BaseRowSampleCollector {
         let col_len = columns_val.len();
         for i in 0..column_groups.len() {
             let offsets = column_groups[i].get_column_offsets();
-            let mut has_null = true;
+            if offsets.len() == 1 {
+                // For the single-column group, its fm_sketch is the same as that of the
+                // corresponding column. Hence, we don't need to maintain its
+                // fm_sketch. We just copy the corresponding column's fm_sketch after iterating
+                // all rows. Also, we can directly copy total_size and null_count.
+                continue;
+            }
+            // We don't maintain the null count information for the multi-column group.
             for j in offsets {
                 if columns_val[*j as usize][0] == NIL_FLAG {
                     continue;
                 }
-                has_null = false;
                 self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64 - 1
             }
-            // We only maintain the null count for single column case.
-            if has_null && offsets.len() == 1 {
-                self.null_count[col_len + i] += 1;
-                continue;
-            }
-            if offsets.len() == 1 {
-                let offset = offsets[0] as usize;
-                if columns_info[offset].as_accessor().is_string_like() {
-                    self.fm_sketches[col_len + i].insert(&collation_keys_val[offset]);
+            let mut hasher = Hasher128::with_seed(0);
+            for j in offsets {
+                if columns_info[*j as usize].as_accessor().is_string_like() {
+                    hasher.write(&collation_keys_val[*j as usize]);
                 } else {
-                    self.fm_sketches[col_len + i].insert(&columns_val[offset]);
+                    hasher.write(&columns_val[*j as usize]);
                 }
-            } else {
-                let mut hasher = Hasher128::with_seed(0);
-                for j in offsets {
-                    if columns_info[*j as usize].as_accessor().is_string_like() {
-                        hasher.write(&collation_keys_val[*j as usize]);
-                    } else {
-                        hasher.write(&columns_val[*j as usize]);
-                    }
-                }
-                self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
             }
+            self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
         }
     }
 
@@ -885,6 +896,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
         let mut common_handle_hist = Histogram::new(self.max_bucket_size);
         let mut common_handle_cms = CmSketch::new(self.cm_sketch_depth, self.cm_sketch_width);
         let mut common_handle_fms = FmSketch::new(self.max_fm_sketch_size);
+        let mut ctx = EvalContext::default();
         while !is_drained {
             let result = self.data.next_batch(BATCH_MAX_SIZE).await;
             is_drained = result.is_drained?.stop();
@@ -894,12 +906,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
             if columns_without_handle_len + 1 == columns_slice.len() {
                 for logical_row in &result.logical_rows {
                     let mut data = vec![];
-                    columns_slice[0].encode(
-                        *logical_row,
-                        &columns_info[0],
-                        &mut EvalContext::default(),
-                        &mut data,
-                    )?;
+                    columns_slice[0].encode(*logical_row, &columns_info[0], &mut ctx, &mut data)?;
                     pk_builder.append(&data, false);
                 }
                 columns_slice = &columns_slice[1..];
@@ -919,7 +926,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
                         columns_slice[i].encode(
                             *logical_row,
                             &columns_info[i],
-                            &mut EvalContext::default(),
+                            &mut ctx,
                             &mut handle_col_val,
                         )?;
                         data.extend_from_slice(&handle_col_val);
@@ -964,12 +971,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
             for (i, collector) in collectors.iter_mut().enumerate() {
                 for logical_row in &result.logical_rows {
                     let mut val = vec![];
-                    columns_slice[i].encode(
-                        *logical_row,
-                        &columns_info[i],
-                        &mut EvalContext::default(),
-                        &mut val,
-                    )?;
+                    columns_slice[i].encode(*logical_row, &columns_info[i], &mut ctx, &mut val)?;
 
                     // This is a workaround for different encoding methods used by TiDB and TiKV for
                     // CM Sketch. We need this because we must ensure we are using the same encoding
@@ -990,9 +992,8 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
                         INT_FLAG | UINT_FLAG | DURATION_FLAG => {
                             let mut mut_val = &val[..];
                             let decoded_val = mut_val.read_datum()?;
-                            let flattened =
-                                table::flatten(&mut EvalContext::default(), decoded_val)?;
-                            encode_value(&mut EvalContext::default(), &[flattened])?
+                            let flattened = table::flatten(&mut ctx, decoded_val)?;
+                            encode_value(&mut ctx, &[flattened])?
                         }
                         _ => val,
                     };
@@ -1002,14 +1003,14 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
                             TT, match columns_info[i].as_accessor().collation()? {
                                 Collation::TT => {
                                     let mut mut_val = &val[..];
-                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &columns_info[i])?;
+                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &columns_info[i])?;
                                     if decoded_val == Datum::Null {
                                         val
                                     } else {
                                         // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
                                         // So it is safe the unwrap the Ok value.
                                         let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
-                                        encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)])?
+                                        encode_value(&mut ctx, &[Datum::Bytes(decoded_sorted_val)])?
                                     }
                                 }
                             }
@@ -1227,8 +1228,9 @@ mod tests {
         );
         let cases = vec![Datum::I64(1), Datum::Null, Datum::I64(2), Datum::I64(5)];
 
+        let mut ctx = EvalContext::default();
         for data in cases {
-            sample.collect(datum::encode_value(&mut EvalContext::default(), &[data]).unwrap());
+            sample.collect(datum::encode_value(&mut ctx, &[data]).unwrap());
         }
         assert_eq!(sample.samples.len(), max_sample_size);
         assert_eq!(sample.null_count, 1);
@@ -1244,10 +1246,9 @@ mod tests {
         let loop_cnt = 1000;
         let mut item_cnt: HashMap<Vec<u8>, usize> = HashMap::new();
         let mut nums: Vec<Vec<u8>> = Vec::with_capacity(row_num);
+        let mut ctx = EvalContext::default();
         for i in 0..row_num {
-            nums.push(
-                datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
-            );
+            nums.push(datum::encode_value(&mut ctx, &[Datum::I64(i as i64)]).unwrap());
         }
         for loop_i in 0..loop_cnt {
             let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
@@ -1292,10 +1293,9 @@ mod tests {
         let loop_cnt = 1000;
         let mut item_cnt: HashMap<Vec<u8>, usize> = HashMap::new();
         let mut nums: Vec<Vec<u8>> = Vec::with_capacity(row_num);
+        let mut ctx = EvalContext::default();
         for i in 0..row_num {
-            nums.push(
-                datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
-            );
+            nums.push(datum::encode_value(&mut ctx, &[Datum::I64(i as i64)]).unwrap());
         }
         for loop_i in 0..loop_cnt {
             let mut collector =
@@ -1338,10 +1338,9 @@ mod tests {
         let sample_num = 0; // abnormal.
         let row_num = 100;
         let mut nums: Vec<Vec<u8>> = Vec::with_capacity(row_num);
+        let mut ctx = EvalContext::default();
         for i in 0..row_num {
-            nums.push(
-                datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
-            );
+            nums.push(datum::encode_value(&mut ctx, &[Datum::I64(i as i64)]).unwrap());
         }
         {
             // Test for ReservoirRowSampleCollector
@@ -1399,19 +1398,16 @@ mod benches {
         }
         let mut column_vals = Vec::new();
         let mut collation_key_vals = Vec::new();
+        let mut ctx = EvalContext::default();
         for i in 0..columns_info.len() {
             let mut val = vec![];
             columns_slice[i]
-                .encode(0, &columns_info[i], &mut EvalContext::default(), &mut val)
+                .encode(0, &columns_info[i], &mut ctx, &mut val)
                 .unwrap();
             if columns_info[i].as_accessor().is_string_like() {
                 let mut mut_val = &val[..];
-                let decoded_val = table::decode_col_value(
-                    &mut mut_val,
-                    &mut EvalContext::default(),
-                    &columns_info[i],
-                )
-                .unwrap();
+                let decoded_val =
+                    table::decode_col_value(&mut mut_val, &mut ctx, &columns_info[i]).unwrap();
                 let decoded_sorted_val =
                     CollatorUtf8Mb4Bin::sort_key(&decoded_val.as_string().unwrap().unwrap())
                         .unwrap();

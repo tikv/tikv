@@ -168,6 +168,7 @@ fn test_delete_files_in_range_for_titan() {
         &cfg.rocksdb.build_cf_resources(cache),
         None,
         cfg.storage.api_version(),
+        None,
         cfg.storage.engine,
     );
 

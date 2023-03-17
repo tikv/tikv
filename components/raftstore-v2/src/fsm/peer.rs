@@ -9,10 +9,11 @@ use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{errorpb, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{Config, TabletSnapManager, Transport};
-use slog::{debug, error, info, trace, Logger};
+use slog::{debug, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
+    slog_panic,
     time::{duration_to_sec, Instant},
 };
 
@@ -159,12 +160,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         let mb = match self.store_ctx.router.mailbox(region_id) {
             Some(mb) => mb,
             None => {
-                error!(
-                    self.fsm.logger(),
-                    "failed to get mailbox";
-                    "tick" => ?tick,
-                );
-                return;
+                if !self.fsm.peer.serving() || self.store_ctx.router.is_shutdown() {
+                    return;
+                }
+                slog_panic!(self.fsm.logger(), "failed to get mailbox"; "tick" => ?tick);
             }
         };
         self.fsm.tick_registry[idx] = true;
@@ -327,6 +326,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::TabletTrimmed { tablet_index } => {
                     self.fsm.peer_mut().on_tablet_trimmed(tablet_index)
                 }
+                PeerMsg::CleanupImportSst(ssts) => self
+                    .fsm
+                    .peer_mut()
+                    .on_cleanup_import_sst(self.store_ctx, ssts),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }
