@@ -349,7 +349,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
-        fail::fail_point!("apply_before_commit_merge");
         PEER_ADMIN_CMD_COUNTER.commit_merge.all.inc();
 
         self.flush();
@@ -365,7 +364,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let mut start_time = Instant::now_coarse();
         let mut wait_duration = None;
-        if !source_path.exists() {
+        let force_send = (|| {
+            fail::fail_point!("force_send_catch_up_logs", |_| true);
+            false
+        })();
+        if !source_path.exists() || force_send {
             let (tx, rx) = oneshot::channel();
             self.res_reporter().redirect_catch_up_logs(CatchUpLogs {
                 target_region_id: self.region_id(),
@@ -391,6 +394,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             wait_duration = Some(now.saturating_duration_since(start_time));
             start_time = now;
         };
+        fail::fail_point!("after_acquire_source_checkpoint", |_| Err(
+            tikv_util::box_err!("fp")
+        ));
 
         info!(
             self.logger,
@@ -465,6 +471,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             info!(self.logger, "reuse merged tablet");
         }
         let merge_time = Instant::now_coarse();
+        fail::fail_point!("after_merge_source_checkpoint", |_| Err(
+            tikv_util::box_err!("fp")
+        ));
 
         info!(
             self.logger,

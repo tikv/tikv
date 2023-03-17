@@ -779,6 +779,7 @@ pub mod merge_helper {
         source: metapb::Region,
         source_peer: metapb::Peer,
         target: metapb::Region,
+        check: bool,
     ) -> metapb::Region {
         let region_id = source.id;
         let mut req = RaftCmdRequest::default();
@@ -794,22 +795,26 @@ pub mod merge_helper {
 
         let (msg, sub) = PeerMsg::admin_command(req);
         router.send(region_id, msg).unwrap();
-        block_on(sub.result()).unwrap();
+        let resp = block_on(sub.result()).unwrap();
+        if check {
+            assert!(!resp.get_header().has_error(), "{:?}", resp);
+        }
 
         // TODO: when persistent implementation is ready, we can use tablet index of
         // the parent to check whether the split is done. Now, just sleep a second.
         thread::sleep(Duration::from_secs(1));
 
         let new_target = router.region_detail(target.id);
-        if new_target.get_start_key() == source.get_start_key() {
-            // [source, target] => new_target
-            assert_eq!(new_target.get_end_key(), target.get_end_key());
-        } else {
-            // [target, source] => new_target
-            assert_eq!(new_target.get_start_key(), target.get_start_key());
-            assert_eq!(new_target.get_end_key(), source.get_end_key());
+        if check {
+            if new_target.get_start_key() == source.get_start_key() {
+                // [source, target] => new_target
+                assert_eq!(new_target.get_end_key(), target.get_end_key());
+            } else {
+                // [target, source] => new_target
+                assert_eq!(new_target.get_start_key(), target.get_start_key());
+                assert_eq!(new_target.get_end_key(), source.get_end_key());
+            }
         }
-
         new_target
     }
 }
