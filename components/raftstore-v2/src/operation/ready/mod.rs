@@ -154,7 +154,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // When it's handling snapshot, it's pointless to tick as all the side
         // affects have to wait till snapshot is applied. On the other hand, ticking
         // will bring other corner cases like elections.
-        !self.is_handling_snapshot() && self.raft_group_mut().tick()
+        !self.is_handling_snapshot() && self.serving() && self.raft_group_mut().tick()
     }
 
     pub fn on_peer_unreachable(&mut self, to_peer_id: u64) {
@@ -255,11 +255,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
-        } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
-            error!(self.logger, "raft step error"; "err" => ?e);
         } else {
-            let committed_index = self.raft_group().raft.raft_log.committed;
-            self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
+            // This can be a message that sent when it's still a follower. Nevertheleast,
+            // it's meaningless to continue to handle the request as callbacks are cleared.
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                && self.is_leader()
+                && (msg.get_message().get_from() == raft::INVALID_ID
+                    || msg.get_message().get_from() == self.peer_id())
+            {
+                ctx.raft_metrics.message_dropped.stale_msg.inc();
+                return;
+            }
+
+            if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+                error!(self.logger, "raft step error"; "err" => ?e);
+            } else {
+                let committed_index = self.raft_group().raft.raft_log.committed;
+                self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
+            }
         }
 
         self.set_has_ready();
@@ -932,7 +945,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         write_task: &mut WriteTask<EK, ER>,
     ) {
         let prev_raft_state = self.entry_storage().raft_state().clone();
-        let ever_persisted = self.ever_persisted();
+        let prev_ever_persisted = self.ever_persisted();
 
         if !ready.snapshot().is_empty() {
             if let Err(e) = self.apply_snapshot(
@@ -946,20 +959,24 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         }
 
-        let entry_storage = self.entry_storage_mut();
         if !ready.entries().is_empty() {
-            entry_storage.append(ready.take_entries(), write_task);
+            assert!(self.ever_persisted(), "{}", SlogFormat(self.logger()));
+            self.entry_storage_mut()
+                .append(ready.take_entries(), write_task);
         }
         if let Some(hs) = ready.hs() {
-            entry_storage.raft_state_mut().set_hard_state(hs.clone());
+            self.entry_storage_mut()
+                .raft_state_mut()
+                .set_hard_state(hs.clone());
         }
-        if !ever_persisted || prev_raft_state != *entry_storage.raft_state() {
+        let entry_storage = self.entry_storage();
+        if !prev_ever_persisted || prev_raft_state != *entry_storage.raft_state() {
             write_task.raft_state = Some(entry_storage.raft_state().clone());
         }
-        // If snapshot initializes the peer, we don't need to write apply trace again.
+        // If snapshot initializes the peer (in `apply_snapshot`), we don't need to
+        // write apply trace again.
         if !self.ever_persisted() {
             let region_id = self.region().get_id();
-            let entry_storage = self.entry_storage();
             let raft_engine = entry_storage.raft_engine();
             if write_task.raft_wb.is_none() {
                 write_task.raft_wb = Some(raft_engine.log_batch(64));
