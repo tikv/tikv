@@ -419,7 +419,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     engine: E,
     resource_ctl: Option<Arc<ResourceController>>,
     cleanup_method: CleanupMethod,
-) -> ReadPool {
+) -> (ReadPool, String) {
     let unified_read_pool_name = get_unified_read_pool_name();
     let raftkv = Arc::new(Mutex::new(engine));
     let builder = YatpPoolBuilder::new(ReporterTicker { reporter })
@@ -451,7 +451,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         builder.build_multi_level_pool()
     };
     let time_slice_inspector = Arc::new(TimeSliceInspector::new(&unified_read_pool_name));
-    ReadPool::Yatp {
+    (ReadPool::Yatp {
         pool,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
             .with_label_values(&[&unified_read_pool_name]),
@@ -463,7 +463,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         pool_size: config.max_thread_count,
         resource_ctl,
         time_slice_inspector,
-    }
+    }, unified_read_pool_name)
 }
 
 impl From<Vec<FuturePool>> for ReadPool {
@@ -744,6 +744,7 @@ mod tests {
 
     use futures::channel::oneshot;
     use raftstore::store::{ReadStats, WriteStats};
+    use resource_control::ResourceGroupManager;
 
     use super::*;
     use crate::storage::TestEngineBuilder;
@@ -767,7 +768,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
+        let (pool, _) =
             build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
@@ -809,7 +810,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
+        let (pool, _) =
             build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
@@ -859,7 +860,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
+        let (pool, _) =
             build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
@@ -941,5 +942,61 @@ mod tests {
         inspector.update();
         let ewma = inspector.get_ewma_time_slice().as_secs_f64();
         assert!((ewma - 0.01307).abs() < MARGIN);
+    }
+
+    #[test]
+    fn test_yatp_task_poll_duration_metric() {
+        let count_metric = |name: &str| -> u64 {
+            let mut sum = 0;
+            for i in 0..=2 {
+                let hist = yatp::metrics::TASK_POLL_DURATION.with_label_values(&[name, &format!("{}", i)]);
+                sum += hist.get_sample_count();
+            }
+            sum
+        };
+
+        for control in [false, true] {
+            let resource_manager = if control {
+                let resource_manager = ResourceGroupManager::default();
+                let resource_ctl = resource_manager.derive_controller("test_yatp_task_poll_duration_metric".into(), true);
+                Some(resource_ctl)
+            } else {
+                None
+            };
+            let config = UnifiedReadPoolConfig {
+                min_thread_count: 1,
+                max_thread_count: 2,
+                max_tasks_per_worker: 1,
+                ..Default::default()
+            };
+
+            let engine = TestEngineBuilder::new().build().unwrap();
+
+            let (pool, name) =
+                build_yatp_read_pool(&config, DummyReporter, engine, resource_manager, CleanupMethod::InPlace);
+
+            let gen_task = || {
+                let (tx, rx) = oneshot::channel::<()>();
+                let task = async move {
+                    // sleep the thread 100ms to trigger flushing the metrics.
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    let _ = rx.await;
+                };
+                (task, tx)
+            };
+
+            let handle = pool.handle();
+            let (task1, tx1) = gen_task();
+            let (task2, tx2) = gen_task();
+
+            handle.spawn(task1, CommandPri::Normal, 1, vec![]).unwrap();
+            handle.spawn(task2, CommandPri::Normal, 2, vec![]).unwrap();
+
+            tx1.send(()).unwrap();
+            tx2.send(()).unwrap();
+
+            thread::sleep(Duration::from_millis(300));
+            assert_eq!(count_metric(&name), 2);
+        }
     }
 }
