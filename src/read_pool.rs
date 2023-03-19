@@ -413,14 +413,33 @@ fn get_unified_read_pool_name() -> String {
     "unified-read-pool".to_string()
 }
 
+#[inline]
 pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
     reporter: R,
     engine: E,
     resource_ctl: Option<Arc<ResourceController>>,
     cleanup_method: CleanupMethod,
-) -> (ReadPool, String) {
+) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
+    build_yatp_read_pool_with_name(
+        config,
+        reporter,
+        engine,
+        resource_ctl,
+        cleanup_method,
+        unified_read_pool_name,
+    )
+}
+
+pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
+    config: &UnifiedReadPoolConfig,
+    reporter: R,
+    engine: E,
+    resource_ctl: Option<Arc<ResourceController>>,
+    cleanup_method: CleanupMethod,
+    unified_read_pool_name: String,
+) -> ReadPool {
     let raftkv = Arc::new(Mutex::new(engine));
     let builder = YatpPoolBuilder::new(ReporterTicker { reporter })
         .name_prefix(&unified_read_pool_name)
@@ -451,22 +470,19 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         builder.build_multi_level_pool()
     };
     let time_slice_inspector = Arc::new(TimeSliceInspector::new(&unified_read_pool_name));
-    (
-        ReadPool::Yatp {
-            pool,
-            running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
-                .with_label_values(&[&unified_read_pool_name]),
-            running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
-                .with_label_values(&[&unified_read_pool_name]),
-            max_tasks: config
-                .max_tasks_per_worker
-                .saturating_mul(config.max_thread_count),
-            pool_size: config.max_thread_count,
-            resource_ctl,
-            time_slice_inspector,
-        },
-        unified_read_pool_name,
-    )
+    ReadPool::Yatp {
+        pool,
+        running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
+            .with_label_values(&[&unified_read_pool_name]),
+        running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
+            .with_label_values(&[&unified_read_pool_name]),
+        max_tasks: config
+            .max_tasks_per_worker
+            .saturating_mul(config.max_thread_count),
+        pool_size: config.max_thread_count,
+        resource_ctl,
+        time_slice_inspector,
+    }
 }
 
 impl From<Vec<FuturePool>> for ReadPool {
@@ -771,7 +787,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let (pool, _) =
+        let pool =
             build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
@@ -813,7 +829,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let (pool, _) =
+        let pool =
             build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
@@ -863,7 +879,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let (pool, _) =
+        let pool =
             build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
 
         let gen_task = || {
@@ -960,10 +976,10 @@ mod tests {
         };
 
         for control in [false, true] {
+            let name = format!("test_yatp_task_poll_duration_metric_{}", control);
             let resource_manager = if control {
                 let resource_manager = ResourceGroupManager::default();
-                let resource_ctl = resource_manager
-                    .derive_controller("test_yatp_task_poll_duration_metric".into(), true);
+                let resource_ctl = resource_manager.derive_controller(name.clone(), true);
                 Some(resource_ctl)
             } else {
                 None
@@ -977,12 +993,13 @@ mod tests {
 
             let engine = TestEngineBuilder::new().build().unwrap();
 
-            let (pool, name) = build_yatp_read_pool(
+            let pool = build_yatp_read_pool_with_name(
                 &config,
                 DummyReporter,
                 engine,
                 resource_manager,
                 CleanupMethod::InPlace,
+                name.clone(),
             );
 
             let gen_task = || {
@@ -1007,6 +1024,7 @@ mod tests {
 
             thread::sleep(Duration::from_millis(300));
             assert_eq!(count_metric(&name), 2);
+            drop(pool);
         }
     }
 }

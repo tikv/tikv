@@ -663,14 +663,13 @@ where
                 .resource_manager
                 .as_ref()
                 .map(|m| m.derive_controller("unified-read-pool".into(), true));
-            let (pool, _) = build_yatp_read_pool(
+            Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
                 CleanupMethod::Remote(self.background_worker.remote()),
-            );
-            Some(pool)
+            ))
         } else {
             None
         };
