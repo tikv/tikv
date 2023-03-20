@@ -5499,6 +5499,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "online_config",
  "openssl",
  "prometheus",
  "rand 0.8.5",
