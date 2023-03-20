@@ -102,7 +102,8 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                                     "inner_msg" => ?inner_msg,
                                     "is_replicated" => is_replicated,
                                     "has_already_inited" => has_already_inited,
-                                    "is_first" => is_first,
+                                    "inited_or_fallback" => o.get().inited_or_fallback.load(Ordering::SeqCst),
+                                    "snapshot_inflight" => o.get().snapshot_inflight.load(Ordering::SeqCst),
                                     "elapsed" => elapsed,
                                     "do_fallback" => do_fallback,
                             );
@@ -112,6 +113,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                                 early_skip = false;
                                 return;
                             }
+                            // If not timeout, do following checking.
                         }
                     }
                     // If a snapshot is sent, we must skip further handling.

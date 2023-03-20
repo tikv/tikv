@@ -166,7 +166,7 @@ fn test_add_absent_learner_peer_by_simple() {
 
     cluster.must_put(b"k3", b"v3");
     check_key(&cluster, b"k3", b"v3", Some(true), None, None);
-    let new_states = collect_all_states(&cluster, 1);
+    let new_states = collect_all_states(&cluster.cluster_ext, 1);
     assert_eq!(new_states.len(), 3);
     for i in new_states.keys() {
         assert_eq!(
@@ -213,7 +213,7 @@ fn test_add_absent_learner_peer_by_joint() {
 
     cluster.must_put(b"k3", b"v3");
     check_key(&cluster, b"k3", b"v3", Some(true), None, None);
-    let new_states = collect_all_states(&cluster, 1);
+    let new_states = collect_all_states(&cluster.cluster_ext, 1);
     assert_eq!(new_states.len(), 3);
     for i in new_states.keys() {
         assert_eq!(

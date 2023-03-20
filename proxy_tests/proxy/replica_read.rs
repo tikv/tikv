@@ -30,7 +30,7 @@ impl GcMonitor {
         let data = &*self.data.lock().unwrap();
         for (k, v) in data {
             if *v != 0 {
-                error!("GcMonitor::valid_clean failed at type {} refcount {}", k, v);
+                tikv_util::error!("GcMonitor::valid_clean failed at type {} refcount {}", k, v);
                 return false;
             }
         }

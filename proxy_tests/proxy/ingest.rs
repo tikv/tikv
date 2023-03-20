@@ -143,8 +143,8 @@ fn test_ingest_return_none() {
 
     fail::cfg("on_handle_ingest_sst_return", "return").unwrap();
 
-    let prev_states1 = collect_all_states(&cluster, region1.get_id());
-    let prev_states5 = collect_all_states(&cluster, region5.get_id());
+    let prev_states1 = collect_all_states(&cluster.cluster_ext, region1.get_id());
+    let prev_states5 = collect_all_states(&cluster.cluster_ext, region5.get_id());
     let (file1, meta1, sst_path1) = make_sst(
         &cluster,
         region1.get_id(),
@@ -168,8 +168,8 @@ fn test_ingest_return_none() {
     check_key(&cluster, b"k1_66", b"2", Some(true), Some(false), None);
     check_key(&cluster, b"k5_66", b"2", Some(true), Some(false), None);
 
-    let new_states1 = collect_all_states(&cluster, region1.get_id());
-    let new_states5 = collect_all_states(&cluster, region5.get_id());
+    let new_states1 = collect_all_states(&cluster.cluster_ext, region1.get_id());
+    let new_states5 = collect_all_states(&cluster.cluster_ext, region5.get_id());
     must_altered_memory_apply_state(&prev_states1, &new_states1);
     must_unaltered_memory_apply_term(&prev_states1, &new_states1);
     must_unaltered_disk_apply_state(&prev_states1, &new_states1);
@@ -198,8 +198,8 @@ fn test_ingest_return_none() {
     check_key(&cluster, b"k1_222", b"2", Some(true), None, None);
     check_key(&cluster, b"k5_66", b"2", Some(false), None, None);
 
-    let new_states1 = collect_all_states(&cluster, region1.get_id());
-    let new_states5 = collect_all_states(&cluster, region5.get_id());
+    let new_states1 = collect_all_states(&cluster.cluster_ext, region1.get_id());
+    let new_states5 = collect_all_states(&cluster.cluster_ext, region5.get_id());
     // Region 1 is persisted.
     must_altered_memory_apply_state(&prev_states1, &new_states1);
     must_unaltered_memory_apply_term(&prev_states1, &new_states1);

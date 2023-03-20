@@ -318,7 +318,7 @@ mod restart {
             let v = format!("v{}", i);
             cluster.must_put(k.as_bytes(), v.as_bytes());
         }
-        let prev_state = collect_all_states(&cluster, region_id);
+        let prev_state = collect_all_states(&cluster.cluster_ext, region_id);
         let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
         let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
         let req =
@@ -405,10 +405,10 @@ mod persist {
         check_key(&cluster, b"k0", b"v0", Some(true), Some(false), None);
         let region_id = cluster.get_region(b"k0").get_id();
 
-        let prev_states = collect_all_states(&cluster, region_id);
+        let prev_states = collect_all_states(&cluster.cluster_ext, region_id);
         cluster.must_put(b"k1", b"v1");
         check_key(&cluster, b"k1", b"v1", Some(true), Some(false), None);
-        let new_states = collect_all_states(&cluster, region_id);
+        let new_states = collect_all_states(&cluster.cluster_ext, region_id);
         must_altered_memory_apply_index(&prev_states, &new_states, 1);
         must_altered_disk_apply_index(&prev_states, &new_states, 0);
 
@@ -419,14 +419,14 @@ mod persist {
 
         // TODO(tiflash) wait `write_apply_state` in raftstore.
         std::thread::sleep(std::time::Duration::from_millis(1000));
-        let prev_states = collect_all_states(&cluster, region_id);
+        let prev_states = collect_all_states(&cluster.cluster_ext, region_id);
         cluster.must_put(b"k3", b"v3");
         // Because we flush when batch ends.
         check_key(&cluster, b"k3", b"v3", Some(true), Some(false), None);
 
         // TODO(tiflash) wait `write_apply_state` in raftstore.
         std::thread::sleep(std::time::Duration::from_millis(1000));
-        let new_states = collect_all_states(&cluster, region_id);
+        let new_states = collect_all_states(&cluster.cluster_ext, region_id);
         must_apply_index_advanced_diff(&prev_states, &new_states, 0);
         fail::remove("on_pre_write_apply_state");
     }
@@ -452,7 +452,7 @@ mod persist {
         let r3 = cluster.get_region(b"k3");
 
         std::thread::sleep(std::time::Duration::from_millis(1000));
-        let prev_states = collect_all_states(&cluster, r3.get_id());
+        let prev_states = collect_all_states(&cluster.cluster_ext, r3.get_id());
 
         info!("start merge"; "from" => r1.get_id(), "to" => r3.get_id());
         pd_client.must_merge(r1.get_id(), r3.get_id());
@@ -461,7 +461,7 @@ mod persist {
         std::thread::sleep(std::time::Duration::from_millis(1000));
         let r3_new = cluster.get_region(b"k3");
         assert_eq!(r3_new.get_id(), r3.get_id());
-        let new_states = collect_all_states(&cluster, r3_new.get_id());
+        let new_states = collect_all_states(&cluster.cluster_ext, r3_new.get_id());
         // index 6 empty command
         // index 7 CommitMerge
         must_altered_disk_apply_index(&prev_states, &new_states, 2);

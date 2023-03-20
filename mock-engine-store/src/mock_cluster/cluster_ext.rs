@@ -47,6 +47,7 @@ pub struct ClusterExt {
     pub ffi_helper_lst: Vec<FFIHelperSet>,
     pub(crate) ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
     pub test_data: TestData,
+    pub cluster_ptr: isize,
 }
 
 impl ClusterExt {
@@ -214,6 +215,11 @@ impl ClusterExt {
             }
         }
         ids
+    }
+
+    pub fn set_expected_safe_ts(&mut self, leader_safe_ts: u64, self_safe_ts: u64) {
+        self.test_data.expected_leader_safe_ts = leader_safe_ts;
+        self.test_data.expected_self_safe_ts = self_safe_ts;
     }
 }
 

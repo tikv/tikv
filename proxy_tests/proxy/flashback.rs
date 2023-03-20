@@ -65,7 +65,7 @@ mod persist {
         // Write for cluster
         cluster.must_put(b"k1", b"v1");
 
-        let prev_states = collect_all_states(&cluster, region_id);
+        let prev_states = collect_all_states(&cluster.cluster_ext, region_id);
 
         if !do_persist {
             fail::cfg("no_persist_flashback", "return(0)").unwrap();
@@ -90,7 +90,7 @@ mod persist {
         stop_tiflash_node(&mut cluster, victim);
         restart_tiflash_node(&mut cluster, victim);
 
-        let new_states = collect_all_states(&cluster, region_id);
+        let new_states = collect_all_states(&cluster.cluster_ext, region_id);
 
         if !do_persist {
             // Check apply index is not persisted in disk.

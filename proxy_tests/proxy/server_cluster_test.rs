@@ -93,6 +93,7 @@ fn test_safe_ts_basic() {
     let physical_time = 646454654654;
     suite
         .cluster
+        .cluster_ext
         .set_expected_safe_ts(physical_time, physical_time);
     suite.must_check_leader(1, TimeStamp::new(physical_time), 1, 1);
 
@@ -179,7 +180,7 @@ fn test_pprof() {
     let check_task = check(status_server.listening_addr(), region_id);
     let rt = tokio::runtime::Runtime::new().unwrap();
     let handle = rt.spawn(check_task);
-    for i in 0..300 {
+    for i in 0..350 {
         let k = format!("k{}", i);
         cluster.must_put(k.as_bytes(), b"v");
         if handle.is_finished() {

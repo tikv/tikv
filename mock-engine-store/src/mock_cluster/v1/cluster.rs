@@ -187,7 +187,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         // Force sync to enable Leader run as a Leader, rather than proxy
         fail::cfg("apply_on_handle_snapshot_sync", "return").unwrap();
 
-        Cluster {
+        let mut c = Cluster {
             cluster_ext: ClusterExt::default(),
             cfg: Config {
                 tikv: new_tikv_config(id),
@@ -209,7 +209,9 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             sim,
             pd_client,
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
-        }
+        };
+        c.cluster_ext.cluster_ptr = &c as *const _ as isize;
+        c
     }
 
     pub fn id(&self) -> u64 {

@@ -65,11 +65,6 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         self.bootstrap_conf_change()
     }
 
-    pub fn set_expected_safe_ts(&mut self, leader_safe_ts: u64, self_safe_ts: u64) {
-        self.cluster_ext.test_data.expected_leader_safe_ts = leader_safe_ts;
-        self.cluster_ext.test_data.expected_self_safe_ts = self_safe_ts;
-    }
-
     pub fn get_tiflash_engine(&self, node_id: u64) -> &TiFlashEngine {
         &self.engines[&node_id].kv
     }

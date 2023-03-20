@@ -17,7 +17,7 @@ fn test_interaction() {
     // Wait until all nodes have (k1, v1).
     check_key(&cluster, b"k1", b"v1", Some(true), None, None);
 
-    let prev_states = collect_all_states(&cluster, region_id);
+    let prev_states = collect_all_states(&cluster.cluster_ext, region_id);
     let compact_log = test_raftstore::new_compact_log_request(100, 10);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
     let _ = cluster
@@ -26,7 +26,7 @@ fn test_interaction() {
 
     // Empty result can also be handled by post_exec
     let new_states = must_wait_until_cond_states(
-        &cluster,
+        &cluster.cluster_ext,
         region_id,
         &prev_states,
         &|old: &States, new: &States| {
@@ -45,13 +45,13 @@ fn test_interaction() {
     check_key(&cluster, b"k2", b"v2", Some(true), None, None);
 
     fail::cfg("on_empty_cmd_normal", "return").unwrap();
-    let prev_states = collect_all_states(&cluster, region_id);
+    let prev_states = collect_all_states(&cluster.cluster_ext, region_id);
     let _ = cluster
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
 
     std::thread::sleep(std::time::Duration::from_millis(400));
-    let new_states = collect_all_states(&cluster, region_id);
+    let new_states = collect_all_states(&cluster.cluster_ext, region_id);
     must_altered_memory_apply_state(&prev_states, &new_states);
     must_unaltered_memory_apply_term(&prev_states, &new_states);
 
@@ -135,11 +135,11 @@ fn leadership_change_impl(mode: TransferLeaderRunMode) {
         _ => {}
     };
 
-    let prev_states = collect_all_states(&cluster, region_id);
+    let prev_states = collect_all_states(&cluster.cluster_ext, region_id);
     cluster.must_transfer_leader(region.get_id(), peer_2.clone());
 
     // The states remain the same, since we don't observe empty cmd.
-    let new_states = collect_all_states(&cluster, region_id);
+    let new_states = collect_all_states(&cluster.cluster_ext, region_id);
 
     match mode {
         TransferLeaderRunMode::FilterAll => {
@@ -159,7 +159,7 @@ fn leadership_change_impl(mode: TransferLeaderRunMode) {
     cluster.must_transfer_leader(region.get_id(), peer_1.clone());
     std::thread::sleep(std::time::Duration::from_secs(1));
 
-    let new_states = collect_all_states(&cluster, region_id);
+    let new_states = collect_all_states(&cluster.cluster_ext, region_id);
     must_altered_memory_apply_state(&prev_states, &new_states);
     must_altered_memory_apply_term(&prev_states, &new_states);
 
@@ -178,7 +178,7 @@ fn test_kv_write_always_persist() {
     cluster.must_put(b"k0", b"v0");
     let region_id = cluster.get_region(b"k0").get_id();
 
-    let mut prev_states = collect_all_states(&cluster, region_id);
+    let mut prev_states = collect_all_states(&cluster.cluster_ext, region_id);
     // Always persist on every command
     fail::cfg("on_post_exec_normal_end", "return(true)").unwrap();
     for i in 1..15 {
@@ -192,12 +192,18 @@ fn test_kv_write_always_persist() {
 
         // This may happen after memory write data and before commit.
         // We must check if we already have in memory.
-        check_apply_state(&cluster, region_id, &prev_states, Some(false), None);
+        check_apply_state(
+            &cluster.cluster_ext,
+            region_id,
+            &prev_states,
+            Some(false),
+            None,
+        );
         // Wait persist.
         // TODO Change to wait condition timeout.
         std::thread::sleep(std::time::Duration::from_millis(100));
         // However, advanced apply index will always persisted.
-        let new_states = collect_all_states(&cluster, region_id);
+        let new_states = collect_all_states(&cluster.cluster_ext, region_id);
         must_altered_disk_apply_state(&prev_states, &new_states);
         prev_states = new_states;
     }
@@ -238,7 +244,7 @@ fn test_kv_write() {
 
     // We can read initial raft state, since we don't persist meta either.
     let r1 = cluster.get_region(b"k1").get_id();
-    let prev_states = collect_all_states(&cluster, r1);
+    let prev_states = collect_all_states(&cluster.cluster_ext, r1);
 
     fail::remove("on_post_exec_normal");
     fail::remove("on_post_exec_admin");
@@ -263,14 +269,14 @@ fn test_kv_write() {
         );
     }
 
-    let new_states = collect_all_states(&cluster, r1);
+    let new_states = collect_all_states(&cluster.cluster_ext, r1);
     must_altered_memory_apply_state(&prev_states, &new_states);
     must_unaltered_disk_apply_state(&prev_states, &new_states);
 
     std::thread::sleep(std::time::Duration::from_millis(20));
     fail::remove("try_flush_data");
 
-    let prev_states = collect_all_states(&cluster, r1);
+    let prev_states = collect_all_states(&cluster.cluster_ext, r1);
     // Write more after we force persist when CompactLog.
     for i in 20..30 {
         let k = format!("k{}", i);
@@ -311,7 +317,7 @@ fn test_kv_write() {
         );
     }
 
-    let new_states = collect_all_states(&cluster, r1);
+    let new_states = collect_all_states(&cluster.cluster_ext, r1);
     must_altered_memory_apply_state(&prev_states, &new_states);
     must_altered_disk_apply_state(&prev_states, &new_states);
 
@@ -385,7 +391,7 @@ fn test_compact_log() {
     }
 
     std::thread::sleep(std::time::Duration::from_millis(500));
-    let prev_state = collect_all_states(&cluster, region_id);
+    let prev_state = collect_all_states(&cluster.cluster_ext, region_id);
 
     let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
     let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
@@ -402,7 +408,7 @@ fn test_compact_log() {
 
     // CompactLog is filtered, because we can't flush data.
     // However, we can still observe apply index advanced
-    let new_state = collect_all_states(&cluster, region_id);
+    let new_state = collect_all_states(&cluster.cluster_ext, region_id);
     must_altered_disk_apply_index(&prev_state, &new_state, 0);
     must_altered_memory_apply_index(&prev_state, &new_state, 1);
     must_unaltered_memory_truncated_state(&prev_state, &new_state);
@@ -424,7 +430,7 @@ fn test_compact_log() {
     check_key(&cluster, b"kz", b"vz", Some(true), None, None);
 
     // CompactLog is not filtered
-    let new_state = collect_all_states(&cluster, region_id);
+    let new_state = collect_all_states(&cluster.cluster_ext, region_id);
     // compact log + (kz,vz)
     must_altered_memory_apply_index(&prev_state, &new_state, 2);
     must_altered_memory_truncated_state(&prev_state, &new_state);
@@ -449,7 +455,7 @@ mod mix_mode {
 
         let region = cluster.get_region(b"k1");
         let region_id = region.get_id();
-        let prev_state = collect_all_states(&cluster, region_id);
+        let prev_state = collect_all_states(&cluster.cluster_ext, region_id);
         let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
         let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
         let req =
@@ -461,7 +467,7 @@ mod mix_mode {
         // Wait for state applys.
         std::thread::sleep(std::time::Duration::from_secs(2));
 
-        let new_state = collect_all_states(&cluster, region_id);
+        let new_state = collect_all_states(&cluster.cluster_ext, region_id);
         must_altered_memory_apply_state(&prev_state, &new_state);
         must_unaltered_disk_apply_state(&prev_state, &new_state);
 
@@ -483,7 +489,7 @@ mod mix_mode {
 
         // We can read initial raft state, since we don't persist meta either.
         let r1 = cluster.get_region(b"k0").get_id();
-        let prev_states = collect_all_states(&mut cluster, r1);
+        let prev_states = collect_all_states(&cluster.cluster_ext, r1);
 
         for i in 1..10 {
             let k = format!("k{}", i);
@@ -498,7 +504,7 @@ mod mix_mode {
             check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
         }
 
-        let new_states = collect_all_states(&mut cluster, r1);
+        let new_states = collect_all_states(&cluster.cluster_ext, r1);
         must_altered_memory_apply_state(&prev_states, &new_states);
         must_unaltered_disk_apply_state(&prev_states, &new_states);
 

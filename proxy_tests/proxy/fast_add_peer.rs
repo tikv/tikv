@@ -85,9 +85,14 @@ fn simple_fast_add_peer(
     check_key(&cluster, b"k1", b"v1", Some(true), None, Some(vec![1, 2]));
 
     // Getting (k1,v1) not necessarily means peer 2 is ready.
-    must_wait_until_cond_node(&cluster, 1, Some(vec![2]), &|states: &States| -> bool {
-        find_peer_by_id(states.in_disk_region_state.get_region(), 2).is_some()
-    });
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        1,
+        Some(vec![2]),
+        &|states: &States| -> bool {
+            find_peer_by_id(states.in_disk_region_state.get_region(), 2).is_some()
+        },
+    );
 
     // Add learner 3 according to source_type
     match source_type {
@@ -219,9 +224,14 @@ fn simple_fast_add_peer(
             );
         }
     };
-    must_wait_until_cond_node(&cluster, 1, Some(vec![3]), &|states: &States| -> bool {
-        find_peer_by_id(states.in_disk_region_state.get_region(), 3).is_some()
-    });
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        1,
+        Some(vec![3]),
+        &|states: &States| -> bool {
+            find_peer_by_id(states.in_disk_region_state.get_region(), 3).is_some()
+        },
+    );
 
     match pause {
         PauseType::ApplySnapshot => {
@@ -254,9 +264,14 @@ fn simple_fast_add_peer(
 
     // Destroy peer, and then try re-add a new peer of the same region.
     pd_client.must_remove_peer(1, new_learner_peer(3, 3));
-    must_wait_until_cond_node(&cluster, 1, Some(vec![1]), &|states: &States| -> bool {
-        find_peer_by_id(states.in_disk_region_state.get_region(), 3).is_none()
-    });
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        1,
+        Some(vec![1]),
+        &|states: &States| -> bool {
+            find_peer_by_id(states.in_disk_region_state.get_region(), 3).is_none()
+        },
+    );
     std::thread::sleep(std::time::Duration::from_millis(1000));
     // Assert the peer removing succeeed.
     iter_ffi_helpers(&cluster, Some(vec![3]), &mut |_, ffi: &mut FFIHelperSet| {
@@ -277,9 +292,14 @@ fn simple_fast_add_peer(
     pd_client.must_add_peer(1, new_learner_peer(3, 4));
     // Wait until Learner has applied ConfChange
     std::thread::sleep(std::time::Duration::from_millis(1000));
-    must_wait_until_cond_node(&cluster, 1, Some(vec![3]), &|states: &States| -> bool {
-        find_peer_by_id(states.in_disk_region_state.get_region(), 4).is_some()
-    });
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        1,
+        Some(vec![3]),
+        &|states: &States| -> bool {
+            find_peer_by_id(states.in_disk_region_state.get_region(), 4).is_some()
+        },
+    );
     // If we re-add peer, we can still go fast path.
     iter_ffi_helpers(&cluster, Some(vec![3]), &mut |_, ffi: &mut FFIHelperSet| {
         (*ffi.engine_store_server).mutate_region_states(1, |e: &mut RegionStats| {
@@ -494,9 +514,14 @@ fn test_apply_snapshot() {
     pd_client.must_add_peer(1, new_learner_peer(3, 3));
     std::thread::sleep(std::time::Duration::from_millis(1000));
     must_put_and_check_key(&mut cluster, 2, 3, Some(true), None, Some(vec![1, 2]));
-    must_wait_until_cond_node(&cluster, 1, Some(vec![2]), &|states: &States| -> bool {
-        find_peer_by_id(states.in_disk_region_state.get_region(), 3).is_some()
-    });
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        1,
+        Some(vec![2]),
+        &|states: &States| -> bool {
+            find_peer_by_id(states.in_disk_region_state.get_region(), 3).is_some()
+        },
+    );
 
     // peer 2 can't apply new kvs.
     cluster.add_send_filter(CloneFilterFactory(
@@ -523,9 +548,14 @@ fn test_apply_snapshot() {
 
     debug!("wait applying snapshot of peer 2");
     // Wait until peer 2 in Applying state.
-    must_wait_until_cond_node(&cluster, 1, Some(vec![2]), &|states: &States| -> bool {
-        states.in_disk_region_state.get_state() == PeerState::Applying
-    });
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        1,
+        Some(vec![2]),
+        &|states: &States| -> bool {
+            states.in_disk_region_state.get_state() == PeerState::Applying
+        },
+    );
 
     // Now if we continue fast path, peer 2 will be in Applying state.
     // Peer 3 can't use peer 2's data.
@@ -566,9 +596,14 @@ fn test_split_no_fast_add() {
 
     fail::cfg("fap_core_no_fast_path", "panic").unwrap();
     cluster.must_split(&r1, b"k2");
-    must_wait_until_cond_node(&cluster, 1000, None, &|states: &States| -> bool {
-        states.in_disk_region_state.get_region().get_peers().len() == 3
-    });
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        1000,
+        None,
+        &|states: &States| -> bool {
+            states.in_disk_region_state.get_region().get_peers().len() == 3
+        },
+    );
     let _r1_new = cluster.get_region(b"k1"); // 1000
     let _r3_new = cluster.get_region(b"k3"); // 1
     cluster.must_put(b"k0", b"v0");
@@ -653,9 +688,14 @@ fn test_fall_back_to_slow_path() {
 
     pd_client.must_add_peer(1, new_learner_peer(2, 2));
     check_key(&cluster, b"k2", b"v2", Some(true), None, Some(vec![1, 2]));
-    must_wait_until_cond_node(&cluster, 1, Some(vec![2]), &|states: &States| -> bool {
-        find_peer_by_id(states.in_disk_region_state.get_region(), 2).is_some()
-    });
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        1,
+        Some(vec![2]),
+        &|states: &States| -> bool {
+            find_peer_by_id(states.in_disk_region_state.get_region(), 2).is_some()
+        },
+    );
 
     fail::remove("fap_mock_fail_after_write");
     fail::remove("on_can_apply_snapshot");
@@ -683,20 +723,26 @@ fn test_single_replica_migrate() {
     // Fast add peer 2
     pd_client.must_add_peer(1, new_learner_peer(2, 2));
     check_key(&cluster, b"k1", b"v1", Some(true), None, Some(vec![1, 2]));
-    must_wait_until_cond_node(&cluster, 1, Some(vec![2]), &|states: &States| -> bool {
-        find_peer_by_id(states.in_disk_region_state.get_region(), 2).is_some()
-    });
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        1,
+        Some(vec![2]),
+        &|states: &States| -> bool {
+            find_peer_by_id(states.in_disk_region_state.get_region(), 2).is_some()
+        },
+    );
 
     fail::cfg("fap_mock_add_peer_from_id", "return(2)").unwrap();
 
     // Remove peer 2.
     pd_client.must_remove_peer(1, new_learner_peer(2, 2));
-    must_wait_until_cond_generic(
-        &cluster,
-        1,
-        None,
-        &|states: &HashMap<u64, States>| -> bool { states.get(&2).is_none() },
-    );
+    must_wait_until_cond_generic(&cluster.cluster_ext, 1, None, &|states: &HashMap<
+        u64,
+        States,
+    >|
+     -> bool {
+        states.get(&2).is_none()
+    });
 
     // Remove peer 2 and then add some new logs.
     cluster.must_put(b"krm2", b"v");
@@ -709,12 +755,13 @@ fn test_single_replica_migrate() {
     pd_client.must_add_peer(1, new_learner_peer(3, 3));
     check_key(&cluster, b"krm2", b"v", Some(true), None, Some(vec![3]));
     std::thread::sleep(std::time::Duration::from_millis(2000));
-    must_wait_until_cond_generic(
-        &cluster,
-        1,
-        None,
-        &|states: &HashMap<u64, States>| -> bool { states.get(&3).is_some() },
-    );
+    must_wait_until_cond_generic(&cluster.cluster_ext, 1, None, &|states: &HashMap<
+        u64,
+        States,
+    >|
+     -> bool {
+        states.get(&3).is_some()
+    });
     fail::remove("fap_core_no_fast_path");
 
     fail::remove("on_can_apply_snapshot");
