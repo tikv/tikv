@@ -9,7 +9,7 @@ use std::{path::Path, process};
 use clap::{crate_authors, App, Arg};
 use encryption_export::data_key_manager_from_config;
 use engine_traits::Peekable;
-use fork::{dup_kv_engine_files, dup_raft_engine_files, remove_and_recreate_dir, symlink_snaps};
+use fork::{create_dir, dup_kv_engine_files, dup_raft_engine_files, symlink_snaps};
 use kvproto::raft_serverpb::StoreIdent;
 use serde_json::{Map, Value};
 use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
@@ -237,7 +237,7 @@ fn main() {
             process::exit(-1);
         }
 
-        if let Err(e) = remove_and_recreate_dir(agent_dir) {
+        if let Err(e) = create_dir(agent_dir) {
             eprintln!("remove and re-create agent directory fail: {}", e);
             process::exit(-1);
         }

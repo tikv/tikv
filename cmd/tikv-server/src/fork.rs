@@ -13,15 +13,10 @@ use tikv::config::TikvConfig;
 const SNAP_NAMES: &str = "^.+\\.(meta|sst)$";
 const ROCKSDB_WALS: &str = "^([0-9]+).log$";
 
-/// Remove `path` if it exists, and re-create the directory.
-pub fn remove_and_recreate_dir<P: AsRef<Path>>(path: P) -> Result<(), String> {
+/// Create a directory at `path`, return an error if exists.
+pub fn create_dir<P: AsRef<Path>>(path: P) -> Result<(), String> {
     let path = path.as_ref();
-    if let Err(e) = std::fs::remove_dir_all(path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(format!("remove_dir_all({}): {}", path.display(), e));
-        }
-    }
-    create_dir(path)
+    std::fs::create_dir(path).map_err(|e| format!("create_dir({}): {}", path.display(), e))
 }
 
 /// Symlink snapshot files from the original TiKV instance (specified by
@@ -159,11 +154,6 @@ fn rocksdb_files_should_copy(iter: &mut dyn Iterator<Item = String>) -> Vec<Stri
     }
     names.sort_by_key(|a| a.0);
     names.pop().map_or_else(|| vec![], |a| vec![a.1])
-}
-
-fn create_dir<P: AsRef<Path>>(path: P) -> Result<(), String> {
-    let path = path.as_ref();
-    std::fs::create_dir(path).map_err(|e| format!("create_dir({}): {}", path.display(), e))
 }
 
 fn read_dir<P: AsRef<Path>>(path: P) -> Result<ReadDir, String> {
