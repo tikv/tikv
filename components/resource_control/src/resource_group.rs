@@ -186,7 +186,7 @@ impl ResourceController {
         }
     }
 
-    fn add_resource_group(&self, name: Vec<u8>, ru_quota: u64, group_priority: u32) {
+    fn add_resource_group(&self, name: Vec<u8>, ru_quota: u64, mut group_priority: u32) {
         if group_priority == 0 {
             // map 0 to medium priority(default priority)
             group_priority = MEDIUM_PRIORITY;
@@ -313,7 +313,7 @@ impl TaskPriorityProvider for ResourceController {
     }
 }
 
-fn concat_priority_vt(mut group_priority: u32, vt: u64) -> u64 {
+fn concat_priority_vt(group_priority: u32, vt: u64) -> u64 {
     assert!(group_priority >= 1 && group_priority <= 16);
 
     // map group_priority from [1, 16] to [0, 15] to limit it 4 bits and get bitwise
