@@ -7,7 +7,7 @@ use futures::{
     future::BoxFuture,
     FutureExt, SinkExt, StreamExt,
 };
-use grpcio::{RpcStatus, RpcStatusCode, ServerStreamingSink, WriteFlags};
+use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
     errorpb::{Error as PbError, *},
     logbackuppb::{FlushEvent, SubscribeFlushEventResponse},
@@ -96,15 +96,12 @@ impl SubscriptionManager {
                 sub.flush().await
             };
 
-            match send_all.await {
-                Err(err) => {
-                    let can_retry = matches!(&err, grpcio::Error::RpcFailure(rpc_err) if rpc_err.code() == RpcStatusCode::UNAVAILABLE);
-                    if !can_retry {
-                        canceled.push(*id);
-                    }
-                    Error::from(err).report("sending subscription");
+            if let Err(err) = send_all.await {
+                let can_retry = matches!(&err, grpcio::Error::RpcFailure(rpc_err) if rpc_err.code() == RpcStatusCode::UNAVAILABLE);
+                if !can_retry {
+                    canceled.push(*id);
                 }
-                _ => {}
+                Error::from(err).report("sending subscription");
             }
         }
 
@@ -129,7 +126,8 @@ impl SubscriptionManager {
 
 // Note: can we make it more generic...?
 #[cfg(not(test))]
-pub type Subscription = ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>;
+pub type Subscription =
+    grpcio::ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>;
 
 #[cfg(test)]
 pub type Subscription = tests::MockSink;
