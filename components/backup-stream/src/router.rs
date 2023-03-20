@@ -1841,7 +1841,6 @@ mod tests {
         let task = StreamTaskInfo::new(
             tmp_dir.path().to_path_buf(),
             stream_task,
-            Duration::from_secs(300),
             vec![(vec![], vec![])],
             merged_file_size_limit,
             CompressionType::Zstd,
@@ -2200,7 +2199,6 @@ mod tests {
         let task = StreamTaskInfo::new(
             tmp_dir.path().to_path_buf(),
             stream_task,
-            Duration::from_secs(300),
             vec![(vec![], vec![])],
             0x100000,
             CompressionType::Zstd,
