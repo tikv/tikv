@@ -85,39 +85,38 @@ impl<T: Send + 'static> Sender<T> {
     // It's used to make sure messages from one peer are sent in order.
     // The returned value is the priority that the message sent with. It is
     // calculated by resource controller and compared with `low_bound`.
-    pub fn send(&self, m: T, low_bound: u64) -> Result<u64, SendError<T>> {
+    pub fn send(&self, m: T, low_bound: Option<u64>) -> Result<Option<u64>, SendError<T>> {
         match self {
-            Sender::Vanilla(sender) => sender.send(m).map(|_| 0),
+            Sender::Vanilla(sender) => sender.send(m).map(|_| None),
             Sender::Priority {
                 resource_ctl,
                 sender,
                 last_msg_group,
             } => {
-                // TODO: pass different command priority
-                let priority = std::cmp::max(
-                    resource_ctl
-                        .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal),
-                    low_bound,
-                );
-                sender.send(m, priority).map(|_| priority)
+                let p = resource_ctl
+                    .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
+                let priority = if let Some(low_bound) = low_bound {
+                    std::cmp::max(p, low_bound)
+                } else {
+                    p
+                };
+                sender.send(m, priority).map(|_| Some(priority))
             }
         }
     }
 
-    pub fn try_send(&self, m: T, low_bound: u64) -> Result<u64, TrySendError<T>> {
+    pub fn try_send(&self, m: T, low_bound: Option<u64>) -> Result<Option<u64>, TrySendError<T>> {
         match self {
-            Sender::Vanilla(sender) => sender.try_send(m).map(|_| 0),
+            Sender::Vanilla(sender) => sender.try_send(m).map(|_| None),
             Sender::Priority {
                 resource_ctl,
                 sender,
                 last_msg_group,
             } => {
-                let priority = std::cmp::max(
-                    resource_ctl
-                        .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal),
-                    low_bound,
-                );
-                sender.try_send(m, priority).map(|_| priority)
+                let p = resource_ctl
+                    .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
+                let priority = std::cmp::max(p, low_bound.unwrap_or(0));
+                sender.try_send(m, priority).map(|_| Some(priority))
             }
         }
     }
@@ -215,7 +214,7 @@ mod tests {
             n1 += 1;
             let msg = Msg(1);
             tx.consume_msg_resource(&msg);
-            tx.send(msg, 0).unwrap();
+            tx.send(msg, None).unwrap();
         });
 
         drop(tx);
