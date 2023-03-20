@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::{
     annotate,
-    errors::{Error, ReportableResult, Result},
+    errors::{Error, Result},
     future,
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
     metrics,
@@ -90,10 +90,11 @@ impl SubscriptionManager {
             };
 
             match send_all.await {
-                Err(grpcio::Error::RemoteStopped) => {
-                    canceled.push(*id);
-                }
                 Err(err) => {
+                    let can_retry = matches!(&err, grpcio::Error::RpcFailure(rpc_err) if rpc_err.code() == RpcStatusCode::UNAVAILABLE);
+                    if !can_retry {
+                        canceled.push(*id);
+                    }
                     Error::from(err).report("sending subscription");
                 }
                 _ => {}
@@ -107,11 +108,10 @@ impl SubscriptionManager {
 
     async fn remove_subscription(&mut self, id: &Uuid) {
         match self.subscribers.remove(id) {
-            Some(mut sub) => {
+            Some(sub) => {
                 info!("client is gone, removing subscription"; "id" => %id);
-                sub.close()
-                    .await
-                    .report_if_err(format_args!("during removing subscription {}", id))
+                // The stream is an endless stream -- we don't need to close it.
+                drop(sub);
             }
             None => {
                 warn!("BUG: the subscriber has been removed before we are going to remove it."; "id" => %id);
