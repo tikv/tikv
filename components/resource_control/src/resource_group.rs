@@ -314,7 +314,7 @@ impl TaskPriorityProvider for ResourceController {
 }
 
 fn concat_priority_vt(group_priority: u32, vt: u64) -> u64 {
-    assert!(group_priority >= 1 && group_priority <= 16);
+    assert!((1..=16).contains(&group_priority));
 
     // map group_priority from [1, 16] to [0, 15] to limit it 4 bits and get bitwise
     // negation to replace leading 4 bits of vt. So that the priority is ordered in
