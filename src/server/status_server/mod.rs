@@ -707,14 +707,15 @@ where
 }
 
 #[derive(Serialize)]
-struct ResouceGroupSetting {
+struct ResourceGroupSetting {
     name: String,
     ru: u64,
+    priority: u32,
     burst_limit: i64,
 }
 
-fn into_debug_request_group(rg: ResourceGroup) -> ResouceGroupSetting {
-    ResouceGroupSetting {
+fn into_debug_request_group(rg: ResourceGroup) -> ResourceGroupSetting {
+    ResourceGroupSetting {
         name: rg.name,
         ru: rg
             .r_u_settings
@@ -722,6 +723,7 @@ fn into_debug_request_group(rg: ResourceGroup) -> ResouceGroupSetting {
             .get_r_u()
             .get_settings()
             .get_fill_rate(),
+        priority: rg.priority,
         burst_limit: rg
             .r_u_settings
             .get_ref()
