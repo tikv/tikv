@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter};
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry, DATA_CFS};
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use slog::{error, info, Logger};
+use slog::{error, info, warn, Logger};
 use tikv_util::{time::Instant, worker::Runnable};
 use txn_types::WriteBatchFlags;
 
