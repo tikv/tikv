@@ -1066,7 +1066,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     send_time: write_begin,
                     inspector: latency_inspect,
                 },
-                0,
+                None,
             ) {
                 warn!("send latency inspecting to write workers failed"; "err" => ?err);
             }
@@ -2464,6 +2464,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let snap_stats = self.ctx.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
+        stats.set_snapshot_stats(snap_stats.stats.into());
+
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["sending"])
             .set(snap_stats.sending_count as i64);

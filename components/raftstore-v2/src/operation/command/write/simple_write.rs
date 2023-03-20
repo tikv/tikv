@@ -463,7 +463,8 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
                 };
                 ssts.push(sst);
             }
-            *buf = left;
+            let read = is.pos();
+            *buf = &left[read as usize..];
             Some(SimpleWrite::Ingest(ssts))
         }
         tag => panic!("corrupted data: invalid tag {}", tag),
@@ -532,6 +533,24 @@ mod tests {
 
         let res = decoder.next();
         assert!(res.is_none(), "{:?}", res);
+
+        let mut encoder = SimpleWriteEncoder::with_capacity(512);
+        let exp: Vec<_> = (0..10)
+            .map(|id| {
+                let mut meta = SstMeta::default();
+                meta.set_region_id(id);
+                meta
+            })
+            .collect();
+        encoder.ingest(exp.clone());
+        let bin = encoder.encode();
+        let req_encoder = SimpleWriteReqEncoder::new(header, bin, 0, false);
+        let (bytes, _) = req_encoder.encode();
+        let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
+        let write = decoder.next().unwrap();
+        let SimpleWrite::Ingest(ssts) = write else { panic!("should be ingest") };
+        assert_eq!(exp, ssts);
+        assert_matches!(decoder.next(), None);
     }
 
     #[test]

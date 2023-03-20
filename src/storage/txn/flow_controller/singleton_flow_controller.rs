@@ -728,7 +728,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         // Because pending compaction bytes changes dramatically, take the
         // logarithm of pending compaction bytes to make the values fall into
         // a relative small range
-        let num = (self.engine.pending_compaction_bytes(self.region_id, &cf) as f64).log2();
+        let mut num = (self.engine.pending_compaction_bytes(self.region_id, &cf) as f64).log2();
+        if !num.is_finite() {
+            // 0.log2() == -inf, which is not expected and may lead to sum always be NaN
+            num = 0.0;
+        }
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
         checker.long_term_pending_bytes.observe(num);
         SCHED_PENDING_COMPACTION_BYTES_GAUGE
@@ -1078,6 +1082,15 @@ pub(super) mod tests {
         }
     }
 
+    fn send_flow_info(tx: &mpsc::SyncSender<FlowInfo>, region_id: u64) {
+        tx.send(FlowInfo::Flush("default".to_string(), 0, region_id))
+            .unwrap();
+        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
+            .unwrap();
+    }
+
     pub fn test_flow_controller_basic_impl(flow_controller: &FlowController, region_id: u64) {
         // enable flow controller
         assert_eq!(flow_controller.enabled(), true);
@@ -1130,48 +1143,34 @@ pub(super) mod tests {
 
         // exceeds the threshold on start
         stub.0.num_memtables.store(8, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0, region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(region_id), true);
         // once falls below the threshold, pass the on start check
         stub.0.num_memtables.store(1, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0, region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         // not throttle when the average of the sliding window doesn't exceeds the
         // threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0, region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), true);
 
         // the average of sliding window exceeds the threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0, region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), false);
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
 
         // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtables.store(1, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0, region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), true);
     }
+
     #[test]
     fn test_flow_controller_memtable() {
         let stub = EngineStub::new();
@@ -1198,26 +1197,17 @@ pub(super) mod tests {
 
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
-        tx.send(FlowInfo::L0("default".to_string(), 0, region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(region_id), true);
         // once fall below the threshold, pass the on start check
         stub.0.num_l0_files.store(10, Ordering::Relaxed);
-        tx.send(FlowInfo::L0("default".to_string(), 0, region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
 
         // exceeds the threshold, throttle now
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
-        tx.send(FlowInfo::L0("default".to_string(), 0, region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), false);
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
@@ -1243,41 +1233,25 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         // on start check forbids flow control
-        assert!(
-            flow_controller.discard_ratio(region_id) < f64::EPSILON,
-            "discard_ratio {}",
-            flow_controller.discard_ratio(region_id)
-        );
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
         // once fall below the threshold, pass the on start check
         stub.0
             .pending_compaction_bytes
             .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
 
         stub.0
             .pending_compaction_bytes
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
         // pending compaction bytes jump after unsafe destroy range
@@ -1291,10 +1265,7 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
         stub.0
@@ -1316,19 +1287,13 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
             .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
-            .unwrap();
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
 
@@ -1340,6 +1305,30 @@ pub(super) mod tests {
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
         let flow_controller = FlowController::Singleton(flow_controller);
         test_flow_controller_pending_compaction_bytes_impl(&flow_controller, &stub, &tx, 0);
+    }
+
+    #[test]
+    fn test_flow_controller_pending_compaction_bytes_of_zero() {
+        let region_id = 0;
+        let stub = EngineStub::new();
+        let (tx, rx) = mpsc::sync_channel(0);
+        let flow_controller =
+            EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
+        let flow_controller = FlowController::Singleton(flow_controller);
+
+        // should handle zero pending compaction bytes properly
+        stub.0.pending_compaction_bytes.store(0, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+        stub.0
+            .pending_compaction_bytes
+            .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        stub.0
+            .pending_compaction_bytes
+            .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
 
     #[test]

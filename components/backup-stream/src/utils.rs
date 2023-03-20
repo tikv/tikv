@@ -144,7 +144,7 @@ pub struct StopWatch(Instant);
 
 impl StopWatch {
     /// Create a new stopwatch via current time.
-    pub fn new() -> Self {
+    pub fn by_now() -> Self {
         Self(Instant::now_coarse())
     }
 

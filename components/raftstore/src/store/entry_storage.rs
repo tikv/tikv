@@ -960,7 +960,12 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                 .raft_engine
                 .get_entry(self.region_id, idx)
                 .unwrap()
-                .unwrap()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "region_id={}, peer_id={}, idx={idx}",
+                        self.region_id, self.peer_id
+                    )
+                })
                 .get_term())
         }
     }

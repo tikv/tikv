@@ -514,6 +514,10 @@ pub trait SnapshotExt {
         None
     }
 
+    fn get_region_id(&self) -> Option<u64> {
+        None
+    }
+
     fn get_txn_extra_op(&self) -> TxnExtraOp {
         TxnExtraOp::Noop
     }

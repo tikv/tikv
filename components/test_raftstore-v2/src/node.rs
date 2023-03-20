@@ -3,7 +3,6 @@
 use std::{
     path::Path,
     sync::{Arc, Mutex, RwLock},
-    time::Duration,
 };
 
 use collections::{HashMap, HashSet};
@@ -12,6 +11,7 @@ use encryption_export::DataKeyManager;
 use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{RaftEngine, RaftEngineReadOnly, TabletRegistry};
+use futures::Future;
 use kvproto::{
     kvrpcpb::ApiVersion,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
@@ -342,14 +342,12 @@ impl Simulator for NodeCluster {
         Ok(node_id)
     }
 
-    fn snapshot(
+    fn async_snapshot(
         &mut self,
         request: RaftCmdRequest,
-        timeout: Duration,
-    ) -> std::result::Result<
-        RegionSnapshot<<RocksEngine as engine_traits::KvEngine>::Snapshot>,
-        RaftCmdResponse,
-    > {
+    ) -> impl Future<
+        Output = std::result::Result<RegionSnapshot<engine_rocks::RocksSnapshot>, RaftCmdResponse>,
+    > + Send {
         let node_id = request.get_header().get_peer().get_store_id();
         if !self
             .trans
@@ -362,7 +360,7 @@ impl Simulator for NodeCluster {
             let mut resp = RaftCmdResponse::default();
             let e: RaftError = box_err!("missing sender for store {}", node_id);
             resp.mut_header().set_error(e.into());
-            return Err(resp);
+            // return async move {Err(resp)};
         }
 
         let mut router = {
@@ -370,7 +368,7 @@ impl Simulator for NodeCluster {
             guard.routers.get_mut(&node_id).unwrap().clone()
         };
 
-        router.snapshot(request, timeout)
+        router.snapshot(request)
     }
 
     fn async_peer_msg_on_node(&self, node_id: u64, region_id: u64, msg: PeerMsg) -> Result<()> {
@@ -432,6 +430,10 @@ impl Simulator for NodeCluster {
     fn clear_recv_filters(&mut self, node_id: u64) {
         let mut trans = self.trans.core.lock().unwrap();
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
+    }
+
+    fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {
+        self.trans.send(msg)
     }
 }
 
