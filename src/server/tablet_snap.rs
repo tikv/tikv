@@ -20,7 +20,7 @@
 use std::io;
 use std::{
     cmp,
-    convert::TryFrom,
+    convert::{TryFrom,TryInto},
     fmt::Debug,
     fs::{self, File},
     io::{BorrowedBuf, Error as IoError, ErrorKind, Read, Seek, SeekFrom, Write},
@@ -82,7 +82,11 @@ fn is_sst(file_name: &str) -> bool {
 
 async fn read_to(f: &mut File, to: &mut Vec<u8>, size: usize, limiter: &Limiter) -> Result<()> {
     // It's likely in page cache already.
-    limiter.consume(size / 2).await;
+    let cost= size/2;
+    limiter.consume(cost).await;
+    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+        .send
+        .inc_by(cost.try_into().unwrap());
     to.clear();
     to.reserve_exact(size);
     let mut buf: BorrowedBuf<'_> = to.spare_capacity_mut().into();
@@ -311,6 +315,9 @@ async fn accept_one_file(
             ));
         }
         limiter.consume(chunk_len).await;
+        SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+            .recv
+            .inc_by(chunk_len.try_into().unwrap() );
         digest.write(&chunk.data);
         f.write_all(&chunk.data)?;
         if exp_size == file_size {
@@ -605,9 +612,6 @@ async fn send_snap_files(
     let mut req = TabletSnapshotRequest::default();
     req.mut_end().set_checksum(checksum);
     sender.send((req, WriteFlags::default())).await?;
-    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
-        .send
-        .inc_by(total_sent);
     info!("sent all snap file finish"; "snap_key" => %key, "region_id" => region_id, "to_peer" => to_peer);
     sender.close().await?;
     Ok(total_sent)
@@ -668,6 +672,9 @@ pub fn send_snap(
         match recv_result {
             None => {
                 let cost = UnixSecs::now().into_inner().saturating_sub(snap_start);
+                let send_duration_sec = timer.saturating_elapsed().as_secs();
+                WAIT_SNAP_HISTOGRAM
+                    .observe((cost - generate_duration_sec - send_duration_sec) as f64);
                 // it should ignore if the duration of snapshot is less than 1s to decrease the
                 // grpc data size.
                 if cost >= 1 {
