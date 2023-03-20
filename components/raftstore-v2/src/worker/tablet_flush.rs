@@ -74,6 +74,15 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             .get(&region_id)
             .unwrap_or_else(|| &0);
         assert!(prev_applied_index < applied_index);
+        if prev_applied_index < applied_index {
+            warn!(
+                self.logger,
+                "Applied index is less than before";
+                "prev_applied_index" => prev_applied_index,
+                "current_applied_index" => applied_index,
+                "is_leader" => is_leader,
+            );
+        }
         if applied_index - prev_applied_index <= 100 {
             // We dont need to flush memtable if we just flushed before
             // figure out an appropriate number

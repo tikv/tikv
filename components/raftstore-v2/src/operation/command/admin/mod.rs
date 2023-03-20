@@ -139,6 +139,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
                             let region_id = self.region().get_id();
                             self.set_tablet_being_flushed(true);
+                            info!(
+                                self.logger,
+                                "Schedule flush tablet";
+                                "applied_index" => self.storage().apply_state().get_applied_index(),
+                            );
                             ctx.schedulers
                                 .tablet_flush
                                 .schedule(crate::TabletFlushTask::TabletFlush {
@@ -172,6 +177,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             return;
                         }
 
+                        info!(
+                            self.logger,
+                            "Propose split";
+                        );
                         self.set_tablet_being_flushed(false);
                         self.propose_split(ctx, req)
                     }
