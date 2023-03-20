@@ -16,7 +16,6 @@ use crate::{Error, PdFuture, Result};
 const INF: [u8; 1] = [0u8];
 
 /// A Get request to the meta storage.
-#[repr(transparent)]
 #[derive(Clone, Debug)]
 pub struct Get {
     inner: pb::GetRequest,
@@ -67,7 +66,6 @@ impl Get {
 }
 
 /// A Put request to the meta store.
-#[repr(transparent)]
 #[derive(Clone, Debug)]
 pub struct Put {
     inner: pb::PutRequest,
@@ -95,7 +93,6 @@ impl From<Put> for pb::PutRequest {
     }
 }
 
-#[repr(transparent)]
 #[derive(Clone, Debug)]
 pub struct Watch {
     inner: pb::WatchRequest,
