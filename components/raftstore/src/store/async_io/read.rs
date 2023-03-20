@@ -227,7 +227,6 @@ where
 
                 snap_data.set_removed_records(region_state.get_removed_records().into());
                 snap_data.set_merged_records(region_state.get_merged_records().into());
-             
 
                 // create checkpointer.
                 let snap_key = TabletSnapKey::from_region_snap(region_id, to_peer, &snapshot);

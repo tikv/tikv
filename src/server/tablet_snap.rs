@@ -413,6 +413,9 @@ async fn recv_snap_files<'a>(
         (0, vec![])
     };
     let received = accept_missing(&path, missing_ssts, &mut stream, &limiter).await?;
+    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+        .recv
+        .inc_by(received);
     info!("received all tablet snapshot file"; "snap_key" => %context.key, "region_id" => region_id, "received" => received, "reused" => reused);
     let final_path = snap_mgr.final_recv_path(&context.key);
     fs::rename(&path, final_path)?;
@@ -668,6 +671,9 @@ pub fn send_snap(
         match recv_result {
             None => {
                 let cost = UnixSecs::now().into_inner().saturating_sub(snap_start);
+                let send_duration_sec = timer.saturating_elapsed().as_secs();
+                WAIT_SNAP_HISTOGRAM
+                    .observe((cost - generate_duration_sec - send_duration_sec) as f64);
                 // it should ignore if the duration of snapshot is less than 1s to decrease the
                 // grpc data size.
                 if cost >= 1 {
