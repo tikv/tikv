@@ -73,7 +73,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             .last_applied_indexes
             .get(&region_id)
             .unwrap_or_else(|| &0);
-        assert!(prev_applied_index < applied_index);
         if prev_applied_index < applied_index {
             warn!(
                 self.logger,
