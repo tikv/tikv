@@ -117,11 +117,7 @@ impl<T: Send + 'static> Sender<T> {
             } => {
                 let p = resource_ctl
                     .get_priority(last_msg_group.borrow().as_bytes(), CommandPri::Normal);
-                let priority = if let Some(low_bound) = low_bound {
-                    std::cmp::max(p, low_bound)
-                } else {
-                    p
-                };
+                let priority = std::cmp::max(p, low_bound.unwrap_or(0));
                 sender.try_send(m, priority).map(|_| Some(priority))
             }
         }

@@ -185,6 +185,10 @@ impl ResourceController {
     }
 
     fn add_resource_group(&self, name: Vec<u8>, ru_quota: u64, group_priority: u32) {
+        if group_priority == 0 {
+            // map 0 to medium priority(default priority)
+            group_priority = MEDIUM_PRIORITY;
+        }
         let mut max_ru_quota = self.max_ru_quota.lock().unwrap();
         if ru_quota > *max_ru_quota {
             *max_ru_quota = ru_quota;
@@ -298,11 +302,8 @@ impl TaskPriorityProvider for ResourceController {
 }
 
 fn concat_priority_vt(mut group_priority: u32, vt: u64) -> u64 {
-    assert!(group_priority <= 16);
-    // map 0 to medium priority(default priority)
-    if group_priority == 0 {
-        group_priority = MEDIUM_PRIORITY;
-    }
+    assert!(group_priority >= 1 && group_priority <= 16);
+
     // map group_priority from [1, 16] to [0, 15] to limit it 4 bits and get bitwise
     // negation to replace leading 4 bits of vt. So that the priority is ordered in
     // the descending order by group_priority first, then by vt in ascending order.
@@ -586,8 +587,8 @@ pub(crate) mod tests {
 
     #[test]
     fn test_concat_priority_vt() {
-        let v1 = concat_priority_vt(0, 1000);
-        let v2 = concat_priority_vt(0, 1111);
+        let v1 = concat_priority_vt(MEDIUM_PRIORITY, 1000);
+        let v2 = concat_priority_vt(MEDIUM_PRIORITY, 1111);
         assert!(v1 < v2);
 
         let v3 = concat_priority_vt(LOW_PRIORITY, 1000);
