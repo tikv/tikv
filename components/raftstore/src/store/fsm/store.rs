@@ -1066,7 +1066,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     send_time: write_begin,
                     inspector: latency_inspect,
                 },
-                0,
+                None,
             ) {
                 warn!("send latency inspecting to write workers failed"; "err" => ?err);
             }
