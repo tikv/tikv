@@ -15,13 +15,14 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use futures::executor::block_on;
+use futures::{executor::block_on, Future};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
 use kvproto::{
     deadlock_grpc::create_deadlock,
     debugpb_grpc::DebugClient,
     diagnosticspb_grpc::create_diagnostics,
+    import_sstpb_grpc::create_import_sst,
     kvrpcpb::{ApiVersion, Context},
     metapb,
     raft_cmdpb::RaftCmdResponse,
@@ -48,7 +49,7 @@ use test_pd_client::TestPdClient;
 use test_raftstore::{filter_send, AddressMap, Config, Filter};
 use tikv::{
     coprocessor, coprocessor_v2,
-    import::SstImporter,
+    import::{ImportSstService, LocalTablets, SstImporter},
     read_pool::ReadPool,
     server::{
         gc_worker::GcWorker, load_statistics::ThreadLoadPool, lock_manager::LockManager,
@@ -241,6 +242,7 @@ pub struct ServerMeta {
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: StoreRouter<RocksEngine, RaftTestEngine>,
+    gc_worker: GcWorker<TestRaftKv2>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
@@ -462,7 +464,7 @@ impl ServerCluster {
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
         )?;
-        self.storages.insert(node_id, raft_kv_v2);
+        self.storages.insert(node_id, raft_kv_v2.clone());
 
         ReplicaReadLockChecker::new(concurrency_manager.clone()).register(&mut coprocessor_host);
 
@@ -473,13 +475,13 @@ impl ServerCluster {
                 SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
             )
         };
-        // let import_service = ImportSstService::new(
-        // cfg.import.clone(),
-        // cfg.raft_store.raft_entry_max_size,
-        // raft_kv_2.clone(),
-        // tablet_registry.clone(),
-        // Arc::clone(&importer),
-        // );
+        let import_service = ImportSstService::new(
+            cfg.import.clone(),
+            cfg.raft_store.raft_entry_max_size,
+            raft_kv_v2,
+            LocalTablets::Registry(tablet_registry.clone()),
+            Arc::clone(&importer),
+        );
 
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service();
@@ -544,7 +546,7 @@ impl ServerCluster {
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));
             svr.register_service(create_deadlock(deadlock_service.clone()));
-            // svr.register_service(create_import_sst(import_service.clone()));
+            svr.register_service(create_import_sst(import_service.clone()));
             if let Some(svcs) = self.pending_services.get(&node_id) {
                 for fact in svcs {
                     svr.register_service(fact());
@@ -578,7 +580,7 @@ impl ServerCluster {
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
         node.start(
             raft_engine,
-            tablet_registry,
+            tablet_registry.clone(),
             &raft_router,
             simulate_trans.clone(),
             snap_mgr.clone(),
@@ -614,7 +616,9 @@ impl ServerCluster {
             )
             .unwrap();
 
-        server.start(server_cfg, security_mgr).unwrap();
+        server
+            .start(server_cfg, security_mgr, tablet_registry)
+            .unwrap();
 
         self.metas.insert(
             node_id,
@@ -623,6 +627,7 @@ impl ServerCluster {
                 node,
                 server,
                 sim_router,
+                gc_worker,
                 sim_trans: simulate_trans,
                 rsmeter_cleanup,
             },
@@ -632,6 +637,10 @@ impl ServerCluster {
             .insert(node_id, concurrency_manager);
 
         Ok(node_id)
+    }
+
+    pub fn get_gc_worker(&self, node_id: u64) -> &GcWorker<TestRaftKv2> {
+        &self.metas.get(&node_id).unwrap().gc_worker
     }
 
     pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<CausalTsProviderImpl>> {
@@ -742,24 +751,25 @@ impl Simulator for ServerCluster {
         self.storages.remove(&node_id);
     }
 
-    fn snapshot(
+    fn async_snapshot(
         &mut self,
         request: kvproto::raft_cmdpb::RaftCmdRequest,
-        timeout: Duration,
-    ) -> std::result::Result<RegionSnapshot<<RocksEngine as KvEngine>::Snapshot>, RaftCmdResponse>
-    {
+    ) -> impl Future<
+        Output = std::result::Result<RegionSnapshot<engine_rocks::RocksSnapshot>, RaftCmdResponse>,
+    > + Send {
         let node_id = request.get_header().get_peer().get_store_id();
         let mut router = match self.metas.get(&node_id) {
             None => {
                 let mut resp = RaftCmdResponse::default();
                 let e: RaftError = box_err!("missing sender for store {}", node_id);
                 resp.mut_header().set_error(e.into());
-                return Err(resp);
+                // return async move {Err(resp)};
+                unreachable!()
             }
             Some(meta) => meta.sim_router.clone(),
         };
 
-        router.snapshot(request, timeout)
+        router.snapshot(request)
     }
 
     fn async_peer_msg_on_node(
@@ -786,6 +796,10 @@ impl Simulator for ServerCluster {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn send_raft_msg(&mut self, _msg: RaftMessage) -> raftstore::Result<()> {
+        unimplemented!()
     }
 }
 

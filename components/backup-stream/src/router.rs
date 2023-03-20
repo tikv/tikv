@@ -1174,7 +1174,7 @@ impl StreamTaskInfo {
                 return Ok(None);
             }
             let begin = Instant::now_coarse();
-            let mut sw = StopWatch::new();
+            let mut sw = StopWatch::by_now();
 
             // generate meta data and prepare to flush to storage
             let mut metadata_info = self

@@ -205,9 +205,11 @@
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
-## Max bytes that snapshot can be written to disk in one second.
-## It should be set based on your disk performance.
-# snap-max-write-bytes-per-sec = "100MB"
+## Max bytes that snapshot can interact with disk in one second. It should be
+## set based on your disk performance. Only write flow is considered, if
+## partiioned-raft-kv is used, read flow is also considered and it will be estimated
+## as read_size * 0.5 to get around errors from page cache.
+# snap-io-max-bytes-per-sec = "100MB"
 
 ## Whether to enable request batch.
 # enable-request-batch = true
@@ -1099,8 +1101,16 @@
 ## Only available for `format-version` >= 2. This option is only
 ## available when TiKV >= 6.3.x.
 ##
-## Default: false.
-# enable-log-recycle = false
+## Default: true.
+# enable-log-recycle = true
+
+## Whether to prepare log files for recycling when start.
+## If `true`, batch empty log files will be prepared for recycling when
+## starting engine.
+## Only available for `enable-log-reycle` is true.
+##
+## Default: false
+# prefill-for-recycle = false
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.

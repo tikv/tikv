@@ -50,7 +50,7 @@ use test_pd_client::TestPdClient;
 use tikv::{
     config::ConfigController,
     coprocessor, coprocessor_v2,
-    import::{ImportSstService, SstImporter},
+    import::{ImportSstService, LocalTablets, SstImporter},
     read_pool::ReadPool,
     server::{
         gc_worker::GcWorker,
@@ -59,6 +59,7 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
         service::DebugService,
+        tablet_snap::NoSnapshotCache,
         ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
@@ -441,7 +442,7 @@ impl ServerCluster {
             cfg.import.clone(),
             cfg.raft_store.raft_entry_max_size,
             engine,
-            engines.kv.clone(),
+            LocalTablets::Singleton(engines.kv.clone()),
             Arc::clone(&importer),
         );
 
@@ -452,7 +453,7 @@ impl ServerCluster {
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&self.pd_client), &bg_worker, extension.clone());
         let snap_mgr = SnapManagerBuilder::default()
-            .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+            .max_write_bytes_per_sec(cfg.server.snap_io_max_bytes_per_sec.0 as i64)
             .max_total_size(cfg.server.snap_max_total_size.0)
             .encryption_key_manager(key_manager)
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
@@ -620,7 +621,9 @@ impl ServerCluster {
             )
             .unwrap();
 
-        server.start(server_cfg, security_mgr).unwrap();
+        server
+            .start(server_cfg, security_mgr, NoSnapshotCache)
+            .unwrap();
 
         self.metas.insert(
             node_id,

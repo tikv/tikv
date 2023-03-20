@@ -8,11 +8,13 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use dashmap::{mapref::one::Ref, DashMap};
 use kvproto::{
     kvrpcpb::CommandPri,
     resource_manager::{GroupMode, ResourceGroup},
 };
+use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use tikv_util::info;
 use yatp::queue::priority::TaskPriorityProvider;
 
@@ -150,7 +152,7 @@ pub struct ResourceController {
     // groups' factors, it can't be changed concurrently.
     max_ru_quota: Mutex<u64>,
     // record consumption of each resource group, name --> resource_group
-    resource_consumptions: DashMap<Vec<u8>, GroupPriorityTracker>,
+    resource_consumptions: RwLock<HashMap<Vec<u8>, GroupPriorityTracker>>,
 
     last_min_vt: AtomicU64,
 }
@@ -161,7 +163,7 @@ impl ResourceController {
             name,
             is_read,
             max_ru_quota: Mutex::new(DEFAULT_MAX_RU_QUOTA),
-            resource_consumptions: DashMap::new(),
+            resource_consumptions: RwLock::new(HashMap::default()),
             last_min_vt: AtomicU64::new(0),
         };
         // add the "default" resource group
@@ -211,7 +213,7 @@ impl ResourceController {
         };
 
         // maybe update existed group
-        self.resource_consumptions.insert(name, group);
+        self.resource_consumptions.write().insert(name, group);
     }
 
     // we calculate the weight of each resource group based on the currently maximum
@@ -220,9 +222,12 @@ impl ResourceController {
     // often, and iterate 10k entry cost less than 5ms, so the performance is
     // acceptable.
     fn adjust_all_resource_group_factors(&self, max_ru_quota: u64) {
-        self.resource_consumptions.iter_mut().for_each(|mut g| {
-            g.value_mut().weight = Self::calculate_factor(max_ru_quota, g.ru_quota);
-        });
+        self.resource_consumptions
+            .write()
+            .iter_mut()
+            .for_each(|(_, tracker)| {
+                tracker.weight = Self::calculate_factor(max_ru_quota, tracker.ru_quota);
+            });
     }
 
     fn remove_resource_group(&self, name: &[u8]) {
@@ -235,18 +240,19 @@ impl ResourceController {
             );
             return;
         }
-        self.resource_consumptions.remove(name);
+        self.resource_consumptions.write().remove(name);
     }
 
     #[inline]
-    fn resource_group(&self, name: &[u8]) -> Ref<'_, Vec<u8>, GroupPriorityTracker> {
-        if let Some(g) = self.resource_consumptions.get(name) {
-            g
-        } else {
-            self.resource_consumptions
-                .get(DEFAULT_RESOURCE_GROUP_NAME.as_bytes())
-                .unwrap()
-        }
+    fn resource_group(&self, name: &[u8]) -> MappedRwLockReadGuard<'_, GroupPriorityTracker> {
+        let guard = self.resource_consumptions.read();
+        RwLockReadGuard::map(guard, |m| {
+            if let Some(g) = m.get(name) {
+                g
+            } else {
+                m.get(DEFAULT_RESOURCE_GROUP_NAME.as_bytes()).unwrap()
+            }
+        })
     }
 
     pub fn consume(&self, name: &[u8], delta: ResourceConsumeType) {
@@ -256,15 +262,18 @@ impl ResourceController {
     pub fn update_min_virtual_time(&self) {
         let mut min_vt = u64::MAX;
         let mut max_vt = 0;
-        self.resource_consumptions.iter().for_each(|g| {
-            let vt = g.current_vt();
-            if min_vt > vt {
-                min_vt = vt;
-            }
-            if max_vt < vt {
-                max_vt = vt;
-            }
-        });
+        self.resource_consumptions
+            .read()
+            .iter()
+            .for_each(|(_, tracker)| {
+                let vt = tracker.current_vt();
+                if min_vt > vt {
+                    min_vt = vt;
+                }
+                if max_vt < vt {
+                    max_vt = vt;
+                }
+            });
 
         // TODO: use different threshold for different resource type
         // needn't do update if the virtual different is less than 100ms/100KB.
@@ -272,13 +281,16 @@ impl ResourceController {
             return;
         }
 
-        self.resource_consumptions.iter().for_each(|g| {
-            let vt = g.current_vt();
-            if vt < max_vt {
-                // TODO: is increase by half is a good choice.
-                g.increase_vt((max_vt - vt) / 2);
-            }
-        });
+        self.resource_consumptions
+            .read()
+            .iter()
+            .for_each(|(_, tracker)| {
+                let vt = tracker.current_vt();
+                if vt < max_vt {
+                    // TODO: is increase by half is a good choice.
+                    tracker.increase_vt((max_vt - vt) / 2);
+                }
+            });
         // max_vt is actually a little bigger than the current min vt, but we don't
         // need totally accurate here.
         self.last_min_vt.store(max_vt, Ordering::Relaxed);
@@ -447,7 +459,7 @@ pub(crate) mod tests {
         assert_eq!(resource_manager.resource_groups.len(), 2);
 
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
-        assert_eq!(resource_ctl.resource_consumptions.len(), 3);
+        assert_eq!(resource_ctl.resource_consumptions.read().len(), 3);
 
         let group1 = resource_ctl.resource_group("test".as_bytes());
         assert_eq!(group1.weight, 500);
@@ -515,7 +527,7 @@ pub(crate) mod tests {
         let new_group = new_resource_group_ru("new_group".into(), 500, HIGH_PRIORITY);
         resource_manager.add_resource_group(new_group);
 
-        assert_eq!(resource_ctl.resource_consumptions.len(), 4);
+        assert_eq!(resource_ctl.resource_consumptions.read().len(), 4);
         let group3 = resource_ctl.resource_group("new_group".as_bytes());
         assert_eq!(group3.weight, 200);
         assert!(group3.current_vt() >= group1_vt / 2);
@@ -566,22 +578,34 @@ pub(crate) mod tests {
             let group1 = new_resource_group_ru(format!("group{}", i), 100, 0);
             resource_manager.add_resource_group(group1);
         }
+        // consume for default group
+        resource_ctl.consume(
+            b"default",
+            ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
+        );
+        resource_ctl_write.consume(b"default", ResourceConsumeType::IoBytes(10000));
+
         assert_eq!(resource_manager.get_all_resource_groups().len(), 10);
-        assert_eq!(resource_ctl.resource_consumptions.len(), 11); // 10 + 1(default)
-        assert_eq!(resource_ctl_write.resource_consumptions.len(), 11);
+        assert_eq!(resource_ctl.resource_consumptions.read().len(), 11); // 10 + 1(default)
+        assert_eq!(resource_ctl_write.resource_consumptions.read().len(), 11);
 
         resource_manager.retain(|k, _v| k.starts_with("test"));
         assert_eq!(resource_manager.get_all_resource_groups().len(), 5);
-        assert_eq!(resource_ctl.resource_consumptions.len(), 6);
-        assert_eq!(resource_ctl_write.resource_consumptions.len(), 6);
+        assert_eq!(resource_ctl.resource_consumptions.read().len(), 6);
+        assert_eq!(resource_ctl_write.resource_consumptions.read().len(), 6);
         assert!(resource_manager.get_resource_group("group1").is_none());
-        assert_eq!(
-            resource_ctl.resource_group("group2".as_bytes()).key(),
-            "default".as_bytes()
+        // should use the virtual time of default group for non-exist group
+        assert_ne!(
+            resource_ctl
+                .resource_group("group2".as_bytes())
+                .current_vt(),
+            0
         );
-        assert_eq!(
-            resource_ctl_write.resource_group("group2".as_bytes()).key(),
-            "default".as_bytes()
+        assert_ne!(
+            resource_ctl_write
+                .resource_group("group2".as_bytes())
+                .current_vt(),
+            0
         );
     }
 
