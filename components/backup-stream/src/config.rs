@@ -27,11 +27,12 @@ impl ConfigManager for BackupStreamConfigManager {
         change: ConfigChange,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         info!(
-            " log backup config changed";
+            "log backup config changed";
             "change" => ?change,
         );
         let mut cfg = self.config.as_ref().write().unwrap();
         cfg.update(change)?;
+        cfg.validate()?;
 
         self.scheduler.schedule(Task::ChangeConfig(cfg.clone()))?;
         Ok(())

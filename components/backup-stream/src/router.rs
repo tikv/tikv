@@ -2350,4 +2350,20 @@ mod tests {
             _ => panic!("unexpected cmd!"),
         }
     }
+
+    #[test]
+    fn test_udpate_invalid_config() {
+        let cfg = BackupStreamConfig::default();
+        let (sched, _) = dummy_scheduler();
+        let mut cfg_manager = BackupStreamConfigManager::new(sched, cfg.clone());
+
+        let new_cfg = BackupStreamConfig {
+            max_flush_interval: ReadableDuration::secs(0),
+            ..Default::default()
+        };
+
+        let changed = cfg.diff(&new_cfg);
+        let r = cfg_manager.dispatch(changed);
+        assert!(r.is_err());
+    }
 }
