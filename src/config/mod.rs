@@ -1800,7 +1800,13 @@ impl Default for RaftEngineConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            config: RawRaftEngineConfig::default(),
+            config: RawRaftEngineConfig {
+                // TODO: after update the dependency to `raft-engine` lib, revokes the
+                // following unelegant settings.
+                // Enable log recycling by default.
+                enable_log_recycle: true,
+                ..RawRaftEngineConfig::default()
+            },
         }
     }
 }
