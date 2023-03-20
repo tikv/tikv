@@ -214,7 +214,7 @@ mod tests {
             n1 += 1;
             let msg = Msg(1);
             tx.consume_msg_resource(&msg);
-            tx.send(msg, 0).unwrap();
+            tx.send(msg, None).unwrap();
         });
 
         drop(tx);
