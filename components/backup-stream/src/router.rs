@@ -1517,15 +1517,17 @@ mod tests {
     use external_storage::{ExternalData, NoopStorage};
     use futures::AsyncReadExt;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
+    use online_config::{ConfigManager, OnlineConfig};
     use tikv_util::{
         codec::number::NumberEncoder,
+        config::ReadableDuration,
         worker::{dummy_scheduler, ReceiverWrapper},
     };
     use tokio::fs::File;
     use txn_types::{Write, WriteType};
 
     use super::*;
-    use crate::utils;
+    use crate::{config::BackupStreamConfigManager, utils};
 
     #[derive(Debug)]
     struct KvEventsBuilder {
@@ -2311,5 +2313,41 @@ mod tests {
         .await;
         assert_eq!(result.is_ok(), true);
         Ok(())
+    }
+
+    #[test]
+    fn test_update_config() {
+        let (sched, rx) = dummy_scheduler();
+        let cfg = BackupStreamConfig::default();
+        let router = Arc::new(RouterInner::new(
+            PathBuf::new(),
+            sched.clone(),
+            1,
+            cfg.max_flush_interval.0,
+        ));
+
+        let mut cfg_manager = BackupStreamConfigManager::new(sched, cfg.clone());
+
+        let _new_cfg = BackupStreamConfig {
+            max_flush_interval: ReadableDuration::minutes(2),
+            ..Default::default()
+        };
+
+        let changed = cfg.diff(&_new_cfg);
+        cfg_manager.dispatch(changed).unwrap();
+
+        let cmds = collect_recv(rx);
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            Task::ChangeConfig(cfg) => {
+                assert!(matches!(cfg, _new_cfg));
+                router.udpate_config(cfg);
+                assert_eq!(
+                    router.max_flush_interval.rl().to_owned(),
+                    _new_cfg.max_flush_interval.0
+                );
+            }
+            _ => panic!("unexpected cmd!"),
+        }
     }
 }
