@@ -76,6 +76,8 @@ where
             });
             ctx.spawn(send_task);
         } else {
+            // check pending admin reqeust is used for EBS Backup.
+            // for raftstore v2. we don't need it for now. so just return unimplemented
             ctx.spawn(
                 sink.fail(RpcStatus::with_message(
                     RpcStatusCode::UNIMPLEMENTED,

@@ -8,6 +8,7 @@
 
 #[cfg(test)]
 extern crate test;
+
 use std::{
     cmp,
     collections::{
