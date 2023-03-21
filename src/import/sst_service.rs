@@ -29,7 +29,9 @@ use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, Error, Result,
     SstImporter,
 };
-use tikv_kv::{Engine, Modify, SnapContext, Snapshot, SnapshotExt, WriteData, WriteEvent};
+use tikv_kv::{
+    Engine, LocalTablets, Modify, SnapContext, Snapshot, SnapshotExt, WriteData, WriteEvent,
+};
 use tikv_util::{
     config::ReadableSize,
     future::create_stream_with_buffer,
@@ -39,7 +41,7 @@ use tikv_util::{
 use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
-use super::{make_rpc_error, LocalTablets};
+use super::make_rpc_error;
 use crate::{
     import::duplicate_detect::DuplicateDetector,
     server::CONFIG_ROCKSDB_GAUGE,

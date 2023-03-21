@@ -48,7 +48,7 @@ use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
 use kvproto::{
-    deadlock::create_deadlock, diagnosticspb::create_diagnostics,
+    brpb::create_backup, deadlock::create_deadlock, diagnosticspb::create_diagnostics,
     import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
@@ -74,7 +74,7 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    import::{ImportSstService, LocalTablets, SstImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::{
         build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
     },
@@ -92,6 +92,7 @@ use tikv::{
     storage::{
         self,
         config_manager::StorageConfigManger,
+        kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{FlowController, TabletFlowController},
         Engine, Storage,
@@ -980,6 +981,34 @@ where
     fn register_services(&mut self) {
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
+
+        // Backup service.
+        let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
+        let backup_scheduler = backup_worker.scheduler();
+        let backup_service = backup::Service::<RocksEngine, ER>::new(backup_scheduler);
+        if servers
+            .server
+            .register_service(create_backup(backup_service))
+            .is_some()
+        {
+            fatal!("failed to register backup service");
+        }
+
+        let backup_endpoint = backup::Endpoint::new(
+            self.node.as_ref().unwrap().id(),
+            engines.engine.clone(),
+            self.region_info_accessor.clone().unwrap(),
+            LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
+            self.config.backup.clone(),
+            self.concurrency_manager.clone(),
+            self.config.storage.api_version(),
+            self.causal_ts_provider.clone(),
+        );
+        self.cfg_controller.as_mut().unwrap().register(
+            tikv::config::Module::Backup,
+            Box::new(backup_endpoint.get_config_manager()),
+        );
+        backup_worker.start(backup_endpoint);
 
         // Import SST service.
         let import_service = ImportSstService::new(

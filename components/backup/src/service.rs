@@ -1,47 +1,53 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{marker::PhantomData, sync::atomic::*};
+use std::sync::atomic::*;
 
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, RaftEngine};
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::brpb::*;
-use raftstore::{
-    router::RaftStoreRouter,
-    store::msg::{PeerMsg, SignificantMsg},
+use raftstore::store::{
+    fsm::store::RaftRouter,
+    msg::{PeerMsg, SignificantMsg},
 };
 use tikv_util::{error, info, worker::*};
 
 use super::Task;
 
 /// Service handles the RPC messages for the `Backup` service.
-
 #[derive(Clone)]
-pub struct Service<E, RR> {
+pub struct Service<EK: KvEngine, ER: RaftEngine> {
     scheduler: Scheduler<Task>,
-    router: RR,
-    _phantom: PhantomData<E>,
+    router: Option<RaftRouter<EK, ER>>,
 }
 
-impl<E, RR> Service<E, RR>
+impl<EK, ER> Service<EK, ER>
 where
-    E: KvEngine,
-    RR: RaftStoreRouter<E>,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
-    /// Create a new backup service.
-    pub fn new(scheduler: Scheduler<Task>, router: RR) -> Self {
+    // Create a new backup service without router, this used for raftstore v2.
+    // because we don't have RaftStoreRouter any more.
+    pub fn new(scheduler: Scheduler<Task>) -> Self {
         Service {
             scheduler,
-            router,
-            _phantom: PhantomData,
+            router: None,
+        }
+    }
+
+    // Create a new backup service with router, this used for raftstore v1.
+    pub fn new_with_router(scheduler: Scheduler<Task>, router: RaftRouter<EK, ER>) -> Self {
+        Service {
+            scheduler,
+            router: Some(router),
         }
     }
 }
 
-impl<E, RR> Backup for Service<E, RR>
+impl<EK, ER> Backup for Service<EK, ER>
 where
-    E: KvEngine,
-    RR: RaftStoreRouter<E>,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
     fn check_pending_admin_op(
         &mut self,
@@ -50,25 +56,36 @@ where
         mut sink: ServerStreamingSink<CheckAdminResponse>,
     ) {
         let (tx, rx) = mpsc::unbounded();
-        self.router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
-        });
-
-        let send_task = async move {
-            let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
-            sink.send_all(&mut s).await?;
-            sink.close().await?;
-            Ok(())
+        if let Some(router) = &self.router {
+            router.broadcast_normal(|| {
+                PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
+            });
+            let send_task = async move {
+                let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
+                sink.send_all(&mut s).await?;
+                sink.close().await?;
+                Ok(())
+            }
+            .map(|res: Result<()>| match res {
+                Ok(_) => {
+                    info!("check admin closed");
+                }
+                Err(e) => {
+                    error!("check admin canceled"; "error" => ?e);
+                }
+            });
+            ctx.spawn(send_task);
+        } else {
+            ctx.spawn(
+                sink.fail(RpcStatus::with_message(
+                    RpcStatusCode::UNIMPLEMENTED,
+                    "check_pending_admin_op is unimplemented".to_string(),
+                ))
+                .unwrap_or_else(
+                    |e| error!("check_pending_admin_op failed to send error"; "error" => ?e),
+                ),
+            )
         }
-        .map(|res: Result<()>| match res {
-            Ok(_) => {
-                info!("check admin closed");
-            }
-            Err(e) => {
-                error!("check admin canceled"; "error" => ?e);
-            }
-        });
-        ctx.spawn(send_task);
     }
 
     fn backup(
@@ -142,8 +159,7 @@ mod tests {
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let backup_service =
-            super::Service::<RocksEngine, RaftStoreBlackHole>::new(scheduler, RaftStoreBlackHole);
+        let backup_service = super::Service::<RocksEngine>::new(scheduler);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();

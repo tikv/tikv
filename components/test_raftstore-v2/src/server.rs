@@ -49,7 +49,7 @@ use test_pd_client::TestPdClient;
 use test_raftstore::{filter_send, AddressMap, Config, Filter};
 use tikv::{
     coprocessor, coprocessor_v2,
-    import::{ImportSstService, LocalTablets, SstImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
         gc_worker::GcWorker, load_statistics::ThreadLoadPool, lock_manager::LockManager,
@@ -59,7 +59,7 @@ use tikv::{
     },
     storage::{
         self,
-        kv::{FakeExtension, RaftExtension, SnapContext},
+        kv::{FakeExtension, LocalTablets, RaftExtension, SnapContext},
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
