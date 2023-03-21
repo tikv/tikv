@@ -23,4 +23,3 @@ pub mod utils;
 pub use checkpoint_manager::GetCheckpointResult;
 pub use endpoint::{Endpoint, ObserveOp, RegionCheckpointOperation, RegionSet, Task};
 pub use service::Service;
-pub(crate) use tikv_util::fut as future;

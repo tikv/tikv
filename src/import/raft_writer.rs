@@ -7,11 +7,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use futures::{Stream, StreamExt};
+use futures::{Future, Stream, StreamExt};
 use kvproto::kvrpcpb::Context;
 use sst_importer::metrics::{APPLIER_ENGINE_REQUEST_DURATION, APPLIER_EVENT, IMPORTER_APPLY_BYTES};
 use tikv_kv::{with_tls_engine, Engine, WriteData, WriteEvent};
-use tikv_util::{fut, time::Instant};
+use tikv_util::time::Instant;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::storage;
@@ -36,6 +36,10 @@ async fn acquire_semaphore(smp: &Arc<Semaphore>) -> Option<SemaphorePermit<'_>> 
 }
 
 #[derive(Clone, Default)]
+/// A structure for throttling write throughput by region.
+/// It uses the [`Engine`] stored in the thread local storage to write data.
+/// Check the method [`tikv_kv::set_tls_engine`] for more details about the
+/// thread local engine.
 pub(crate) struct ThrottledTlsEngineWriter(Arc<Mutex<Inner>>);
 
 impl ThrottledTlsEngineWriter {
@@ -50,14 +54,17 @@ impl ThrottledTlsEngineWriter {
         &self,
         wd: WriteData,
         ctx: Context,
-    ) -> fut![storage::Result<()>] {
+    ) -> impl Future<Output = storage::Result<()>> + Send + 'static {
         let mut this = self.0.lock().unwrap();
         let max_permit = this.max_permit;
         let start = Instant::now_coarse();
         let sem = this
             .sems
             .entry(ctx.get_region_id())
-            .or_insert_with(|| Arc::new(Semaphore::new(max_permit)))
+            .or_insert_with(|| {
+                APPLIER_EVENT.with_label_values(&["new-writer"]).inc();
+                Arc::new(Semaphore::new(max_permit))
+            })
             .clone();
         async move {
             APPLIER_ENGINE_REQUEST_DURATION
@@ -105,7 +112,14 @@ impl ThrottledTlsEngineWriter {
         }
 
         let mut this = self.0.lock().unwrap();
+
+        let before_count = this.sems.len();
         this.sems.retain(|_, v| Arc::strong_count(v) > 1);
+        let after_count = this.sems.len();
+
+        APPLIER_EVENT
+            .with_label_values(&["gc-writer"])
+            .inc_by((before_count.saturating_sub(after_count)) as _);
         true
     }
 
@@ -199,7 +213,7 @@ mod test {
         fn send_to_applier(
             &self,
             args: impl std::iter::Iterator<Item = (WriteData, Context)>,
-        ) -> fut![()] {
+        ) -> impl Future<Output = ()> {
             let fut = args
                 .map(|arg| {
                     self.rt.spawn(

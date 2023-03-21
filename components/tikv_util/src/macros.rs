@@ -141,15 +141,6 @@ macro_rules! safe_panic {
     });
 }
 
-/// A shortcut for making an opaque future type for return type or argument
-/// type, which is sendable and not borrowing any variables.  
-///
-/// `fut![T]` == `impl Future<Output = T> + Send + 'static`
-#[macro_export]
-macro_rules! fut {
-    ($t:ty) => { impl core::future::Future<Output = $t> + Send + 'static };
-}
-
 #[macro_export]
 macro_rules! impl_format_delegate_newtype {
     ($t:ty) => {

@@ -822,6 +822,15 @@ impl<'a> slog::KV for SlogRegion<'a> {
     }
 }
 
+/// A shortcut for making an opaque future type for return type or argument
+/// type, which is sendable and not borrowing any variables.  
+///
+/// `future![T]` == `impl Future<Output = T> + Send + 'static`
+#[macro_export]
+macro_rules! future {
+    ($t:ty) => { impl core::future::Future<Output = $t> + Send + 'static };
+}
+
 pub fn debug_iter<D: std::fmt::Debug>(t: impl Iterator<Item = D>) -> impl std::fmt::Debug {
     DebugIter(RefCell::new(t))
 }

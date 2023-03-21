@@ -68,6 +68,10 @@ const REQUEST_WRITE_CONCURRENCY: usize = 16;
 /// content length is greater than 128, however when the length is greater than
 /// 128, the extra 1~4 bytes can be ignored.
 const WIRE_EXTRA_BYTES: usize = 10;
+/// The interval of running the GC for
+/// [`raft_writer::ThrottledTlsEngineWriter`]. There aren't too many items held
+/// in the writer. So we can run the GC less frequently.
+const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
 
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
@@ -113,7 +117,7 @@ pub struct ImportSstService<E: Engine> {
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
 
-    applier: raft_writer::ThrottledTlsEngineWriter,
+    writer: raft_writer::ThrottledTlsEngineWriter,
 }
 
 struct RequestCollector {
@@ -305,11 +309,13 @@ impl<E: Engine> ImportSstService<E> {
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(threads.handle(), tablet.clone());
         }
-        let applier = raft_writer::ThrottledTlsEngineWriter::default();
-        let gc_handle = applier.clone();
+        threads.spawn(Self::tick(importer.clone()));
+
+        let writer = raft_writer::ThrottledTlsEngineWriter::default();
+        let gc_handle = writer.clone();
         threads.spawn(async move {
             while gc_handle.try_gc() {
-                tokio::time::sleep(Duration::from_secs(300)).await;
+                tokio::time::sleep(WRITER_GC_INTERVAL).await;
             }
         });
 
@@ -325,7 +331,7 @@ impl<E: Engine> ImportSstService<E> {
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
-            applier,
+            writer,
         }
     }
 
@@ -488,7 +494,7 @@ impl<E: Engine> ImportSstService<E> {
     async fn apply_imp(
         mut req: ApplyRequest,
         importer: Arc<SstImporter>,
-        handle: raft_writer::ThrottledTlsEngineWriter,
+        writer: raft_writer::ThrottledTlsEngineWriter,
         limiter: Limiter,
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {
@@ -546,7 +552,7 @@ impl<E: Engine> ImportSstService<E> {
                 // SAFETY: we have registered the thread local storage engine into the thread
                 // when creating them.
                 let task = unsafe {
-                    handle
+                    writer
                         .write::<E>(w, context.clone())
                         .map_err(transfer_error)
                 };
@@ -765,7 +771,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let importer = self.importer.clone();
         let limiter = self.limiter.clone();
         let max_raft_size = self.raft_entry_max_size.0 as usize;
-        let applier = self.applier.clone();
+        let applier = self.writer.clone();
 
         let handle_task = async move {
             // Records how long the apply task waits to be scheduled.
