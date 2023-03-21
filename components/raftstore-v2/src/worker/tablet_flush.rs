@@ -27,13 +27,9 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Task::TabletFlush {
-                region_id,
-                req,
-                is_leader,
-                applied_index,
-                ch,
-            } => unimplemented!(),
+            Task::TabletFlush { region_id, .. } => {
+                write!(f, "Flush tablet before split for region {}", region_id)
+            }
         }
     }
 }
@@ -64,7 +60,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     fn flush_tablet(
         &mut self,
         region_id: u64,
-        mut req: Option<RaftCmdRequest>,
+        req: Option<RaftCmdRequest>,
         is_leader: bool,
         applied_index: u64,
         ch: Option<CmdResChannel>,
@@ -82,26 +78,43 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 "is_leader" => is_leader,
             );
         }
-        if applied_index - prev_applied_index <= 100 {
+        let mut need_flush = true;
+        if applied_index > prev_applied_index && applied_index - prev_applied_index <= 200 {
             // We dont need to flush memtable if we just flushed before
-            // figure out an appropriate number
+            need_flush = false;
         }
 
         self.last_applied_indexes.insert(region_id, applied_index);
         if let Some(mut cache) = self.tablet_registry.get(region_id) {
             if let Some(tablet) = cache.latest() {
-                let now = Instant::now();
-                tablet.flush_cfs(DATA_CFS, true).unwrap();
-                let elapsed = now.saturating_elapsed();
                 info!(
                     self.logger,
-                    "Flush memtable time consumes";
+                    "Begin flush memtable time";
                     "region_id" =>  region_id,
-                    "duration" => ?elapsed,
                     "prev_applied_index" => prev_applied_index,
                     "current_applied_index" => applied_index,
                     "is_leader" => is_leader,
                 );
+
+                if need_flush {
+                    let now = Instant::now();
+                    tablet.flush_cfs(DATA_CFS, true).unwrap();
+                    let elapsed = now.saturating_elapsed();
+                    info!(
+                        self.logger,
+                        "Flush memtable time consumes";
+                        "region_id" =>  region_id,
+                        "duration" => ?elapsed,
+                        "prev_applied_index" => prev_applied_index,
+                        "current_applied_index" => applied_index,
+                        "is_leader" => is_leader,
+                    );
+                } else {
+                    info!(
+                        self.logger,
+                        "Skip flush memtable";
+                    );
+                }
 
                 if is_leader {
                     let mut req = req.unwrap();

@@ -218,16 +218,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
                         return;
                     }
-                    ctx.schedulers
-                        .tablet_flush
-                        .schedule(crate::TabletFlushTask::TabletFlush {
-                            region_id: self.region().get_id(),
-                            req: None,
-                            is_leader: false,
-                            applied_index: self.storage().apply_state().get_applied_index(),
-                            ch: None,
-                        })
-                        .unwrap(); // todo
+                    let _ =
+                        ctx.schedulers
+                            .tablet_flush
+                            .schedule(crate::TabletFlushTask::TabletFlush {
+                                region_id: self.region().get_id(),
+                                req: None,
+                                is_leader: false,
+                                applied_index: self.storage().apply_state().get_applied_index(),
+                                ch: None,
+                            });
                     return;
                 }
                 _ => {}

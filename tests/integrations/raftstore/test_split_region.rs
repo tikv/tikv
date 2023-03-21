@@ -145,87 +145,13 @@ fn test_server_split_region_twice() {
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
-fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(REGION_MAX_SIZE));
-    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(REGION_SPLIT_SIZE));
-
-    let check_size_diff = cluster.cfg.raft_store.region_split_check_diff().0;
-    let mut range = 1..;
-
-    cluster.run();
-
-    let pd_client = Arc::clone(&cluster.pd_client);
-
-    let region = pd_client.get_region(b"").unwrap();
-
-    let last_key = put_till_size(cluster, REGION_SPLIT_SIZE, &mut range);
-
-    // it should be finished in millis if split.
-    thread::sleep(Duration::from_millis(300));
-
-    let target = pd_client.get_region(&last_key).unwrap();
-
-    assert_eq!(region, target);
-
-    let max_key = put_cf_till_size(
-        cluster,
-        CF_WRITE,
-        REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
-        &mut range,
-    );
-
-    let left = pd_client.get_region(b"").unwrap();
-    let right = pd_client.get_region(&max_key).unwrap();
-    if left == right {
-        cluster.wait_region_split(&region);
-    }
-
-    let left = pd_client.get_region(b"").unwrap();
-    let right = pd_client.get_region(&max_key).unwrap();
-
-    assert_ne!(left, right);
-    assert_eq!(region.get_start_key(), left.get_start_key());
-    assert_eq!(right.get_start_key(), left.get_end_key());
-    assert_eq!(region.get_end_key(), right.get_end_key());
-    assert_eq!(pd_client.get_region(&max_key).unwrap(), right);
-    assert_eq!(pd_client.get_region(left.get_end_key()).unwrap(), right);
-
-    let middle_key = left.get_end_key();
-    let leader = cluster.leader_of_region(left.get_id()).unwrap();
-    let store_id = leader.get_store_id();
-    let mut size = 0;
-    cluster.engines[&store_id]
-        .kv
-        .scan(
-            CF_DEFAULT,
-            &data_key(b""),
-            &data_key(middle_key),
-            false,
-            |k, v| {
-                size += k.len() as u64;
-                size += v.len() as u64;
-                Ok(true)
-            },
-        )
-        .expect("");
-    assert!(size <= REGION_SPLIT_SIZE);
-    // although size may be smaller than REGION_SPLIT_SIZE, but the diff should
-    // be small.
-    assert!(size > REGION_SPLIT_SIZE - 1000);
-
-    let epoch = left.get_region_epoch().clone();
-    let get = new_request(left.get_id(), epoch, vec![new_get_cmd(&max_key)], false);
-    let resp = cluster
-        .call_command_on_leader(get, Duration::from_secs(5))
-        .unwrap();
-    assert!(resp.get_header().has_error());
-    assert!(resp.get_header().get_error().has_key_not_in_region());
-}
-
 #[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore::new_incompatible_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-fn test_node_auto_split_region() {
+#[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_incompatible_node_cluster)]
+fn test_auto_split_region() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
@@ -277,24 +203,24 @@ fn test_node_auto_split_region() {
     let leader = cluster.leader_of_region(left.get_id()).unwrap();
     let store_id = leader.get_store_id();
     let mut size = 0;
-    // cluster.engines[&store_id]
-    //     .kv
-    //     .scan(
-    //         CF_DEFAULT,
-    //         &data_key(b""),
-    //         &data_key(middle_key),
-    //         false,
-    //         |k, v| {
-    //             size += k.len() as u64;
-    //             size += v.len() as u64;
-    //             Ok(true)
-    //         },
-    //     )
-    //     .expect("");
-    // assert!(size <= REGION_SPLIT_SIZE);
-    // // although size may be smaller than REGION_SPLIT_SIZE, but the diff should
-    // // be small.
-    // assert!(size > REGION_SPLIT_SIZE - 1000);
+    cluster
+        .scan(
+            store_id,
+            CF_DEFAULT,
+            &data_key(b""),
+            &data_key(middle_key),
+            false,
+            |k, v| {
+                size += k.len() as u64;
+                size += v.len() as u64;
+                Ok(true)
+            },
+        )
+        .expect("");
+    assert!(size <= REGION_SPLIT_SIZE);
+    // although size may be smaller than REGION_SPLIT_SIZE, but the diff should
+    // be small.
+    assert!(size > REGION_SPLIT_SIZE - 1000);
 
     let epoch = left.get_region_epoch().clone();
     let get = new_request(left.get_id(), epoch, vec![new_get_cmd(&max_key)], false);
@@ -303,27 +229,6 @@ fn test_node_auto_split_region() {
         .unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
-}
-
-#[test]
-fn test_incompatible_node_auto_split_region() {
-    let count = 5;
-    let mut cluster = new_incompatible_node_cluster(0, count);
-    test_auto_split_region(&mut cluster);
-}
-
-#[test]
-fn test_server_auto_split_region() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
-    test_auto_split_region(&mut cluster);
-}
-
-#[test]
-fn test_incompatible_server_auto_split_region() {
-    let count = 5;
-    let mut cluster = new_incompatible_server_cluster(0, count);
-    test_auto_split_region(&mut cluster);
 }
 
 // A filter that disable commitment by heartbeat.

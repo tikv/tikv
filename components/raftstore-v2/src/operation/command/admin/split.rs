@@ -25,7 +25,7 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{any::Any, borrow::Cow, cmp, path::PathBuf, time::Duration};
+use std::{any::Any, borrow::Cow, cmp, path::PathBuf};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
@@ -55,7 +55,6 @@ use raftstore::{
 };
 use slog::{error, info, warn};
 use tikv_util::{log::SlogFormat, slog_panic, time::Instant};
-use txn_types::WriteBatchFlags;
 
 use crate::{
     batch::StoreContext,
@@ -473,6 +472,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             )
         });
 
+        info!(
+            self.logger,
+            "Begin create checkpoint time";
+        );
         let now = Instant::now();
         let reg = self.tablet_registry();
         for new_region in &regions {
