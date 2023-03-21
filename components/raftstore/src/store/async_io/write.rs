@@ -965,7 +965,7 @@ where
         assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
-            writers[i].send(WriteMsg::Shutdown, 0).unwrap();
+            writers[i].send(WriteMsg::Shutdown, None).unwrap();
             handler.join().unwrap();
         }
     }
