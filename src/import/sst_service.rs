@@ -309,7 +309,6 @@ impl<E: Engine> ImportSstService<E> {
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(threads.handle(), tablet.clone());
         }
-        threads.spawn(Self::tick(importer.clone()));
 
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
         let gc_handle = writer.clone();
