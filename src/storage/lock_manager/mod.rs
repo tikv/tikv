@@ -47,7 +47,8 @@ use crate::{
             commands::ReleasedLocks, sched_pool::SchedPool, scheduler::SchedulerTaskCallback,
             Error as TxnError,
         },
-        DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
+        DynamicConfigs as StorageDynamicConfigs, Error as StorageError, PessimisticLockKeyResult,
+        PessimisticLockResults, ProcessResult,
     },
 };
 
@@ -628,6 +629,61 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
             lock_req_ctx.get_callback_for_cancellation(self.clone()),
             diag_ctx,
         );
+    }
+
+    fn on_wait_for_lock_after_resuming(
+        &self,
+        original_cb: &mut Option<SchedulerTaskCallback>,
+        pr: &mut ProcessResult,
+        lock_info: Vec<WriteResultLockInfo>,
+    ) {
+        if lock_info.is_empty() {
+            return;
+        }
+
+        // TODO: Update lock wait relationship.
+
+        let results = match pr {
+            ProcessResult::PessimisticLockRes {
+                res: Ok(PessimisticLockResults(res)),
+            } => res,
+            _ => unreachable!(),
+        };
+
+        let cbs = match original_cb {
+            Some(SchedulerTaskCallback::LockKeyCallbacks(ref mut v)) => v,
+            _ => unreachable!(),
+        };
+        assert_eq!(results.len(), cbs.len());
+
+        let finished_len = results.len() - lock_info.len();
+
+        let original_results = std::mem::replace(results, Vec::with_capacity(finished_len));
+        let original_cbs = std::mem::replace(cbs, Vec::with_capacity(finished_len));
+        let mut lock_wait_entries = SmallVec::<[_; 10]>::with_capacity(lock_info.len());
+        let mut lock_info_it = lock_info.into_iter();
+
+        for (result, cb) in original_results.into_iter().zip(original_cbs) {
+            if let PessimisticLockKeyResult::Waiting = &result {
+                let lock_info = lock_info_it.next().unwrap();
+                let lock_info_pb = lock_info.lock_info_pb.clone();
+                let entry = make_lock_waiting_after_resuming(lock_info, cb);
+                lock_wait_entries.push((entry, lock_info_pb));
+            } else {
+                results.push(result);
+                cbs.push(cb);
+            }
+        }
+
+        assert!(lock_info_it.next().is_none());
+        assert_eq!(results.len(), cbs.len());
+
+        // Add to the lock waiting queue.
+        // TODO: the request may be canceled from lock manager at this time. If so, it
+        // should not be added to the queue.
+        for (entry, lock_info_pb) in lock_wait_entries {
+            self.push_lock_wait(entry, lock_info_pb);
+        }
     }
 }
 

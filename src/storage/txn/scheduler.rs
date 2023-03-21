@@ -64,7 +64,6 @@ use crate::storage::{
         Statistics,
     },
     lock_manager::{
-        self,
         lock_wait_context::PessimisticLockKeyCallback,
         lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry},
         waiter_manager, LockManagerTrait,
@@ -73,10 +72,7 @@ use crate::storage::{
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
     txn::{
         commands,
-        commands::{
-            Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
-            WriteResultLockInfo,
-        },
+        commands::{Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult},
         flow_controller::FlowController,
         latch::{Latches, Lock},
         sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
@@ -84,7 +80,6 @@ use crate::storage::{
     },
     types::StorageCallback,
     DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
-    PessimisticLockKeyResult, PessimisticLockResults,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -1163,7 +1158,14 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
                 }
             } else if tag == CommandKind::acquire_pessimistic_lock_resumed {
                 // Some requests meets lock again after waiting and resuming.
-                scheduler.on_wait_for_lock_after_resuming(cid, pr.as_mut().unwrap(), lock_info);
+                let mut slot = self.inner.get_task_slot(cid);
+                let task_ctx = slot.get_mut(&cid).unwrap();
+                let cb = &mut task_ctx.cb;
+                self.inner.lock_mgr.on_wait_for_lock_after_resuming(
+                    cb,
+                    pr.as_mut().unwrap(),
+                    lock_info,
+                );
             } else {
                 // WriteResult returning lock info is only expected to exist for pessimistic
                 // lock requests.
@@ -1503,66 +1505,6 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
             PessimisticLockMode::Pipelined
         } else {
             PessimisticLockMode::Sync
-        }
-    }
-
-    fn on_wait_for_lock_after_resuming(
-        &self,
-        cid: u64,
-        pr: &mut ProcessResult,
-        lock_info: Vec<WriteResultLockInfo>,
-    ) {
-        if lock_info.is_empty() {
-            return;
-        }
-
-        // TODO: Update lock wait relationship.
-
-        let results = match pr {
-            ProcessResult::PessimisticLockRes {
-                res: Ok(PessimisticLockResults(res)),
-            } => res,
-            _ => unreachable!(),
-        };
-
-        let mut slot = self.inner.get_task_slot(cid);
-        let task_ctx = slot.get_mut(&cid).unwrap();
-        let cbs = match task_ctx.cb {
-            Some(SchedulerTaskCallback::LockKeyCallbacks(ref mut v)) => v,
-            _ => unreachable!(),
-        };
-        assert_eq!(results.len(), cbs.len());
-
-        let finished_len = results.len() - lock_info.len();
-
-        let original_results = std::mem::replace(results, Vec::with_capacity(finished_len));
-        let original_cbs = std::mem::replace(cbs, Vec::with_capacity(finished_len));
-        let mut lock_wait_entries = SmallVec::<[_; 10]>::with_capacity(lock_info.len());
-        let mut lock_info_it = lock_info.into_iter();
-
-        for (result, cb) in original_results.into_iter().zip(original_cbs) {
-            if let PessimisticLockKeyResult::Waiting = &result {
-                let lock_info = lock_info_it.next().unwrap();
-                let lock_info_pb = lock_info.lock_info_pb.clone();
-                let entry = lock_manager::make_lock_waiting_after_resuming(lock_info, cb);
-                lock_wait_entries.push((entry, lock_info_pb));
-            } else {
-                results.push(result);
-                cbs.push(cb);
-            }
-        }
-
-        assert!(lock_info_it.next().is_none());
-        assert_eq!(results.len(), cbs.len());
-
-        // Release the mutex in the latch slot.
-        drop(slot);
-
-        // Add to the lock waiting queue.
-        // TODO: the request may be canceled from lock manager at this time. If so, it
-        // should not be added to the queue.
-        for (entry, lock_info_pb) in lock_wait_entries {
-            self.inner.lock_mgr.push_lock_wait(entry, lock_info_pb);
         }
     }
 
