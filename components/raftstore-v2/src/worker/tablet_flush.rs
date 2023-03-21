@@ -79,7 +79,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             );
         }
         let mut need_flush = true;
-        if applied_index > prev_applied_index && applied_index - prev_applied_index <= 200 {
+        if applied_index > prev_applied_index && applied_index - prev_applied_index <= 100 {
             // We dont need to flush memtable if we just flushed before
             need_flush = false;
         } else {
