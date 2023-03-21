@@ -13,7 +13,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use engine_traits::KvEngine;
 use kvproto::{
-    kvrpcpb::{self, CommandPri, LockInfo},
+    kvrpcpb::{self, CommandPri, Context, LockInfo},
     metapb::RegionEpoch,
 };
 use parking_lot::Mutex;
@@ -41,8 +41,12 @@ use super::txn::commands::WriteResultLockInfo;
 use crate::{
     server::{resolve::StoreAddrResolver, Error, Result},
     storage::{
+        lock_manager::lock_wait_context::LockWaitContext,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
-        txn::{commands::ReleasedLocks, sched_pool::SchedPool, Error as TxnError},
+        txn::{
+            commands::ReleasedLocks, sched_pool::SchedPool, scheduler::SchedulerTaskCallback,
+            Error as TxnError,
+        },
         DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
     },
 };
@@ -572,6 +576,59 @@ pub trait LockManagerTrait: Clone + Send + Sync + 'static {
                 .unwrap();
         }
     }
+
+    /// Event handler for the request of waiting for lock
+    fn on_wait_for_lock(
+        &self,
+        ctx: &Context,
+        original_cb: &mut Option<SchedulerTaskCallback>,
+        lock_info: WriteResultLockInfo,
+        tracker: TrackerToken,
+    ) {
+        let key = lock_info.key.clone();
+        let lock_digest = lock_info.lock_digest;
+        let start_ts = lock_info.parameters.start_ts;
+        let is_first_lock = lock_info.parameters.is_first_lock;
+        let wait_timeout = lock_info.parameters.wait_timeout;
+
+        let diag_ctx = DiagnosticContext {
+            key: lock_info.key.to_raw().unwrap(),
+            resource_group_tag: ctx.get_resource_group_tag().into(),
+            tracker,
+        };
+        let wait_token = self.allocate_token();
+
+        let (lock_req_ctx, lock_wait_entry, lock_info_pb) =
+            make_lock_waiting(self.clone(), original_cb, wait_token, lock_info);
+
+        // The entry must be pushed to the lock waiting queue before sending to
+        // `lock_mgr`. When the request is canceled in anywhere outside the lock
+        // waiting queue (including `lock_mgr`), it first tries to remove the
+        // entry from the lock waiting queue. If the entry doesn't exist
+        // in the queue, it will be regarded as already popped out from the queue and
+        // therefore will woken up, thus the canceling operation will be
+        // skipped. So pushing the entry to the queue must be done before any
+        // possible cancellation.
+        self.push_lock_wait(lock_wait_entry, lock_info_pb.clone());
+
+        let wait_info = KeyLockWaitInfo {
+            key,
+            lock_digest,
+            lock_info: lock_info_pb,
+        };
+        self.wait_for(
+            wait_token,
+            ctx.get_region_id(),
+            ctx.get_region_epoch().clone(),
+            ctx.get_term(),
+            start_ts,
+            wait_info,
+            is_first_lock,
+            wait_timeout,
+            lock_req_ctx.get_callback_for_cancellation(self.clone()),
+            diag_ctx,
+        );
+    }
 }
 
 // For test
@@ -660,6 +717,39 @@ impl MockLockManager {
             .map(|(&token, _)| token)
             .collect()
     }
+}
+
+fn make_lock_waiting(
+    lock_mgr: impl LockManagerTrait,
+    original_cb: &mut Option<SchedulerTaskCallback>,
+    lock_wait_token: LockWaitToken,
+    lock_info: WriteResultLockInfo,
+) -> (LockWaitContext, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
+    let cb = original_cb.take().unwrap();
+
+    let ctx = LockWaitContext::new(
+        lock_info.key.clone(),
+        lock_wait_token,
+        cb.unwrap_normal_request_callback(),
+        lock_info.parameters.allow_lock_with_conflict,
+    );
+    let first_batch_cb = ctx.get_callback_for_first_write_batch();
+    *original_cb = Some(SchedulerTaskCallback::NormalRequestCallback(first_batch_cb));
+
+    assert!(lock_info.req_states.is_none());
+
+    let lock_wait_entry = Box::new(LockWaitEntry {
+        key: lock_info.key,
+        lock_hash: lock_info.lock_digest.hash,
+        parameters: lock_info.parameters,
+        should_not_exist: lock_info.should_not_exist,
+        lock_wait_token,
+        req_states: ctx.get_shared_states().clone(),
+        legacy_wake_up_index: None,
+        key_cb: Some(ctx.get_callback_for_blocked_key(lock_mgr).into()),
+    });
+
+    (ctx, lock_wait_entry, lock_info.lock_info_pb)
 }
 
 pub(super) fn make_lock_waiting_after_resuming(

@@ -65,9 +65,9 @@ use crate::storage::{
     },
     lock_manager::{
         self,
-        lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
+        lock_wait_context::PessimisticLockKeyCallback,
         lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry},
-        waiter_manager, DiagnosticContext, LockManagerTrait, LockWaitToken,
+        waiter_manager, LockManagerTrait,
     },
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
@@ -227,7 +227,7 @@ impl SchedulerTaskCallback {
         }
     }
 
-    fn unwrap_normal_request_callback(self) -> StorageCallback {
+    pub fn unwrap_normal_request_callback(self) -> StorageCallback {
         match self {
             Self::NormalRequestCallback(cb) => cb,
             _ => panic!(""),
@@ -852,61 +852,6 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         Lock::new(entries.into_iter().map(|entry| &entry.key))
     }
 
-    /// Event handler for the request of waiting for lock
-    fn on_wait_for_lock(
-        &self,
-        ctx: &Context,
-        cid: u64,
-        lock_info: WriteResultLockInfo,
-        tracker: TrackerToken,
-    ) {
-        let key = lock_info.key.clone();
-        let lock_digest = lock_info.lock_digest;
-        let start_ts = lock_info.parameters.start_ts;
-        let is_first_lock = lock_info.parameters.is_first_lock;
-        let wait_timeout = lock_info.parameters.wait_timeout;
-
-        let diag_ctx = DiagnosticContext {
-            key: lock_info.key.to_raw().unwrap(),
-            resource_group_tag: ctx.get_resource_group_tag().into(),
-            tracker,
-        };
-        let wait_token = self.inner.lock_mgr.allocate_token();
-
-        let (lock_req_ctx, lock_wait_entry, lock_info_pb) =
-            self.make_lock_waiting(cid, wait_token, lock_info);
-
-        // The entry must be pushed to the lock waiting queue before sending to
-        // `lock_mgr`. When the request is canceled in anywhere outside the lock
-        // waiting queue (including `lock_mgr`), it first tries to remove the
-        // entry from the lock waiting queue. If the entry doesn't exist
-        // in the queue, it will be regarded as already popped out from the queue and
-        // therefore will woken up, thus the canceling operation will be
-        // skipped. So pushing the entry to the queue must be done before any
-        // possible cancellation.
-        self.inner
-            .lock_mgr
-            .push_lock_wait(lock_wait_entry, lock_info_pb.clone());
-
-        let wait_info = lock_manager::KeyLockWaitInfo {
-            key,
-            lock_digest,
-            lock_info: lock_info_pb,
-        };
-        self.inner.lock_mgr.wait_for(
-            wait_token,
-            ctx.get_region_id(),
-            ctx.get_region_epoch().clone(),
-            ctx.get_term(),
-            start_ts,
-            wait_info,
-            is_first_lock,
-            wait_timeout,
-            lock_req_ctx.get_callback_for_cancellation(self.inner.lock_mgr.clone()),
-            diag_ctx,
-        );
-    }
-
     // wakes up locks in the legacy mode
     // returns the locks to be resumed after current cmd finishes
     fn on_release_locks(
@@ -1198,7 +1143,12 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
                     assert_eq!(to_be_write.size(), 0);
                     pr = Some(ProcessResult::Res);
 
-                    scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker);
+                    let mut slot = self.inner.get_task_slot(cid);
+                    let task_ctx = slot.get_mut(&cid).unwrap();
+                    let cb = &mut task_ctx.cb;
+                    self.inner
+                        .lock_mgr
+                        .on_wait_for_lock(&ctx, cb, lock_info, tracker);
                 } else {
                     // For requests with `allow_lock_with_conflict`, key errors are set key-wise.
                     // TODO: It's better to return this error from
@@ -1554,45 +1504,6 @@ impl<E: Engine, L: LockManagerTrait> TxnScheduler<E, L> {
         } else {
             PessimisticLockMode::Sync
         }
-    }
-
-    fn make_lock_waiting(
-        &self,
-        cid: u64,
-        lock_wait_token: LockWaitToken,
-        lock_info: WriteResultLockInfo,
-    ) -> (LockWaitContext, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
-        let mut slot = self.inner.get_task_slot(cid);
-        let task_ctx = slot.get_mut(&cid).unwrap();
-        let cb = task_ctx.cb.take().unwrap();
-
-        let ctx = LockWaitContext::new(
-            lock_info.key.clone(),
-            lock_wait_token,
-            cb.unwrap_normal_request_callback(),
-            lock_info.parameters.allow_lock_with_conflict,
-        );
-        let first_batch_cb = ctx.get_callback_for_first_write_batch();
-        task_ctx.cb = Some(SchedulerTaskCallback::NormalRequestCallback(first_batch_cb));
-        drop(slot);
-
-        assert!(lock_info.req_states.is_none());
-
-        let lock_wait_entry = Box::new(LockWaitEntry {
-            key: lock_info.key,
-            lock_hash: lock_info.lock_digest.hash,
-            parameters: lock_info.parameters,
-            should_not_exist: lock_info.should_not_exist,
-            lock_wait_token,
-            req_states: ctx.get_shared_states().clone(),
-            legacy_wake_up_index: None,
-            key_cb: Some(
-                ctx.get_callback_for_blocked_key(self.inner.lock_mgr.clone())
-                    .into(),
-            ),
-        });
-
-        (ctx, lock_wait_entry, lock_info.lock_info_pb)
     }
 
     fn on_wait_for_lock_after_resuming(
