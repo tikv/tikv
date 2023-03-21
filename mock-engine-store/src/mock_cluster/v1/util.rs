@@ -86,6 +86,7 @@ pub fn create_tiflash_test_engine(
         &cfg.rocksdb.build_cf_resources(cache),
         None,
         cfg.storage.api_version(),
+        None,
         cfg.storage.engine,
     );
 

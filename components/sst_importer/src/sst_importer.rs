@@ -25,7 +25,7 @@ use engine_traits::{
 use external_storage_export::{
     compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
 };
-use file_system::{get_io_rate_limiter, OpenOptions};
+use file_system::{get_io_rate_limiter, IoType, OpenOptions};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     import_sstpb::*,
@@ -36,10 +36,9 @@ use tikv_util::{
         bytes::{decode_bytes_in_place, encode_bytes},
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     },
-    config::ReadableSize,
-    stream::block_on_external_io,
-    sys::SysQuota,
+    sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
+    HandyRwLock,
 };
 use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, TimeStamp, WriteRef};
@@ -50,7 +49,7 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util, Config, Error, Result,
+    util, Config, ConfigManager as ImportConfigManager, Error, Result,
 };
 
 pub struct LoadedFile {
@@ -279,7 +278,7 @@ pub struct SstImporter {
     download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: Arc<AtomicU64>,
-    mem_limit: ReadableSize,
+    mem_limit: Arc<AtomicU64>,
 }
 
 impl SstImporter {
@@ -291,13 +290,30 @@ impl SstImporter {
     ) -> Result<SstImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
         let cached_storage = CacheMap::default();
-        let download_rt = tokio::runtime::Builder::new_current_thread()
+        // We are going to run some background tasks here, (hyper needs to maintain the
+        // connection, the cache map needs gc intervally.) so we must create a
+        // multi-thread runtime, given there isn't blocking, a single thread runtime is
+        // enough.
+        let download_rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("sst_import_misc")
+            .after_start_wrapper(|| {
+                tikv_alloc::add_thread_memory_accessor();
+                file_system::set_io_type(IoType::Import);
+            })
+            .before_stop_wrapper(|| {
+                tikv_alloc::remove_thread_memory_accessor();
+            })
             .enable_all()
             .build()?;
         download_rt.spawn(cached_storage.gc_loop());
 
-        let memory_limit = (SysQuota::memory_limit_in_bytes() as f64) * cfg.memory_use_ratio;
-        info!("sst importer memory limit when apply"; "size" => ?memory_limit);
+        let memory_limit = Self::calcualte_usage_mem(cfg.memory_use_ratio);
+        info!(
+            "sst importer memory limit when apply";
+            "ratio" => cfg.memory_use_ratio,
+            "size" => ?memory_limit,
+        );
 
         Ok(SstImporter {
             dir: ImportDir::new(root)?,
@@ -309,8 +325,12 @@ impl SstImporter {
             cached_storage,
             download_rt,
             mem_use: Arc::new(AtomicU64::new(0)),
-            mem_limit: ReadableSize(memory_limit as u64),
+            mem_limit: Arc::new(AtomicU64::new(memory_limit)),
         })
+    }
+
+    fn calcualte_usage_mem(mem_ratio: f64) -> u64 {
+        ((SysQuota::memory_limit_in_bytes() as f64) * mem_ratio) as u64
     }
 
     pub fn set_compression_type(
@@ -571,6 +591,19 @@ impl SstImporter {
         Ok(())
     }
 
+    pub fn update_config_memory_use_ratio(&self, cfg_mgr: &ImportConfigManager) {
+        let mem_ratio = cfg_mgr.rl().memory_use_ratio;
+        let memory_limit = Self::calcualte_usage_mem(mem_ratio);
+
+        if self.mem_limit.load(Ordering::SeqCst) != memory_limit {
+            self.mem_limit.store(memory_limit, Ordering::SeqCst);
+            info!("update importer config";
+                "memory-use-ratio" => mem_ratio,
+                "size" => memory_limit,
+            )
+        }
+    }
+
     pub fn shrink_by_tick(&self) -> usize {
         let mut shrink_buff_size: usize = 0;
         let mut retain_buff_size: usize = 0;
@@ -631,7 +664,7 @@ impl SstImporter {
     // If mem_limit is 0, which represent download kv-file when import.
     // Or read kv-file into buffer directly.
     pub fn import_support_download(&self) -> bool {
-        self.mem_limit == ReadableSize(0)
+        self.mem_limit.load(Ordering::SeqCst) == 0
     }
 
     fn request_memory(&self, meta: &KvMeta) -> Option<MemUsePermit> {
@@ -639,7 +672,7 @@ impl SstImporter {
         let old = self.mem_use.fetch_add(size, Ordering::SeqCst);
 
         // If the memory is limited, roll backup the mem_use and return false.
-        if old + size > self.mem_limit.0 {
+        if old + size > self.mem_limit.load(Ordering::SeqCst) {
             self.mem_use.fetch_sub(size, Ordering::SeqCst);
             CACHE_EVENT.with_label_values(&["out-of-quota"]).inc();
             None
@@ -788,13 +821,15 @@ impl SstImporter {
             encrypt_wrap_reader(file_crypter, inner)?
         };
 
-        let r = block_on_external_io(external_storage_export::read_external_storage_info_buff(
-            &mut reader,
-            speed_limiter,
-            file_length,
-            expected_sha256,
-            external_storage_export::MIN_READ_SPEED,
-        ));
+        let r =
+            self.download_rt
+                .block_on(external_storage_export::read_external_storage_info_buff(
+                    &mut reader,
+                    speed_limiter,
+                    file_length,
+                    expected_sha256,
+                    external_storage_export::MIN_READ_SPEED,
+                ));
         let url = ext_storage.url()?.to_string();
         let buff = r.map_err(|e| Error::CannotReadExternalStorage {
             url: url.to_string(),
@@ -1435,6 +1470,7 @@ mod tests {
     };
     use external_storage_export::read_external_storage_info_buff;
     use file_system::File;
+    use online_config::{ConfigManager, OnlineConfig};
     use openssl::hash::{Hasher, MessageDigest};
     use tempfile::Builder;
     use test_sst_importer::*;
@@ -1942,6 +1978,53 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn test_update_config_memory_use_ratio() {
+        // create SstImpoter with default.
+        let cfg = Config {
+            memory_use_ratio: 0.3,
+            ..Default::default()
+        };
+        let import_dir = tempfile::tempdir().unwrap();
+        let importer = SstImporter::new(&cfg, import_dir, None, ApiVersion::V1).unwrap();
+        let mem_limit_old = importer.mem_limit.load(Ordering::SeqCst);
+
+        // create new config and get the diff config.
+        let cfg_new = Config {
+            memory_use_ratio: 0.1,
+            ..Default::default()
+        };
+        let change = cfg.diff(&cfg_new);
+
+        // create config manager and update config.
+        let mut cfg_mgr = ImportConfigManager::new(cfg);
+        cfg_mgr.dispatch(change).unwrap();
+        importer.update_config_memory_use_ratio(&cfg_mgr);
+
+        let mem_limit_new = importer.mem_limit.load(Ordering::SeqCst);
+        assert!(mem_limit_old > mem_limit_new);
+        assert_eq!(
+            mem_limit_old / 3,
+            mem_limit_new,
+            "mem_limit_old / 3 = {} mem_limit_new = {}",
+            mem_limit_old / 3,
+            mem_limit_new
+        );
+    }
+
+    #[test]
+    fn test_update_config_with_invalid_conifg() {
+        let cfg = Config::default();
+        let cfg_new = Config {
+            memory_use_ratio: -0.1,
+            ..Default::default()
+        };
+        let change = cfg.diff(&cfg_new);
+        let mut cfg_mgr = ImportConfigManager::new(cfg);
+        let r = cfg_mgr.dispatch(change);
+        assert!(r.is_err());
     }
 
     #[test]

@@ -16,6 +16,7 @@ pub use self::{
         ChangePeer, ExecResult, GenSnapTask, Msg as ApplyTask, Notifier as ApplyNotifier, Proposal,
         Registration, SwitchWitness, TaskRes as ApplyTaskRes,
     },
+    metrics::{GlobalStoreStat, LocalStoreStat},
     peer::{new_admin_request, DestroyPeerJob, PeerFsm, MAX_PROPOSAL_SIZE_RATIO},
     store::{
         create_raft_batch_system, RaftBatchSystem, RaftPollerBuilder, RaftRouter, StoreInfo,

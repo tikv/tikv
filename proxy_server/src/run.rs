@@ -81,7 +81,7 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    import::{ImportSstService, SstImporter},
+    import::{ImportSstService, LocalTablets, SstImporter},
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
@@ -89,6 +89,7 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
+        tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
         KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
         GRPC_THREAD_PREFIX,
@@ -1096,8 +1097,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .unwrap()
             .to_owned();
 
-        let bps = i64::try_from(self.config.server.snap_max_write_bytes_per_sec.0)
-            .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));
+        let bps = i64::try_from(self.config.server.snap_io_max_bytes_per_sec.0)
+            .unwrap_or_else(|_| fatal!("snap_io_max_bytes_per_sec > i64::max_value"));
 
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(bps)
@@ -1438,8 +1439,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let import_service = ImportSstService::new(
             self.config.import.clone(),
             self.config.raft_store.raft_entry_max_size,
-            self.router.clone(),
-            engines.engines.kv.clone(),
+            engines.engine.clone(),
+            LocalTablets::Singleton(engines.engines.kv.clone()),
             servers.importer.clone(),
         );
         if servers
@@ -1649,7 +1650,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
             .server
-            .start(server_config, self.security_mgr.clone())
+            .start(server_config, self.security_mgr.clone(), NoSnapshotCache)
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
     }
 

@@ -205,9 +205,11 @@
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
-## Max bytes that snapshot can be written to disk in one second.
-## It should be set based on your disk performance.
-# snap-max-write-bytes-per-sec = "100MB"
+## Max bytes that snapshot can interact with disk in one second. It should be
+## set based on your disk performance. Only write flow is considered, if
+## partiioned-raft-kv is used, read flow is also considered and it will be estimated
+## as read_size * 0.5 to get around errors from page cache.
+# snap-io-max-bytes-per-sec = "100MB"
 
 ## Whether to enable request batch.
 # enable-request-batch = true
@@ -515,8 +517,8 @@
 ## Value -1 means files opened are always kept open and RocksDB will prefetch index and filter
 ## blocks into block cache at startup. So if your database has a large working set, it will take
 ## several minutes to open the DB. You may need to increase this if your database has a large
-## working set. You can estimate the number of files based on `target-file-size-base` and
-## `target_file_size_multiplier` for level-based compaction.
+## working set. You can estimate the number of files based on `target-file-size-base` for
+## level-based compaction.
 # max-open-files = 40960
 
 ## Max size of RocksDB's MANIFEST file.
@@ -1099,8 +1101,16 @@
 ## Only available for `format-version` >= 2. This option is only
 ## available when TiKV >= 6.3.x.
 ##
-## Default: false.
-# enable-log-recycle = false
+## Default: true.
+# enable-log-recycle = true
+
+## Whether to prepare log files for recycling when start.
+## If `true`, batch empty log files will be prepared for recycling when
+## starting engine.
+## Only available for `enable-log-reycle` is true.
+##
+## Default: false
+# prefill-for-recycle = false
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
