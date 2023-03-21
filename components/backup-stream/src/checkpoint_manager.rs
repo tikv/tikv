@@ -97,10 +97,7 @@ impl SubscriptionManager {
             };
 
             if let Err(err) = send_all.await {
-                let can_retry = matches!(&err, grpcio::Error::RpcFailure(rpc_err) if rpc_err.code() == RpcStatusCode::UNAVAILABLE);
-                if !can_retry {
-                    canceled.push(*id);
-                }
+                canceled.push(*id);
                 Error::from(err).report("sending subscription");
             }
         }
