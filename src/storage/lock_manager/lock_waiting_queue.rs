@@ -937,7 +937,7 @@ mod tests {
     #[test]
     fn test_simple_push_pop() {
         let lock_mgr = MockLockManager::new();
-        let queues = LockWaitQueues::new();
+        let queues = lock_mgr.lock_wait_queues();
         assert_eq!(queues.entry_count(), 0);
         assert_eq!(queues.is_empty(), true);
 
@@ -968,7 +968,7 @@ mod tests {
     #[test]
     fn test_popping_priority() {
         let lock_mgr = MockLockManager::new();
-        let queues = LockWaitQueues::new();
+        let queues = lock_mgr.lock_wait_queues();
         assert_eq!(queues.entry_count(), 0);
 
         queues.mock_lock_wait(b"k1", 10, 5, false, &lock_mgr);
@@ -994,7 +994,7 @@ mod tests {
     #[test]
     fn test_removing_by_token() {
         let lock_mgr = MockLockManager::new();
-        let queues = LockWaitQueues::new();
+        let queues = lock_mgr.lock_wait_queues();
         assert_eq!(queues.entry_count(), 0);
 
         queues.mock_lock_wait(b"k1", 10, 5, false, &lock_mgr);
@@ -1042,7 +1042,7 @@ mod tests {
     #[test]
     fn test_dropping_cancelled_entries() {
         let lock_mgr = MockLockManager::new();
-        let queues = LockWaitQueues::new();
+        let queues = lock_mgr.lock_wait_queues();
         assert_eq!(queues.entry_count(), 0);
 
         let h10 = queues.mock_lock_wait(b"k1", 10, 5, false, &lock_mgr);
@@ -1073,7 +1073,7 @@ mod tests {
     #[tokio::test]
     async fn test_delayed_notify_all() {
         let lock_mgr = MockLockManager::new();
-        let queues = LockWaitQueues::new();
+        let queues = lock_mgr.lock_wait_queues();
         assert_eq!(queues.entry_count(), 0);
 
         queues.mock_lock_wait(b"k1", 8, 5, false, &lock_mgr);
@@ -1246,7 +1246,7 @@ mod tests {
     #[bench]
     fn bench_update_lock_wait_empty(b: &mut test::Bencher) {
         let lock_mgr = MockLockManager::new();
-        let queues = LockWaitQueues::new();
+        let queues = lock_mgr.lock_wait_queues();
         queues.mock_lock_wait(b"k1", 5, 6, false, &lock_mgr);
 
         let mut lock_info = kvrpcpb::LockInfo::default();
@@ -1265,7 +1265,7 @@ mod tests {
     #[bench]
     fn bench_update_lock_wait_queue_len_512(b: &mut test::Bencher) {
         let lock_mgr = MockLockManager::new();
-        let queues = LockWaitQueues::new();
+        let queues = lock_mgr.lock_wait_queues();
 
         let key = b"t\x00\x00\x00\x00\x00\x00\x00\x01_r\x00\x00\x00\x00\x00\x00\x00\x01";
 
