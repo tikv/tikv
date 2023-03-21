@@ -1423,7 +1423,9 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_raft_local_state(&self, region_id: u64, store_id: u64) -> Option<RaftLocalState> {
-        self.get_engine(store_id).get_raft_local_state(region_id)
+        self.get_engine(store_id)
+            .get_raft_local_state(region_id)
+            .unwrap()
     }
 
     pub fn shutdown(&mut self) {
@@ -1524,8 +1526,11 @@ impl WrapFactory {
         self.raft_engine.get_apply_state(region_id, u64::MAX)
     }
 
-    pub fn get_raft_local_state(&self, region_id: u64) -> Option<RaftLocalState> {
-        self.raft_engine.get_raft_state(region_id).unwrap()
+    pub fn get_raft_local_state(
+        &self,
+        region_id: u64,
+    ) -> engine_traits::Result<Option<RaftLocalState>> {
+        self.raft_engine.get_raft_state(region_id)
     }
 }
 
@@ -1629,5 +1634,13 @@ impl RawEngine for WrapFactory {
         region_id: u64,
     ) -> engine_traits::Result<Option<RegionLocalState>> {
         self.get_region_state(region_id)
+    }
+
+    fn raft_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        self.get_apply_state(region_id)
+    }
+
+    fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
+        self.get_raft_local_state(region_id)
     }
 }

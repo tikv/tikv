@@ -1951,9 +1951,9 @@ pub trait RawEngine: Peekable<DbVector = RocksDbVector> + SyncMutable {
     fn region_local_state(&self, region_id: u64)
     -> engine_traits::Result<Option<RegionLocalState>>;
 
-    fn raft_apply_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
-        unimplemented!()
-    }
+    fn raft_apply_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftApplyState>>;
+
+    fn raft_local_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftLocalState>>;
 }
 
 impl RawEngine for RocksEngine {
@@ -1962,5 +1962,13 @@ impl RawEngine for RocksEngine {
         region_id: u64,
     ) -> engine_traits::Result<Option<RegionLocalState>> {
         self.get_msg_cf(CF_RAFT, &keys::region_state_key(region_id))
+    }
+
+    fn raft_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        self.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+    }
+
+    fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
+        self.get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
     }
 }
