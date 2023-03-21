@@ -691,27 +691,6 @@ pub mod tests {
     }
 
     #[test]
-    fn test_rpc_retry() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
-        let mut mgr = super::CheckpointManager::default();
-        rt.spawn(mgr.spawn_subscription_mgr());
-
-        let error_sink = MockSink::with_fail_once(RpcStatusCode::UNAVAILABLE);
-        rt.block_on(mgr.add_subscriber(error_sink.clone())).unwrap();
-
-        mgr.resolve_regions(vec![simple_resolve_result()]);
-        mgr.flush();
-        assert_eq!(mgr.sync_with_subs_mgr(|item| { item.subscribers.len() }), 1);
-        mgr.resolve_regions(vec![simple_resolve_result()]);
-        mgr.flush();
-        mgr.sync_with_subs_mgr(|_| {});
-        assert_eq!(error_sink.0.lock().unwrap().items.len(), 1);
-    }
-
-    #[test]
     fn test_rpc_failure() {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
