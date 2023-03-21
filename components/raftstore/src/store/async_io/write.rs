@@ -46,9 +46,8 @@ use crate::{
         local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics, TimeTracker},
         metrics::*,
         transport::Transport,
-        util,
         util::LatencyInspector,
-        PeerMsg,
+        PeerMsg, ProposalContext,
     },
     Result,
 };
@@ -193,7 +192,7 @@ where
     // called after writing to kvdb and raftdb.
     pub persisted_cbs: Vec<Box<dyn FnOnce() + Send>>,
     overwrite_to: Option<u64>,
-    entries: Vec<Entry>,
+    pub entries: Vec<Entry>,
     pub raft_state: Option<RaftLocalState>,
     pub extra_write: ExtraWrite<EK::WriteBatch, ER::LogBatch>,
     pub messages: Vec<RaftMessage>,
@@ -289,8 +288,8 @@ where
                 let mut dominant_group = "".to_owned();
                 let mut max_write_bytes = 0;
                 for entry in &t.entries {
-                    let header = util::get_entry_header(entry);
-                    let group_name = header.get_resource_group_name().to_owned();
+                    let group_name =
+                        ProposalContext::from_bytes(entry.get_context()).resource_group_name;
                     let write_bytes = entry.compute_size() as u64;
                     resource_ctl.consume(
                         group_name.as_bytes(),

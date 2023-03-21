@@ -42,7 +42,10 @@ use protobuf::Message;
 use raft::{eraftpb::EntryType, GetEntriesContext, NO_LIMIT};
 use raftstore::{
     coprocessor::RegionChangeReason,
-    store::{metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext, Transport},
+    store::{
+        metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext, ProposalContextBits,
+        Transport,
+    },
     Error, Result,
 };
 use slog::{debug, info};
@@ -120,7 +123,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .propose_locks_before_prepare_merge(store_ctx, pre_propose.lock_size_limit)
             .and_then(|_| {
                 let mut proposal_ctx = ProposalContext::empty();
-                proposal_ctx.insert(ProposalContext::PREPARE_MERGE);
+                proposal_ctx.insert(ProposalContextBits::PREPARE_MERGE);
                 let data = req.write_to_bytes().unwrap();
                 self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
             });

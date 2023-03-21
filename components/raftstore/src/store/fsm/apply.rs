@@ -94,7 +94,7 @@ use crate::{
             self, admin_cmd_epoch_lookup, check_flashback_state, check_req_region_epoch,
             compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
         },
-        Config, RegionSnapshot, RegionTask, WriteCallback,
+        Config, ProposalContext, RegionSnapshot, RegionTask, WriteCallback,
     },
     Error, Result,
 };
@@ -3733,8 +3733,8 @@ impl<EK: KvEngine> ResourceMetered for Msg<EK> {
                 let mut max_write_bytes = 0;
                 for cached_entries in &apply.entries {
                     cached_entries.iter_entries(|entry| {
-                        let header = util::get_entry_header(entry);
-                        let group_name = header.get_resource_group_name().to_owned();
+                        let group_name =
+                            ProposalContext::from_bytes(entry.get_context()).resource_group_name;
                         let write_bytes = entry.compute_size() as u64;
                         resource_ctl.consume(
                             group_name.as_bytes(),
