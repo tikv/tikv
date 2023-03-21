@@ -130,6 +130,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if let Err(err) = validate_batch_split(req.get_admin_request(), self.region()) {
                         Err(err)
                     } else {
+                        // To reduce the impact of the expensive operation of `checkpoint` (it will
+                        // flush memtables of the rocksdb) in applying batch split, we split the
+                        // BatchSplit cmd into two phases:
+                        //
+                        // 1. Schedule flush memtable task so that the memtables of the rocksdb can
+                        // be flushed in advance in a way that will not block the normal raft
+                        // operations (`checkpoint` will still cause flush but it will be
+                        // significantly lightweight). At the same time, send flush memtable msgs to
+                        // the follower so that they can flush memtalbes in advance too.
+                        //
+                        // 2. When the task finishes, it will propose a batch split with
+                        // `SPLIT_SECOND_PHASE` flag.
                         if !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
                             .contains(WriteBatchFlags::SPLIT_SECOND_PHASE)
                         {

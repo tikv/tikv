@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{Iterable, Peekable, CF_DEFAULT, CF_WRITE};
+use engine_traits::{Peekable, CF_DEFAULT, CF_WRITE};
 use keys::data_key;
 use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;

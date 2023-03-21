@@ -1005,7 +1005,7 @@ impl<T: Simulator> Cluster<T> {
         };
 
         if amended_start_key > amended_end_key {
-            return Ok(())
+            return Ok(());
         }
 
         tablet.scan(cf, amended_start_key, amended_end_key, fill_cache, f)
