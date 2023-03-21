@@ -55,8 +55,8 @@ enum SubscriptionOp {
     Inspect(Box<dyn FnOnce(&SubscriptionManager) + Send>),
 }
 
-pub(crate) struct SubscriptionManager {
-    pub(crate) subscribers: HashMap<Uuid, Subscription>,
+pub struct SubscriptionManager {
+    subscribers: HashMap<Uuid, Subscription>,
     input: Receiver<SubscriptionOp>,
 }
 
@@ -207,7 +207,7 @@ impl CheckpointManager {
 
     /// update a region checkpoint in need.
     #[cfg(test)]
-    pub fn update_region_checkpoint(&mut self, region: &Region, checkpoint: TimeStamp) {
+    fn update_region_checkpoint(&mut self, region: &Region, checkpoint: TimeStamp) {
         Self::update_ts(&mut self.checkpoint_ts, region.clone(), checkpoint)
     }
 
@@ -334,7 +334,7 @@ impl CheckpointManager {
     }
 
     #[cfg(test)]
-    pub(crate) fn sync_with_subs_mgr<T: Send + 'static>(
+    fn sync_with_subs_mgr<T: Send + 'static>(
         &mut self,
         f: impl FnOnce(&SubscriptionManager) -> T + Send + 'static,
     ) -> T {
