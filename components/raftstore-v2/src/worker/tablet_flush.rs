@@ -82,9 +82,10 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         if applied_index > prev_applied_index && applied_index - prev_applied_index <= 200 {
             // We dont need to flush memtable if we just flushed before
             need_flush = false;
+        } else {
+            self.last_applied_indexes.insert(region_id, applied_index);
         }
 
-        self.last_applied_indexes.insert(region_id, applied_index);
         if let Some(mut cache) = self.tablet_registry.get(region_id) {
             if let Some(tablet) = cache.latest() {
                 info!(
