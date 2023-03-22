@@ -65,10 +65,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         applied_index: u64,
         ch: Option<CmdResChannel>,
     ) {
-        let prev_applied_index = *self
-            .last_applied_indexes
-            .get(&region_id)
-            .unwrap_or_else(|| &0);
+        let prev_applied_index = *self.last_applied_indexes.get(&region_id).unwrap_or(&0);
         if prev_applied_index < applied_index {
             warn!(
                 self.logger,
@@ -78,44 +75,31 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 "is_leader" => is_leader,
             );
         }
-        let mut need_flush = true;
-        if applied_index > prev_applied_index && applied_index - prev_applied_index <= 100 {
-            // We dont need to flush memtable if we just flushed before
-            need_flush = false;
-        } else {
-            self.last_applied_indexes.insert(region_id, applied_index);
-        }
+        self.last_applied_indexes.insert(region_id, applied_index);
 
         if let Some(mut cache) = self.tablet_registry.get(region_id) {
             if let Some(tablet) = cache.latest() {
                 info!(
                     self.logger,
-                    "Begin flush memtable time";
+                    "Begin flush memtable";
                     "region_id" =>  region_id,
                     "prev_applied_index" => prev_applied_index,
                     "current_applied_index" => applied_index,
                     "is_leader" => is_leader,
                 );
 
-                if need_flush {
-                    let now = Instant::now();
-                    tablet.flush_cfs(DATA_CFS, true).unwrap();
-                    let elapsed = now.saturating_elapsed();
-                    info!(
-                        self.logger,
-                        "Flush memtable time consumes";
-                        "region_id" =>  region_id,
-                        "duration" => ?elapsed,
-                        "prev_applied_index" => prev_applied_index,
-                        "current_applied_index" => applied_index,
-                        "is_leader" => is_leader,
-                    );
-                } else {
-                    info!(
-                        self.logger,
-                        "Skip flush memtable";
-                    );
-                }
+                let now = Instant::now();
+                tablet.flush_cfs(DATA_CFS, true).unwrap();
+                let elapsed = now.saturating_elapsed();
+                info!(
+                    self.logger,
+                    "Flush memtable time consumes";
+                    "region_id" =>  region_id,
+                    "duration" => ?elapsed,
+                    "prev_applied_index" => prev_applied_index,
+                    "current_applied_index" => applied_index,
+                    "is_leader" => is_leader,
+                );
 
                 if is_leader {
                     let mut req = req.unwrap();
