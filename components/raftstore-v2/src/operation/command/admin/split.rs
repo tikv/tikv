@@ -472,10 +472,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             )
         });
 
-        info!(
-            self.logger,
-            "Begin create checkpoint time";
-        );
         let now = Instant::now();
         let reg = self.tablet_registry();
         for new_region in &regions {
