@@ -3127,7 +3127,7 @@ pub struct TikvConfig {
     #[online_config(skip)]
     pub security: SecurityConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     pub import: ImportConfig,
 
     #[online_config(submodule)]
