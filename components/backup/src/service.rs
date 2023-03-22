@@ -56,37 +56,32 @@ where
         mut sink: ServerStreamingSink<CheckAdminResponse>,
     ) {
         let (tx, rx) = mpsc::unbounded();
-        if let Some(router) = &self.router {
-            router.broadcast_normal(|| {
-                PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
-            });
-            let send_task = async move {
-                let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
-                sink.send_all(&mut s).await?;
-                sink.close().await?;
-                Ok(())
+        match &self.router {
+            Some(router) => {
+                router.broadcast_normal(|| {
+                    PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
+                });
+                let send_task = async move {
+                    let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
+                    sink.send_all(&mut s).await?;
+                    sink.close().await?;
+                    Ok(())
+                }
+                .map(|res: Result<()>| match res {
+                    Ok(_) => {
+                        info!("check admin closed");
+                    }
+                    Err(e) => {
+                        error!("check admin canceled"; "error" => ?e);
+                    }
+                });
+                ctx.spawn(send_task);
             }
-            .map(|res: Result<()>| match res {
-                Ok(_) => {
-                    info!("check admin closed");
-                }
-                Err(e) => {
-                    error!("check admin canceled"; "error" => ?e);
-                }
-            });
-            ctx.spawn(send_task);
-        } else {
-            // check pending admin reqeust is used for EBS Backup.
-            // for raftstore v2. we don't need it for now. so just return unimplemented
-            ctx.spawn(
-                sink.fail(RpcStatus::with_message(
-                    RpcStatusCode::UNIMPLEMENTED,
-                    "check_pending_admin_op is unimplemented".to_string(),
-                ))
-                .unwrap_or_else(
-                    |e| error!("check_pending_admin_op failed to send error"; "error" => ?e),
-                ),
-            )
+            None => {
+                // check pending admin reqeust is used for EBS Backup.
+                // for raftstore v2. we don't need it for now. so just return unimplemented
+                unimplemented_call!(ctx, sink)
+            }
         }
     }
 
