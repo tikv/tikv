@@ -2,10 +2,9 @@
 
 use std::fmt::{Display, Formatter};
 
-use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry, DATA_CFS};
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use slog::{error, info, warn, Logger};
+use slog::{error, info, Logger};
 use tikv_util::{time::Instant, worker::Runnable};
 use txn_types::WriteBatchFlags;
 
@@ -19,7 +18,6 @@ pub enum Task {
         region_id: u64,
         req: Option<RaftCmdRequest>,
         is_leader: bool,
-        applied_index: u64,
         ch: Option<CmdResChannel>,
     },
 }
@@ -38,9 +36,6 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     router: StoreRouter<EK, ER>,
     tablet_registry: TabletRegistry<EK>,
     logger: Logger,
-
-    // region_id -> last applied index
-    last_applied_indexes: HashMap<u64, u64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
@@ -53,7 +48,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             router,
             tablet_registry,
             logger,
-            last_applied_indexes: HashMap::default(),
         }
     }
 
@@ -62,32 +56,10 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         region_id: u64,
         req: Option<RaftCmdRequest>,
         is_leader: bool,
-        applied_index: u64,
         ch: Option<CmdResChannel>,
     ) {
-        let prev_applied_index = *self.last_applied_indexes.get(&region_id).unwrap_or(&0);
-        if prev_applied_index < applied_index {
-            warn!(
-                self.logger,
-                "Applied index is less than before";
-                "prev_applied_index" => prev_applied_index,
-                "current_applied_index" => applied_index,
-                "is_leader" => is_leader,
-            );
-        }
-        self.last_applied_indexes.insert(region_id, applied_index);
-
         if let Some(mut cache) = self.tablet_registry.get(region_id) {
             if let Some(tablet) = cache.latest() {
-                info!(
-                    self.logger,
-                    "Begin flush memtable";
-                    "region_id" =>  region_id,
-                    "prev_applied_index" => prev_applied_index,
-                    "current_applied_index" => applied_index,
-                    "is_leader" => is_leader,
-                );
-
                 let now = Instant::now();
                 tablet.flush_cfs(DATA_CFS, true).unwrap();
                 let elapsed = now.saturating_elapsed();
@@ -96,8 +68,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     "Flush memtable time consumes";
                     "region_id" =>  region_id,
                     "duration" => ?elapsed,
-                    "prev_applied_index" => prev_applied_index,
-                    "current_applied_index" => applied_index,
                     "is_leader" => is_leader,
                 );
 
@@ -134,9 +104,8 @@ where
                 region_id,
                 req,
                 is_leader,
-                applied_index,
                 ch,
-            } => self.flush_tablet(region_id, req, is_leader, applied_index, ch),
+            } => self.flush_tablet(region_id, req, is_leader, ch),
         }
     }
 }

@@ -225,7 +225,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 region_id: self.region().get_id(),
                                 req: None,
                                 is_leader: false,
-                                applied_index: self.storage().apply_state().get_applied_index(),
                                 ch: None,
                             });
                     return;

@@ -26,7 +26,7 @@ use raftstore::{
     },
     Error,
 };
-use slog::info;
+use slog::{error, info};
 use split::SplitResult;
 pub use split::{
     report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
@@ -154,18 +154,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             info!(
                                 self.logger,
                                 "Schedule flush tablet";
-                                "applied_index" => self.storage().apply_state().get_applied_index(),
                             );
-                            ctx.schedulers
-                                .tablet_flush
-                                .schedule(crate::TabletFlushTask::TabletFlush {
+                            if let Err(e) = ctx.schedulers.tablet_flush.schedule(
+                                crate::TabletFlushTask::TabletFlush {
                                     region_id,
                                     req: Some(req),
                                     is_leader: true,
-                                    applied_index: self.storage().apply_state().get_applied_index(),
                                     ch: Some(ch),
-                                })
-                                .unwrap(); // todo
+                                },
+                            ) {
+                                error!(
+                                    self.logger,
+                                    "Fail to schedule flush task";
+                                    "err" => ?e,
+                                )
+                            }
 
                             let peers = self.region().get_peers().to_vec();
                             for p in peers {
