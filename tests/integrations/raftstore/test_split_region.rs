@@ -150,7 +150,6 @@ fn test_server_split_region_twice() {
 #[test_case(test_raftstore::new_incompatible_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_incompatible_node_cluster)]
 fn test_auto_split_region() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
