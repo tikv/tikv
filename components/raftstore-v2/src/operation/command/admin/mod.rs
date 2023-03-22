@@ -127,6 +127,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "Split is deprecated. Please use BatchSplit instead."
                 )),
                 AdminCmdType::BatchSplit => {
+                    #[allow(clippy::question_mark)]
                     if let Err(err) = validate_batch_split(req.get_admin_request(), self.region()) {
                         Err(err)
                     } else {
