@@ -738,4 +738,34 @@ mod tests {
         compact(DbType::Kv, CF_WRITE).unwrap();
         compact(DbType::Raft, CF_DEFAULT).unwrap_err();
     }
+
+    #[test]
+    fn test_range_in_region() {
+        let mut region = metapb::Region::default();
+        region.set_start_key(b"k01".to_vec());
+        region.set_end_key(b"k10".to_vec());
+
+        let ranges = vec![
+            ("", "", "k01", "k10"),
+            ("zk00", "", "k01", "k10"),
+            ("", "zk11", "k01", "k10"),
+            ("zk02", "zk07", "k02", "k07"),
+            ("zk00", "zk07", "k01", "k07"),
+            ("zk02", "zk11", "k02", "k10"),
+        ];
+
+        for (range_start, range_end, expect_start, expect_end) in ranges {
+            assert_eq!(
+                (expect_start.as_bytes(), expect_end.as_bytes()),
+                range_in_region((range_start.as_bytes(), range_end.as_bytes()), &region).unwrap()
+            );
+        }
+
+        let ranges = vec![("zk05", "zk02"), ("zk11", ""), ("", "zk00")];
+        for (range_start, range_end) in ranges {
+            assert!(
+                range_in_region((range_start.as_bytes(), range_end.as_bytes()), &region).is_none()
+            );
+        }
+    }
 }

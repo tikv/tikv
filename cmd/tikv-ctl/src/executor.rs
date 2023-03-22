@@ -78,6 +78,10 @@ pub fn new_debug_executor(
     let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache)
         .lite(true)
         .build();
+    let kv_db = match factory.create_shared_db(data_dir) {
+        Ok(db) => db,
+        Err(e) => handle_engine_error(e),
+    };
 
     let cfg_controller = ConfigController::default();
     if !cfg.raft_engine.enable {
@@ -93,10 +97,6 @@ pub fn new_debug_executor(
             Ok(db) => db,
             Err(e) => handle_engine_error(e),
         };
-        let kv_db = match factory.create_shared_db(data_dir) {
-            Ok(db) => db,
-            Err(e) => handle_engine_error(e),
-        };
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {
@@ -109,10 +109,6 @@ pub fn new_debug_executor(
         let raft_db = RaftLogEngine::new(config, key_manager, None /* io_rate_limiter */).unwrap();
         match cfg.storage.engine {
             EngineType::RaftKv => {
-                let kv_db = match factory.create_shared_db(data_dir) {
-                    Ok(db) => db,
-                    Err(e) => handle_engine_error(e),
-                };
                 let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
                 Box::new(debugger) as Box<dyn DebugExecutor>
             }
