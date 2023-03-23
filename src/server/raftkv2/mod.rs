@@ -169,9 +169,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
             flags |= WriteBatchFlags::STALE_READ.bits();
         }
-        if ctx.allowed_in_flashback {
-            flags |= WriteBatchFlags::FLASHBACK.bits();
-        }
+        // TODO: flashback is not supported yet.
+        // if ctx.allowed_in_flashback {
+        //     flags |= WriteBatchFlags::FLASHBACK.bits();
+        // }
         header.set_flags(flags);
         // Encode `start_ts` in `flag_data` for the check of stale read and flashback.
         if need_encoded_start_ts {
@@ -234,9 +235,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         if batch.extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();
         }
-        if batch.extra.allowed_in_flashback {
-            flags |= WriteBatchFlags::FLASHBACK.bits();
-        }
+        // TODO: flashback is not supported yet.
+        // if batch.extra.allowed_in_flashback {
+        //     flags |= WriteBatchFlags::FLASHBACK.bits();
+        // }
         header.set_flags(flags);
 
         self.schedule_txn_extra(batch.extra);
