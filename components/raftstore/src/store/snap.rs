@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, RwLock,
     },
-    thread, time, u64,
+    thread, time, u64
 };
 
 use collections::{HashMap, HashMapEntry as Entry};
@@ -1975,7 +1975,7 @@ pub struct TabletSnapManager {
     // directory to store snapfile.
     base: PathBuf,
     receiving: Arc<Mutex<Vec<TabletSnapKey>>>,
-    stats: Arc<Mutex<Vec<SnapshotStat>>>,
+    stats: Arc<Mutex<HashMap<TabletSnapKey,(Instant,SnapshotStat)>>>,
 }
 
 impl TabletSnapManager {
@@ -1999,20 +1999,37 @@ impl TabletSnapManager {
         })
     }
 
-    pub fn collect_stat(&self, snap: SnapshotStat) {
-        debug!(
-            "collect snapshot stat";
-            "region_id" => snap.region_id,
-            "total_size" => snap.get_transport_size(),
-            "total_duration_sec" => snap.get_total_duration_sec(),
-            "generate_duration_sec" => snap.get_generate_duration_sec(),
-            "send_duration_sec" => snap.get_generate_duration_sec(),
+    pub fn begin_snapshot(&self,key:TabletSnapKey,start:Instant,generate_duration_sec:u64){
+        let mut stat=SnapshotStat::default();
+        stat.set_generate_duration_sec(generate_duration_sec);
+        self.stats.lock().unwrap().insert(key,(start,stat));
+    }
+
+    pub fn finish_snapshot(&self,key:TabletSnapKey,send:Instant){
+        let region_id=key.region_id;
+        self.stats.lock().unwrap()
+            .entry(key)
+            .and_modify(|(start,stat)|{
+                stat.set_send_duration_sec(start.saturating_elapsed().as_secs());
+                stat.set_total_duration_sec(send.saturating_elapsed().as_secs());
+                stat.set_region_id(region_id);
+            }
         );
-        self.stats.lock().unwrap().push(snap);
     }
 
     pub fn stats(&self) -> SnapStats {
-        let stats = std::mem::take(self.stats.lock().unwrap().as_mut());
+        let finished:HashMap<TabletSnapKey,(Instant,SnapshotStat)>=
+            self.stats.lock().unwrap()
+                .drain_filter(|_,(_,stat)|{
+                    stat.get_region_id()>0
+                })
+                .collect();
+
+        let stats:Vec<SnapshotStat>=finished
+            .into_values()
+            .map(|(_,stat)|stat)
+            .filter(|stat|stat.get_total_duration_sec()>1)
+            .collect();
         SnapStats {
             sending_count: 0,
             receiving_count: 0,

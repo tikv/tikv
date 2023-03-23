@@ -20,10 +20,10 @@
 use std::io;
 use std::{
     cmp,
-    convert::{TryFrom,TryInto},
+    convert::{TryFrom, TryInto},
     fmt::Debug,
     fs::{self, File},
-    io::{BorrowedBuf, Error as IoError, ErrorKind, Read, Seek, SeekFrom, Write},
+    io::{BorrowedBuf, Read, Seek, SeekFrom, Write},
     path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -46,7 +46,6 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::{
-    pdpb::SnapshotStat,
     raft_serverpb::{
         RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
         TabletSnapshotPreview, TabletSnapshotRequest, TabletSnapshotResponse,
@@ -59,8 +58,9 @@ use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{ReadableSize, Tracker, VersionTrack},
-    time::{Instant, UnixSecs},
+    time::Instant,
     worker::Runnable,
+    DeferContext,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
@@ -82,7 +82,7 @@ fn is_sst(file_name: &str) -> bool {
 
 async fn read_to(f: &mut File, to: &mut Vec<u8>, size: usize, limiter: &Limiter) -> Result<()> {
     // It's likely in page cache already.
-    let cost= size/2;
+    let cost = size / 2;
     limiter.consume(cost).await;
     SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
         .send
@@ -317,7 +317,7 @@ async fn accept_one_file(
         limiter.consume(chunk_len).await;
         SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
             .recv
-            .inc_by(chunk_len.try_into().unwrap() );
+            .inc_by(chunk_len.try_into().unwrap());
         digest.write(&chunk.data);
         f.write_all(&chunk.data)?;
         if exp_size == file_size {
@@ -638,16 +638,9 @@ pub fn send_snap(
         msg.get_to_peer().get_id(),
         msg.get_message().get_snapshot(),
     );
-
-    let (snap_start, generate_duration_sec) = {
-        let snap = msg.get_message().get_snapshot();
-        let mut snap_data = RaftSnapshotData::default();
-        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
-            return Err(Error::Io(IoError::new(ErrorKind::Other, e)));
-        }
-        let snap_start = snap_data.get_meta().get_start();
-        let generate_duration_sec = snap_data.get_meta().get_generate_duration_sec();
-        (snap_start, generate_duration_sec)
+    let deregister = {
+        let (mgr, key) = (mgr.clone(), key.clone());
+        DeferContext::new(move || mgr.finish_snapshot(key.clone(), timer))
     };
 
     let cb = ChannelBuilder::new(env)
@@ -668,30 +661,14 @@ pub fn send_snap(
         let recv_result = receiver.next().await;
         send_timer.observe_duration();
         drop(client);
+        drop(deregister);
         mgr.delete_snapshot(&key);
         match recv_result {
-            None => {
-                let cost = UnixSecs::now().into_inner().saturating_sub(snap_start);
-                let send_duration_sec = timer.saturating_elapsed().as_secs();
-                WAIT_SNAP_HISTOGRAM
-                    .observe((cost - generate_duration_sec - send_duration_sec) as f64);
-                // it should ignore if the duration of snapshot is less than 1s to decrease the
-                // grpc data size.
-                if cost >= 1 {
-                    let mut stat = SnapshotStat::default();
-                    stat.set_region_id(key.region_id);
-                    stat.set_transport_size(total_size);
-                    stat.set_generate_duration_sec(generate_duration_sec);
-                    stat.set_send_duration_sec(timer.saturating_elapsed().as_secs());
-                    stat.set_total_duration_sec(cost);
-                    mgr.collect_stat(stat);
-                }
-                Ok(SendStat {
-                    key,
-                    total_size,
-                    elapsed: timer.saturating_elapsed(),
-                })
-            }
+            None => Ok(SendStat {
+                key,
+                total_size,
+                elapsed: timer.saturating_elapsed(),
+            }),
             Some(Err(e)) => Err(e.into()),
             Some(Ok(resp)) => Err(Error::Other(
                 format!("receive unexpected response {:?}", resp).into(),

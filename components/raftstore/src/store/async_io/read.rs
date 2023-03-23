@@ -15,11 +15,7 @@ use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::{eraftpb::Snapshot, GetEntriesContext};
-use tikv_util::{
-    error, info,
-    time::{Instant, UnixSecs},
-    worker::Runnable,
-};
+use tikv_util::{error, info, time::Instant, worker::Runnable};
 
 use crate::store::{
     metrics::{SNAPSHOT_KV_COUNT_HISTOGRAM, SNAPSHOT_SIZE_HISTOGRAM},
@@ -224,10 +220,9 @@ where
                 snap_data.set_region(region_state.get_region().clone());
                 snap_data.set_version(TABLET_SNAPSHOT_VERSION);
                 snap_data.mut_meta().set_for_balance(for_balance);
-
                 snap_data.set_removed_records(region_state.get_removed_records().into());
                 snap_data.set_merged_records(region_state.get_merged_records().into());
-
+                snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
                 // create checkpointer.
                 let snap_key = TabletSnapKey::from_region_snap(region_id, to_peer, &snapshot);
                 let mut res = None;
@@ -237,16 +232,8 @@ where
                     error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
                     SNAP_COUNTER.generate.fail.inc();
                 } else {
-                    snap_data.mut_meta().set_start(UnixSecs::now().into_inner());
-                    snap_data
-                        .mut_meta()
-                        .set_generate_duration_sec(start.saturating_elapsed().as_secs());
-                    snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
+                    let generate_duration_secs = start.saturating_elapsed().as_secs();
                     let elapsed = start.saturating_elapsed_secs();
-                    SNAP_COUNTER.generate.success.inc();
-                    SNAP_HISTOGRAM.generate.observe(elapsed);
-                    SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
-                    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(total_keys as f64);
                     info!(
                         "snapshot generated";
                         "region_id" => region_id,
@@ -256,6 +243,13 @@ where
                         "total_size" => total_size,
                         "total_keys" => total_keys,
                     );
+                    self.snap_mgr()
+                        .begin_snapshot(snap_key, start, generate_duration_secs);
+                    snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
+                    SNAP_COUNTER.generate.success.inc();
+                    SNAP_HISTOGRAM.generate.observe(elapsed);
+                    SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
+                    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(total_keys as f64);
                     res = Some(Box::new((snapshot, to_peer)))
                 }
 
