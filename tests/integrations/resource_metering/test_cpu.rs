@@ -75,7 +75,7 @@ pub fn test_commit() {
 pub fn test_reschedule_coprocessor() {
     let tag = "tag_coprocessor";
 
-    let (test_suite, mut store, endpoint) = setup_test_suite();
+    let (test_suite, mut store, mut endpoint) = setup_test_suite();
     fail::cfg("copr_reschedule", "return").unwrap();
     fail::cfg_callback("scanner_next", || cpu_load(Duration::from_millis(100))).unwrap();
     defer!({
@@ -217,6 +217,7 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         ..Default::default()
     });
     let store = Store::from_storage(test_suite.get_storage());
+    let engine_for_cop = store.get_engine().clone();
     tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
     let pool = ReadPool::from(readpool_impl::build_read_pool_for_test(
         &CoprReadPoolConfig::default_for_test(),
@@ -229,6 +230,7 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         cm,
         test_suite.get_tag_factory(),
         Arc::new(QuotaLimiter::default()),
+        engine_for_cop,
     );
     (test_suite, store, endpoint)
 }

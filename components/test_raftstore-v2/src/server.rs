@@ -379,6 +379,7 @@ impl ServerCluster {
             RaftKv2::new(raft_router.clone(), region_info_accessor.region_leaders()),
             sim_router.filters().clone(),
         );
+        let raft_engine_for_cop = raft_kv_v2.clone();
 
         // Create storage.
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -503,6 +504,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             res_tag_factory,
             quota_limiter,
+            raft_engine_for_cop,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;

@@ -79,6 +79,7 @@ pub fn init_data_with_details<E: Engine>(
     commit: bool,
     cfg: &Config,
 ) -> (Store<E>, Endpoint<E>, Arc<QuotaLimiter>) {
+    let engine_for_cop = engine.clone();
     let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
@@ -110,6 +111,7 @@ pub fn init_data_with_details<E: Engine>(
         cm,
         ResourceTagFactory::new_for_test(),
         limiter.clone(),
+        engine_for_cop,
     );
     (store, copr, limiter)
 }
