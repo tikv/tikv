@@ -11,6 +11,7 @@ use compact_log::CompactLogResult;
 use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
+    metapb::PeerRole,
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
 };
@@ -173,7 +174,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
                             let peers = self.region().get_peers().to_vec();
                             for p in peers {
-                                if p == *self.peer() {
+                                if p == *self.peer()
+                                    || p.get_role() != PeerRole::Voter
+                                    || p.is_witness
+                                {
                                     continue;
                                 }
                                 let mut msg = RaftMessage::default();

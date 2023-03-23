@@ -65,9 +65,10 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         let now = Instant::now();
         tablet.flush_cfs(DATA_CFS, true).unwrap();
         let elapsed = now.saturating_elapsed();
+        // to be removed after when it's stable
         info!(
             self.logger,
-            "Flush memtable time consumes";
+            "flush memtable time consumes";
             "region_id" =>  region_id,
             "duration" => ?elapsed,
             "is_leader" => is_leader,

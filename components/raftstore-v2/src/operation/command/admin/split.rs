@@ -516,9 +516,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 });
         }
         let elapsed = now.saturating_elapsed();
+        // to be removed after when it's stable
         info!(
             self.logger,
-            "Create checkpoint time consumes";
+            "create checkpoint time consumes";
             "region" =>  ?self.region(),
             "duration" => ?elapsed
         );
