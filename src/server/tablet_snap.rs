@@ -420,6 +420,9 @@ async fn recv_snap_files<'a>(
         (0, vec![])
     };
     let received = accept_missing(&path, missing_ssts, &mut stream, &limiter).await?;
+    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+        .recv
+        .inc_by(received);
     info!("received all tablet snapshot file"; "snap_key" => %context.key, "region_id" => region_id, "received" => received, "reused" => reused);
     let final_path = snap_mgr.final_recv_path(&context.key);
     fs::rename(&path, final_path)?;

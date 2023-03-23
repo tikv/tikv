@@ -203,8 +203,6 @@ pub fn send_snap(
                 mgr.delete_snapshot(&key, &chunks.snap, true);
                 let cost = UnixSecs::now().into_inner().saturating_sub(snap_start);
                 let send_duration_sec = timer.saturating_elapsed().as_secs();
-                WAIT_SNAP_HISTOGRAM
-                    .observe((cost - generate_duration_sec - send_duration_sec) as f64);
                 // it should ignore if the duration of snapshot is less than 1s to decrease the
                 // grpc data size.
                 if cost >= 1 {

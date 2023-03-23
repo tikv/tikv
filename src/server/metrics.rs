@@ -309,12 +309,6 @@ lazy_static! {
         exponential_buckets(0.05, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref WAIT_SNAP_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_server_wait_snapshot_duration_seconds",
-        "Bucketed histogram of server send snapshots duration",
-        exponential_buckets(0.05, 2.0, 20).unwrap()
-    )
-    .unwrap();
     pub static ref GRPC_REQ_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
         "tikv_server_grpc_req_batch_size",
         "grpc batch size of gRPC requests",
