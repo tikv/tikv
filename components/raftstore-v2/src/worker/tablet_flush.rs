@@ -69,7 +69,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         info!(
             self.logger,
             "flush memtable time consumes";
-            "region_id" =>  region_id,
+            "region_id" => region_id,
             "duration" => ?elapsed,
             "is_leader" => is_leader,
         );
