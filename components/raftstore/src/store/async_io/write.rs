@@ -445,7 +445,8 @@ where
             .unwrap();
 
         if let Some(raft_state) = task.raft_state.take()
-            && self.raft_states.insert(task.region_id, raft_state).is_none() {
+            && self.raft_states.insert(task.region_id, raft_state).is_none()
+        {
             self.state_size += std::mem::size_of::<RaftLocalState>();
         }
         self.extra_batch_write.merge(&mut task.extra_write);
@@ -964,7 +965,7 @@ where
         assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
-            writers[i].send(WriteMsg::Shutdown, 0).unwrap();
+            writers[i].send(WriteMsg::Shutdown, None).unwrap();
             handler.join().unwrap();
         }
     }

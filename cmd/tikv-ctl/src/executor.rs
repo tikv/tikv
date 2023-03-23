@@ -233,7 +233,7 @@ pub trait DebugExecutor {
         );
     }
 
-    fn dump_raft_log(&self, region: u64, index: u64) {
+    fn dump_raft_log(&self, region: u64, index: u64, binary: bool) {
         let idx_key = keys::raft_log_key(region, index);
         println!("idx_key: {}", escape(&idx_key));
         println!("region: {}", region);
@@ -245,6 +245,11 @@ pub trait DebugExecutor {
         println!("msg len: {}", data.len());
 
         if data.is_empty() {
+            return;
+        }
+
+        if binary {
+            println!("data: \n{}", hex::encode_upper(&data));
             return;
         }
 

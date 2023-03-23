@@ -391,6 +391,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         log_index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
+        fail_point!(
+            "on_apply_batch_split",
+            self.peer().get_store_id() == 3,
+            |_| { unreachable!() }
+        );
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let region = self.region();
@@ -692,7 +697,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         mut split_init: Box<SplitInit>,
     ) {
         let region_id = split_init.region.id;
-        if self.storage().is_initialized() && self.persisted_index() >= RAFT_INIT_LOG_INDEX {
+        let peer_id = split_init
+            .region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == self.peer().get_store_id())
+            .unwrap()
+            .get_id();
+
+        // If peer_id in `split_init` is less than the current peer_id, the conf change
+        // for the peer should have occurred and we should just report finish to
+        // the source region of this out of dated peer initialization.
+        if self.storage().is_initialized() && self.persisted_index() >= RAFT_INIT_LOG_INDEX
+            || peer_id < self.peer().get_id()
+        {
             // Race with split operation. The tablet created by split will eventually be
             // deleted. We don't trim it.
             report_split_init_finish(store_ctx, split_init.derived_region_id, region_id, true);
