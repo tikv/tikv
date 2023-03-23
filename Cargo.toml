@@ -378,7 +378,7 @@ grpcio = { version = "0.10.4", default-features = false, features = ["openssl-ve
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-yatp = { git = "https://github.com/you06/yatp.git", rev = "bc21bdbd1f8c8df92e9cada4ee15f046fb49228b" }
+yatp = { git = "https://github.com/you06/yatp.git", rev = "9edbf31430ed1366e9af233ca6ce58b9a7886e5c" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
