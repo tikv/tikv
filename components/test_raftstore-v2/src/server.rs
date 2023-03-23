@@ -15,7 +15,7 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use futures::executor::block_on;
+use futures::{executor::block_on, Future};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
 use kvproto::{
@@ -751,24 +751,25 @@ impl Simulator for ServerCluster {
         self.storages.remove(&node_id);
     }
 
-    fn snapshot(
+    fn async_snapshot(
         &mut self,
         request: kvproto::raft_cmdpb::RaftCmdRequest,
-        timeout: Duration,
-    ) -> std::result::Result<RegionSnapshot<<RocksEngine as KvEngine>::Snapshot>, RaftCmdResponse>
-    {
+    ) -> impl Future<
+        Output = std::result::Result<RegionSnapshot<engine_rocks::RocksSnapshot>, RaftCmdResponse>,
+    > + Send {
         let node_id = request.get_header().get_peer().get_store_id();
         let mut router = match self.metas.get(&node_id) {
             None => {
                 let mut resp = RaftCmdResponse::default();
                 let e: RaftError = box_err!("missing sender for store {}", node_id);
                 resp.mut_header().set_error(e.into());
-                return Err(resp);
+                // return async move {Err(resp)};
+                unreachable!()
             }
             Some(meta) => meta.sim_router.clone(),
         };
 
-        router.snapshot(request, timeout)
+        router.snapshot(request)
     }
 
     fn async_peer_msg_on_node(
@@ -795,6 +796,10 @@ impl Simulator for ServerCluster {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn send_raft_msg(&mut self, _msg: RaftMessage) -> raftstore::Result<()> {
+        unimplemented!()
     }
 }
 

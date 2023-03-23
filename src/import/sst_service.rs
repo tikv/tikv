@@ -26,8 +26,8 @@ use kvproto::{
     kvrpcpb::Context,
 };
 use sst_importer::{
-    error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, Error, Result,
-    SstImporter,
+    error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, ConfigManager,
+    Error, Result, SstImporter,
 };
 use tikv_kv::{
     Engine, LocalTablets, Modify, SnapContext, Snapshot, SnapshotExt, WriteData, WriteEvent,
@@ -37,6 +37,7 @@ use tikv_util::{
     future::create_stream_with_buffer,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
+    HandyRwLock,
 };
 use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
@@ -87,7 +88,7 @@ async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> sto
 /// raftstore to trigger the ingest process.
 #[derive(Clone)]
 pub struct ImportSstService<E: Engine> {
-    cfg: Config,
+    cfg: ConfigManager,
     tablets: LocalTablets<E::Local>,
     engine: E,
     threads: Arc<Runtime>,
@@ -298,10 +299,12 @@ impl<E: Engine> ImportSstService<E> {
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(threads.handle(), tablet.clone());
         }
-        threads.spawn(Self::tick(importer.clone()));
+
+        let cfg_mgr = ConfigManager::new(cfg);
+        threads.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
 
         ImportSstService {
-            cfg,
+            cfg: cfg_mgr,
             tablets,
             threads: Arc::new(threads),
             block_threads: Arc::new(block_threads),
@@ -313,9 +316,15 @@ impl<E: Engine> ImportSstService<E> {
         }
     }
 
-    async fn tick(importer: Arc<SstImporter>) {
+    pub fn get_config_manager(&self) -> ConfigManager {
+        self.cfg.clone()
+    }
+
+    async fn tick(importer: Arc<SstImporter>, cfg: ConfigManager) {
         loop {
             sleep(Duration::from_secs(10)).await;
+
+            importer.update_config_memory_use_ratio(&cfg);
             importer.shrink_by_tick();
         }
     }
@@ -546,7 +555,7 @@ macro_rules! impl_write {
             let import = self.importer.clone();
             let tablets = self.tablets.clone();
             let (rx, buf_driver) =
-                create_stream_with_buffer(stream, self.cfg.stream_channel_window);
+                create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
             let mut rx = rx.map_err(Error::from);
 
             let timer = Instant::now_coarse();
@@ -654,7 +663,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
-        let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
+        let (rx, buf_driver) =
+            create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
         let mut map_rx = rx.map_err(Error::from);
 
         let handle_task = async move {

@@ -1251,6 +1251,8 @@ where
             LocalTablets::Singleton(engines.engines.kv.clone()),
             servers.importer.clone(),
         );
+        let import_cfg_mgr = import_service.get_config_manager();
+
         if servers
             .server
             .register_service(create_import_sst(import_service))
@@ -1258,6 +1260,11 @@ where
         {
             fatal!("failed to register import service");
         }
+
+        self.cfg_controller
+            .as_mut()
+            .unwrap()
+            .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
 
         // Debug service.
         let debug_service = DebugService::new(

@@ -255,11 +255,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
-        } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
-            error!(self.logger, "raft step error"; "err" => ?e);
         } else {
-            let committed_index = self.raft_group().raft.raft_log.committed;
-            self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
+            // This can be a message that sent when it's still a follower. Nevertheleast,
+            // it's meaningless to continue to handle the request as callbacks are cleared.
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                && self.is_leader()
+                && (msg.get_message().get_from() == raft::INVALID_ID
+                    || msg.get_message().get_from() == self.peer_id())
+            {
+                ctx.raft_metrics.message_dropped.stale_msg.inc();
+                return;
+            }
+
+            if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+                error!(self.logger, "raft step error"; "err" => ?e);
+            } else {
+                let committed_index = self.raft_group().raft.raft_log.committed;
+                self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
+            }
         }
 
         self.set_has_ready();
