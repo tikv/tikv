@@ -520,6 +520,7 @@ mod tests {
             .build()
             .unwrap()
             .with_raft_extension(RaftRouterWrap::new(router.clone()));
+        let engine_for_cop = engine.clone();
 
         let storage =
             TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
@@ -557,6 +558,7 @@ mod tests {
             storage.get_concurrency_manager(),
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(

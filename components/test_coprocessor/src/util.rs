@@ -14,14 +14,14 @@ pub fn next_id() -> i64 {
     ID_GENERATOR.fetch_add(1, Ordering::Relaxed) as i64
 }
 
-pub fn handle_request<E>(copr: &Endpoint<E>, req: Request) -> Response
+pub fn handle_request<E>(copr: &mut Endpoint<E>, req: Request) -> Response
 where
     E: Engine,
 {
     block_on(copr.parse_and_handle_unary_request(req, None)).consume()
 }
 
-pub fn handle_select<E>(copr: &Endpoint<E>, req: Request) -> SelectResponse
+pub fn handle_select<E>(copr: &mut Endpoint<E>, req: Request) -> SelectResponse
 where
     E: Engine,
 {
@@ -33,7 +33,7 @@ where
 }
 
 pub fn handle_streaming_select<E, F>(
-    copr: &Endpoint<E>,
+    copr: &mut Endpoint<E>,
     req: Request,
     mut check_range: F,
 ) -> Vec<StreamResponse>

@@ -457,7 +457,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let source = req.mut_context().take_request_source();
         let begin_instant = Instant::now();
-        let future = future_copr(&self.copr, Some(ctx.peer()), req);
+        let future = future_copr(&mut self.copr, Some(ctx.peer()), req);
         let task = async move {
             let resp = future.await?.consume();
             sink.success(resp).await?;
@@ -825,7 +825,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let ctx = Arc::new(ctx);
         let peer = ctx.peer();
         let storage = self.storage.clone();
-        let copr = self.copr.clone();
+        let mut copr = self.copr.clone();
         let copr_v2 = self.copr_v2.clone();
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
@@ -839,7 +839,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 handle_batch_commands_request(
                     &mut batcher,
                     &storage,
-                    &copr,
+                    &mut copr,
                     &copr_v2,
                     &peer,
                     id,
@@ -1048,7 +1048,7 @@ fn response_batch_commands_request<F, T>(
 fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L, F>,
-    copr: &Endpoint<E>,
+    copr: &mut Endpoint<E>,
     copr_v2: &coprocessor_v2::Endpoint,
     peer: &str,
     id: u64,
@@ -1917,7 +1917,7 @@ fn future_raw_checksum<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn future_copr<E: Engine>(
-    copr: &Endpoint<E>,
+    copr: &mut Endpoint<E>,
     peer: Option<String>,
     req: Request,
 ) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {

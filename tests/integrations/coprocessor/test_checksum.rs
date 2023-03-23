@@ -48,7 +48,7 @@ fn test_checksum() {
     ];
 
     let product = ProductTable::new();
-    let (store, endpoint, _) = init_data_with_commit(&product, &data, true);
+    let (store, mut endpoint, _) = init_data_with_commit(&product, &data, true);
 
     for column in &[&product["id"], &product["name"], &product["count"]] {
         assert!(column.index >= 0);
@@ -62,7 +62,7 @@ fn test_checksum() {
         let request = new_checksum_request(range.clone(), scan_on);
         let expected = reversed_checksum_crc64_xor(&store, range);
 
-        let response = handle_request(&endpoint, request);
+        let response = handle_request(&mut endpoint, request);
         let mut resp = ChecksumResponse::default();
         resp.merge_from_bytes(response.get_data()).unwrap();
         assert_eq!(resp.get_checksum(), expected);

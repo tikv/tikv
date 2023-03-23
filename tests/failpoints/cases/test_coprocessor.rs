@@ -8,7 +8,7 @@ use kvproto::{
     kvrpcpb::{Context, IsolationLevel},
     tikvpb::TikvClient,
 };
-use more_asserts::{assert_ge, assert_le};
+use more_asserts::{assert_ge, assert_gt, assert_le};
 use protobuf::Message;
 use test_coprocessor::*;
 use test_raftstore::{must_get_equal, new_peer, new_server_cluster};
@@ -24,11 +24,11 @@ use txn_types::{Key, Lock, LockType};
 #[test]
 fn test_deadline() {
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &[]);
+    let (_, mut endpoint) = init_with_data(&product, &[]);
     let req = DagSelect::from(&product).build();
 
     fail::cfg("deadline_check_fail", "return()").unwrap();
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
 
     assert!(resp.get_other_error().contains("exceeding the deadline"));
 }
@@ -38,12 +38,12 @@ fn test_deadline_2() {
     // It should not even take any snapshots when request is outdated from the
     // beginning.
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &[]);
+    let (_, mut endpoint) = init_with_data(&product, &[]);
     let req = DagSelect::from(&product).build();
 
     fail::cfg("rockskv_async_snapshot", "panic").unwrap();
     fail::cfg("deadline_check_fail", "return()").unwrap();
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
 
     assert!(resp.get_other_error().contains("exceeding the deadline"));
 }
@@ -60,7 +60,7 @@ fn test_deadline_3() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint, _) = {
+    let (_, mut endpoint, _) = {
         let engine = tikv::storage::TestEngineBuilder::new().build().unwrap();
         let cfg = tikv::server::Config {
             end_point_request_max_handle_duration: tikv_util::config::ReadableDuration::secs(1),
@@ -72,7 +72,7 @@ fn test_deadline_3() {
 
     fail::cfg("kv_cursor_seek", "sleep(2000)").unwrap();
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
-    let cop_resp = handle_request(&endpoint, req);
+    let cop_resp = handle_request(&mut endpoint, req);
     let mut resp = SelectResponse::default();
     resp.merge_from_bytes(cop_resp.get_data()).unwrap();
 
@@ -88,11 +88,11 @@ fn test_deadline_3() {
 #[test]
 fn test_parse_request_failed() {
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &[]);
+    let (_, mut endpoint) = init_with_data(&product, &[]);
     let req = DagSelect::from(&product).build();
 
     fail::cfg("coprocessor_parse_request", "return()").unwrap();
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
 
     assert!(resp.get_other_error().contains("unsupported tp"));
 }
@@ -101,12 +101,12 @@ fn test_parse_request_failed() {
 fn test_parse_request_failed_2() {
     // It should not even take any snapshots when parse failed.
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &[]);
+    let (_, mut endpoint) = init_with_data(&product, &[]);
     let req = DagSelect::from(&product).build();
 
     fail::cfg("rockskv_async_snapshot", "panic").unwrap();
     fail::cfg("coprocessor_parse_request", "return()").unwrap();
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
 
     assert!(resp.get_other_error().contains("unsupported tp"));
 }
@@ -114,11 +114,11 @@ fn test_parse_request_failed_2() {
 #[test]
 fn test_readpool_full() {
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &[]);
+    let (_, mut endpoint) = init_with_data(&product, &[]);
     let req = DagSelect::from(&product).build();
 
     fail::cfg("future_pool_spawn_full", "return()").unwrap();
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
 
     assert!(resp.get_region_error().has_server_is_busy());
 }
@@ -126,11 +126,11 @@ fn test_readpool_full() {
 #[test]
 fn test_snapshot_failed() {
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &[]);
+    let (_, mut endpoint) = init_with_data(&product, &[]);
     let req = DagSelect::from(&product).build();
 
     fail::cfg("rockskv_async_snapshot", "return()").unwrap();
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
 
     assert!(resp.get_other_error().contains("snapshot failed"));
 }
@@ -138,11 +138,11 @@ fn test_snapshot_failed() {
 #[test]
 fn test_snapshot_failed_2() {
     let product = ProductTable::new();
-    let (store, endpoint) = init_with_data(&product, &[]);
+    let (store, mut endpoint) = init_with_data(&product, &[]);
     let req = DagSelect::from(&product).build();
 
     store.get_engine().trigger_not_leader();
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
 
     assert!(resp.get_region_error().has_not_leader());
 }
@@ -152,11 +152,11 @@ fn test_storage_error() {
     let data = vec![(1, Some("name:0"), 2), (2, Some("name:4"), 3)];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, mut endpoint) = init_with_data(&product, &data);
     let req = DagSelect::from(&product).build();
 
     fail::cfg("kv_cursor_seek", "return()").unwrap();
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
 
     assert!(resp.get_other_error().contains("kv cursor seek error"));
 }
@@ -174,12 +174,12 @@ fn test_region_error_in_scan() {
     let (_cluster, raft_engine, mut ctx) = new_raft_engine(1, "");
     ctx.set_isolation_level(IsolationLevel::Si);
 
-    let (_, endpoint, _) =
+    let (_, mut endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
     fail::cfg("region_snapshot_seek", "return()").unwrap();
     let req = DagSelect::from(&product).build_with(ctx, &[0]);
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
 
     assert!(
         resp.get_region_error()
@@ -198,7 +198,7 @@ fn test_paging_scan() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, mut endpoint) = init_with_data(&product, &data);
     // set batch size and grow size to 1, so that only 1 row will be scanned in each
     // batch.
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
@@ -214,7 +214,7 @@ fn test_paging_scan() {
                 .paging_size(paging_size as u64)
                 .desc(desc)
                 .build();
-            let resp = handle_request(&endpoint, req);
+            let resp = handle_request(&mut endpoint, req);
             let mut select_resp = SelectResponse::default();
             select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
@@ -258,7 +258,7 @@ fn test_paging_scan() {
             .limit(1)
             .desc(desc)
             .build();
-        let resp = handle_request(&endpoint, req);
+        let resp = handle_request(&mut endpoint, req);
         assert!(resp.range.is_none());
         assert!(resp.range.is_none());
 
@@ -269,7 +269,7 @@ fn test_paging_scan() {
             .desc(desc)
             .paging_size(2)
             .build();
-        let resp = handle_request(&endpoint, agg_req);
+        let resp = handle_request(&mut endpoint, agg_req);
         assert!(resp.range.is_some());
     }
 }
@@ -284,7 +284,7 @@ fn test_paging_scan_multi_ranges() {
         (5, Some("name:1"), 4),
     ];
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, mut endpoint) = init_with_data(&product, &data);
     // set batch size and grow size to 1, so that only 1 row will be scanned in each
     // batch.
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
@@ -308,7 +308,7 @@ fn test_paging_scan_multi_ranges() {
             let key_ranges = vec![range1.clone(), range2.clone()];
 
             let req = builder.key_ranges(key_ranges).build();
-            let resp = handle_request(&endpoint, req);
+            let resp = handle_request(&mut endpoint, req);
             let mut select_resp = SelectResponse::default();
             select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
@@ -417,4 +417,90 @@ fn test_read_index_lock_checking_on_follower() {
         "{:?}",
         resp
     );
+}
+
+#[test]
+fn test_cop_busy_err_with_applied_index() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_cluster, raft_engine, mut ctx) = new_raft_engine(1, "");
+    ctx.set_isolation_level(IsolationLevel::Si);
+
+    let (_, mut endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
+
+    fail::cfg("read_pool_busy_err", "return()").unwrap();
+    let range1 = product.get_record_range(1, 1);
+    for batched_task in [false, true] {
+        let mut ranges = Vec::with_capacity(5);
+        let ctx_clone = ctx.clone();
+        let req = if !batched_task {
+            let r1 = range1.clone();
+            ranges.push(r1);
+            DagSelect::from(&product)
+                .key_ranges(ranges)
+                .build_with(ctx_clone, &[0])
+        } else {
+            let r1 = range1.clone();
+            ranges.push(r1);
+            let mut batch_req = DagSelect::from(&product)
+                .key_ranges(ranges)
+                .build_with(ctx_clone, &[0]);
+            let prepare_store_batched_task = |task_id: u64,
+                                              range: kvproto::coprocessor::KeyRange|
+             -> kvproto::coprocessor::StoreBatchTask {
+                let mut store_batched_task = kvproto::coprocessor::StoreBatchTask::new();
+                store_batched_task.set_region_id(ctx.get_region_id());
+                store_batched_task.set_region_epoch(ctx.get_region_epoch().clone());
+                store_batched_task.set_peer(ctx.get_peer().clone());
+                store_batched_task.set_ranges((vec![range]).into());
+                store_batched_task.set_task_id(task_id);
+                store_batched_task
+            };
+            let range2 = product.get_record_range(2, 2);
+            let range3 = product.get_record_range(3, 5);
+            let range4 = product.get_record_range(5, 10);
+            batch_req.tasks.push(prepare_store_batched_task(2, range2));
+            batch_req.tasks.push(prepare_store_batched_task(3, range3));
+            batch_req.tasks.push(prepare_store_batched_task(4, range4));
+            batch_req
+        };
+
+        let mut resp = handle_request(&mut endpoint, req);
+        assert_eq!(
+            resp.get_region_error()
+                .get_server_is_busy()
+                .estimated_wait_ms,
+            777
+        );
+        assert_gt!(
+            resp.get_region_error().get_server_is_busy().applied_index,
+            0
+        );
+        if batched_task {
+            let batch_resp = resp.take_batch_responses();
+            for batch_task_resp in batch_resp.into_iter() {
+                assert_eq!(
+                    batch_task_resp
+                        .get_region_error()
+                        .get_server_is_busy()
+                        .estimated_wait_ms,
+                    777
+                );
+                assert_gt!(
+                    batch_task_resp
+                        .get_region_error()
+                        .get_server_is_busy()
+                        .applied_index,
+                    0
+                );
+            }
+        }
+    }
 }

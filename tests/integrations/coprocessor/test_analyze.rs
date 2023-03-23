@@ -114,14 +114,14 @@ fn test_analyze_column_with_lock() {
 
     let product = ProductTable::new();
     for &iso_level in &[IsolationLevel::Si, IsolationLevel::Rc] {
-        let (_, endpoint, _) = init_data_with_commit(&product, &data, false);
+        let (_, mut endpoint, _) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_column_req(&product, 3, 3, 3, 3, 4, 32);
         let mut ctx = Context::default();
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
 
-        let resp = handle_request(&endpoint, req);
+        let resp = handle_request(&mut endpoint, req);
         match iso_level {
             IsolationLevel::Si => {
                 assert!(resp.get_data().is_empty(), "{:?}", resp);
@@ -149,10 +149,10 @@ fn test_analyze_column() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
+    let (_, mut endpoint, _) = init_data_with_commit(&product, &data, true);
 
     let req = new_analyze_column_req(&product, 3, 3, 3, 3, 4, 32);
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeColumnsResp::default();
     analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
@@ -181,10 +181,10 @@ fn test_analyze_single_primary_column() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
+    let (_, mut endpoint, _) = init_data_with_commit(&product, &data, true);
 
     let req = new_analyze_column_req(&product, 1, 3, 3, 3, 4, 32);
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeColumnsResp::default();
     analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
@@ -206,14 +206,14 @@ fn test_analyze_index_with_lock() {
 
     let product = ProductTable::new();
     for &iso_level in &[IsolationLevel::Si, IsolationLevel::Rc] {
-        let (_, endpoint, _) = init_data_with_commit(&product, &data, false);
+        let (_, mut endpoint, _) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32, 0, 1);
         let mut ctx = Context::default();
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
 
-        let resp = handle_request(&endpoint, req);
+        let resp = handle_request(&mut endpoint, req);
         match iso_level {
             IsolationLevel::Si => {
                 assert!(resp.get_data().is_empty(), "{:?}", resp);
@@ -246,10 +246,10 @@ fn test_analyze_index() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
+    let (_, mut endpoint, _) = init_data_with_commit(&product, &data, true);
 
     let req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32, 2, 2);
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeIndexResp::default();
     analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
@@ -288,11 +288,11 @@ fn test_analyze_sampling_reservoir() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
+    let (_, mut endpoint, _) = init_data_with_commit(&product, &data, true);
 
     // Pass the 2nd column as a column group.
     let req = new_analyze_sampling_req(&product, 1, 5, 0.0);
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeColumnsResp::default();
     analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
@@ -320,11 +320,11 @@ fn test_analyze_sampling_bernoulli() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
+    let (_, mut endpoint, _) = init_data_with_commit(&product, &data, true);
 
     // Pass the 2nd column as a column group.
     let req = new_analyze_sampling_req(&product, 1, 0, 0.5);
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeColumnsResp::default();
     analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
@@ -346,12 +346,12 @@ fn test_invalid_range() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
+    let (_, mut endpoint, _) = init_data_with_commit(&product, &data, true);
     let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32, 0, 1);
     let mut key_range = KeyRange::default();
     key_range.set_start(b"xxx".to_vec());
     key_range.set_end(b"zzz".to_vec());
     req.set_ranges(vec![key_range].into());
-    let resp = handle_request(&endpoint, req);
+    let resp = handle_request(&mut endpoint, req);
     assert!(!resp.get_other_error().is_empty());
 }
