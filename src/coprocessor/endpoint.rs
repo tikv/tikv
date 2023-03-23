@@ -574,7 +574,7 @@ impl<E: Engine> Endpoint<E> {
         let snap_fut = self
             .parse_request_and_check_memory_locks(req, peer.clone(), false)
             .map(|(_, req_ctx)| Self::async_snapshot(&mut self.engine, &req_ctx));
-        let fut = async move {
+        async move {
             match snap_fut {
                 Ok(snap) => {
                     let (handle_res, batch_res) = futures::join!(snap, result_of_batch);
@@ -598,10 +598,8 @@ impl<E: Engine> Endpoint<E> {
                     resp.set_batch_responses(batch_res.into());
                 }
             }
-            resp.into()
-        };
-
-        fut
+            resp
+        }
     }
 
     // process_batch_tasks process the input batched coprocessor tasks if any,
