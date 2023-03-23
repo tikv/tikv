@@ -7,7 +7,7 @@ use futures::{
     future::BoxFuture,
     FutureExt, SinkExt, StreamExt,
 };
-use grpcio::{RpcStatus, RpcStatusCode, ServerStreamingSink, WriteFlags};
+use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
     errorpb::{Error as PbError, *},
     logbackuppb::{FlushEvent, SubscribeFlushEventResponse},
@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::{
     annotate,
-    errors::{Error, ReportableResult, Result},
+    errors::{Error, Result},
     future,
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
     metrics,
@@ -51,9 +51,11 @@ impl std::fmt::Debug for CheckpointManager {
 enum SubscriptionOp {
     Add(Subscription),
     Emit(Box<[FlushEvent]>),
+    #[cfg(test)]
+    Inspect(Box<dyn FnOnce(&SubscriptionManager) + Send>),
 }
 
-struct SubscriptionManager {
+pub struct SubscriptionManager {
     subscribers: HashMap<Uuid, Subscription>,
     input: Receiver<SubscriptionOp>,
 }
@@ -72,8 +74,13 @@ impl SubscriptionManager {
                 SubscriptionOp::Emit(events) => {
                     self.emit_events(events).await;
                 }
+                #[cfg(test)]
+                SubscriptionOp::Inspect(f) => {
+                    f(&self);
+                }
             }
         }
+        // NOTE: Maybe close all subscription streams here.
     }
 
     async fn emit_events(&mut self, events: Box<[FlushEvent]>) {
@@ -89,14 +96,9 @@ impl SubscriptionManager {
                 sub.flush().await
             };
 
-            match send_all.await {
-                Err(grpcio::Error::RemoteStopped) => {
-                    canceled.push(*id);
-                }
-                Err(err) => {
-                    Error::from(err).report("sending subscription");
-                }
-                _ => {}
+            if let Err(err) = send_all.await {
+                canceled.push(*id);
+                Error::from(err).report("sending subscription");
             }
         }
 
@@ -107,11 +109,10 @@ impl SubscriptionManager {
 
     async fn remove_subscription(&mut self, id: &Uuid) {
         match self.subscribers.remove(id) {
-            Some(mut sub) => {
+            Some(sub) => {
                 info!("client is gone, removing subscription"; "id" => %id);
-                sub.close()
-                    .await
-                    .report_if_err(format_args!("during removing subscription {}", id))
+                // The stream is an endless stream -- we don't need to close it.
+                drop(sub);
             }
             None => {
                 warn!("BUG: the subscriber has been removed before we are going to remove it."; "id" => %id);
@@ -121,7 +122,12 @@ impl SubscriptionManager {
 }
 
 // Note: can we make it more generic...?
-pub type Subscription = ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>;
+#[cfg(not(test))]
+pub type Subscription =
+    grpcio::ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>;
+
+#[cfg(test)]
+pub type Subscription = tests::MockSink;
 
 /// The result of getting a checkpoint.
 /// The possibility of failed to getting checkpoint is pretty high:
@@ -201,7 +207,7 @@ impl CheckpointManager {
 
     /// update a region checkpoint in need.
     #[cfg(test)]
-    pub fn update_region_checkpoint(&mut self, region: &Region, checkpoint: TimeStamp) {
+    fn update_region_checkpoint(&mut self, region: &Region, checkpoint: TimeStamp) {
         Self::update_ts(&mut self.checkpoint_ts, region.clone(), checkpoint)
     }
 
@@ -325,6 +331,29 @@ impl CheckpointManager {
 
     pub fn get_resolved_ts(&self) -> Option<TimeStamp> {
         self.resolved_ts.values().map(|x| x.checkpoint).min()
+    }
+
+    #[cfg(test)]
+    fn sync_with_subs_mgr<T: Send + 'static>(
+        &mut self,
+        f: impl FnOnce(&SubscriptionManager) -> T + Send + 'static,
+    ) -> T {
+        use std::sync::Mutex;
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let t = Arc::new(Mutex::new(None));
+        let tr = Arc::clone(&t);
+        self.manager_handle
+            .as_mut()
+            .unwrap()
+            .try_send(SubscriptionOp::Inspect(Box::new(move |x| {
+                *tr.lock().unwrap() = Some(f(x));
+                tx.send(()).unwrap();
+            })))
+            .unwrap();
+        rx.recv().unwrap();
+        let mut t = t.lock().unwrap();
+        t.take().unwrap()
     }
 }
 
@@ -525,17 +554,21 @@ pub mod tests {
     use std::{
         assert_matches,
         collections::HashMap,
-        sync::{Arc, RwLock},
+        sync::{Arc, Mutex, RwLock},
         time::Duration,
     };
 
-    use futures::future::ok;
-    use kvproto::metapb::*;
+    use futures::{future::ok, Sink};
+    use grpcio::{RpcStatus, RpcStatusCode};
+    use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};
     use pd_client::{PdClient, PdFuture};
     use txn_types::TimeStamp;
 
     use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
-    use crate::GetCheckpointResult;
+    use crate::{
+        subscription_track::{CheckpointType, ResolveResult},
+        GetCheckpointResult,
+    };
 
     fn region(id: u64, version: u64, conf_version: u64) -> Region {
         let mut r = Region::new();
@@ -545,6 +578,137 @@ pub mod tests {
         r.set_id(id);
         r.set_region_epoch(e);
         r
+    }
+
+    #[derive(Clone)]
+    pub struct MockSink(Arc<Mutex<MockSinkInner>>);
+
+    impl MockSink {
+        fn with_fail_once(code: RpcStatusCode) -> Self {
+            let mut failed = false;
+            let inner = MockSinkInner {
+                items: Vec::default(),
+                closed: false,
+                on_error: Box::new(move || {
+                    if failed {
+                        RpcStatusCode::OK
+                    } else {
+                        failed = true;
+                        code
+                    }
+                }),
+            };
+            Self(Arc::new(Mutex::new(inner)))
+        }
+
+        fn trivial() -> Self {
+            let inner = MockSinkInner {
+                items: Vec::default(),
+                closed: false,
+                on_error: Box::new(|| RpcStatusCode::OK),
+            };
+            Self(Arc::new(Mutex::new(inner)))
+        }
+
+        pub async fn fail(&self, status: RpcStatus) -> crate::errors::Result<()> {
+            panic!("failed in a case should never fail: {}", status);
+        }
+    }
+
+    struct MockSinkInner {
+        items: Vec<SubscribeFlushEventResponse>,
+        closed: bool,
+        on_error: Box<dyn FnMut() -> grpcio::RpcStatusCode + Send>,
+    }
+
+    impl Sink<(SubscribeFlushEventResponse, grpcio::WriteFlags)> for MockSink {
+        type Error = grpcio::Error;
+
+        fn poll_ready(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            Ok(()).into()
+        }
+
+        fn start_send(
+            self: std::pin::Pin<&mut Self>,
+            item: (SubscribeFlushEventResponse, grpcio::WriteFlags),
+        ) -> Result<(), Self::Error> {
+            let mut guard = self.0.lock().unwrap();
+            let code = (guard.on_error)();
+            if code != RpcStatusCode::OK {
+                return Err(grpcio::Error::RpcFailure(RpcStatus::new(code)));
+            }
+            guard.items.push(item.0);
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            Ok(()).into()
+        }
+
+        fn poll_close(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            let mut guard = self.0.lock().unwrap();
+            guard.closed = true;
+            Ok(()).into()
+        }
+    }
+
+    fn simple_resolve_result() -> ResolveResult {
+        let mut region = Region::new();
+        region.set_id(42);
+        ResolveResult {
+            region,
+            checkpoint: 42.into(),
+            checkpoint_type: CheckpointType::MinTs,
+        }
+    }
+
+    #[test]
+    fn test_rpc_sub() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let mut mgr = super::CheckpointManager::default();
+        rt.spawn(mgr.spawn_subscription_mgr());
+
+        let trivial_sink = MockSink::trivial();
+        rt.block_on(mgr.add_subscriber(trivial_sink.clone()))
+            .unwrap();
+
+        mgr.resolve_regions(vec![simple_resolve_result()]);
+        mgr.flush();
+        mgr.sync_with_subs_mgr(|_| {});
+        assert_eq!(trivial_sink.0.lock().unwrap().items.len(), 1);
+    }
+
+    #[test]
+    fn test_rpc_failure() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let mut mgr = super::CheckpointManager::default();
+        rt.spawn(mgr.spawn_subscription_mgr());
+
+        let error_sink = MockSink::with_fail_once(RpcStatusCode::INTERNAL);
+        rt.block_on(mgr.add_subscriber(error_sink.clone())).unwrap();
+
+        mgr.resolve_regions(vec![simple_resolve_result()]);
+        mgr.flush();
+        assert_eq!(mgr.sync_with_subs_mgr(|item| { item.subscribers.len() }), 0);
+        let sink = error_sink.0.lock().unwrap();
+        assert_eq!(sink.items.len(), 0);
+        // The stream shouldn't be closed when exit by a failure.
+        assert_eq!(sink.closed, false);
     }
 
     #[test]
