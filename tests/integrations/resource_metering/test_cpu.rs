@@ -217,7 +217,7 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         ..Default::default()
     });
     let store = Store::from_storage(test_suite.get_storage());
-    let engine_for_cop = store.get_engine().clone();
+    let engine_for_cop = store.get_engine();
     tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
     let pool = ReadPool::from(readpool_impl::build_read_pool_for_test(
         &CoprReadPoolConfig::default_for_test(),

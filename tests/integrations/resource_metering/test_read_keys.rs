@@ -207,7 +207,7 @@ fn init_coprocessor_with_data(
     tag_factory: ResourceTagFactory,
 ) -> Endpoint<RocksEngine> {
     let mut store = Store::default();
-    let engine_for_cop = store.get_engine().clone();
+    let engine_for_cop = store.get_engine();
     store.begin();
     for &(id, name, count) in vals {
         store
