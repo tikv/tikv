@@ -58,35 +58,37 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         is_leader: bool,
         ch: Option<CmdResChannel>,
     ) {
-        if let Some(mut cache) = self.tablet_registry.get(region_id) {
-            if let Some(tablet) = cache.latest() {
-                let now = Instant::now();
-                tablet.flush_cfs(DATA_CFS, true).unwrap();
-                let elapsed = now.saturating_elapsed();
-                info!(
-                    self.logger,
-                    "Flush memtable time consumes";
-                    "region_id" =>  region_id,
-                    "duration" => ?elapsed,
-                    "is_leader" => is_leader,
-                );
+        let Some(Some(tablet)) = self
+            .tablet_registry
+            .get(region_id)
+            .map(|mut cache| cache.latest().cloned()) else {return};
+        let now = Instant::now();
+        tablet.flush_cfs(DATA_CFS, true).unwrap();
+        let elapsed = now.saturating_elapsed();
+        info!(
+            self.logger,
+            "Flush memtable time consumes";
+            "region_id" =>  region_id,
+            "duration" => ?elapsed,
+            "is_leader" => is_leader,
+        );
 
-                if is_leader {
-                    let mut req = req.unwrap();
-                    req.mut_header()
-                        .set_flags(WriteBatchFlags::SPLIT_SECOND_PHASE.bits());
-                    if let Err(e) = self.router.send(
-                        region_id,
-                        PeerMsg::AdminCommand(RaftRequest::new(req, ch.unwrap())),
-                    ) {
-                        error!(
-                            self.logger,
-                            "send split request fail in the second phase";
-                            "region_id" => region_id, "err" => ?e,
-                        );
-                    }
-                }
-            }
+        if !is_leader {
+            return;
+        }
+
+        let mut req = req.unwrap();
+        req.mut_header()
+            .set_flags(WriteBatchFlags::SPLIT_SECOND_PHASE.bits());
+        if let Err(e) = self.router.send(
+            region_id,
+            PeerMsg::AdminCommand(RaftRequest::new(req, ch.unwrap())),
+        ) {
+            error!(
+                self.logger,
+                "send split request fail in the second phase";
+                "region_id" => region_id, "err" => ?e,
+            );
         }
     }
 }
