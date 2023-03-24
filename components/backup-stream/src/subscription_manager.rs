@@ -45,8 +45,21 @@ use crate::{
 type ScanPool = yatp::ThreadPool<yatp::task::callback::TaskCell>;
 
 const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
-const RETRY_AWAIT_INTERVAL: Duration = Duration::from_secs(2);
-const TRY_START_OBSERVE_MAX_RETRY_TIME: u8 = 12;
+
+// The retry parameters for failed to get last checkpoint ts.
+// When PD is temporarily disconnected, we may need this retry.
+// The total duration of retrying is about 345s ( 20 * 16 + 15 ),
+// which is longer than the RPO promise.
+const TRY_START_OBSERVE_MAX_RETRY_TIME: u8 = 24;
+const RETRY_AWAIT_BASIC_DURATION: Duration = Duration::from_secs(1);
+const RETRY_AWAIT_MAX_DURATION: Duration = Duration::from_secs(16);
+
+fn backoff_for_start_observe(failed_for: u8) -> Duration {
+    Ord::min(
+        RETRY_AWAIT_BASIC_DURATION * (1 << failed_for),
+        RETRY_AWAIT_MAX_DURATION,
+    )
+}
 
 /// a request for doing initial scanning.
 struct ScanCmd {
@@ -559,7 +572,7 @@ where
             self.stat.event_retry_request += 1;
             tokio::spawn(async move {
                 #[cfg(not(feature = "failpoints"))]
-                let delay = RETRY_AWAIT_INTERVAL;
+                let delay = backoff_for_start_observe(has_failed_for);
                 #[cfg(feature = "failpoints")]
                 let delay = (|| {
                     fail::fail_point!("subscribe_mgr_retry_start_observe_delay", |v| {
@@ -569,7 +582,7 @@ where
                             .expect("should be number (in ms)");
                         Duration::from_millis(dur)
                     });
-                    RETRY_AWAIT_INTERVAL
+                    backoff_for_start_observe(has_failed_for)
                 })();
                 tokio::time::sleep(delay).await;
                 try_send!(
@@ -771,5 +784,33 @@ mod test {
         }
 
         should_finish_in(move || drop(pool), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_backoff_for_start_observe() {
+        assert_eq!(
+            super::backoff_for_start_observe(0),
+            super::RETRY_AWAIT_BASIC_DURATION
+        );
+        assert_eq!(
+            super::backoff_for_start_observe(1),
+            super::RETRY_AWAIT_BASIC_DURATION * 2
+        );
+        assert_eq!(
+            super::backoff_for_start_observe(2),
+            super::RETRY_AWAIT_BASIC_DURATION * 4
+        );
+        assert_eq!(
+            super::backoff_for_start_observe(3),
+            super::RETRY_AWAIT_BASIC_DURATION * 8
+        );
+        assert_eq!(
+            super::backoff_for_start_observe(4),
+            super::RETRY_AWAIT_MAX_DURATION
+        );
+        assert_eq!(
+            super::backoff_for_start_observe(5),
+            super::RETRY_AWAIT_MAX_DURATION
+        );
     }
 }
