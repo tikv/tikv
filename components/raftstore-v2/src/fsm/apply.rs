@@ -21,7 +21,7 @@ use tikv_util::{
 };
 
 use crate::{
-    operation::DataTrace,
+    operation::{CatchUpLogs, DataTrace},
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
 };
@@ -31,12 +31,19 @@ use crate::{
 /// Using a trait to make signiture simpler.
 pub trait ApplyResReporter {
     fn report(&self, apply_res: ApplyRes);
+
+    fn redirect_catch_up_logs(&self, c: CatchUpLogs);
 }
 
 impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for Mailbox<F, S> {
     fn report(&self, apply_res: ApplyRes) {
         // TODO: check shutdown.
         let _ = self.force_send(PeerMsg::ApplyRes(apply_res));
+    }
+
+    fn redirect_catch_up_logs(&self, c: CatchUpLogs) {
+        let msg = PeerMsg::RedirectCatchUpLogs(c);
+        let _ = self.force_send(msg);
     }
 }
 

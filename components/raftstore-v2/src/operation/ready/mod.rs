@@ -213,6 +213,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.on_gc_peer_request(ctx, &msg);
                     return;
                 }
+                ExtraMessageType::MsgFlushMemtable => {
+                    let region_epoch = msg.as_ref().get_region_epoch();
+                    if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
+                        return;
+                    }
+                    let _ =
+                        ctx.schedulers
+                            .tablet_flush
+                            .schedule(crate::TabletFlushTask::TabletFlush {
+                                region_id: self.region().get_id(),
+                                req: None,
+                                is_leader: false,
+                                ch: None,
+                            });
+                    return;
+                }
+                ExtraMessageType::MsgWantRollbackMerge => {
+                    if self.is_leader() {
+                        // TODO:
+                        // self.merge_context_mut().maybe_add_rollback_peer();
+                        return;
+                    }
+                }
                 _ => (),
             }
         }
@@ -345,7 +368,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// The message is pushed into the send buffer, it may not be sent out until
     /// transport is flushed explicitly.
-    fn send_raft_message<T: Transport>(
+    pub(crate) fn send_raft_message<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         msg: RaftMessage,

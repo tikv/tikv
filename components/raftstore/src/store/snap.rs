@@ -3113,7 +3113,7 @@ pub mod tests {
 
         // filter out the total duration seconds less than one sencond.
         mgr.begin_snapshot(key.clone(), start, 1);
-        mgr.finish_snapshot(key.clone(), start);
+        mgr.finish_snapshot(key, start);
         assert_eq!(mgr.stats().stats.len(), 0);
     }
 
