@@ -35,8 +35,7 @@ use crate::{
     future,
     metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
     metrics,
-    observer::BackupStreamObserver,
-    router::{TaskSelector, Router},
+    router::{Router, TaskSelector},
     subscription_track::{ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, Work},
@@ -564,7 +563,9 @@ where
                 #[cfg(feature = "failpoints")]
                 let delay = (|| {
                     fail::fail_point!("subscribe_mgr_retry_start_observe_delay", |v| {
-                        let dur = v.expect("should provide delay time (in ms)").parse::<u64>()
+                        let dur = v
+                            .expect("should provide delay time (in ms)")
+                            .parse::<u64>()
                             .expect("should be number (in ms)");
                         Duration::from_millis(dur)
                     });
@@ -772,4 +773,3 @@ mod test {
         should_finish_in(move || drop(pool), Duration::from_secs(5));
     }
 }
-
