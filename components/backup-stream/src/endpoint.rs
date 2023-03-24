@@ -55,7 +55,7 @@ use crate::{
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, TaskSelector},
-    subscription_manager::{self, RegionSubscriptionManager, ResolvedRegions},
+    subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, StopWatch, Work},
@@ -89,7 +89,7 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     pool: Runtime,
     initial_scan_memory_quota: PendingMemoryQuota,
     initial_scan_throughput_quota: Limiter,
-    region_operator: subscription_manager::Handle,
+    region_operator: RegionSubscriptionManager<S, R, PDC>,
     failover_time: Option<Instant>,
     // We holds the config before, even it is useless for now,
     // however probably it would be useful in the future.
@@ -174,7 +174,9 @@ where
                 pool.handle().clone(),
                 initial_scan_throughput_quota.clone(),
             ),
+            observer.clone(),
             meta_client.clone(),
+            pd_client.clone(),
             ((config.num_threads + 1) / 2).max(1),
             leadership_resolver,
         );
