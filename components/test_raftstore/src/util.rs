@@ -662,9 +662,9 @@ pub fn configure_for_merge(config: &mut Config) {
     config.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
 }
 
-pub fn ignore_merge_target_integrity<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.dev_assert = false;
-    cluster.pd_client.ignore_merge_target_integrity();
+pub fn ignore_merge_target_integrity(config: &mut Config, pd_client: &TestPdClient) {
+    config.raft_store.dev_assert = false;
+    pd_client.ignore_merge_target_integrity();
 }
 
 pub fn configure_for_lease_read(
