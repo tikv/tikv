@@ -109,7 +109,7 @@ pub struct PrepareMergeResult {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn propose_prepare_merge<T>(
+    pub fn propose_prepare_merge<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
@@ -136,7 +136,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.check_pessimistic_locks(r, &mut req)?
         } else {
             let r = self.check_logs_before_prepare_merge(store_ctx)?;
-            let r = self.check_trim_status(r, &mut req)?;
+            let r = self.check_trim_status(store_ctx, r, &mut req)?;
             self.check_pessimistic_locks(r, &mut req)?
         };
         req.mut_admin_request()
@@ -303,8 +303,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         })
     }
 
-    fn check_trim_status(
+    fn check_trim_status<T: Transport>(
         &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
         ctx: PreProposeContext,
         req: &mut RaftCmdRequest,
     ) -> Result<PreProposeContext> {
@@ -331,7 +332,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             msg.mut_extra_msg()
                 .mut_availability_context()
                 .set_from_region_id(self.region_id());
-            self.add_message(msg);
+            store_ctx.trans.send(msg)?;
             pending_source.insert(p.get_id());
         }
         let mut pending_target = HashSet::default();
@@ -346,7 +347,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             msg.mut_extra_msg()
                 .mut_availability_context()
                 .set_from_region_id(self.region_id());
-            self.add_message(msg);
+            store_ctx.trans.send(msg)?;
             pending_target.insert(p.get_id());
         }
         let status = &mut self.merge_context_mut().prepare_status;
@@ -555,6 +556,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             && req.is_some()
             && start_time.saturating_elapsed() > TRIM_CHECK_TIMEOUT
         {
+            info!(self.logger, "cancel merge because trim check timed out");
             self.take_merge_context();
         }
         // Check the fence.

@@ -772,10 +772,11 @@ pub mod merge_helper {
     };
     use raftstore_v2::router::PeerMsg;
 
-    use super::TestRouter;
+    use super::Cluster;
 
     pub fn merge_region(
-        router: &mut TestRouter,
+        cluster: &Cluster,
+        store_offset: usize,
         source: metapb::Region,
         source_peer: metapb::Peer,
         target: metapb::Region,
@@ -794,17 +795,18 @@ pub mod merge_helper {
         req.set_admin_request(admin_req);
 
         let (msg, sub) = PeerMsg::admin_command(req);
-        router.send(region_id, msg).unwrap();
-        let resp = block_on(sub.result()).unwrap();
-        if check {
-            assert!(!resp.get_header().has_error(), "{:?}", resp);
-        }
+        cluster.routers[store_offset].send(region_id, msg).unwrap();
+        // They may communicate about trimmed status.
+        cluster.dispatch(region_id, vec![]);
+        let _ = block_on(sub.result()).unwrap();
+        // We don't check the response because it needs to do a lot of checks async
+        // before actually proposing the command.
 
         // TODO: when persistent implementation is ready, we can use tablet index of
         // the parent to check whether the split is done. Now, just sleep a second.
         thread::sleep(Duration::from_secs(1));
 
-        let new_target = router.region_detail(target.id);
+        let new_target = cluster.routers[store_offset].region_detail(target.id);
         if check {
             if new_target.get_start_key() == source.get_start_key() {
                 // [source, target] => new_target
