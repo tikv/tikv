@@ -54,7 +54,7 @@ use raftstore::{
     Result,
 };
 use slog::{error, info, warn};
-use tikv_util::{log::SlogFormat, slog_panic};
+use tikv_util::{log::SlogFormat, slog_panic, time::Instant};
 
 use crate::{
     batch::StoreContext,
@@ -356,7 +356,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) -> Result<u64> {
-        validate_batch_split(req.get_admin_request(), self.region())?;
         // We rely on ConflictChecker to detect conflicts, so no need to set proposal
         // context.
         let data = req.write_to_bytes().unwrap();
@@ -478,6 +477,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             )
         });
 
+        let now = Instant::now();
         let reg = self.tablet_registry();
         for new_region in &regions {
             let new_region_id = new_region.id;
@@ -515,6 +515,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     )
                 });
         }
+        let elapsed = now.saturating_elapsed();
+        // to be removed after when it's stable
+        info!(
+            self.logger,
+            "create checkpoint time consumes";
+            "region" =>  ?self.region(),
+            "duration" => ?elapsed
+        );
+
         let reg = self.tablet_registry();
         let path = reg.tablet_path(region_id, log_index);
         let mut ctx = TabletContext::new(&regions[derived_index], Some(log_index));
