@@ -362,7 +362,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Err(Error::PendingPrepareMerge)
     }
 
-    pub fn merge_on_availability_response<T>(
+    pub fn merge_on_availability_response<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         from_peer: u64,
