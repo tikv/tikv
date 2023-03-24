@@ -20,7 +20,7 @@
 use std::io;
 use std::{
     cmp,
-    convert::{TryFrom, TryInto},
+    convert::TryFrom,
     fmt::Debug,
     fs::{self, File},
     io::{BorrowedBuf, Read, Seek, SeekFrom, Write},
@@ -86,7 +86,7 @@ async fn read_to(f: &mut File, to: &mut Vec<u8>, size: usize, limiter: &Limiter)
     limiter.consume(cost).await;
     SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
         .send
-        .inc_by(cost.try_into().unwrap());
+        .inc_by(cost as u64);
     to.clear();
     to.reserve_exact(size);
     let mut buf: BorrowedBuf<'_> = to.spare_capacity_mut().into();
@@ -317,7 +317,7 @@ async fn accept_one_file(
         limiter.consume(chunk_len).await;
         SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
             .recv
-            .inc_by(chunk_len.try_into().unwrap());
+            .inc_by(chunk_len as u64);
         digest.write(&chunk.data);
         f.write_all(&chunk.data)?;
         if exp_size == file_size {
@@ -420,9 +420,6 @@ async fn recv_snap_files<'a>(
         (0, vec![])
     };
     let received = accept_missing(&path, missing_ssts, &mut stream, &limiter).await?;
-    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
-        .recv
-        .inc_by(received);
     info!("received all tablet snapshot file"; "snap_key" => %context.key, "region_id" => region_id, "received" => received, "reused" => reused);
     let final_path = snap_mgr.final_recv_path(&context.key);
     fs::rename(&path, final_path)?;

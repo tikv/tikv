@@ -245,7 +245,6 @@ where
                     );
                     self.snap_mgr()
                         .begin_snapshot(snap_key, start, generate_duration_secs);
-                    snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
                     SNAP_COUNTER.generate.success.inc();
                     SNAP_HISTOGRAM.generate.observe(elapsed);
                     SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);

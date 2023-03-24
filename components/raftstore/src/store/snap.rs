@@ -2012,23 +2012,19 @@ impl TabletSnapManager {
             .unwrap()
             .entry(key)
             .and_modify(|(start, stat)| {
-                stat.set_send_duration_sec(start.saturating_elapsed().as_secs());
-                stat.set_total_duration_sec(send.saturating_elapsed().as_secs());
+                stat.set_send_duration_sec(send.saturating_elapsed().as_secs());
+                stat.set_total_duration_sec(start.saturating_elapsed().as_secs());
                 stat.set_region_id(region_id);
             });
     }
 
     pub fn stats(&self) -> SnapStats {
-        let finished: HashMap<TabletSnapKey, (Instant, SnapshotStat)> = self
+        let stats: Vec<SnapshotStat> = self
             .stats
             .lock()
             .unwrap()
             .drain_filter(|_, (_, stat)| stat.get_region_id() > 0)
-            .collect();
-
-        let stats: Vec<SnapshotStat> = finished
-            .into_values()
-            .map(|(_, stat)| stat)
+            .map(|(_, (_, stat))| stat)
             .filter(|stat| stat.get_total_duration_sec() > 1)
             .collect();
         SnapStats {
@@ -3095,6 +3091,30 @@ pub mod tests {
         src_mgr.init().unwrap();
         // The sst_path will be deleted by SnapManager because it is a temp filet.
         assert!(!file_system::file_exists(&sst_path));
+    }
+
+    #[test]
+    fn test_snapshot_stats() {
+        let snap_dir = Builder::new()
+            .prefix("test_snapshot_stats")
+            .tempdir()
+            .unwrap();
+        let start = Instant::now();
+        let mgr = TabletSnapManager::new(snap_dir.path()).unwrap();
+        let key = TabletSnapKey::new(1, 1, 1, 1);
+        mgr.begin_snapshot(key.clone(), start - time::Duration::from_secs(2), 1);
+        // filter out the snapshot that is not finished
+        assert!(mgr.stats().stats.is_empty());
+        mgr.finish_snapshot(key.clone(), start - time::Duration::from_secs(1));
+        let stats = mgr.stats().stats;
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].get_total_duration_sec(), 2);
+        assert!(mgr.stats().stats.is_empty());
+
+        // filter out the total duration seconds less than one sencond.
+        mgr.begin_snapshot(key.clone(), start, 1);
+        mgr.finish_snapshot(key.clone(), start);
+        assert_eq!(mgr.stats().stats.len(), 0);
     }
 
     #[test]
