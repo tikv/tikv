@@ -113,7 +113,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // Mirrors v1::on_raft_gc_log_tick.
-    fn maybe_propose_compact_log<T>(
+    fn maybe_propose_compact_log<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         force: bool,
