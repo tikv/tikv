@@ -1,12 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{Arc, RwLock},
-    time::{Duration, Instant},
-};
+use std::sync::{Arc, RwLock};
 
 use engine_traits::{KvEngine, RaftEngine};
-use futures::{compat::Future01CompatExt, FutureExt};
+use futures::Future;
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
@@ -14,12 +11,12 @@ use kvproto::{
 use raft::SnapshotStatus;
 use raftstore::{
     router::handle_send_error,
-    store::{cmd_resp, RegionSnapshot, Transport},
-    Error, Result, Result as RaftStoreResult,
+    store::{RegionSnapshot, Transport},
+    Result, Result as RaftStoreResult,
 };
 use raftstore_v2::router::{PeerMsg, RaftRouter};
 use test_raftstore::{filter_send, Filter};
-use tikv_util::{timer::GLOBAL_TIMER_HANDLE, HandyRwLock};
+use tikv_util::HandyRwLock;
 
 #[derive(Clone)]
 pub struct SimulateTransport<C> {
@@ -71,25 +68,16 @@ pub trait SnapshotRouter<E: KvEngine> {
     fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-        timeout: Duration,
-    ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>;
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>> + Send;
 }
 
 impl<EK: KvEngine, ER: RaftEngine> SnapshotRouter<EK> for RaftRouter<EK, ER> {
     fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-        timeout: Duration,
-    ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse> {
-        let timeout_f = GLOBAL_TIMER_HANDLE.delay(Instant::now() + timeout).compat();
-        futures::executor::block_on(async move {
-            futures::select! {
-                res = self.snapshot(req).fuse() => res,
-                e = timeout_f.fuse() => {
-                    Err(cmd_resp::new_error(Error::Timeout(format!("request timeout for {:?}: {:?}", timeout,e))))
-                },
-            }
-        })
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
+    {
+        self.snapshot(req)
     }
 }
 
@@ -97,9 +85,9 @@ impl<E: KvEngine, C: SnapshotRouter<E>> SnapshotRouter<E> for SimulateTransport<
     fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-        timeout: Duration,
-    ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
-        self.ch.snapshot(req, timeout)
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>> + Send
+    {
+        self.ch.snapshot(req)
     }
 }
 

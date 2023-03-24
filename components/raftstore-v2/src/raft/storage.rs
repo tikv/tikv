@@ -340,7 +340,7 @@ mod tests {
     use super::*;
     use crate::{
         fsm::ApplyResReporter,
-        operation::{test_util::create_tmp_importer, write_initial_states},
+        operation::{test_util::create_tmp_importer, write_initial_states, CatchUpLogs},
         raft::Apply,
         router::ApplyRes,
     };
@@ -369,6 +369,7 @@ mod tests {
 
     impl ApplyResReporter for TestRouter {
         fn report(&self, _res: ApplyRes) {}
+        fn redirect_catch_up_logs(&self, _c: CatchUpLogs) {}
     }
 
     fn new_region() -> Region {

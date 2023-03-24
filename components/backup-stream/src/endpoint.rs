@@ -56,7 +56,7 @@ use crate::{
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
-    subscription_track::SubscriptionTracer,
+    subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, StopWatch, Work},
 };
@@ -93,7 +93,6 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     failover_time: Option<Instant>,
     // We holds the config before, even it is useless for now,
     // however probably it would be useful in the future.
-    #[allow(dead_code)]
     config: BackupStreamConfig,
     checkpoint_mgr: CheckpointManager,
 }
@@ -184,7 +183,7 @@ where
         pool.spawn(op_loop);
         let mut checkpoint_mgr = CheckpointManager::default();
         pool.spawn(checkpoint_mgr.spawn_subscription_mgr());
-        Endpoint {
+        let ep = Endpoint {
             meta_client,
             range_router,
             scheduler,
@@ -203,7 +202,9 @@ where
             failover_time: None,
             config,
             checkpoint_mgr,
-        }
+        };
+        ep.pool.spawn(ep.min_ts_worker());
+        ep
     }
 }
 
@@ -476,7 +477,7 @@ where
     }
 
     fn backup_batch(&self, batch: CmdBatch, work: Work) {
-        let mut sw = StopWatch::new();
+        let mut sw = StopWatch::by_now();
 
         let router = self.range_router.clone();
         let sched = self.scheduler.clone();
@@ -763,7 +764,7 @@ where
             let mut resolved = get_rts.await?;
             let mut new_rts = resolved.global_checkpoint();
             fail::fail_point!("delay_on_flush");
-            flush_ob.before(resolved.take_region_checkpoints()).await;
+            flush_ob.before(resolved.take_resolve_result()).await;
             if let Some(rewritten_rts) = flush_ob.rewrite_resolved_ts(&task).await {
                 info!("rewriting resolved ts"; "old" => %new_rts, "new" => %rewritten_rts);
                 new_rts = rewritten_rts.min(new_rts);
@@ -919,13 +920,31 @@ where
         }
     }
 
+    fn min_ts_worker(&self) -> future![()] {
+        let sched = self.scheduler.clone();
+        let interval = self.config.min_ts_interval.0;
+        async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                try_send!(
+                    sched,
+                    Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve)
+                );
+            }
+        }
+    }
+
     pub fn handle_region_checkpoints_op(&mut self, op: RegionCheckpointOperation) {
         match op {
-            RegionCheckpointOperation::Update(u) => {
-                // Let's clear all stale checkpoints first.
-                // Or they may slow down the global checkpoint.
-                self.checkpoint_mgr.clear();
-                self.checkpoint_mgr.update_region_checkpoints(u);
+            RegionCheckpointOperation::Resolved {
+                checkpoints,
+                start_time,
+            } => {
+                self.checkpoint_mgr.resolve_regions(checkpoints);
+                metrics::MIN_TS_RESOLVE_DURATION.observe(start_time.saturating_elapsed_secs());
+            }
+            RegionCheckpointOperation::Flush => {
+                self.checkpoint_mgr.flush();
             }
             RegionCheckpointOperation::Get(g, cb) => {
                 let _guard = self.pool.handle().enter();
@@ -952,6 +971,37 @@ where
                         err.report("adding subscription");
                     }
                 });
+            }
+            RegionCheckpointOperation::PrepareMinTsForResolve => {
+                let min_ts = self.pool.block_on(self.prepare_min_ts());
+                let start_time = Instant::now();
+                // We need to reschedule the `Resolve` task to queue, because the subscription
+                // is asynchronous -- there may be transactions committed before
+                // the min_ts we prepared but haven't been observed yet.
+                try_send!(
+                    self.scheduler,
+                    Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolve {
+                        min_ts,
+                        start_time
+                    })
+                );
+            }
+            RegionCheckpointOperation::Resolve { min_ts, start_time } => {
+                let sched = self.scheduler.clone();
+                try_send!(
+                    self.scheduler,
+                    Task::ModifyObserve(ObserveOp::ResolveRegions {
+                        callback: Box::new(move |mut resolved| {
+                            let t =
+                                Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolved {
+                                    checkpoints: resolved.take_resolve_result(),
+                                    start_time,
+                                });
+                            try_send!(sched, t);
+                        }),
+                        min_ts
+                    })
+                );
             }
         }
     }
@@ -997,7 +1047,16 @@ pub enum RegionSet {
 }
 
 pub enum RegionCheckpointOperation {
-    Update(Vec<(Region, TimeStamp)>),
+    Flush,
+    PrepareMinTsForResolve,
+    Resolve {
+        min_ts: TimeStamp,
+        start_time: Instant,
+    },
+    Resolved {
+        checkpoints: Vec<ResolveResult>,
+        start_time: Instant,
+    },
     Get(RegionSet, Box<dyn FnOnce(Vec<GetCheckpointResult>) + Send>),
     Subscribe(Subscription),
 }
@@ -1005,9 +1064,17 @@ pub enum RegionCheckpointOperation {
 impl fmt::Debug for RegionCheckpointOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Update(arg0) => f.debug_tuple("Update").field(arg0).finish(),
+            Self::Flush => f.debug_tuple("Flush").finish(),
             Self::Get(arg0, _) => f.debug_tuple("Get").field(arg0).finish(),
+
             Self::Subscribe(_) => f.debug_tuple("Subscription").finish(),
+            Self::Resolved { checkpoints, .. } => {
+                f.debug_tuple("Resolved").field(checkpoints).finish()
+            }
+            Self::PrepareMinTsForResolve => f.debug_tuple("PrepareMinTsForResolve").finish(),
+            Self::Resolve { min_ts, .. } => {
+                f.debug_struct("Resolve").field("min_ts", min_ts).finish()
+            }
         }
     }
 }
@@ -1185,7 +1252,7 @@ impl Task {
                 ObserveOp::NotifyFailToStartObserve { .. } => "modify_observe.retry",
                 ObserveOp::ResolveRegions { .. } => "modify_observe.resolve",
             },
-            Task::ForceFlush(_) => "force_flush",
+            Task::ForceFlush(..) => "force_flush",
             Task::FatalError(..) => "fatal_error",
             Task::Sync(..) => "sync",
             Task::MarkFailover(_) => "mark_failover",

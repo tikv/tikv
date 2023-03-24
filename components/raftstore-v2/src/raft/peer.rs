@@ -26,6 +26,7 @@ use raftstore::{
     },
 };
 use slog::Logger;
+use tikv_util::slog_panic;
 
 use super::storage::Storage;
 use crate::{
@@ -828,5 +829,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn last_sent_snapshot_index(&self) -> u64 {
         self.last_sent_snapshot_index
+    }
+
+    #[inline]
+    pub fn index_term(&self, idx: u64) -> u64 {
+        match self.raft_group.raft.raft_log.term(idx) {
+            Ok(t) => t,
+            Err(e) => slog_panic!(self.logger, "failed to load term"; "index" => idx, "err" => ?e),
+        }
     }
 }

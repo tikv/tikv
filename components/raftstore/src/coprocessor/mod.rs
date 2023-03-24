@@ -275,7 +275,7 @@ pub struct RoleChange {
 }
 
 impl RoleChange {
-    #[cfg(feature = "testexport")]
+    #[cfg(any(test, feature = "testexport"))]
     pub fn new(state: StateRole) -> Self {
         RoleChange {
             state,

@@ -1,11 +1,16 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod commit;
 pub mod prepare;
+pub mod rollback;
 
-use engine_traits::{KvEngine, RaftEngine};
+use std::path::PathBuf;
+
+use commit::CatchUpLogs;
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{
     raft_cmdpb::RaftCmdRequest,
-    raft_serverpb::{PeerState, RegionLocalState},
+    raft_serverpb::{MergeState, PeerState, RegionLocalState},
 };
 use prepare::PrepareStatus;
 use raft::{ProgressState, INVALID_INDEX};
@@ -15,9 +20,24 @@ use tikv_util::box_err;
 
 use crate::raft::Peer;
 
+pub const MERGE_SOURCE_PREFIX: &str = "merge-source";
+
+// `index` is the commit index of `PrepareMergeRequest`, `commit` field of
+// `CommitMergeRequest`.
+fn merge_source_path<EK>(
+    registry: &TabletRegistry<EK>,
+    source_region_id: u64,
+    index: u64,
+) -> PathBuf {
+    let tablet_name = registry.tablet_name(MERGE_SOURCE_PREFIX, source_region_id, index);
+    registry.tablet_root().join(tablet_name)
+}
+
+/// This context is only used at source region.
 #[derive(Default)]
 pub struct MergeContext {
     prepare_status: Option<PrepareStatus>,
+    catch_up_logs: Option<CatchUpLogs>,
 }
 
 impl MergeContext {
@@ -70,7 +90,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Returns (minimal matched, minimal committed)
-    pub fn calculate_min_progress(&self) -> Result<(u64, u64)> {
+    fn calculate_min_progress(&self) -> Result<(u64, u64)> {
         let (mut min_m, mut min_c) = (None, None);
         if let Some(progress) = self.raft_group().status().progress {
             for (id, pr) in progress.iter() {
@@ -108,5 +128,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             min_m = min_c;
         }
         Ok((min_m, min_c))
+    }
+
+    #[inline]
+    fn applied_merge_state(&self) -> Option<&MergeState> {
+        self.merge_context().and_then(|ctx| {
+            if let Some(PrepareStatus::Applied(state)) = ctx.prepare_status.as_ref() {
+                Some(state)
+            } else {
+                None
+            }
+        })
     }
 }
