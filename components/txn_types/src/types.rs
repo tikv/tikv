@@ -570,6 +570,8 @@ bitflags! {
         const TRANSFER_LEADER_PROPOSAL = 0b00000100;
         /// Indicates this request is a flashback transaction.
         const FLASHBACK = 0b00001000;
+        /// Indicates the relevant tablet has been flushed, and we can propose split now.
+        const SPLIT_SECOND_PHASE = 0b00010000;
     }
 }
 
