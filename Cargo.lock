@@ -537,6 +537,7 @@ dependencies = [
  "openssl",
  "pd_client",
  "prometheus",
+ "prometheus-static-metric",
  "protobuf",
  "raft",
  "raftstore",
