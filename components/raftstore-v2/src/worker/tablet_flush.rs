@@ -88,7 +88,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             error!(
                 self.logger,
                 "send split request fail in the second phase";
-                "region_id" => region_id, "err" => ?e,
+                "region_id" => region_id,
+                "err" => ?e,
             );
         }
     }

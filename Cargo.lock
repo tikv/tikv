@@ -2712,7 +2712,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/SpadeA-Tang/kvproto?branch=flush-table#8b5729fa29b6092cb5024cf73991c0deda9f33e3"
+source = "git+https://github.com/pingcap/kvproto.git#af969693ce8a7884e5bdc5d81c728f657d33065a"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
