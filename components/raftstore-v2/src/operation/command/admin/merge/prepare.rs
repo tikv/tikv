@@ -77,7 +77,6 @@ pub enum PrepareStatus {
         pending_source: HashSet<u64>,
         // Target peers that we are not sure if trimmed.
         pending_target: HashSet<u64>,
-        ctx: PreProposeContext,
         req: Option<RaftCmdRequest>,
     },
     /// When a fence <idx, cmd> is present, we (1) delay the PrepareMerge
@@ -126,17 +125,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             req.get_admin_request().get_prepare_merge(),
         )?;
         // We need to check three things in order:
-        // (1) `check_logs_before_prepare_merge`
-        // (2) `check_trim_status`
+        // (1) `check_trim_status`
+        // (2) `check_logs_before_prepare_merge`
         // (3) `check_pessimistic_locks`
-        // Check 2 and 3 are async, they yield by returning error.
+        // Check 1 and 3 are async, they yield by returning error.
         let pre_propose = if let Some(r) = self.already_checked_pessimistic_locks()? {
             r
-        } else if let Some(r) = self.already_checked_trim_status()? {
+        } else if self.already_checked_trim_status()? {
+            let r = self.check_logs_before_prepare_merge(store_ctx)?;
             self.check_pessimistic_locks(r, &mut req)?
         } else {
+            self.check_trim_status(store_ctx, &mut req)?;
             let r = self.check_logs_before_prepare_merge(store_ctx)?;
-            let r = self.check_trim_status(store_ctx, r, &mut req)?;
             self.check_pessimistic_locks(r, &mut req)?
         };
         req.mut_admin_request()
@@ -306,7 +306,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     fn check_trim_status<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        ctx: PreProposeContext,
         req: &mut RaftCmdRequest,
     ) -> Result<PreProposeContext> {
         if self.storage().has_dirty_data() {
@@ -357,7 +356,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             start_time: Instant::now_coarse(),
             pending_source,
             pending_target,
-            ctx,
             req: Some(mem::take(req)),
         });
         Err(Error::PendingPrepareMerge)
@@ -439,7 +437,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    fn already_checked_trim_status(&mut self) -> Result<Option<PreProposeContext>> {
+    fn already_checked_trim_status(&mut self) -> Result<bool> {
         match self
             .merge_context()
             .as_ref()
@@ -448,11 +446,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Some(PrepareStatus::WaitForTrimStatus {
                 pending_source,
                 pending_target,
-                ctx,
                 ..
             }) => {
                 if pending_source.is_empty() && pending_target.is_empty() {
-                    Ok(Some(ctx.clone()))
+                    Ok(true)
                 } else {
                     info!(
                         self.logger,
@@ -467,7 +464,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "another merge is in-progress, merge_state: {:?}.",
                 state
             )),
-            None => Ok(None),
+            None => Ok(false),
         }
     }
 

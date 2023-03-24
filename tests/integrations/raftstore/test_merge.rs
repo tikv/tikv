@@ -412,7 +412,6 @@ fn test_node_check_merged_message() {
 // merge.
 // No v2, it requires all peers to be available to check trim status.
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_merge_slow_split() {
     fn imp(is_right_derive: bool) {
         let mut cluster = new_cluster(0, 3);
