@@ -368,7 +368,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// The message is pushed into the send buffer, it may not be sent out until
     /// transport is flushed explicitly.
-    pub fn send_raft_message<T: Transport>(
+    pub(crate) fn send_raft_message<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         msg: RaftMessage,
