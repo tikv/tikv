@@ -51,7 +51,7 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    operation::{SharedReadTablet, SPLIT_PREFIX},
+    operation::{SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
     worker::{pd, tablet_gc},
@@ -62,6 +62,7 @@ use crate::{
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// A logger without any KV. It's clean for creating new PeerFSM.
     pub logger: Logger,
+    pub store_id: u64,
     pub coprocessor_host: CoprocessorHost<EK>,
     /// The transport for sending messages to peers on other stores.
     pub trans: T,
@@ -392,6 +393,10 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 continue;
             }
             let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
+            // Keep the checkpoint even if source is destroyed.
+            if prefix == MERGE_SOURCE_PREFIX {
+                continue;
+            }
             let fsm = match peers.get(&region_id) {
                 Some((_, fsm)) => fsm,
                 None => {
@@ -405,14 +410,17 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             if prefix == SPLIT_PREFIX {
                 file_system::remove_dir_all(&path)?;
                 continue;
-            }
-            if prefix.is_empty() {
+            } else if prefix == MERGE_IN_PROGRESS_PREFIX {
+                continue;
+            } else if prefix.is_empty() {
                 // Stale split data can be deleted.
                 if fsm.peer().storage().tablet_index() > tablet_index {
                     file_system::remove_dir_all(&path)?;
                 }
+            } else {
+                debug_assert!(false, "unexpected tablet prefix: {}", path.display());
+                warn!(self.logger, "unexpected tablet prefix"; "path" => %path.display());
             }
-            // TODO: handle other prefix
         }
         // TODO: list all available tablets and destroy those which are not in the
         // peers.
@@ -432,6 +440,7 @@ where
         let cfg = self.cfg.value().clone();
         let mut poll_ctx = StoreContext {
             logger: self.logger.clone(),
+            store_id: self.store_id,
             trans: self.trans.clone(),
             current_time: None,
             has_ready: false,

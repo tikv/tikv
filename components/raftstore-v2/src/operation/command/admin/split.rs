@@ -260,6 +260,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn force_split_check<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        let control = self.split_flow_control_mut();
+        control.size_diff_hint = ctx.cfg.region_split_check_diff().0 as i64;
+        self.add_pending_tick(PeerTick::SplitRegionCheck);
+    }
+
     pub fn on_request_split<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
@@ -873,7 +879,9 @@ mod test {
 
     use super::*;
     use crate::{
-        fsm::ApplyResReporter, operation::test_util::create_tmp_importer, raft::Apply,
+        fsm::ApplyResReporter,
+        operation::{test_util::create_tmp_importer, CatchUpLogs},
+        raft::Apply,
         router::ApplyRes,
     };
 
@@ -892,6 +900,8 @@ mod test {
         fn report(&self, apply_res: ApplyRes) {
             let _ = self.sender.send(apply_res);
         }
+
+        fn redirect_catch_up_logs(&self, _c: CatchUpLogs) {}
     }
 
     fn new_split_req(key: &[u8], id: u64, children: Vec<u64>) -> SplitRequest {

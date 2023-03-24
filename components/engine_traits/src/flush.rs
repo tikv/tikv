@@ -29,7 +29,7 @@ use crate::{data_cf_offset, RaftEngine, RaftLogBatch, DATA_CFS_LEN};
 pub struct ApplyProgress {
     cf: String,
     apply_index: u64,
-    earliest_seqno: u64,
+    smallest_seqno: u64,
 }
 
 impl ApplyProgress {
@@ -123,8 +123,8 @@ impl PersistenceListener {
 
     /// Called when memtable is frozen.
     ///
-    /// `earliest_seqno` should be the smallest seqno of the memtable.
-    pub fn on_memtable_sealed(&self, cf: String, earliest_seqno: u64) {
+    /// `smallest_seqno` should be the smallest seqno of the memtable.
+    pub fn on_memtable_sealed(&self, cf: String, smallest_seqno: u64) {
         // The correctness relies on the assumption that there will be only one
         // thread writting to the DB and increasing apply index.
         // Apply index will be set within DB lock, so it's correct even with manual
@@ -133,16 +133,16 @@ impl PersistenceListener {
         let apply_index = self.state.applied_index.load(Ordering::SeqCst);
         let mut prs = self.progress.lock().unwrap();
         let flushed = prs.last_flushed[offset];
-        if flushed > earliest_seqno {
+        if flushed > smallest_seqno {
             panic!(
                 "sealed seqno has been flushed {} {} {} <= {}",
-                cf, apply_index, earliest_seqno, flushed
+                cf, apply_index, smallest_seqno, flushed
             );
         }
         prs.prs.push_back(ApplyProgress {
             cf,
             apply_index,
-            earliest_seqno,
+            smallest_seqno,
         });
     }
 
@@ -170,8 +170,7 @@ impl PersistenceListener {
                     cursor.move_next();
                     continue;
                 }
-                // Note flushed largest_seqno equals to earliest_seqno of next memtable.
-                if pr.earliest_seqno < largest_seqno {
+                if pr.smallest_seqno <= largest_seqno {
                     match &mut flushed_pr {
                         None => flushed_pr = cursor.remove_current(),
                         Some(flushed_pr) => {
