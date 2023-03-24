@@ -77,6 +77,7 @@ tonic = "0.8"
 txn_types = { workspace = true }
 uuid = "0.8"
 yatp = { workspace = true }
+prometheus-static-metric = "0.5"
 
 [dev-dependencies]
 async-trait = "0.1"
