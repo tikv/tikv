@@ -1004,6 +1004,10 @@ impl<T: Simulator> Cluster<T> {
             region_end_key
         };
 
+        if amended_start_key > amended_end_key {
+            return Ok(());
+        }
+
         tablet.scan(cf, amended_start_key, amended_end_key, fill_cache, f)
     }
 
