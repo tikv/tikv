@@ -488,13 +488,10 @@ where
                 // is still little chance to lost data: For example, if a region cannot elect
                 // the leader for long time. (say, net work partition) At that time, we have
                 // nowhere to record the lock status of this region.
-                let success = try_send!(
+                try_send!(
                     self.scheduler,
                     Task::ModifyObserve(ObserveOp::Start { region: r.region })
                 );
-                if success {
-                    crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_add(1, Ordering::SeqCst);
-                }
             }
         }
         Ok(())

@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::Ordering,
     Arc, RwLock,
 };
 
@@ -127,15 +127,12 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
 
     fn on_applied_current_term(&self, role: StateRole, region: &Region) {
         if role == StateRole::Leader && self.should_register_region(region) {
-            let success = try_send!(
+            try_send!(
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::Start {
                     region: region.clone(),
                 })
             );
-            if success {
-                IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_add(1, Ordering::SeqCst);
-            }
         }
     }
 }

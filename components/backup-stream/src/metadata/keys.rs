@@ -38,7 +38,7 @@ pub struct KeyValue(pub MetaKey, pub Vec<u8>);
 impl std::fmt::Debug for MetaKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("MetaKey")
-            .field(&self.0.escape_ascii())
+            .field(&format_args!("{}", self.0.escape_ascii()))
             .finish()
     }
 }
@@ -156,6 +156,10 @@ impl MetaKey {
     /// The key for pausing some task.
     pub fn pause_of(name: &str) -> Self {
         Self(format!("{}{}/{}", PREFIX, PATH_PAUSE, name).into_bytes())
+    }
+
+    pub fn last_errors_of(name: &str) -> Self {
+        Self(format!("{}{}/{}", PREFIX, PATH_LAST_ERROR, name).into_bytes())
     }
 
     pub fn last_error_of(name: &str, store: u64) -> Self {

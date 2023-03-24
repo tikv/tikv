@@ -14,7 +14,6 @@ use engine_traits::KvEngine;
 use error_code::{backup_stream as errs, ErrorCodeExt};
 use futures::FutureExt;
 use kvproto::metapb::Region;
-use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::{
     coprocessor::{ObserveHandle, RegionInfoProvider},
@@ -37,7 +36,7 @@ use crate::{
     metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
     metrics,
     observer::BackupStreamObserver,
-    router::{Router, TaskSelector},
+    router::{TaskSelector, Router},
     subscription_track::{ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, Work},
@@ -48,6 +47,7 @@ type ScanPool = yatp::ThreadPool<yatp::task::callback::TaskCell>;
 
 const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
 const RETRY_AWAIT_INTERVAL: Duration = Duration::from_secs(2);
+const TRY_START_OBSERVE_MAX_RETRY_TIME: u8 = 12;
 
 /// a request for doing initial scanning.
 struct ScanCmd {
@@ -431,6 +431,7 @@ where
                     region,
                     handle,
                     err,
+                    has_failed_for,
                 } => {
                     info!("retry observe region"; "region" => %region.get_id(), "err" => %err);
                     // No need for retrying observe canceled.
@@ -442,7 +443,7 @@ where
                         region.get_start_key().to_owned(),
                         region.get_end_key().to_owned(),
                     );
-                    match self.retry_observe(region, handle).await {
+                    match self.retry_observe(region, handle, has_failed_for).await {
                         Ok(()) => {}
                         Err(e) => {
                             let msg = Task::FatalError(
@@ -505,7 +506,8 @@ where
                             Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
                                 region: region.clone(),
                                 handle,
-                                err: Box::new(e)
+                                err: Box::new(e),
+                                has_failed_for: 0,
                             })
                         );
                     }
@@ -546,6 +548,10 @@ where
     }
 
     async fn start_observe(&mut self, region: Region) {
+        self.retry_start_observe(region, 0).await
+    }
+
+    async fn retry_start_observe(&mut self, region: Region, has_failed_for: u8) {
         let handle = ObserveHandle::new();
         let schd = self.scheduler.clone();
         self.subs.add_pending_region(&region);
@@ -553,20 +559,47 @@ where
             warn!("failed to start observe, would retry"; "err" => %err, utils::slog_region(&region));
             self.stat.event_retry_request += 1;
             tokio::spawn(async move {
-                tokio::time::sleep(RETRY_AWAIT_INTERVAL).await;
+                #[cfg(not(feature = "failpoints"))]
+                let delay = RETRY_AWAIT_INTERVAL;
+                #[cfg(feature = "failpoints")]
+                let delay = (|| {
+                    fail::fail_point!("subscribe_mgr_retry_start_observe_delay", |v| {
+                        let dur = v.expect("should provide delay time (in ms)").parse::<u64>()
+                            .expect("should be number (in ms)");
+                        Duration::from_millis(dur)
+                    });
+                    RETRY_AWAIT_INTERVAL
+                })();
+                tokio::time::sleep(delay).await;
                 try_send!(
                     schd,
                     Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
                         region,
                         handle,
-                        err: Box::new(err)
+                        err: Box::new(err),
+                        has_failed_for: has_failed_for + 1
                     })
                 )
             });
         }
     }
 
-    async fn retry_observe(&mut self, region: Region, handle: ObserveHandle) -> Result<()> {
+    async fn retry_observe(
+        &mut self,
+        region: Region,
+        handle: ObserveHandle,
+        failure_count: u8,
+    ) -> Result<()> {
+        if failure_count > TRY_START_OBSERVE_MAX_RETRY_TIME {
+            return Err(Error::Other(
+                format!(
+                    "retry time exceeds for region {:?}",
+                    utils::debug_region(&region)
+                )
+                .into(),
+            ));
+        }
+
         let (tx, rx) = crossbeam::channel::bounded(1);
         self.regions
             .find_region_by_id(
@@ -614,7 +647,7 @@ where
             .with_label_values(&["retry"])
             .inc();
         self.stat.event_retry_start += 1;
-        self.start_observe(region).await;
+        self.retry_start_observe(region, failure_count).await;
         Ok(())
     }
 
@@ -739,3 +772,4 @@ mod test {
         should_finish_in(move || drop(pool), Duration::from_secs(5));
     }
 }
+

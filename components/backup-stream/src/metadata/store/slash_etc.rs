@@ -41,7 +41,7 @@ impl std::fmt::Debug for Key {
         f.debug_tuple("Key")
             .field(&format_args!(
                 "{}@{}",
-                log_wrappers::Value::key(&self.0),
+                self.0.escape_ascii(),
                 self.1
             ))
             .finish()
