@@ -229,7 +229,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             });
                     return;
                 }
-                _ => {}
+                ExtraMessageType::MsgWantRollbackMerge => {
+                    if self.is_leader() {
+                        // TODO:
+                        // self.merge_context_mut().maybe_add_rollback_peer();
+                        return;
+                    }
+                }
+                _ => (),
             }
         }
         if !msg.has_region_epoch() {

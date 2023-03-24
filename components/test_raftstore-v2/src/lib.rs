@@ -2,6 +2,7 @@
 #![allow(incomplete_features)]
 #![feature(type_alias_impl_trait)]
 #![feature(return_position_impl_trait_in_trait)]
+#![feature(let_chains)]
 
 mod cluster;
 mod node;

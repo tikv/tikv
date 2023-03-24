@@ -15,8 +15,11 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
 };
-use merge::prepare::PrepareMergeResult;
-pub use merge::MergeContext;
+use merge::{commit::CommitMergeResult, prepare::PrepareMergeResult};
+pub use merge::{
+    commit::{CatchUpLogs, MERGE_IN_PROGRESS_PREFIX},
+    MergeContext, MERGE_SOURCE_PREFIX,
+};
 use protobuf::Message;
 use raftstore::{
     store::{
@@ -48,6 +51,7 @@ pub enum AdminCmdResult {
     CompactLog(CompactLogResult),
     UpdateGcPeers(UpdateGcPeersResult),
     PrepareMerge(PrepareMergeResult),
+    CommitMerge(CommitMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -226,6 +230,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.propose(ctx, data)
                 }
                 AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
+                AdminCmdType::CommitMerge => self.propose_commit_merge(ctx, req),
                 _ => unimplemented!(),
             }
         };
