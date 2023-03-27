@@ -48,16 +48,16 @@ impl From<CfNameWrap> for CfName {
     }
 }
 
-struct Writer<E: KvEngine> {
-    writer: <E as SstExt>::SstWriter,
+struct Writer<EK: KvEngine> {
+    writer: <EK as SstExt>::SstWriter,
     total_kvs: u64,
     total_bytes: u64,
     checksum: u64,
     digest: crc64fast::Digest,
 }
 
-impl<E: KvEngine> Writer<E> {
-    fn new(writer: <E as SstExt>::SstWriter) -> Self {
+impl<EK: KvEngine> Writer<EK> {
+    fn new(writer: <EK as SstExt>::SstWriter) -> Self {
         Writer {
             writer,
             total_kvs: 0,
@@ -97,7 +97,7 @@ impl<E: KvEngine> Writer<E> {
         Ok(())
     }
 
-    fn finish_read(writer: <E as SstExt>::SstWriter) -> Result<(u64, impl Read)> {
+    fn finish_read(writer: <EK as SstExt>::SstWriter) -> Result<(u64, impl Read)> {
         let (sst_info, sst_reader) = writer.finish_read()?;
         Ok((sst_info.file_size(), sst_reader))
     }
@@ -160,28 +160,28 @@ impl<E: KvEngine> Writer<E> {
     }
 }
 
-pub struct BackupWriterBuilder<E: KvEngine> {
+pub struct BackupWriterBuilder<EK: KvEngine> {
     store_id: u64,
     limiter: Limiter,
     region: Region,
-    db: E,
+    db: EK,
     compression_type: Option<SstCompressionType>,
     compression_level: i32,
     sst_max_size: u64,
     cipher: CipherInfo,
 }
 
-impl<E: KvEngine> BackupWriterBuilder<E> {
+impl<EK: KvEngine> BackupWriterBuilder<EK> {
     pub fn new(
         store_id: u64,
         limiter: Limiter,
         region: Region,
-        db: E,
+        db: EK,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         sst_max_size: u64,
         cipher: CipherInfo,
-    ) -> BackupWriterBuilder<E> {
+    ) -> BackupWriterBuilder<EK> {
         Self {
             store_id,
             limiter,
@@ -194,7 +194,7 @@ impl<E: KvEngine> BackupWriterBuilder<E> {
         }
     }
 
-    pub fn build(&self, start_key: Vec<u8>, storage_name: &str) -> Result<BackupWriter<E>> {
+    pub fn build(&self, start_key: Vec<u8>, storage_name: &str) -> Result<BackupWriter<EK>> {
         let key = file_system::sha256(&start_key).ok().map(hex::encode);
         let store_id = self.store_id;
         let name = backup_file_name(store_id, &self.region, key, storage_name);
@@ -211,34 +211,34 @@ impl<E: KvEngine> BackupWriterBuilder<E> {
 }
 
 /// A writer writes txn entries into SST files.
-pub struct BackupWriter<E: KvEngine> {
+pub struct BackupWriter<EK: KvEngine> {
     name: String,
-    default: Writer<E>,
-    write: Writer<E>,
+    default: Writer<EK>,
+    write: Writer<EK>,
     limiter: Limiter,
     sst_max_size: u64,
     cipher: CipherInfo,
 }
 
-impl<E: KvEngine> BackupWriter<E> {
+impl<EK: KvEngine> BackupWriter<EK> {
     /// Create a new BackupWriter.
     pub fn new(
-        db: E,
+        db: EK,
         name: &str,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         limiter: Limiter,
         sst_max_size: u64,
         cipher: CipherInfo,
-    ) -> Result<BackupWriter<E>> {
-        let default = <E as SstExt>::SstWriterBuilder::new()
+    ) -> Result<BackupWriter<EK>> {
+        let default = <EK as SstExt>::SstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
             .set_db(&db)
             .set_compression_type(compression_type)
             .set_compression_level(compression_level)
             .build(name)?;
-        let write = <E as SstExt>::SstWriterBuilder::new()
+        let write = <EK as SstExt>::SstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
             .set_db(&db)
@@ -335,19 +335,19 @@ impl<E: KvEngine> BackupWriter<E> {
 }
 
 /// A writer writes Raw kv into SST files.
-pub struct BackupRawKvWriter<E: KvEngine> {
+pub struct BackupRawKvWriter<EK: KvEngine> {
     name: String,
     cf: CfName,
-    writer: Writer<E>,
+    writer: Writer<EK>,
     limiter: Limiter,
     cipher: CipherInfo,
     codec: KeyValueCodec,
 }
 
-impl<E: KvEngine> BackupRawKvWriter<E> {
+impl<EK: KvEngine> BackupRawKvWriter<EK> {
     /// Create a new BackupRawKvWriter.
     pub fn new(
-        db: E,
+        db: EK,
         name: &str,
         cf: CfNameWrap,
         limiter: Limiter,
@@ -355,8 +355,8 @@ impl<E: KvEngine> BackupRawKvWriter<E> {
         compression_level: i32,
         cipher: CipherInfo,
         codec: KeyValueCodec,
-    ) -> Result<BackupRawKvWriter<E>> {
-        let writer = <E as SstExt>::SstWriterBuilder::new()
+    ) -> Result<BackupRawKvWriter<EK>> {
+        let writer = <EK as SstExt>::SstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf.into())
             .set_db(&db)

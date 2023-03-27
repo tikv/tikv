@@ -36,7 +36,7 @@ where
     }
 
     // Create a new backup service with router, this used for raftstore v1.
-    pub fn new_with_router(scheduler: Scheduler<Task>, router: RaftRouter<EK, ER>) -> Self {
+    pub fn with_router(scheduler: Scheduler<Task>, router: RaftRouter<EK, ER>) -> Self {
         Service {
             scheduler,
             router: Some(router),

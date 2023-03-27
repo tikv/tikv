@@ -162,12 +162,12 @@ pub struct BackupRange {
 
 /// The generic saveable writer. for generic `InMemBackupFiles`.
 /// Maybe what we really need is make Writer a trait...
-enum KvWriter<E: KvEngine> {
-    Txn(BackupWriter<E>),
-    Raw(BackupRawKvWriter<E>),
+enum KvWriter<EK: KvEngine> {
+    Txn(BackupWriter<EK>),
+    Raw(BackupRawKvWriter<EK>),
 }
 
-impl<E: KvEngine> std::fmt::Debug for KvWriter<E> {
+impl<EK: KvEngine> std::fmt::Debug for KvWriter<EK> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Txn(_) => f.debug_tuple("Txn").finish(),
@@ -176,7 +176,7 @@ impl<E: KvEngine> std::fmt::Debug for KvWriter<E> {
     }
 }
 
-impl<E: KvEngine> KvWriter<E> {
+impl<EK: KvEngine> KvWriter<EK> {
     async fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         match self {
             Self::Txn(writer) => writer.save(storage).await,
@@ -193,8 +193,8 @@ impl<E: KvEngine> KvWriter<E> {
 }
 
 #[derive(Debug)]
-struct InMemBackupFiles<E: KvEngine> {
-    files: KvWriter<E>,
+struct InMemBackupFiles<EK: KvEngine> {
+    files: KvWriter<EK>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     start_version: TimeStamp,
@@ -202,8 +202,8 @@ struct InMemBackupFiles<E: KvEngine> {
     region: Region,
 }
 
-async fn save_backup_file_worker<E: KvEngine>(
-    rx: async_channel::Receiver<InMemBackupFiles<E>>,
+async fn save_backup_file_worker<EK: KvEngine>(
+    rx: async_channel::Receiver<InMemBackupFiles<EK>>,
     tx: UnboundedSender<BackupResponse>,
     storage: Arc<dyn ExternalStorage>,
     codec: KeyValueCodec,
@@ -275,10 +275,10 @@ async fn save_backup_file_worker<E: KvEngine>(
 
 /// Send the save task to the save worker.
 /// Record the wait time at the same time.
-async fn send_to_worker_with_metrics<E: KvEngine>(
-    tx: &async_channel::Sender<InMemBackupFiles<E>>,
-    files: InMemBackupFiles<E>,
-) -> std::result::Result<(), SendError<InMemBackupFiles<E>>> {
+async fn send_to_worker_with_metrics<EK: KvEngine>(
+    tx: &async_channel::Sender<InMemBackupFiles<EK>>,
+    files: InMemBackupFiles<EK>,
+) -> std::result::Result<(), SendError<InMemBackupFiles<EK>>> {
     let files = match tx.try_send(files) {
         Ok(_) => return Ok(()),
         Err(e) => e.into_inner(),
@@ -459,9 +459,9 @@ impl BackupRange {
         Ok(stat)
     }
 
-    fn backup_raw<E: KvEngine, S: Snapshot>(
+    fn backup_raw<EK: KvEngine, S: Snapshot>(
         &self,
-        writer: &mut BackupRawKvWriter<E>,
+        writer: &mut BackupRawKvWriter<EK>,
         snapshot: &S,
     ) -> Result<Statistics> {
         assert!(self.codec.is_raw_kv);
