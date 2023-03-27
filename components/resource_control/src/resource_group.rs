@@ -280,7 +280,7 @@ impl ResourceController {
             });
         if near_overflow {
             info!("all reset groups' virtual time are near overflow, do reset");
-            max_vt = max_vt - RESET_VT_THRESHOLD;
+            max_vt -= RESET_VT_THRESHOLD;
         }
         // max_vt is actually a little bigger than the current min vt, but we don't
         // need totally accurate here.
