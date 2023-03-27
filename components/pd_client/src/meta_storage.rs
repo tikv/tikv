@@ -169,7 +169,7 @@ impl<S> Sourced<S> {
 }
 
 impl<S: MetaStorageClient> MetaStorageClient for Sourced<S> {
-    type WatchStream = <S as MetaStorageClient>::WatchStream;
+    type WatchStream = S::WatchStream;
 
     fn get(&self, mut req: Get) -> PdFuture<pb::GetResponse> {
         self.prepare_header(req.inner.mut_header());
@@ -240,7 +240,7 @@ impl<S: Stream<Item = Result<pb::WatchResponse>>> Stream for CheckedStream<S> {
 }
 
 impl<S: MetaStorageClient> MetaStorageClient for Checked<S> {
-    type WatchStream = CheckedStream<<S as MetaStorageClient>::WatchStream>;
+    type WatchStream = CheckedStream<S::WatchStream>;
 
     fn get(&self, req: Get) -> PdFuture<pb::GetResponse> {
         self.0
@@ -272,7 +272,7 @@ impl<S: MetaStorageClient> MetaStorageClient for Checked<S> {
 }
 
 impl<S: MetaStorageClient> MetaStorageClient for Arc<S> {
-    type WatchStream = <S as MetaStorageClient>::WatchStream;
+    type WatchStream = S::WatchStream;
 
     fn get(&self, req: Get) -> PdFuture<pb::GetResponse> {
         Arc::as_ref(self).get(req)
