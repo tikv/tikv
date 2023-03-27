@@ -1445,7 +1445,6 @@ mod test {
         };
 
         suite.must_register_task(1, "retry_abort");
-        println!("added the task");
         fail::cfg("subscribe_mgr_retry_start_observe_delay", "return(10)").unwrap();
         fail::cfg("try_start_observe", "return()").unwrap();
 

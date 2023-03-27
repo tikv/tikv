@@ -568,10 +568,10 @@ where
     }
 
     async fn start_observe(&self, region: Region) {
-        self.retry_start_observe(region, 0).await
+        self.start_observe_with_failure_count(region, 0).await
     }
 
-    async fn retry_start_observe(&self, region: Region, has_failed_for: u8) {
+    async fn start_observe_with_failure_count(&self, region: Region, has_failed_for: u8) {
         let handle = ObserveHandle::new();
         let schd = self.scheduler.clone();
         self.subs.add_pending_region(&region);
@@ -671,7 +671,7 @@ where
         metrics::INITIAL_SCAN_REASON
             .with_label_values(&["retry"])
             .inc();
-        self.retry_start_observe(region, failure_count).await;
+        self.start_observe_with_failure_count(region, failure_count).await;
         Ok(())
     }
 
