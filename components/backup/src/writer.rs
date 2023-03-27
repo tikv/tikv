@@ -48,16 +48,16 @@ impl From<CfNameWrap> for CfName {
     }
 }
 
-struct Writer<EK: KvEngine> {
-    writer: <EK as SstExt>::SstWriter,
+struct Writer<W: SstWriter + 'static> {
+    writer: W,
     total_kvs: u64,
     total_bytes: u64,
     checksum: u64,
     digest: crc64fast::Digest,
 }
 
-impl<EK: KvEngine> Writer<EK> {
-    fn new(writer: <EK as SstExt>::SstWriter) -> Self {
+impl<W: SstWriter + 'static> Writer<W> {
+    fn new(writer: W) -> Self {
         Writer {
             writer,
             total_kvs: 0,
@@ -97,7 +97,7 @@ impl<EK: KvEngine> Writer<EK> {
         Ok(())
     }
 
-    fn finish_read(writer: <EK as SstExt>::SstWriter) -> Result<(u64, impl Read)> {
+    fn finish_read(writer: W) -> Result<(u64, impl Read)> {
         let (sst_info, sst_reader) = writer.finish_read()?;
         Ok((sst_info.file_size(), sst_reader))
     }
@@ -213,8 +213,8 @@ impl<EK: KvEngine> BackupWriterBuilder<EK> {
 /// A writer writes txn entries into SST files.
 pub struct BackupWriter<EK: KvEngine> {
     name: String,
-    default: Writer<EK>,
-    write: Writer<EK>,
+    default: Writer<<EK as SstExt>::SstWriter>,
+    write: Writer<<EK as SstExt>::SstWriter>,
     limiter: Limiter,
     sst_max_size: u64,
     cipher: CipherInfo,
@@ -338,7 +338,7 @@ impl<EK: KvEngine> BackupWriter<EK> {
 pub struct BackupRawKvWriter<EK: KvEngine> {
     name: String,
     cf: CfName,
-    writer: Writer<EK>,
+    writer: Writer<<EK as SstExt>::SstWriter>,
     limiter: Limiter,
     cipher: CipherInfo,
     codec: KeyValueCodec,
