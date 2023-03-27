@@ -6,6 +6,7 @@ use raftstore::{
     store::{
         cmd_resp,
         fsm::{apply, MAX_PROPOSAL_SIZE_RATIO},
+        metrics::PEER_WRITE_CMD_COUNTER,
         msg::ErrorCallback,
         util::{self, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER},
     },
@@ -15,10 +16,12 @@ use tikv_util::slog_panic;
 
 use crate::{
     batch::StoreContext,
+    fsm::ApplyResReporter,
     raft::{Apply, Peer},
     router::{ApplyTask, CmdResChannel},
 };
 
+mod ingest;
 mod simple_write;
 
 pub use simple_write::{
@@ -132,14 +135,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, R> Apply<EK, R> {
+impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub fn apply_put(&mut self, cf: &str, index: u64, key: &[u8], value: &[u8]) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.put.inc();
         let off = data_cf_offset(cf);
         if self.should_skip(off, index) {
             return Ok(());
         }
         util::check_key_in_region(key, self.region())?;
+        if let Some(s) = self.buckets.as_mut() {
+            s.write_key(key, value.len() as u64);
+        }
         // Technically it's OK to remove prefix for raftstore v2. But rocksdb doesn't
         // support specifying infinite upper bound in various APIs.
         keys::data_key_with_buffer(key, &mut self.key_buffer);
@@ -178,11 +185,15 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
     #[inline]
     pub fn apply_delete(&mut self, cf: &str, index: u64, key: &[u8]) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.delete.inc();
         let off = data_cf_offset(cf);
         if self.should_skip(off, index) {
             return Ok(());
         }
         util::check_key_in_region(key, self.region())?;
+        if let Some(s) = self.buckets.as_mut() {
+            s.write_key(key, 0);
+        }
         keys::data_key_with_buffer(key, &mut self.key_buffer);
         self.ensure_write_buffer();
         let res = if cf.is_empty() || cf == CF_DEFAULT {

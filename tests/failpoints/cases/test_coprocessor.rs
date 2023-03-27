@@ -261,6 +261,16 @@ fn test_paging_scan() {
         let resp = handle_request(&endpoint, req);
         assert!(resp.range.is_none());
         assert!(resp.range.is_none());
+
+        let agg_req = DagSelect::from(&product)
+            .count(&product["count"])
+            .group_by(&[&product["name"]])
+            .output_offsets(Some(vec![0, 1]))
+            .desc(desc)
+            .paging_size(2)
+            .build();
+        let resp = handle_request(&endpoint, agg_req);
+        assert!(resp.range.is_some());
     }
 }
 

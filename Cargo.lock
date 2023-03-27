@@ -1172,7 +1172,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-channel",
  "crossbeam-deque",
- "crossbeam-epoch 0.9.8",
+ "crossbeam-epoch",
  "crossbeam-queue",
  "crossbeam-utils 0.8.8",
 ]
@@ -1189,12 +1189,13 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-deque"
-version = "0.8.2"
-source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2ebeaf58fe8a193134056#41ed3d948720f26149b2ebeaf58fe8a193134056"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce6fd6f855243022dcecf8702fef0c297d4338e226845fe067f6341ad9fa0cef"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.10",
- "crossbeam-utils 0.8.11",
+ "crossbeam-epoch",
+ "crossbeam-utils 0.8.8",
 ]
 
 [[package]]
@@ -1208,19 +1209,6 @@ dependencies = [
  "crossbeam-utils 0.8.8",
  "lazy_static",
  "memoffset 0.6.4",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-epoch"
-version = "0.9.10"
-source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2ebeaf58fe8a193134056#41ed3d948720f26149b2ebeaf58fe8a193134056"
-dependencies = [
- "autocfg",
- "cfg-if 1.0.0",
- "crossbeam-utils 0.8.11",
- "memoffset 0.6.4",
- "once_cell",
  "scopeguard",
 ]
 
@@ -1241,7 +1229,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "883a5821d7d079fcf34ac55f27a833ee61678110f6b97637cc74513c0d0b42fc"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.8",
+ "crossbeam-epoch",
  "crossbeam-utils 0.8.8",
  "scopeguard",
 ]
@@ -1265,15 +1253,6 @@ checksum = "0bf124c720b7686e3c2663cf54062ab0f68a88af2fb6a030e87e30bf721fcb38"
 dependencies = [
  "cfg-if 1.0.0",
  "lazy_static",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.11"
-source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2ebeaf58fe8a193134056#41ed3d948720f26149b2ebeaf58fe8a193134056"
-dependencies = [
- "cfg-if 1.0.0",
- "once_cell",
 ]
 
 [[package]]
@@ -2884,7 +2863,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0561adc3754362675cc08b5203d8b6444e645395"
+source = "git+https://github.com/pingcap/kvproto.git#b47a4830141f7c8d2719db0f0184652e692eb672"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3013,7 +2992,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b2cd42588ac62e40e297fea56a2286c0c389aade"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -3032,7 +3011,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b2cd42588ac62e40e297fea56a2286c0c389aade"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4646,7 +4625,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#33530112c3a4acaf8c50ca9d0470284109926296"
+source = "git+https://github.com/tikv/raft-engine.git#404e3fefaeeb4da6b7650268d500cfd3fbd29cae"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4831,6 +4810,7 @@ dependencies = [
  "slog",
  "slog-global",
  "smallvec",
+ "sst_importer",
  "tempfile",
  "test_pd",
  "test_util",
@@ -5148,6 +5128,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "online_config",
+ "parking_lot 0.12.1",
  "pd_client",
  "pin-project",
  "prometheus",
@@ -5219,7 +5200,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b2cd42588ac62e40e297fea56a2286c0c389aade"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -5938,6 +5919,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "online_config",
  "openssl",
  "prometheus",
  "rand 0.8.5",
@@ -6743,7 +6725,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.7.0-alpha"
+version = "7.1.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -7045,7 +7027,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#614f3ffd42ddc84b78ff59d65f105f2099a6f1b1"
+source = "git+https://github.com/pingcap/tipb.git#955fbdc879517f16b7a2f5967f143b92a6ab03dd"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7851,7 +7833,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#7ed25299d60a5338bea4ac0ed7470887ab74a010"
+source = "git+https://github.com/tikv/yatp.git?branch=master#5523a9a6a4d0d6242bdb02b0a344f7ee1477b39b"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",

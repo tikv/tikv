@@ -48,7 +48,7 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
     coprocessor, coprocessor_v2,
-    import::{ImportSstService, SstImporter},
+    import::{ImportSstService, LocalTablets, SstImporter},
     read_pool::ReadPool,
     server::{
         gc_worker::GcWorker,
@@ -56,6 +56,7 @@ use tikv::{
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
+        tablet_snap::NoSnapshotCache,
         ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
@@ -324,6 +325,7 @@ impl ServerCluster {
             engines.kv.clone(),
             region_info_accessor.region_leaders(),
         );
+        let extension = engine.raft_extension().clone();
         if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
             engine.set_txn_extra_scheduler(scheduler);
         }
@@ -385,8 +387,8 @@ impl ServerCluster {
         let import_service = ImportSstService::new(
             cfg.import.clone(),
             cfg.raft_store.raft_entry_max_size,
-            sim_router.clone(),
-            engines.kv.clone(),
+            engine.clone(),
+            LocalTablets::Singleton(engines.kv.clone()),
             Arc::clone(&importer),
         );
 
@@ -405,7 +407,6 @@ impl ServerCluster {
             cfg.quota.max_delay_duration,
             cfg.quota.enable_auto_tune,
         ));
-        let extension = engine.raft_extension().clone();
         let store = Storage::<_, _, F>::from_engine(
             engine,
             &cfg.storage,
@@ -432,7 +433,7 @@ impl ServerCluster {
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&self.pd_client), &bg_worker, extension.clone());
         let snap_mgr = SnapManagerBuilder::default()
-            .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+            .max_write_bytes_per_sec(cfg.server.snap_io_max_bytes_per_sec.0 as i64)
             .max_total_size(cfg.server.snap_max_total_size.0)
             .encryption_key_manager(key_manager)
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
@@ -605,7 +606,9 @@ impl ServerCluster {
             )
             .unwrap();
 
-        server.start(server_cfg, security_mgr).unwrap();
+        server
+            .start(server_cfg, security_mgr, NoSnapshotCache)
+            .unwrap();
 
         self.metas.insert(
             node_id,

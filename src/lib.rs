@@ -26,6 +26,7 @@
 #![feature(drain_filter)]
 #![feature(deadline_api)]
 #![feature(let_chains)]
+#![feature(read_buf)]
 #![feature(type_alias_impl_trait)]
 
 #[macro_use(fail_point)]

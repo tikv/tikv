@@ -7,11 +7,13 @@ use engine_rocks::{RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
-use kvproto::kvrpcpb::Context;
+use futures::Future;
+use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb::RaftCmdResponse};
+use raftstore::Result;
 use rand::RngCore;
 use server::server2::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use test_raftstore::{new_put_cf_cmd, Config};
+use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, Config};
 use tikv::{
     server::KvEngineFactoryBuilder,
     storage::{
@@ -20,7 +22,7 @@ use tikv::{
         Engine, Snapshot,
     },
 };
-use tikv_util::{config::ReadableDuration, worker::LazyWorker};
+use tikv_util::{config::ReadableDuration, worker::LazyWorker, HandyRwLock};
 
 use crate::{bootstrap_store, cluster::Cluster, ServerCluster, Simulator};
 
@@ -188,4 +190,42 @@ pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64, regio
         thread::sleep(Duration::from_millis(1 << retry));
     }
     assert!(snapshot.ext().is_max_ts_synced());
+}
+
+// Issue a read request on the specified peer.
+pub fn read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(key)],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    cluster.read(None, request, timeout)
+}
+
+pub fn async_read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+    replica_read: bool,
+) -> impl Future<Output = Result<RaftCmdResponse>> {
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(key)],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    request.mut_header().set_replica_read(replica_read);
+    cluster.sim.wl().async_read(request)
 }

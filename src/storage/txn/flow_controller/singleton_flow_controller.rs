@@ -505,8 +505,7 @@ pub(super) struct FlowChecker<E: FlowControlFactorStore + Send + 'static> {
     wait_for_destroy_range_finish: bool,
 
     region_id: u64,
-    #[getset(get_copy = "pub", set = "pub")]
-    tablet_suffix: u64,
+    rc: AtomicU32,
 }
 
 impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
@@ -516,12 +515,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         discard_ratio: Arc<AtomicU32>,
         limiter: Arc<Limiter>,
     ) -> Self {
-        Self::new_with_region_id(0, 0, config, engine, discard_ratio, limiter)
+        Self::new_with_region_id(0, config, engine, discard_ratio, limiter)
     }
 
     pub fn new_with_region_id(
         region_id: u64,
-        tablet_suffix: u64,
         config: &FlowControlConfig,
         engine: E,
         discard_ratio: Arc<AtomicU32>,
@@ -535,7 +533,6 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
 
         Self {
             region_id,
-            tablet_suffix,
             soft_pending_compaction_bytes_limit: config.soft_pending_compaction_bytes_limit.0,
             hard_pending_compaction_bytes_limit: config.hard_pending_compaction_bytes_limit.0,
             memtables_threshold: config.memtables_threshold,
@@ -549,6 +546,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             last_record_time: Instant::now_coarse(),
             last_speed: 0.0,
             wait_for_destroy_range_finish: false,
+            rc: AtomicU32::new(1),
         }
     }
 
@@ -653,7 +651,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
 
                     let msg = flow_info_receiver.recv_deadline(deadline);
                     if let Err(RecvTimeoutError::Timeout) = msg {
-                        checker.update_statistics();
+                        let (rate, cf_throttle_flags) = checker.update_statistics();
+                        for (cf, val) in cf_throttle_flags {
+                            SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(val);
+                        }
+                        SCHED_WRITE_FLOW_GAUGE.set(rate as i64);
                         deadline = std::time::Instant::now() + TICK_DURATION;
                     } else {
                         checker.on_flow_info_msg(enabled, msg);
@@ -684,26 +686,25 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         self.discard_ratio.store(0, Ordering::Relaxed);
     }
 
-    pub fn update_statistics(&mut self) {
+    pub fn update_statistics(&mut self) -> (f64, HashMap<&str, i64>) {
+        let mut cf_throttle_flags = HashMap::default();
         if let Some(throttle_cf) = self.throttle_cf.as_ref() {
-            SCHED_THROTTLE_CF_GAUGE
-                .with_label_values(&[throttle_cf])
-                .set(1);
+            cf_throttle_flags.insert(throttle_cf.as_str(), 1);
             for cf in self.cf_checkers.keys() {
                 if cf != throttle_cf {
-                    SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(0);
+                    cf_throttle_flags.insert(cf.as_str(), 0);
                 }
             }
         } else {
             for cf in self.cf_checkers.keys() {
-                SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(0);
+                cf_throttle_flags.insert(cf.as_str(), 0);
             }
         }
 
         // calculate foreground write flow
         let dur = self.last_record_time.saturating_elapsed_secs();
         if dur < f64::EPSILON {
-            return;
+            return (0.0, cf_throttle_flags);
         }
         let rate = self.limiter.total_bytes_consumed() as f64 / dur;
         // don't record those write rate of 0.
@@ -713,10 +714,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         if self.limiter.total_bytes_consumed() != 0 {
             self.write_flow_recorder.observe(rate as u64);
         }
-        SCHED_WRITE_FLOW_GAUGE.set(rate as i64);
+
         self.last_record_time = Instant::now_coarse();
 
         self.limiter.reset_statistics();
+        (rate, cf_throttle_flags)
     }
 
     fn on_pending_compaction_bytes_change(&mut self, cf: String) {
@@ -726,7 +728,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         // Because pending compaction bytes changes dramatically, take the
         // logarithm of pending compaction bytes to make the values fall into
         // a relative small range
-        let num = (self.engine.pending_compaction_bytes(self.region_id, &cf) as f64).log2();
+        let mut num = (self.engine.pending_compaction_bytes(self.region_id, &cf) as f64).log2();
+        if !num.is_finite() {
+            // 0.log2() == -inf, which is not expected and may lead to sum always be NaN
+            num = 0.0;
+        }
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
         checker.long_term_pending_bytes.observe(num);
         SCHED_PENDING_COMPACTION_BYTES_GAUGE
@@ -1005,6 +1011,14 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         });
         self.limiter.set_speed_limit(throttle)
     }
+
+    pub fn inc(&self) -> u32 {
+        self.rc.fetch_add(1, Ordering::SeqCst)
+    }
+
+    pub fn dec(&self) -> u32 {
+        self.rc.fetch_sub(1, Ordering::SeqCst)
+    }
 }
 
 #[cfg(test)]
@@ -1068,6 +1082,15 @@ pub(super) mod tests {
         }
     }
 
+    fn send_flow_info(tx: &mpsc::SyncSender<FlowInfo>, region_id: u64) {
+        tx.send(FlowInfo::Flush("default".to_string(), 0, region_id))
+            .unwrap();
+        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
+            .unwrap();
+    }
+
     pub fn test_flow_controller_basic_impl(flow_controller: &FlowController, region_id: u64) {
         // enable flow controller
         assert_eq!(flow_controller.enabled(), true);
@@ -1101,7 +1124,6 @@ pub(super) mod tests {
         stub: &EngineStub,
         tx: &mpsc::SyncSender<FlowInfo>,
         region_id: u64,
-        tablet_suffix: u64,
     ) {
         assert_eq!(flow_controller.consume(0, 2000), Duration::ZERO);
         loop {
@@ -1121,98 +1143,34 @@ pub(super) mod tests {
 
         // exceeds the threshold on start
         stub.0.num_memtables.store(8, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(region_id), true);
         // once falls below the threshold, pass the on start check
         stub.0.num_memtables.store(1, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         // not throttle when the average of the sliding window doesn't exceeds the
         // threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), true);
 
         // the average of sliding window exceeds the threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), false);
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
 
         // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtables.store(1, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), true);
     }
+
     #[test]
     fn test_flow_controller_memtable() {
         let stub = EngineStub::new();
@@ -1220,7 +1178,7 @@ pub(super) mod tests {
         let flow_controller =
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
         let flow_controller = FlowController::Singleton(flow_controller);
-        test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, 0, 0);
+        test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, 0);
     }
 
     pub fn test_flow_controller_l0_impl(
@@ -1228,7 +1186,6 @@ pub(super) mod tests {
         stub: &EngineStub,
         tx: &mpsc::SyncSender<FlowInfo>,
         region_id: u64,
-        tablet_suffix: u64,
     ) {
         assert_eq!(flow_controller.consume(region_id, 2000), Duration::ZERO);
         loop {
@@ -1240,56 +1197,17 @@ pub(super) mod tests {
 
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
-        tx.send(FlowInfo::L0(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(region_id), true);
         // once fall below the threshold, pass the on start check
         stub.0.num_l0_files.store(10, Ordering::Relaxed);
-        tx.send(FlowInfo::L0(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
 
         // exceeds the threshold, throttle now
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
-        tx.send(FlowInfo::L0(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), false);
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
@@ -1302,7 +1220,7 @@ pub(super) mod tests {
         let flow_controller =
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
         let flow_controller = FlowController::Singleton(flow_controller);
-        test_flow_controller_l0_impl(&flow_controller, &stub, &tx, 0, 0);
+        test_flow_controller_l0_impl(&flow_controller, &stub, &tx, 0);
     }
 
     pub fn test_flow_controller_pending_compaction_bytes_impl(
@@ -1310,89 +1228,36 @@ pub(super) mod tests {
         stub: &EngineStub,
         tx: &mpsc::SyncSender<FlowInfo>,
         region_id: u64,
-        tablet_suffix: u64,
     ) {
         // exceeds the threshold
         stub.0
             .pending_compaction_bytes
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction(
-            "default".to_string(),
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         // on start check forbids flow control
-        assert!(
-            flow_controller.discard_ratio(region_id) < f64::EPSILON,
-            "discard_ratio {}",
-            flow_controller.discard_ratio(region_id)
-        );
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
         // once fall below the threshold, pass the on start check
         stub.0
             .pending_compaction_bytes
             .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction(
-            "default".to_string(),
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
 
         stub.0
             .pending_compaction_bytes
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction(
-            "default".to_string(),
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction(
-            "default".to_string(),
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
         // pending compaction bytes jump after unsafe destroy range
         tx.send(FlowInfo::BeforeUnsafeDestroyRange(region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id, 0))
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
@@ -1400,39 +1265,18 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction(
-            "default".to_string(),
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
             .store(10000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction(
-            "default".to_string(),
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
+            .unwrap();
         tx.send(FlowInfo::AfterUnsafeDestroyRange(region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
+            .unwrap();
         assert!(
             flow_controller.discard_ratio(region_id) < f64::EPSILON,
             "discard_ratio {}",
@@ -1443,37 +1287,13 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction(
-            "default".to_string(),
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
             .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction(
-            "default".to_string(),
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
-        tx.send(FlowInfo::L0Intra(
-            "default".to_string(),
-            0,
-            region_id,
-            tablet_suffix,
-        ))
-        .unwrap();
+        send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
 
@@ -1484,7 +1304,31 @@ pub(super) mod tests {
         let flow_controller =
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
         let flow_controller = FlowController::Singleton(flow_controller);
-        test_flow_controller_pending_compaction_bytes_impl(&flow_controller, &stub, &tx, 0, 0);
+        test_flow_controller_pending_compaction_bytes_impl(&flow_controller, &stub, &tx, 0);
+    }
+
+    #[test]
+    fn test_flow_controller_pending_compaction_bytes_of_zero() {
+        let region_id = 0;
+        let stub = EngineStub::new();
+        let (tx, rx) = mpsc::sync_channel(0);
+        let flow_controller =
+            EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
+        let flow_controller = FlowController::Singleton(flow_controller);
+
+        // should handle zero pending compaction bytes properly
+        stub.0.pending_compaction_bytes.store(0, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+        stub.0
+            .pending_compaction_bytes
+            .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        stub.0
+            .pending_compaction_bytes
+            .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
 
     #[test]
