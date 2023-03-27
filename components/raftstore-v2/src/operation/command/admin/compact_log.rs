@@ -13,6 +13,8 @@
 //! Updates truncated index, and compacts logs if the corresponding changes have
 //! been persisted in kvdb.
 
+use std::path::PathBuf;
+
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
 use protobuf::Message;
@@ -113,7 +115,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // Mirrors v1::on_raft_gc_log_tick.
-    fn maybe_propose_compact_log<T>(
+    fn maybe_propose_compact_log<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         force: bool,
@@ -309,6 +311,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ));
     }
 
+    #[inline]
+    pub fn record_tombstone_tablet_path<T>(
+        &mut self,
+        ctx: &StoreContext<EK, ER, T>,
+        old_tablet: PathBuf,
+        new_tablet_index: u64,
+    ) {
+        info!(
+            self.logger,
+            "record tombstone tablet";
+            "prev_tablet_path" => old_tablet.display(),
+            "new_tablet_index" => new_tablet_index
+        );
+        let compact_log_context = self.compact_log_context_mut();
+        compact_log_context
+            .tombstone_tablets_wait_index
+            .push(new_tablet_index);
+        let _ = ctx
+            .schedulers
+            .tablet_gc
+            .schedule(tablet_gc::Task::prepare_destroy_path(
+                old_tablet,
+                self.region_id(),
+                new_tablet_index,
+            ));
+    }
+
     /// Returns if there's any tombstone being removed.
     #[inline]
     pub fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
@@ -369,15 +398,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         mut res: CompactLogResult,
     ) {
         let first_index = self.entry_storage().first_index();
-        if res.compact_index <= first_index {
-            debug!(
-                self.logger,
-                "compact index <= first index, no need to compact";
-                "compact_index" => res.compact_index,
-                "first_index" => first_index,
-            );
-            return;
-        }
         if let Some(i) = self.merge_context().and_then(|c| c.max_compact_log_index())
             && res.compact_index > i
         {
@@ -389,6 +409,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             res.compact_index = i;
         }
+        if res.compact_index <= first_index {
+            debug!(
+                self.logger,
+                "compact index <= first index, no need to compact";
+                "compact_index" => res.compact_index,
+                "first_index" => first_index,
+            );
+            return;
+        }
+        assert!(
+            res.compact_index < self.compact_log_context().last_applying_index,
+            "{}: {}, {}",
+            SlogFormat(&self.logger),
+            res.compact_index,
+            self.compact_log_context().last_applying_index
+        );
         // TODO: check entry_cache_warmup_state
         self.entry_storage_mut()
             .compact_entry_cache(res.compact_index);
