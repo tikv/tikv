@@ -278,6 +278,10 @@ impl ResourceController {
                     tracker.increase_vt((max_vt - vt) / 2);
                 }
             });
+        if near_overflow {
+            info!("all reset groups' virtual time are near overflow, do reset");
+            max_vt = max_vt - RESET_VT_THRESHOLD;
+        }
         // max_vt is actually a little bigger than the current min vt, but we don't
         // need totally accurate here.
         self.last_min_vt.store(max_vt, Ordering::Relaxed);
@@ -558,6 +562,7 @@ pub(crate) mod tests {
         let g2_vt = g2.current_vt();
         assert!(g2_vt < threshold / 2);
         assert!(g1_vt < threshold / 2 && g1_vt < g2_vt);
+        assert_eq!(resource_ctl.last_min_vt.load(Ordering::Relaxed), g2_vt);
     }
 
     #[test]
