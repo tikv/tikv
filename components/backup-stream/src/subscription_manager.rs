@@ -38,7 +38,7 @@ use crate::{
     metrics,
     observer::BackupStreamObserver,
     router::{Router, TaskSelector},
-    subscription_track::SubscriptionTracer,
+    subscription_track::{ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, Work},
     Task,
@@ -58,7 +58,7 @@ struct ScanCmd {
 
 /// The response of requesting resolve the new checkpoint of regions.
 pub struct ResolvedRegions {
-    items: Vec<(Region, TimeStamp)>,
+    items: Vec<ResolveResult>,
     checkpoint: TimeStamp,
 }
 
@@ -67,7 +67,7 @@ impl ResolvedRegions {
     /// Note: Maybe we can compute the global checkpoint internal and getting
     /// the interface clear. However we must take the `min_ts` or we cannot
     /// provide valid global checkpoint if there isn't any region checkpoint.
-    pub fn new(checkpoint: TimeStamp, checkpoints: Vec<(Region, TimeStamp)>) -> Self {
+    pub fn new(checkpoint: TimeStamp, checkpoints: Vec<ResolveResult>) -> Self {
         Self {
             items: checkpoints,
             checkpoint,
@@ -75,7 +75,16 @@ impl ResolvedRegions {
     }
 
     /// take the region checkpoints from the structure.
+    #[deprecated = "please use `take_resolve_result` instead."]
     pub fn take_region_checkpoints(&mut self) -> Vec<(Region, TimeStamp)> {
+        std::mem::take(&mut self.items)
+            .into_iter()
+            .map(|x| (x.region, x.checkpoint))
+            .collect()
+    }
+
+    /// take the resolve result from this struct.
+    pub fn take_resolve_result(&mut self) -> Vec<ResolveResult> {
         std::mem::take(&mut self.items)
     }
 
@@ -455,7 +464,7 @@ where
                 }
                 ObserveOp::ResolveRegions { callback, min_ts } => {
                     let now = Instant::now();
-                    let timedout = self.wait(Duration::from_secs(30)).await;
+                    let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
                         warn!("waiting for initial scanning done timed out, forcing progress!"; 
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
@@ -469,11 +478,7 @@ where
                     // safely.
                     let rts = min_region.map(|rs| rs.checkpoint).unwrap_or(min_ts);
                     info!("getting checkpoint"; "defined_by_region" => ?min_region);
-                    self.subs.warn_if_gap_too_huge(rts);
-                    callback(ResolvedRegions::new(
-                        rts,
-                        cps.into_iter().map(|r| (r.region, r.checkpoint)).collect(),
-                    ));
+                    callback(ResolvedRegions::new(rts, cps));
                 }
             }
         }
@@ -491,6 +496,7 @@ where
                         .with_label_values(&["region-changed"])
                         .inc();
                     let r = async {
+                        self.subs.add_pending_region(region);
                         self.observe_over_with_initial_data_from_checkpoint(
                             region,
                             self.get_last_checkpoint_of(&for_task, region).await?,
@@ -512,7 +518,7 @@ where
                 } else {
                     warn!(
                         "BUG: the region {:?} is register to no task but being observed",
-                        &region
+                        utils::debug_region(region)
                     );
                 }
             }
@@ -532,6 +538,9 @@ where
             }
 
             Some(for_task) => {
+                // the extra failpoint is used to pause the thread.
+                // once it triggered "pause" it cannot trigger early return then.
+                fail::fail_point!("try_start_observe0");
                 fail::fail_point!("try_start_observe", |_| {
                     Err(Error::Other(box_err!("Nature is boring")))
                 });
@@ -544,6 +553,7 @@ where
 
     async fn start_observe(&self, region: Region) {
         let handle = ObserveHandle::new();
+        self.subs.add_pending_region(&region);
         if let Err(err) = self.try_start_observe(&region, handle.clone()).await {
             warn!("failed to start observe, retrying"; "err" => %err);
             try_send!(

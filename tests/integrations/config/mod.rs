@@ -22,6 +22,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
     store::Config as RaftstoreConfig,
 };
+use resource_control::Config as ResourceControlConfig;
 use security::SecurityConfig;
 use slog::Level;
 use test_util::assert_eq_debug;
@@ -781,6 +782,7 @@ fn test_serde_custom_tikv_config() {
         file_size_limit: ReadableSize::gb(5),
         initial_scan_pending_memory_quota: ReadableSize::kb(2),
         initial_scan_rate_limit: ReadableSize::mb(3),
+        min_ts_interval: ReadableDuration::secs(2),
     };
     value.import = ImportConfig {
         num_threads: 123,
@@ -825,6 +827,7 @@ fn test_serde_custom_tikv_config() {
         renew_batch_max_size: 8192,
         alloc_ahead_buffer: ReadableDuration::millis(3000),
     };
+    value.resource_control = ResourceControlConfig { enabled: false };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
     let load = toml::from_str(&custom).unwrap();

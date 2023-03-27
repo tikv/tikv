@@ -425,7 +425,7 @@ fn test_node_merge_multiple_snapshots_not_together() {
 fn test_node_merge_multiple_snapshots(together: bool) {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
-    ignore_merge_target_integrity(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     // make it gc quickly to trigger snapshot easily

@@ -18,6 +18,7 @@ futures = { version = "0.3" }
 kvproto = { workspace = true }
 lazy_static = "1.0"
 online_config = { workspace = true }
+parking_lot = "0.12"
 pd_client = { workspace = true }
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
