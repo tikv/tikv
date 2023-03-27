@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::{max, min},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -26,7 +27,7 @@ const TASK_EXTRA_FACTOR_BY_LEVEL: [u64; 3] = [0, 20, 100];
 pub const MIN_PRIORITY_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 /// default resource group name
 const DEFAULT_RESOURCE_GROUP_NAME: &str = "default";
-/// max RU quota.
+/// The maximum RU quota that can be configured.
 const MAX_RU_QUOTA: u64 = i32::MAX as u64;
 
 #[cfg(test)]
@@ -175,9 +176,7 @@ impl ResourceController {
     }
 
     fn calculate_factor(mut quota: u64) -> u64 {
-        if quota > MAX_RU_QUOTA {
-            quota = MAX_RU_QUOTA;
-        }
+        quota = min(quota, MAX_RU_QUOTA);
         if quota > 0 {
             // the maxinum ru quota is very big, so the precision lost due to
             // integer division is very small.
@@ -248,12 +247,8 @@ impl ResourceController {
             .iter()
             .for_each(|(_, tracker)| {
                 let vt = tracker.current_vt();
-                if min_vt > vt {
-                    min_vt = vt;
-                }
-                if max_vt < vt {
-                    max_vt = vt;
-                }
+                min_vt = min(min_vt, vt);
+                max_vt = max(max_vt, vt);
             });
 
         // TODO: use different threshold for different resource type
