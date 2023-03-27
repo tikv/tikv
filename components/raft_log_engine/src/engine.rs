@@ -404,20 +404,14 @@ impl RaftEngine for RaftLogEngine {
 
     fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
         let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .add_entries::<MessageExtTyped>(raft_group_id, &entries)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)
+        batch.append(raft_group_id, entries)?;
+        self.consume(&mut batch, false)
     }
 
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        batch.put_raft_state(raft_group_id, state)?;
+        self.consume(&mut batch, false)?;
         Ok(())
     }
 
@@ -439,7 +433,7 @@ impl RaftEngine for RaftLogEngine {
             old_first_index.push(self.0.first_index(task.raft_group_id));
         }
 
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        self.consume(&mut batch, false)?;
 
         let mut total = 0;
         for (old_first_index, task) in old_first_index.iter().zip(tasks) {

@@ -10,4 +10,10 @@ lazy_static! {
         &["cloud", "req"]
     )
     .unwrap();
+    pub static ref CLOUD_ERROR_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_cloud_error_count",
+        "Total number of credentail errors from EKS env",
+        &["cloud", "error"]
+    )
+    .unwrap();
 }

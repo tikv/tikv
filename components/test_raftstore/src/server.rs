@@ -277,15 +277,18 @@ impl ServerCluster {
             }
         }
 
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
-        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
-        let sim_router = SimulateTransport::new(raft_router.clone());
-
-        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
-
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
+        let sim_router = SimulateTransport::new(raft_router.clone());
+        let raft_engine = RaftKv::new(
+            sim_router.clone(),
+            engines.kv.clone(),
+            region_info_accessor.region_leaders(),
+        );
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
             for hook in hooks {
@@ -302,7 +305,11 @@ impl ServerCluster {
             raft_engine.clone(),
         ));
 
-        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        let mut engine = RaftKv::new(
+            sim_router.clone(),
+            engines.kv.clone(),
+            region_info_accessor.region_leaders(),
+        );
         if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
             engine.set_txn_extra_scheduler(scheduler);
         }

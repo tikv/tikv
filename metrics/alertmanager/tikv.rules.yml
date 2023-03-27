@@ -253,17 +253,17 @@ groups:
       value: '{{ $value }}'
       summary: TiKV pending {{ $labels.type }} request is high
 
-  - alert: TiKV_batch_request_snapshot_nums
-    expr: sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / ( count(tikv_thread_cpu_seconds_total{name=~"cop_.*"}) *  0.9 ) / count(count(tikv_thread_cpu_seconds_total) by (instance)) > 0
+  - alert: TiKV_coprocessor_cpu_util
+    expr: sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / (count(tikv_thread_cpu_seconds_total{name=~"cop_.*"}) by (instance) * 0.9) >= 1
     for: 1m
     labels:
       env: ENV_LABELS_ENV
       level: warning
-      expr:  sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / ( count(tikv_thread_cpu_seconds_total{name=~"cop_.*"}) *  0.9 ) / count(count(tikv_thread_cpu_seconds_total) by (instance)) > 0
+      expr:  sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / (count(tikv_thread_cpu_seconds_total{name=~"cop_.*"}) by (instance) * 0.9) >= 1
     annotations:
       description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
-      summary: TiKV batch request snapshot nums is high
+      summary: TiKV coprocessor CPU utilization exceeds 90%
 
   - alert: TiKV_pending_task
     expr: sum(tikv_worker_pending_task_total) BY (instance,name)  > 1000

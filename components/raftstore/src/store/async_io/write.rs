@@ -26,7 +26,7 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{
     box_err,
-    config::{Tracker, VersionTrack},
+    config::{ReadableSize, Tracker, VersionTrack},
     debug, info, slow_log, thd_name,
     time::{duration_to_sec, Instant},
     warn,
@@ -49,6 +49,7 @@ const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const KV_WB_DEFAULT_SIZE: usize = 16 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
 const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
+const RAFT_WB_SPLIT_SIZE: usize = ReadableSize::gb(1).0 as usize;
 
 /// Notify the event to the specified region.
 pub trait Notifier: Clone + Send + 'static {
@@ -193,13 +194,18 @@ where
     ER: RaftEngine,
 {
     pub kv_wb: EK::WriteBatch,
-    pub raft_wb: ER::LogBatch,
-    // Write raft state once for a region everytime writing to disk
+    // When a single batch becomes too large, we uses multiple batches each containing atomic
+    // writes.
+    pub raft_wbs: Vec<ER::LogBatch>,
+    // Write states once for a region everytime writing to disk.
+    // These states only corresponds to entries inside `raft_wbs.last()`. States for other write
+    // batches must be inlined early.
     pub raft_states: HashMap<u64, RaftLocalState>,
     pub state_size: usize,
     pub tasks: Vec<WriteTask<EK, ER>>,
     // region_id -> (peer_id, ready_number)
     pub readies: HashMap<u64, (u64, u64)>,
+    pub(crate) raft_wb_split_size: usize,
 }
 
 impl<EK, ER> WriteTaskBatch<EK, ER>
@@ -210,40 +216,55 @@ where
     fn new(kv_wb: EK::WriteBatch, raft_wb: ER::LogBatch) -> Self {
         Self {
             kv_wb,
-            raft_wb,
+            raft_wbs: vec![raft_wb],
             raft_states: HashMap::default(),
             state_size: 0,
             tasks: vec![],
             readies: HashMap::default(),
+            raft_wb_split_size: RAFT_WB_SPLIT_SIZE,
         }
     }
 
+    #[inline]
+    fn flush_states_to_raft_wb(&mut self) {
+        let wb = self.raft_wbs.last_mut().unwrap();
+        for (region_id, state) in self.raft_states.drain() {
+            wb.put_raft_state(region_id, &state).unwrap();
+        }
+        self.state_size = 0;
+    }
+
     /// Add write task to this batch
-    fn add_write_task(&mut self, mut task: WriteTask<EK, ER>) {
+    fn add_write_task(&mut self, raft_engine: &ER, mut task: WriteTask<EK, ER>) {
         if let Err(e) = task.valid() {
             panic!("task is not valid: {:?}", e);
         }
         if let Some(kv_wb) = task.kv_wb.take() {
             self.kv_wb.merge(kv_wb).unwrap();
         }
-        if let Some(raft_wb) = task.raft_wb.take() {
-            self.raft_wb.merge(raft_wb).unwrap();
+
+        if self.raft_wb_split_size > 0
+            && self.raft_wbs.last().unwrap().persist_size() >= self.raft_wb_split_size
+        {
+            self.flush_states_to_raft_wb();
+            self.raft_wbs
+                .push(raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE));
         }
 
-        let entries = std::mem::take(&mut task.entries);
-        self.raft_wb.append(task.region_id, entries).unwrap();
+        let raft_wb = self.raft_wbs.last_mut().unwrap();
+        if let Some(wb) = task.raft_wb.take() {
+            raft_wb.merge(wb).unwrap();
+        }
+        raft_wb
+            .append(task.region_id, std::mem::take(&mut task.entries))
+            .unwrap();
         if let Some((from, to)) = task.cut_logs {
-            self.raft_wb.cut_logs(task.region_id, from, to);
+            raft_wb.cut_logs(task.region_id, from, to);
         }
 
-        if let Some(raft_state) = task.raft_state.take() {
-            if self
-                .raft_states
-                .insert(task.region_id, raft_state)
-                .is_none()
-            {
-                self.state_size += std::mem::size_of::<RaftLocalState>();
-            }
+        if let Some(raft_state) = task.raft_state.take()
+            && self.raft_states.insert(task.region_id, raft_state).is_none() {
+            self.state_size += std::mem::size_of::<RaftLocalState>();
         }
 
         if let Some(prev_readies) = self
@@ -286,15 +307,16 @@ where
 
     #[inline]
     fn get_raft_size(&self) -> usize {
-        self.state_size + self.raft_wb.persist_size()
+        self.state_size
+            + self
+                .raft_wbs
+                .iter()
+                .map(|wb| wb.persist_size())
+                .sum::<usize>()
     }
 
     fn before_write_to_db(&mut self, metrics: &StoreWriteMetrics) {
-        // Put raft state to raft writebatch
-        for (region_id, state) in self.raft_states.drain() {
-            self.raft_wb.put_raft_state(region_id, &state).unwrap();
-        }
-        self.state_size = 0;
+        self.flush_states_to_raft_wb();
         if metrics.waterfall_metrics {
             let now = Instant::now();
             for task in &self.tasks {
@@ -472,7 +494,7 @@ where
     }
 
     pub fn handle_write_task(&mut self, task: WriteTask<EK, ER>) {
-        self.batch.add_write_task(task);
+        self.batch.add_write_task(&self.engines.raft, task);
     }
 
     pub fn write_to_db(&mut self, notify: bool) {
@@ -514,25 +536,28 @@ where
         fail_point!("raft_between_save");
 
         let mut write_raft_time = 0f64;
-        if !self.batch.raft_wb.is_empty() {
+        if !self.batch.raft_wbs[0].is_empty() {
             fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
 
             let now = Instant::now();
             self.perf_context.start_observe();
-            self.engines
-                .raft
-                .consume_and_shrink(
-                    &mut self.batch.raft_wb,
-                    true,
-                    RAFT_WB_SHRINK_SIZE,
-                    RAFT_WB_DEFAULT_SIZE,
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "store {}: {} failed to write to raft engine: {:?}",
-                        self.store_id, self.tag, e
-                    );
-                });
+            for i in 0..self.batch.raft_wbs.len() {
+                self.engines
+                    .raft
+                    .consume_and_shrink(
+                        &mut self.batch.raft_wbs[i],
+                        true,
+                        RAFT_WB_SHRINK_SIZE,
+                        RAFT_WB_DEFAULT_SIZE,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "store {}: {} failed to write to raft engine: {:?}",
+                            self.store_id, self.tag, e
+                        );
+                    });
+            }
+            self.batch.raft_wbs.truncate(1);
             self.perf_context.report_metrics();
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
@@ -722,7 +747,7 @@ where
         engines.kv.write_batch(),
         engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE),
     );
-    batch.add_write_task(task);
+    batch.add_write_task(&engines.raft, task);
     batch.before_write_to_db(&StoreWriteMetrics::new(false));
     if !batch.kv_wb.is_empty() {
         let mut write_opts = WriteOptions::new();
@@ -731,13 +756,12 @@ where
             panic!("test failed to write to kv engine: {:?}", e);
         });
     }
-    if !batch.raft_wb.is_empty() {
-        engines
-            .raft
-            .consume(&mut batch.raft_wb, true)
-            .unwrap_or_else(|e| {
+    if !batch.raft_wbs[0].is_empty() {
+        for wb in &mut batch.raft_wbs {
+            engines.raft.consume(wb, true).unwrap_or_else(|e| {
                 panic!("test failed to write to raft engine: {:?}", e);
             });
+        }
     }
 }
 
