@@ -603,6 +603,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
 
     /// remove some task, without the ranges.
     /// only for testing.
+    #[cfg(test)]
     pub async fn remove_task(&self, name: &str) -> Result<()> {
         self.meta_store
             .delete(Keys::Key(MetaKey::task_of(name)))

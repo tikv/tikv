@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     errors::{Error, Result},
-    metadata::keys::{KeyValue, MetaKey, PREFIX},
+    metadata::keys::{KeyValue, MetaKey, PREFIX}, debug,
 };
 
 fn convert_kv(mut kv: mpb::KeyValue) -> KeyValue {
@@ -165,7 +165,7 @@ impl<
     }
 
     async fn set(&self, mut kv: KeyValue) -> Result<()> {
-        info!("pd meta client setting."; "pair" => ?kv);
+        debug!("pd meta client setting."; "pair" => ?kv);
         self.client
             .put(Put::of(kv.take_key(), kv.take_value()))
             .await?;
@@ -186,7 +186,7 @@ impl<
             .map(convert_kv)
             .collect::<Vec<_>>();
         let revision = resp.get_header().get_revision();
-        info!("pd meta client getting."; "range" => ?keys, "rev" => %revision, "result" => ?inner);
+        debug!("pd meta client getting."; "range" => ?keys, "rev" => %revision, "result" => ?inner);
         Ok(WithRevision { inner, revision })
     }
 }
@@ -196,7 +196,7 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use futures::{Future, StreamExt};
-    use pd_client::{AutoHeader, Checked, RpcClient, Source};
+    use pd_client::{Sourced, Checked, RpcClient, Source};
     use test_pd::{mocker::MetaStorage, util::*, Server as PdServer};
     use tikv_util::config::ReadableDuration;
 
@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn test_query() {
         let (_s, c) =
-            new_test_server_and_client(|c| AutoHeader::new(Arc::new(c), Source::LogBackup, 42));
+            new_test_server_and_client(|c| Sourced::new(Arc::new(c), Source::LogBackup));
 
         let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
         let insert = |k, v| w(c.set(kv(k, v))).unwrap();
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn test_watch() {
         let (_s, c) =
-            new_test_server_and_client(|c| AutoHeader::new(Arc::new(c), Source::LogBackup, 42));
+            new_test_server_and_client(|c| Sourced::new(Arc::new(c), Source::LogBackup));
         let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
         let insert = |k, v| w(c.set(kv(k, v))).unwrap();
 
@@ -280,6 +280,7 @@ mod tests {
 
     #[test]
     fn test_check_error() {
+        // Without AutoHeader, it will fail due to the source is empty.
         let (_s, c) = new_test_server_and_client(|c| Checked::new(Arc::new(c)));
         let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
         let insert = |k, v| w(c.set(kv(k, v)));

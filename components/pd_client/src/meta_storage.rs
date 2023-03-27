@@ -18,7 +18,7 @@ const INF: [u8; 1] = [0u8];
 /// A Get request to the meta storage.
 #[derive(Clone, Debug)]
 pub struct Get {
-    inner: pb::GetRequest,
+    pub(crate) inner: pb::GetRequest,
 }
 
 impl From<Get> for pb::GetRequest {
@@ -68,7 +68,7 @@ impl Get {
 /// A Put request to the meta store.
 #[derive(Clone, Debug)]
 pub struct Put {
-    inner: pb::PutRequest,
+    pub(crate) inner: pb::PutRequest,
 }
 
 impl Put {
@@ -95,7 +95,7 @@ impl From<Put> for pb::PutRequest {
 
 #[derive(Clone, Debug)]
 pub struct Watch {
-    inner: pb::WatchRequest,
+    pub(crate) inner: pb::WatchRequest,
 }
 
 impl Watch {
@@ -150,32 +150,27 @@ impl std::fmt::Display for Source {
     }
 }
 
-/// A wrapper over client which would fill the header fields for all requests.
+/// A wrapper over client which would fill the source field in the header for all requests.
 #[derive(Clone)]
-pub struct AutoHeader<S> {
+pub struct Sourced<S> {
     inner: S,
     source: Source,
-    cluster_id: u64,
 }
 
-impl<S> AutoHeader<S> {
-    pub fn new(inner: S, source: Source, cluster_id: u64) -> Self {
+impl<S> Sourced<S> {
+    pub fn new(inner: S, source: Source)-> Self {
         Self {
             inner,
             source,
-            cluster_id,
         }
     }
 
     fn prepare_header(&self, h: &mut pb::RequestHeader) {
         h.set_source(self.source.to_string());
-        if self.cluster_id > 0 {
-            h.set_cluster_id(self.cluster_id)
-        }
     }
 }
 
-impl<S: MetaStorageClient> MetaStorageClient for AutoHeader<S> {
+impl<S: MetaStorageClient> MetaStorageClient for Sourced<S> {
     type WatchStream = <S as MetaStorageClient>::WatchStream;
 
     fn get(&self, mut req: Get) -> PdFuture<pb::GetResponse> {

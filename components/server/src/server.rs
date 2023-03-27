@@ -60,7 +60,7 @@ use kvproto::{
     kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
-use pd_client::{AutoHeader, Checked, PdClient, RpcClient};
+use pd_client::{Sourced, Checked, PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -1039,10 +1039,9 @@ where
 
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 node.id(),
-                PdStore::new(Checked::new(AutoHeader::new(
+                PdStore::new(Checked::new(Sourced::new(
                     Arc::clone(&self.pd_client),
                     pd_client::Source::LogBackup,
-                    self.pd_client.get_cluster_id().unwrap_or_default(),
                 ))),
                 self.config.backup_stream.clone(),
                 backup_stream_scheduler.clone(),

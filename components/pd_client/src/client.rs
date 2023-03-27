@@ -21,7 +21,7 @@ use futures::{
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
-    meta_storagepb::{GetRequest, GetResponse, PutRequest, WatchRequest, WatchResponse},
+    meta_storagepb::{GetRequest, GetResponse, PutRequest, WatchRequest, WatchResponse, self as mpb},
     metapb,
     pdpb::{self, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
@@ -1121,9 +1121,16 @@ impl PdClient for RpcClient {
     }
 }
 
+impl RpcClient {
+    fn fill_cluster_id_for(&self, header: &mut mpb::RequestHeader) {
+        header.cluster_id = self.cluster_id;
+    }
+}
+
 impl MetaStorageClient for RpcClient {
-    fn get(&self, req: Get) -> PdFuture<GetResponse> {
+    fn get(&self, mut req: Get) -> PdFuture<GetResponse> {
         let timer = Instant::now();
+        self.fill_cluster_id_for(req.inner.mut_header());
         let executor = move |client: &Client, req: GetRequest| {
             let handler = {
                 let inner = client.inner.rl();
@@ -1148,8 +1155,9 @@ impl MetaStorageClient for RpcClient {
             .execute()
     }
 
-    fn put(&self, req: Put) -> PdFuture<kvproto::meta_storagepb::PutResponse> {
+    fn put(&self, mut req: Put) -> PdFuture<kvproto::meta_storagepb::PutResponse> {
         let timer = Instant::now();
+        self.fill_cluster_id_for(req.inner.mut_header());
         let executor = move |client: &Client, req: PutRequest| {
             let handler = {
                 let inner = client.inner.rl();
@@ -1174,8 +1182,9 @@ impl MetaStorageClient for RpcClient {
             .execute()
     }
 
-    fn watch(&self, req: Watch) -> Self::WatchStream {
+    fn watch(&self, mut req: Watch) -> Self::WatchStream {
         let timer = Instant::now();
+        self.fill_cluster_id_for(req.inner.mut_header());
         let executor = move |client: &Client, req: WatchRequest| {
             let handler = {
                 let inner = client.inner.rl();
