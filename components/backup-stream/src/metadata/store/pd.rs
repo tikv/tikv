@@ -12,8 +12,9 @@ use super::{
     WithRevision,
 };
 use crate::{
+    debug,
     errors::{Error, Result},
-    metadata::keys::{KeyValue, MetaKey, PREFIX}, debug,
+    metadata::keys::{KeyValue, MetaKey, PREFIX},
 };
 
 fn convert_kv(mut kv: mpb::KeyValue) -> KeyValue {
@@ -196,7 +197,7 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use futures::{Future, StreamExt};
-    use pd_client::{Sourced, Checked, RpcClient, Source};
+    use pd_client::{Checked, RpcClient, Source, Sourced};
     use test_pd::{mocker::MetaStorage, util::*, Server as PdServer};
     use tikv_util::config::ReadableDuration;
 
@@ -226,8 +227,7 @@ mod tests {
 
     #[test]
     fn test_query() {
-        let (_s, c) =
-            new_test_server_and_client(|c| Sourced::new(Arc::new(c), Source::LogBackup));
+        let (_s, c) = new_test_server_and_client(|c| Sourced::new(Arc::new(c), Source::LogBackup));
 
         let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
         let insert = |k, v| w(c.set(kv(k, v))).unwrap();
@@ -257,8 +257,7 @@ mod tests {
 
     #[test]
     fn test_watch() {
-        let (_s, c) =
-            new_test_server_and_client(|c| Sourced::new(Arc::new(c), Source::LogBackup));
+        let (_s, c) = new_test_server_and_client(|c| Sourced::new(Arc::new(c), Source::LogBackup));
         let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
         let insert = |k, v| w(c.set(kv(k, v))).unwrap();
 

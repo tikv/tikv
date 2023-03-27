@@ -32,7 +32,7 @@ pub use self::{
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
-    meta_storage::{Sourced, Checked, Get, MetaStorageClient, Put, Source, Watch},
+    meta_storage::{Checked, Get, MetaStorageClient, Put, Source, Sourced, Watch},
     util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
 };
 

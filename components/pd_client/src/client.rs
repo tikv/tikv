@@ -21,7 +21,9 @@ use futures::{
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
-    meta_storagepb::{GetRequest, GetResponse, PutRequest, WatchRequest, WatchResponse, self as mpb},
+    meta_storagepb::{
+        self as mpb, GetRequest, GetResponse, PutRequest, WatchRequest, WatchResponse,
+    },
     metapb,
     pdpb::{self, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},

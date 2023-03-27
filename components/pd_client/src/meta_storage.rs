@@ -150,7 +150,8 @@ impl std::fmt::Display for Source {
     }
 }
 
-/// A wrapper over client which would fill the source field in the header for all requests.
+/// A wrapper over client which would fill the source field in the header for
+/// all requests.
 #[derive(Clone)]
 pub struct Sourced<S> {
     inner: S,
@@ -158,11 +159,8 @@ pub struct Sourced<S> {
 }
 
 impl<S> Sourced<S> {
-    pub fn new(inner: S, source: Source)-> Self {
-        Self {
-            inner,
-            source,
-        }
+    pub fn new(inner: S, source: Source) -> Self {
+        Self { inner, source }
     }
 
     fn prepare_header(&self, h: &mut pb::RequestHeader) {
