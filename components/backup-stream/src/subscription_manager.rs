@@ -671,7 +671,8 @@ where
         metrics::INITIAL_SCAN_REASON
             .with_label_values(&["retry"])
             .inc();
-        self.start_observe_with_failure_count(region, failure_count).await;
+        self.start_observe_with_failure_count(region, failure_count)
+            .await;
         Ok(())
     }
 
