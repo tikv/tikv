@@ -290,4 +290,27 @@ mod tests {
         w(c.get_latest(Keys::Key(MetaKey(vec![42u8])))).unwrap_err();
         assert!(w(c.watch(Keys::Key(MetaKey(vec![42u8])), 42)).is_err());
     }
+
+    #[test]
+    fn test_retry() {
+        use tikv_util::defer;
+
+        defer! {{
+            fail::remove("meta_storage_get");
+        }};
+        let (_s, c) = new_test_server_and_client(|c| Sourced::new(Arc::new(c), Source::LogBackup));
+
+        let kv = |k, v: &str| KeyValue(MetaKey::task_of(k), v.as_bytes().to_vec());
+        let insert = |k, v| w(c.set(kv(k, v))).unwrap();
+        insert("rejectme", "this key would be rejected by the failpoint.");
+
+        fail::cfg("meta_storage_get", "4*return").unwrap();
+        let res = w(c.get_latest(Keys::Key(MetaKey::task_of("rejectme")))).expect("should success when temporary failing");
+        assert_eq!(res.inner.len(), 1);
+        assert_eq!(res.inner[0], kv("rejectme",  "this key would be rejected by the failpoint."));
+
+        // FIXME: this would take about 10s to run and influences unit tests run...
+        fail::cfg("meta_storage_get", "return").unwrap();
+        w(c.get_latest(Keys::Key(MetaKey::task_of("rejectme")))).expect_err("should fail when ever failing");
+    }
 }

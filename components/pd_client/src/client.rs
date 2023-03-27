@@ -1136,14 +1136,15 @@ impl MetaStorageClient for RpcClient {
         let executor = move |client: &Client, req: GetRequest| {
             let handler = {
                 let inner = client.inner.rl();
-                inner
+                let r = inner
                     .meta_storage
-                    .get_async_opt(&req, call_option_inner(&inner))
-                    .unwrap_or_else(|e| {
-                        panic!("fail to request PD {} err {:?}", "metastorage::get", e)
-                    })
+                    .get_async_opt(&req, call_option_inner(&inner));
+                futures::future::ready(r).err_into().try_flatten()
             };
             Box::pin(async move {
+                fail::fail_point!("meta_storage_get", req.key.ends_with(b"rejectme"), |_| {
+                    Err(super::Error::Grpc(grpcio::Error::RemoteStopped))
+                });
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .meta_storage_get
@@ -1163,12 +1164,10 @@ impl MetaStorageClient for RpcClient {
         let executor = move |client: &Client, req: PutRequest| {
             let handler = {
                 let inner = client.inner.rl();
-                inner
+                let r = inner
                     .meta_storage
-                    .put_async_opt(&req, call_option_inner(&inner))
-                    .unwrap_or_else(|e| {
-                        panic!("fail to request PD {} err {:?}", "metastorage::put", e)
-                    })
+                    .put_async_opt(&req, call_option_inner(&inner));
+                futures::future::ready(r).err_into().try_flatten()
             };
             Box::pin(async move {
                 let resp = handler.await?;
@@ -1190,12 +1189,10 @@ impl MetaStorageClient for RpcClient {
         let executor = move |client: &Client, req: WatchRequest| {
             let handler = {
                 let inner = client.inner.rl();
-                inner.meta_storage.watch(&req).unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "metastorage::watch", e)
-                })
+                inner.meta_storage.watch(&req)
             };
             Box::pin(async move {
-                let resp = handler;
+                let resp = handler?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .meta_storage_watch
                     .observe(timer.saturating_elapsed_secs());
@@ -1203,10 +1200,6 @@ impl MetaStorageClient for RpcClient {
             }) as _
         };
 
-        // NOTE: the request is purely synchronous, however `sync_request` cannot be
-        // reused directly because it only provides the stub of pdpb.
-        // `Watch` should be a low-frequency operation hence I think there are little
-        // overhead of using the asynchronous version.
         self.pd_client
             .request(req.into(), executor, LEADER_CHANGE_RETRY)
             .execute()
