@@ -248,7 +248,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 // Target peer handles the commit merge request.
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn on_ask_commit_merge<T>(
+    pub fn on_ask_commit_merge<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
