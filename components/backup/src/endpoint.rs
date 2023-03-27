@@ -946,7 +946,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     });
                     let name = backup_file_name(store_id, &brange.region, key, _backend.name());
                     let ct = to_sst_compression_type(request.compression_type);
-                    let db= match tablets.get(brange.region.id) {
+                    let db = match tablets.get(brange.region.id) {
                         Some(t) => t,
                         None => {
                             warn!("backup region not found"; "region" => ?brange.region.id);
