@@ -315,7 +315,7 @@ impl std::ops::Deref for Router {
     type Target = RouterInner;
 
     fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
+        Arc::deref(&self.0)
     }
 }
 

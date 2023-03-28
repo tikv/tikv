@@ -3136,7 +3136,6 @@ pub struct TikvConfig {
     #[online_config(submodule)]
     // The term "log backup" and "backup stream" are identity.
     // The "log backup" should be the only product name exposed to the user.
-    //#[serde(rename = "log-backup")]
     pub log_backup: BackupStreamConfig,
 
     #[online_config(submodule)]
