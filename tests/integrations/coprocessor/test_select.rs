@@ -80,7 +80,7 @@ fn test_select() {
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
-    assert_eq!(limiter.total_read_bytes_consumed(true), total_chunk_size); // the consume_sample is called due to read bytes quota
+    assert_eq!(limiter.total_read_bytes_consumed(), total_chunk_size); // the consume_sample is called due to read bytes quota
 }
 
 #[test]
