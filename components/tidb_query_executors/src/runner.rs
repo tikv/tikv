@@ -5,7 +5,7 @@ use std::{convert::TryFrom, sync::Arc};
 use api_version::KvFormat;
 use fail::fail_point;
 use itertools::Itertools;
-use kvproto::coprocessor::KeyRange;
+use kvproto::{coprocessor::KeyRange, kvrpcpb::DebugInfo};
 use protobuf::Message;
 use tidb_query_common::{
     execute_stats::ExecSummary,
@@ -17,8 +17,12 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext, EvalWarnings},
     EvalType, FieldTypeAccessor,
 };
+// TODO: This value is chosen based on MonetDB/X100's research without our own
+// benchmarks.
+pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 use tikv_util::{
     deadline::Deadline,
+    debug,
     metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
     quota_limiter::QuotaLimiter,
 };
@@ -36,10 +40,6 @@ use super::{
 // is not tuned carefully. We need to benchmark to find a best value. Also we
 // may consider accepting this value from TiDB side.
 const BATCH_INITIAL_SIZE: usize = 32;
-
-// TODO: This value is chosen based on MonetDB/X100's research without our own
-// benchmarks.
-pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
@@ -79,6 +79,8 @@ pub struct BatchExecutorsRunner<SS> {
     paging_size: Option<u64>,
 
     quota_limiter: Arc<QuotaLimiter>,
+
+    debug_info: DebugInfo,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling
@@ -181,6 +183,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
+    debug_info: DebugInfo,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
@@ -212,6 +215,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     descriptor.get_desc(),
                     is_scanned_range_aware,
                     primary_prefix_column_ids,
+                    debug_info,
                 )?
                 .collect_summary(summary_slot_index),
             )
@@ -232,6 +236,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     descriptor.get_desc(),
                     descriptor.get_unique(),
                     is_scanned_range_aware,
+                    debug_info,
                 )?
                 .collect_summary(summary_slot_index),
             )
@@ -428,6 +433,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         is_streaming: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
+        debug_info: DebugInfo,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -443,6 +449,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             is_streaming || paging_size.is_some(), /* For streaming and paging request,
                                                     * executors will continue scan from range
                                                     * end where last scan is finished */
+            debug_info.clone(),
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
@@ -477,6 +484,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             encode_type,
             paging_size,
             quota_limiter,
+            debug_info,
         })
     }
 
@@ -497,6 +505,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
+        ctx.debug_info = self.debug_info.clone();
         let mut record_all = 0;
 
         loop {
@@ -648,6 +657,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         self.deadline.check()?;
 
         let mut result = self.out_most_executor.next_batch(batch_size).await;
+        debug!("internal handle cop request";
+            "start_ts" => ctx.debug_info.start_ts,
+            "connection id" => ctx.debug_info.connection_id,
+        );
 
         let is_drained = result.is_drained?;
 

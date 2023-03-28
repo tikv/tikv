@@ -5,7 +5,7 @@ use std::{collections::HashSet, sync::Arc};
 use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use collections::HashMap;
-use kvproto::coprocessor::KeyRange;
+use kvproto::{coprocessor::KeyRange, kvrpcpb::DebugInfo};
 use smallvec::SmallVec;
 use tidb_query_common::{
     storage::{IntervalRange, Storage},
@@ -51,6 +51,7 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
         is_backward: bool,
         is_scanned_range_aware: bool,
         primary_prefix_column_ids: Vec<i64>,
+        debug_info: DebugInfo,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
@@ -107,6 +108,7 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
             is_key_only,
             accept_point_range: no_common_handle,
             is_scanned_range_aware,
+            debug_info,
         })?;
         Ok(Self(wrapper))
     }
@@ -714,6 +716,7 @@ mod tests {
             false,
             false,
             vec![],
+            Default::default(),
         )
         .unwrap();
 
@@ -798,6 +801,7 @@ mod tests {
             false,
             false,
             vec![],
+            Default::default(),
         )
         .unwrap()
         .collect_summary(1);
@@ -941,6 +945,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                Default::default(),
             )
             .unwrap();
 
@@ -1048,6 +1053,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                Default::default(),
             )
             .unwrap();
 
@@ -1096,6 +1102,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                Default::default(),
             )
             .unwrap();
 
@@ -1138,6 +1145,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                Default::default(),
             )
             .unwrap();
 
@@ -1177,6 +1185,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                Default::default(),
             )
             .unwrap();
 
@@ -1198,6 +1207,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                Default::default(),
             )
             .unwrap();
 
@@ -1232,6 +1242,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                Default::default(),
             )
             .unwrap();
 
@@ -1282,6 +1293,7 @@ mod tests {
             false,
             false,
             vec![],
+            Default::default(),
         )
         .unwrap();
 
@@ -1390,6 +1402,7 @@ mod tests {
             false,
             false,
             primary_prefix_column_ids,
+            Default::default(),
         )
         .unwrap();
 
@@ -1571,6 +1584,7 @@ mod tests {
             false,
             false,
             vec![],
+            Default::default(),
         )
         .unwrap();
 

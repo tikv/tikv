@@ -3,7 +3,8 @@
 use std::{marker::PhantomData, time::Duration};
 
 use api_version::KvFormat;
-use tikv_util::time::Instant;
+use kvproto::kvrpcpb::DebugInfo;
+use tikv_util::{debug, time::Instant};
 use yatp::task::future::reschedule;
 
 use super::{range::*, ranges_iter::*, OwnedKvPair, Storage};
@@ -35,6 +36,7 @@ pub struct RangesScanner<T, F> {
     working_range_begin_key: Vec<u8>,
     working_range_end_key: Vec<u8>,
     rescheduler: RescheduleChecker,
+    debug_info: DebugInfo,
 
     _phantom: PhantomData<F>,
 }
@@ -73,6 +75,7 @@ pub struct RangesScannerOptions<T> {
     pub scan_backward_in_range: bool, // TODO: This can be const generics
     pub is_key_only: bool,            // TODO: This can be const generics
     pub is_scanned_range_aware: bool, // TODO: This can be const generics
+    pub debug_info: DebugInfo,
 }
 
 impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
@@ -83,6 +86,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             scan_backward_in_range,
             is_key_only,
             is_scanned_range_aware,
+            debug_info,
         }: RangesScannerOptions<T>,
     ) -> RangesScanner<T, F> {
         let ranges_len = ranges.len();
@@ -101,6 +105,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             working_range_begin_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
             working_range_end_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
             rescheduler: RescheduleChecker::new(),
+            debug_info,
             _phantom: PhantomData,
         }
     }
@@ -123,21 +128,26 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             let mut force_check = true;
             let range = self.ranges_iter.next();
             let some_row = match range {
-                IterStatus::NewRange(Range::Point(r)) => {
+                IterStatus::NewRange(Range::Point(ref r)) => {
                     if self.is_scanned_range_aware {
-                        self.update_scanned_range_from_new_point(&r);
+                        self.update_scanned_range_from_new_point(r);
                     }
                     self.ranges_iter.notify_drained();
                     self.scanned_rows_per_range.push(0);
-                    self.storage.get(self.is_key_only, r)?
+                    self.storage
+                        .get(self.is_key_only, r.clone(), self.debug_info.clone())?
                 }
-                IterStatus::NewRange(Range::Interval(r)) => {
+                IterStatus::NewRange(Range::Interval(ref r)) => {
                     if self.is_scanned_range_aware {
-                        self.update_scanned_range_from_new_range(&r);
+                        self.update_scanned_range_from_new_range(r);
                     }
                     self.scanned_rows_per_range.push(0);
-                    self.storage
-                        .begin_scan(self.scan_backward_in_range, self.is_key_only, r)?;
+                    self.storage.begin_scan(
+                        self.scan_backward_in_range,
+                        self.is_key_only,
+                        r.clone(),
+                        self.debug_info.clone(),
+                    )?;
                     self.storage.scan_next()?
                 }
                 IterStatus::Continue => {
@@ -148,9 +158,20 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                     if self.is_scanned_range_aware {
                         self.update_working_range_end_key();
                     }
+                    debug!("scanner next_opt drained";
+                        "start_ts" => self.debug_info.start_ts,
+                        "connection id" => self.debug_info.connection_id,
+                        "range" => ?range,
+                    );
                     return Ok(None); // drained
                 }
             };
+            debug!("scanner next_opt";
+                "start_ts" => self.debug_info.start_ts,
+                "connection id" => self.debug_info.connection_id,
+                "range" => ?range,
+                "some row" => ?some_row,
+            );
             if self.is_scanned_range_aware && update_scanned_range {
                 self.update_scanned_range_from_scanned_row(&some_row);
             }
@@ -326,6 +347,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
+            debug_info: Default::default(),
         });
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
@@ -362,6 +384,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: false,
+            debug_info: Default::default(),
         });
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
@@ -393,6 +416,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: true,
             is_scanned_range_aware: false,
+            debug_info: Default::default(),
         });
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
@@ -433,6 +457,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
+            debug_info: Default::default(),
         });
         let mut scanned_rows_per_range = Vec::new();
 
@@ -488,6 +513,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         let r = scanner.take_scanned_range();
@@ -508,6 +534,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         assert_eq!(block_on(scanner.next()).unwrap(), None);
@@ -524,6 +551,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         assert_eq!(block_on(scanner.next()).unwrap(), None);
@@ -540,6 +568,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo");
@@ -578,6 +607,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo");
@@ -623,6 +653,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         let r = scanner.take_scanned_range();
@@ -643,6 +674,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         assert_eq!(block_on(scanner.next()).unwrap(), None);
@@ -659,6 +691,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         assert_eq!(block_on(scanner.next()).unwrap(), None);
@@ -675,6 +708,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo_3");
@@ -711,6 +745,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"bar_2");
@@ -750,6 +785,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         // Only lower_inclusive is updated.
@@ -802,6 +838,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         // Only lower_inclusive is updated.
@@ -857,6 +894,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         // Only lower_inclusive is updated.
@@ -907,6 +945,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            debug_info: Default::default(),
         });
 
         // Lower_inclusive is updated. Upper_exclusive is not update.

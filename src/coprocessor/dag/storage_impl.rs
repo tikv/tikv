@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::kvrpcpb::DebugInfo;
 use tidb_query_common::storage::{
     IntervalRange, OwnedKvPair, PointRange, Result as QeResult, Storage,
 };
@@ -41,6 +42,7 @@ impl<S: Store> Storage for TikvStorage<S> {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
+        debug_info: DebugInfo,
     ) -> QeResult<()> {
         if let Some(scanner) = &mut self.scanner {
             self.cf_stats_backlog.add(&scanner.take_statistics());
@@ -59,6 +61,7 @@ impl<S: Store> Storage for TikvStorage<S> {
                     self.met_newer_ts_data_backlog == NewerTsCheckState::NotMetYet,
                     lower,
                     upper,
+                    debug_info,
                 )
                 .map_err(Error::from)?,
             // There is no transform from storage error to QE's StorageError,
@@ -74,7 +77,12 @@ impl<S: Store> Storage for TikvStorage<S> {
         Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
     }
 
-    fn get(&mut self, _is_key_only: bool, range: PointRange) -> QeResult<Option<OwnedKvPair>> {
+    fn get(
+        &mut self,
+        _is_key_only: bool,
+        range: PointRange,
+        debug_info: DebugInfo,
+    ) -> QeResult<Option<OwnedKvPair>> {
         // TODO: Default CF does not need to be accessed if KeyOnly.
         // TODO: No need to check newer ts data if self.scanner has met newer ts data.
         let key = range.0;
@@ -82,7 +90,16 @@ impl<S: Store> Storage for TikvStorage<S> {
             .store
             .incremental_get(&Key::from_raw(&key))
             .map_err(Error::from)?;
-        Ok(value.map(move |v| (key, v)))
+
+        let key_cloned = key.clone();
+        let res = Ok(value.map(move |v| (key, v)));
+        debug!("storage get";
+            "start_ts" => debug_info.start_ts,
+            "connection id" => debug_info.connection_id,
+            "key" => log_wrappers::Value::key(&key_cloned),
+            "value" => ?res.as_ref().map(|x| x.as_ref().map(|x| &x.1)),
+        );
+        res
     }
 
     #[inline]

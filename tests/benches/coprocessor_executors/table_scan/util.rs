@@ -5,7 +5,7 @@ use std::{marker::PhantomData, sync::Arc};
 use api_version::ApiV1;
 use criterion::black_box;
 use futures::executor::block_on;
-use kvproto::coprocessor::KeyRange;
+use kvproto::{coprocessor::KeyRange, kvrpcpb::DebugInfo};
 use test_coprocessor::*;
 use tidb_query_datatype::expr::EvalConfig;
 use tidb_query_executors::{interface::*, BatchTableScanExecutor};
@@ -46,6 +46,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
             black_box(false),
             black_box(false),
             black_box(vec![]),
+            black_box(DebugInfo::default()),
         )
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,

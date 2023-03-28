@@ -1,16 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod bencher;
-pub mod executor_descriptor;
-pub mod fixture;
-pub mod scan_bencher;
-pub mod store;
-
 use std::{marker::PhantomData, sync::Arc};
 
 use api_version::ApiV1;
 use criterion::{black_box, measurement::Measurement};
-use kvproto::coprocessor::KeyRange;
+use kvproto::{coprocessor::KeyRange, kvrpcpb::DebugInfo};
 use test_coprocessor::*;
 use tikv::{
     coprocessor::RequestHandler,
@@ -20,6 +14,12 @@ use tikv_util::quota_limiter::QuotaLimiter;
 use tipb::Executor as PbExecutor;
 
 pub use self::fixture::FixtureBuilder;
+
+pub mod bencher;
+pub mod executor_descriptor;
+pub mod fixture;
+pub mod scan_bencher;
+pub mod store;
 
 /// Gets the value of `TIKV_BENCH_LEVEL`. The larger value it is, the more
 /// comprehensive benchmarks will be.
@@ -52,6 +52,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
         false,
         None,
         Arc::new(QuotaLimiter::default()),
+        DebugInfo::default(),
     )
     .build()
     .unwrap()

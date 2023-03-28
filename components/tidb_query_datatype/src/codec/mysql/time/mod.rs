@@ -2417,6 +2417,7 @@ mod tests {
             EvalContext {
                 cfg: Arc::new(cfg),
                 warnings,
+                debug_info: Default::default(),
             }
         };
         struct Case {

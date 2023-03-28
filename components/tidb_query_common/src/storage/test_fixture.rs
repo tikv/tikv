@@ -5,6 +5,8 @@ use std::{
     sync::Arc,
 };
 
+use kvproto::kvrpcpb::DebugInfo;
+
 use super::{range::*, Result};
 
 type ErrorBuilder = Box<dyn Send + Sync + Fn() -> crate::error::StorageError>;
@@ -57,6 +59,7 @@ impl super::Storage for FixtureStorage {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
+        _: DebugInfo,
     ) -> Result<()> {
         let data_view = self
             .data
@@ -89,7 +92,12 @@ impl super::Storage for FixtureStorage {
         }
     }
 
-    fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<super::OwnedKvPair>> {
+    fn get(
+        &mut self,
+        is_key_only: bool,
+        range: PointRange,
+        _: DebugInfo,
+    ) -> Result<Option<super::OwnedKvPair>> {
         let r = self.data.get(&range.0);
         match r {
             None => Ok(None),
@@ -128,22 +136,41 @@ mod tests {
         let mut storage = FixtureStorage::from(data);
 
         // Get Key only = false
-        assert_eq!(storage.get(false, PointRange::from("a")).unwrap(), None);
         assert_eq!(
-            storage.get(false, PointRange::from("foo")).unwrap(),
+            storage
+                .get(false, PointRange::from("a"), Default::default())
+                .unwrap(),
+            None,
+        );
+        assert_eq!(
+            storage
+                .get(false, PointRange::from("foo"), Default::default())
+                .unwrap(),
             Some((b"foo".to_vec(), b"1".to_vec()))
         );
 
         // Get Key only = true
-        assert_eq!(storage.get(true, PointRange::from("a")).unwrap(), None);
         assert_eq!(
-            storage.get(true, PointRange::from("foo")).unwrap(),
+            storage
+                .get(true, PointRange::from("a"), Default::default())
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            storage
+                .get(true, PointRange::from("foo"), Default::default())
+                .unwrap(),
             Some((b"foo".to_vec(), Vec::new()))
         );
 
         // Scan Backward = false, Key only = false
         storage
-            .begin_scan(false, false, IntervalRange::from(("foo", "foo_3")))
+            .begin_scan(
+                false,
+                false,
+                IntervalRange::from(("foo", "foo_3")),
+                Default::default(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -169,7 +196,12 @@ mod tests {
 
         // Scan Backward = false, Key only = false
         storage
-            .begin_scan(false, false, IntervalRange::from(("bar", "bar_2")))
+            .begin_scan(
+                false,
+                false,
+                IntervalRange::from(("bar", "bar_2")),
+                Default::default(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -180,7 +212,12 @@ mod tests {
 
         // Scan Backward = false, Key only = true
         storage
-            .begin_scan(false, true, IntervalRange::from(("bar", "foo_")))
+            .begin_scan(
+                false,
+                true,
+                IntervalRange::from(("bar", "foo_")),
+                Default::default(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -199,7 +236,12 @@ mod tests {
 
         // Scan Backward = true, Key only = false
         storage
-            .begin_scan(true, false, IntervalRange::from(("foo", "foo_3")))
+            .begin_scan(
+                true,
+                false,
+                IntervalRange::from(("foo", "foo_3")),
+                Default::default(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -215,12 +257,22 @@ mod tests {
 
         // Scan empty range
         storage
-            .begin_scan(false, false, IntervalRange::from(("faa", "fab")))
+            .begin_scan(
+                false,
+                false,
+                IntervalRange::from(("faa", "fab")),
+                Default::default(),
+            )
             .unwrap();
         assert_eq!(storage.scan_next().unwrap(), None);
 
         storage
-            .begin_scan(false, false, IntervalRange::from(("foo", "foo")))
+            .begin_scan(
+                false,
+                false,
+                IntervalRange::from(("foo", "foo")),
+                Default::default(),
+            )
             .unwrap();
         assert_eq!(storage.scan_next().unwrap(), None);
     }

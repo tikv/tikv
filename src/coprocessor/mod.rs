@@ -21,23 +21,12 @@
 //!
 //! Please refer to `Endpoint` for more details.
 
-mod cache;
-mod checksum;
-pub mod dag;
-mod endpoint;
-mod error;
-mod interceptors;
-pub(crate) mod metrics;
-pub mod readpool_impl;
-mod statistics;
-mod tracker;
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
 pub use checksum::checksum_crc64_xor;
 use engine_traits::PerfLevel;
-use kvproto::{coprocessor as coppb, kvrpcpb};
+use kvproto::{coprocessor as coppb, kvrpcpb, kvrpcpb::DebugInfo};
 use lazy_static::lazy_static;
 use metrics::ReqTag;
 use rand::prelude::*;
@@ -51,6 +40,17 @@ pub use self::{
     error::{Error, Result},
 };
 use crate::storage::{mvcc::TimeStamp, Statistics};
+
+mod cache;
+mod checksum;
+pub mod dag;
+mod endpoint;
+mod error;
+mod interceptors;
+pub(crate) mod metrics;
+pub mod readpool_impl;
+mod statistics;
+mod tracker;
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -145,6 +145,8 @@ pub struct ReqContext {
 
     /// Whether the request is allowed in the flashback state.
     pub allowed_in_flashback: bool,
+
+    pub debug_info: DebugInfo,
 }
 
 impl ReqContext {
@@ -158,6 +160,7 @@ impl ReqContext {
         txn_start_ts: TimeStamp,
         cache_match_version: Option<u64>,
         perf_level: PerfLevel,
+        debug_info: DebugInfo,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
@@ -185,6 +188,7 @@ impl ReqContext {
             upper_bound,
             perf_level,
             allowed_in_flashback: false,
+            debug_info,
         }
     }
 
@@ -200,6 +204,7 @@ impl ReqContext {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
+            DebugInfo::default(),
         )
     }
 

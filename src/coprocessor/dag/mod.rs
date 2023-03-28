@@ -1,12 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod storage_impl;
-
 use std::{marker::PhantomData, sync::Arc};
 
 use api_version::KvFormat;
 use async_trait::async_trait;
-use kvproto::coprocessor::{KeyRange, Response};
+use kvproto::{
+    coprocessor::{KeyRange, Response},
+    kvrpcpb::DebugInfo,
+};
 use protobuf::Message;
 use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
 use tikv_alloc::trace::MemoryTraceGuard;
@@ -19,6 +20,8 @@ use crate::{
     tikv_util::quota_limiter::QuotaLimiter,
 };
 
+mod storage_impl;
+
 pub struct DagHandlerBuilder<S: Store + 'static, F: KvFormat> {
     req: DagRequest,
     ranges: Vec<KeyRange>,
@@ -30,6 +33,7 @@ pub struct DagHandlerBuilder<S: Store + 'static, F: KvFormat> {
     is_cache_enabled: bool,
     paging_size: Option<u64>,
     quota_limiter: Arc<QuotaLimiter>,
+    debug_info: DebugInfo,
     _phantom: PhantomData<F>,
 }
 
@@ -44,6 +48,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
         is_cache_enabled: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
+        debug_info: DebugInfo,
     ) -> Self {
         DagHandlerBuilder {
             req,
@@ -56,6 +61,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             is_cache_enabled,
             paging_size,
             quota_limiter,
+            debug_info,
             _phantom: PhantomData,
         }
     }
@@ -79,6 +85,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             self.is_streaming,
             self.paging_size,
             self.quota_limiter,
+            self.debug_info,
         )?
         .into_boxed())
     }
@@ -101,6 +108,7 @@ impl BatchDagHandler {
         is_streaming: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
+        debug_info: DebugInfo,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
@@ -112,6 +120,7 @@ impl BatchDagHandler {
                 is_streaming,
                 paging_size,
                 quota_limiter,
+                debug_info,
             )?,
             data_version,
         })

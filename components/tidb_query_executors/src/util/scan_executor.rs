@@ -2,7 +2,7 @@
 
 use api_version::{keyspace::KvPair, KvFormat};
 use async_trait::async_trait;
-use kvproto::coprocessor::KeyRange;
+use kvproto::{coprocessor::KeyRange, kvrpcpb::DebugInfo};
 use tidb_query_common::{
     storage::{
         scanner::{RangesScanner, RangesScannerOptions},
@@ -11,6 +11,7 @@ use tidb_query_common::{
     Result,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
+use tikv_util::debug;
 use tipb::{ColumnInfo, FieldType};
 
 use crate::interface::*;
@@ -62,6 +63,7 @@ pub struct ScanExecutorOptions<S, I> {
     pub is_key_only: bool,
     pub accept_point_range: bool,
     pub is_scanned_range_aware: bool,
+    pub debug_info: DebugInfo,
 }
 
 impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
@@ -74,6 +76,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
             is_key_only,
             accept_point_range,
             is_scanned_range_aware,
+            debug_info,
         }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
         tidb_query_datatype::codec::table::check_table_ranges::<F>(&key_ranges)?;
@@ -91,6 +94,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 scan_backward_in_range: is_backward,
                 is_key_only,
                 is_scanned_range_aware,
+                debug_info,
             }),
             is_ended: false,
         })
@@ -200,6 +204,12 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> BatchExecutor for ScanExecuto
             }
             Ok(false) => Ok(BatchExecIsDrain::Remain),
         };
+
+        debug!("ScanExecutor next_batch";
+            "logical_rows" => ?logical_rows,
+            "is_drained" => ?is_drained,
+            "warnings" => ?self.imp.mut_context().take_warnings()
+        );
 
         BatchExecuteResult {
             physical_columns: logical_columns,

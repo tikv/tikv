@@ -1,11 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::kvrpcpb::DebugInfo;
+
+pub use self::range::*;
+
 mod range;
 pub mod ranges_iter;
 pub mod scanner;
 pub mod test_fixture;
-
-pub use self::range::*;
 
 pub type Result<T> = std::result::Result<T, crate::error::StorageError>;
 
@@ -23,13 +25,19 @@ pub trait Storage: Send {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
+        debug_info: DebugInfo,
     ) -> Result<()>;
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>>;
 
     // TODO: Use const generics.
     // TODO: Use reference is better.
-    fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>>;
+    fn get(
+        &mut self,
+        is_key_only: bool,
+        range: PointRange,
+        debug_info: DebugInfo,
+    ) -> Result<Option<OwnedKvPair>>;
 
     fn met_uncacheable_data(&self) -> Option<bool>;
 
@@ -44,16 +52,22 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
+        debug_info: DebugInfo,
     ) -> Result<()> {
-        (**self).begin_scan(is_backward_scan, is_key_only, range)
+        (**self).begin_scan(is_backward_scan, is_key_only, range, debug_info)
     }
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
         (**self).scan_next()
     }
 
-    fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {
-        (**self).get(is_key_only, range)
+    fn get(
+        &mut self,
+        is_key_only: bool,
+        range: PointRange,
+        debug_info: DebugInfo,
+    ) -> Result<Option<OwnedKvPair>> {
+        (**self).get(is_key_only, range, debug_info)
     }
 
     fn met_uncacheable_data(&self) -> Option<bool> {

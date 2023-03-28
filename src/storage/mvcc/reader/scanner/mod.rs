@@ -1,13 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-// #[PerformanceCriticalPath]
-mod backward;
-mod forward;
-
 use std::ops::Bound;
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
+use kvproto::kvrpcpb::{DebugInfo, ExtraOp, IsolationLevel};
 use txn_types::{
     Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, Write, WriteRef, WriteType,
 };
@@ -25,6 +21,10 @@ use crate::storage::{
     need_check_locks,
     txn::{Result as TxnResult, Scanner as StoreScanner},
 };
+
+// #[PerformanceCriticalPath]
+mod backward;
+mod forward;
 
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
 
@@ -146,6 +146,12 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    #[inline]
+    pub fn debug_info(mut self, debug_info: DebugInfo) -> Self {
+        self.0.debug_info = debug_info;
+        self
+    }
+
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
         let lock_cursor = self.build_lock_cursor()?;
@@ -225,10 +231,33 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
     fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
         fail_point!("scanner_next");
 
-        match self {
-            Scanner::Forward(scanner) => Ok(scanner.read_next()?),
-            Scanner::Backward(scanner) => Ok(scanner.read_next()?),
+        debug!("scanner next";
+
+        );
+        let (res, debug_info) = match self {
+            Scanner::Forward(scanner) => (Ok(scanner.read_next()?), scanner.debug_info()),
+            Scanner::Backward(scanner) => (Ok(scanner.read_next()?), scanner.debug_info()),
+        };
+
+        if let Ok(Some((key, value))) = res.as_ref().map(|opt| {
+            opt.as_ref()
+                .map(|(k, v)| (log_wrappers::Value::key(k.as_encoded()), v))
+        }) {
+            debug!("scanner next result";
+                "start_ts" => debug_info.start_ts,
+                "connection id" => debug_info.connection_id,
+                "key" => key,
+                "value" => ?value,
+            );
+        } else {
+            debug!("scanner next result";
+                "start_ts" => debug_info.start_ts,
+                "connection id" => debug_info.connection_id,
+                "result" => ?res,
+            );
         }
+
+        res
     }
 
     /// Take out and reset the statistics collected so far.
@@ -273,6 +302,8 @@ pub struct ScannerConfig<S: Snapshot> {
     access_locks: TsSet,
 
     check_has_newer_ts_data: bool,
+
+    debug_info: DebugInfo,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -291,6 +322,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
+            debug_info: Default::default(),
         }
     }
 

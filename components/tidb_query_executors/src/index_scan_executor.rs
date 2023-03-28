@@ -6,7 +6,7 @@ use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use codec::{number::NumberCodec, prelude::NumberDecoder};
 use itertools::izip;
-use kvproto::coprocessor::KeyRange;
+use kvproto::{coprocessor::KeyRange, kvrpcpb::DebugInfo};
 use tidb_query_common::{
     storage::{IntervalRange, Storage},
     Result,
@@ -55,6 +55,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
         is_backward: bool,
         unique: bool,
         is_scanned_range_aware: bool,
+        debug_info: DebugInfo,
     ) -> Result<Self> {
         // Note 1: `unique = true` doesn't completely mean that it is a unique index
         // scan. Instead it just means that we can use point-get for this index.
@@ -151,6 +152,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             is_key_only: false,
             accept_point_range: unique,
             is_scanned_range_aware,
+            debug_info,
         })?;
         Ok(Self(wrapper))
     }
@@ -987,6 +989,7 @@ mod tests {
                 true,
                 false,
                 false,
+                Default::default(),
             )
             .unwrap();
 
@@ -1044,6 +1047,7 @@ mod tests {
                 true,
                 false,
                 false,
+                Default::default(),
             )
             .unwrap();
 
@@ -1104,6 +1108,7 @@ mod tests {
                 true,
                 false,
                 false,
+                Default::default(),
             )
             .unwrap();
 
@@ -1149,6 +1154,7 @@ mod tests {
                 true,
                 false,
                 false,
+                Default::default(),
             )
             .unwrap();
 
@@ -1201,6 +1207,7 @@ mod tests {
                 false,
                 false,
                 false,
+                Default::default(),
             )
             .unwrap();
 
@@ -1278,6 +1285,7 @@ mod tests {
                 false,
                 false,
                 false,
+                Default::default(),
             )
             .unwrap();
 
@@ -1335,6 +1343,7 @@ mod tests {
                 false,
                 true,
                 false,
+                Default::default(),
             )
             .unwrap();
 
@@ -1445,6 +1454,7 @@ mod tests {
             false,
             true,
             false,
+            Default::default(),
         )
         .unwrap();
 
@@ -1488,6 +1498,7 @@ mod tests {
             false,
             true,
             false,
+            Default::default(),
         )
         .unwrap();
 
@@ -1584,6 +1595,7 @@ mod tests {
             false,
             false,
             false,
+            Default::default(),
         )
         .unwrap();
 
@@ -1684,6 +1696,7 @@ mod tests {
             false,
             true,
             false,
+            Default::default(),
         )
         .unwrap();
 
@@ -1778,6 +1791,7 @@ mod tests {
             false,
             true,
             false,
+            Default::default(),
         )
         .unwrap();
 
@@ -1871,6 +1885,7 @@ mod tests {
             false,
             true,
             false,
+            Default::default(),
         )
         .unwrap();
 
@@ -1997,6 +2012,7 @@ mod tests {
             false,
             true,
             false,
+            Default::default(),
         )
         .unwrap();
 

@@ -47,19 +47,6 @@
 //! * the [`engine_traits`](::engine_traits) crate, more detail of the engine
 //!   abstraction.
 
-pub mod config;
-pub mod config_manager;
-pub mod errors;
-pub mod kv;
-pub mod lock_manager;
-pub(crate) mod metrics;
-pub mod mvcc;
-pub mod raw;
-pub mod txn;
-
-mod read_pool;
-mod types;
-
 use std::{
     borrow::Cow,
     iter,
@@ -137,6 +124,19 @@ use crate::{
         types::StorageCallbackType,
     },
 };
+
+pub mod config;
+pub mod config_manager;
+pub mod errors;
+pub mod kv;
+pub mod lock_manager;
+pub(crate) mod metrics;
+pub mod mvcc;
+pub mod raw;
+pub mod txn;
+
+mod read_pool;
+mod types;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -1235,8 +1235,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         false,
                     );
 
-                    let mut scanner =
-                        snap_store.scanner(reverse_scan, key_only, false, start_key, end_key)?;
+                    let mut scanner = snap_store.scanner(
+                        reverse_scan,
+                        key_only,
+                        false,
+                        start_key,
+                        end_key,
+                        ctx.take_debug_info(),
+                    )?;
                     let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();

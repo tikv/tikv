@@ -18,6 +18,8 @@ log_wrappers = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 serde_json = "1.0"
+slog = { workspace = true }
+slog-global = { workspace = true }
 thiserror = "1.0"
 tikv_util = { workspace = true }
 time = "0.1"

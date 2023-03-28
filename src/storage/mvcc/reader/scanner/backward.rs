@@ -4,7 +4,7 @@
 use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
-use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
+use kvproto::kvrpcpb::{DebugInfo, IsolationLevel, WriteConflictReason};
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -482,6 +482,10 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         }
         self.default_cursor = Some(self.cfg.create_cf_cursor(CF_DEFAULT)?);
         Ok(())
+    }
+
+    pub fn debug_info(&self) -> DebugInfo {
+        self.cfg.debug_info.clone()
     }
 }
 

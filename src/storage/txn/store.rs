@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::IsolationLevel;
+use kvproto::kvrpcpb::{DebugInfo, IsolationLevel};
 use txn_types::{Key, KvPair, Lock, OldValue, TimeStamp, TsSet, Value, WriteRef};
 
 use super::{Error, ErrorInner, Result};
@@ -45,6 +45,7 @@ pub trait Store: Send {
         check_has_newer_ts_data: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        debug_info: DebugInfo,
     ) -> Result<Self::Scanner>;
 }
 
@@ -374,6 +375,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         check_has_newer_ts_data: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        debug_info: DebugInfo,
     ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
@@ -386,6 +388,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .bypass_locks(self.bypass_locks.clone())
             .access_locks(self.access_locks.clone())
             .check_has_newer_ts_data(check_has_newer_ts_data)
+            .debug_info(debug_info)
             .build()?;
 
         Ok(scanner)
@@ -575,6 +578,7 @@ impl Store for FixtureStore {
         _: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        _: DebugInfo,
     ) -> Result<FixtureStoreScanner> {
         use std::ops::Bound;
 
@@ -899,7 +903,14 @@ mod tests {
         let key = format!("{}{}", KEY_PREFIX, START_ID);
         let start_key = Key::from_raw(key.as_bytes());
         let mut scanner = snapshot_store
-            .scanner(false, false, false, Some(start_key), None)
+            .scanner(
+                false,
+                false,
+                false,
+                Some(start_key),
+                None,
+                Default::default(),
+            )
             .unwrap();
 
         let half = (key_num / 2) as usize;
@@ -924,7 +935,14 @@ mod tests {
         let start_key = Key::from_raw(key.as_bytes());
         let expect = &store.keys[0..half - 1];
         let mut scanner = snapshot_store
-            .scanner(true, false, false, None, Some(start_key))
+            .scanner(
+                true,
+                false,
+                false,
+                None,
+                Some(start_key),
+                Default::default(),
+            )
             .unwrap();
 
         let result = scanner.scan(half, 0).unwrap();
@@ -959,6 +977,7 @@ mod tests {
                 false,
                 Some(lower_bound.clone()),
                 Some(upper_bound.clone()),
+                Default::default(),
             )
             .unwrap();
 
@@ -970,7 +989,14 @@ mod tests {
         assert_eq!(result, expected);
 
         let mut scanner = snapshot_store
-            .scanner(true, false, false, Some(lower_bound), Some(upper_bound))
+            .scanner(
+                true,
+                false,
+                false,
+                Some(lower_bound),
+                Some(upper_bound),
+                Default::default(),
+            )
             .unwrap();
 
         // Collect all scanned keys
@@ -998,7 +1024,9 @@ mod tests {
         let bound_b = Key::from_encoded(b"b".to_vec());
         let bound_c = Key::from_encoded(b"c".to_vec());
         let bound_d = Key::from_encoded(b"d".to_vec());
-        store.scanner(false, false, false, None, None).unwrap();
+        store
+            .scanner(false, false, false, None, None, Default::default())
+            .unwrap();
         store
             .scanner(
                 false,
@@ -1006,6 +1034,7 @@ mod tests {
                 false,
                 Some(bound_b.clone()),
                 Some(bound_c.clone()),
+                Default::default(),
             )
             .unwrap();
         assert!(
@@ -1015,7 +1044,8 @@ mod tests {
                     false,
                     false,
                     Some(bound_a.clone()),
-                    Some(bound_c.clone())
+                    Some(bound_c.clone()),
+                    Default::default()
                 )
                 .is_err()
         );
@@ -1026,13 +1056,21 @@ mod tests {
                     false,
                     false,
                     Some(bound_b.clone()),
-                    Some(bound_d.clone())
+                    Some(bound_d.clone()),
+                    Default::default(),
                 )
                 .is_err()
         );
         assert!(
             store
-                .scanner(false, false, false, Some(bound_a.clone()), Some(bound_d))
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_d),
+                    Default::default()
+                )
                 .is_err()
         );
 
@@ -1047,15 +1085,31 @@ mod tests {
             Default::default(),
             false,
         );
-        store2.scanner(false, false, false, None, None).unwrap();
         store2
-            .scanner(false, false, false, Some(bound_a.clone()), None)
+            .scanner(false, false, false, None, None, Default::default())
             .unwrap();
         store2
-            .scanner(false, false, false, Some(bound_a), Some(bound_b))
+            .scanner(
+                false,
+                false,
+                false,
+                Some(bound_a.clone()),
+                None,
+                Default::default(),
+            )
             .unwrap();
         store2
-            .scanner(false, false, false, None, Some(bound_c))
+            .scanner(
+                false,
+                false,
+                false,
+                Some(bound_a),
+                Some(bound_b),
+                Default::default(),
+            )
+            .unwrap();
+        store2
+            .scanner(false, false, false, None, Some(bound_c), Default::default())
             .unwrap();
     }
 
@@ -1158,7 +1212,9 @@ mod tests {
     fn test_fixture_scanner() {
         let store = gen_fixture_store();
 
-        let mut scanner = store.scanner(false, false, false, None, None).unwrap();
+        let mut scanner = store
+            .scanner(false, false, false, None, None, Default::default())
+            .unwrap();
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"ab"), b"bar".to_vec()))
@@ -1193,7 +1249,9 @@ mod tests {
         // error
         assert_eq!(scanner.next().unwrap(), None);
 
-        let mut scanner = store.scanner(true, false, false, None, None).unwrap();
+        let mut scanner = store
+            .scanner(true, false, false, None, None, Default::default())
+            .unwrap();
         scanner.next().unwrap_err();
         // note: mvcc impl does not guarantee to work any more after meeting a non lock
         // error
@@ -1228,7 +1286,9 @@ mod tests {
         );
         assert_eq!(scanner.next().unwrap(), None);
 
-        let mut scanner = store.scanner(false, true, false, None, None).unwrap();
+        let mut scanner = store
+            .scanner(false, true, false, None, None, Default::default())
+            .unwrap();
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"ab"), vec![]))
@@ -1264,6 +1324,7 @@ mod tests {
                 false,
                 Some(Key::from_raw(b"abc")),
                 Some(Key::from_raw(b"abcd")),
+                Default::default(),
             )
             .unwrap();
         assert_eq!(
@@ -1279,6 +1340,7 @@ mod tests {
                 false,
                 Some(Key::from_raw(b"abc")),
                 Some(Key::from_raw(b"bba")),
+                Default::default(),
             )
             .unwrap();
         assert_eq!(
@@ -1303,6 +1365,7 @@ mod tests {
                 false,
                 Some(Key::from_raw(b"b")),
                 Some(Key::from_raw(b"c")),
+                Default::default(),
             )
             .unwrap();
         assert_eq!(scanner.next().unwrap(), Some((Key::from_raw(b"b"), vec![])));
@@ -1320,6 +1383,7 @@ mod tests {
                 false,
                 Some(Key::from_raw(b"b")),
                 Some(Key::from_raw(b"b")),
+                Default::default(),
             )
             .unwrap();
         assert_eq!(scanner.next().unwrap(), None);
@@ -1331,6 +1395,7 @@ mod tests {
                 false,
                 Some(Key::from_raw(b"abc")),
                 Some(Key::from_raw(b"abcd")),
+                Default::default(),
             )
             .unwrap();
         assert_eq!(
@@ -1346,6 +1411,7 @@ mod tests {
                 false,
                 Some(Key::from_raw(b"abc")),
                 Some(Key::from_raw(b"bba")),
+                Default::default(),
             )
             .unwrap();
         scanner.next().unwrap_err();
@@ -1479,6 +1545,7 @@ mod benches {
                     test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),
+                    test::black_box(DebugInfo::default()),
                 )
                 .unwrap();
             test::black_box(scanner);
@@ -1502,6 +1569,7 @@ mod benches {
                     test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),
+                    test::black_box(DebugInfo::default()),
                 )
                 .unwrap();
             for _ in 0..1000 {
@@ -1528,6 +1596,7 @@ mod benches {
                     test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),
+                    test::black_box(DebugInfo::default()),
                 )
                 .unwrap();
             test::black_box(scanner.scan(1000, 0).unwrap());

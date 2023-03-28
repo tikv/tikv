@@ -4,7 +4,7 @@
 use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
-use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};
+use kvproto::kvrpcpb::{DebugInfo, ExtraOp, IsolationLevel, WriteConflictReason};
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -376,6 +376,10 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             }
         }
         Ok(true)
+    }
+
+    pub fn debug_info(&self) -> DebugInfo {
+        self.cfg.debug_info.clone()
     }
 }
 
@@ -2139,6 +2143,7 @@ mod delta_entry_tests {
 
     use super::{super::ScannerBuilder, test_util::*, *};
     use crate::storage::{mvcc::tests::write, txn::tests::*, Engine, Modify, TestEngineBuilder};
+
     /// Check whether everything works as usual when `Delta::get()` goes out of
     /// bound.
     #[test]

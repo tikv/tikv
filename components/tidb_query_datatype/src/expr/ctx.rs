@@ -1,8 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{i64, mem, sync::Arc, u64};
+use std::{fmt::Debug, i64, mem, sync::Arc, u64};
 
 use bitflags::bitflags;
+use kvproto::kvrpcpb::DebugInfo;
 use tipb::DagRequest;
 
 use super::{Error, Result};
@@ -207,20 +208,29 @@ impl EvalWarnings {
 pub struct EvalContext {
     pub cfg: Arc<EvalConfig>,
     pub warnings: EvalWarnings,
+    pub debug_info: DebugInfo,
 }
 
 impl Default for EvalContext {
     fn default() -> EvalContext {
         let cfg = Arc::new(EvalConfig::default());
         let warnings = cfg.new_eval_warnings();
-        EvalContext { cfg, warnings }
+        EvalContext {
+            cfg,
+            warnings,
+            debug_info: Default::default(),
+        }
     }
 }
 
 impl EvalContext {
     pub fn new(cfg: Arc<EvalConfig>) -> EvalContext {
         let warnings = cfg.new_eval_warnings();
-        EvalContext { cfg, warnings }
+        EvalContext {
+            cfg,
+            warnings,
+            debug_info: Default::default(),
+        }
     }
 
     pub fn handle_truncate(&mut self, is_truncated: bool) -> Result<()> {
