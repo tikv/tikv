@@ -37,10 +37,11 @@ use txn_types::TimeStamp;
 use yatp::{task::future::TaskCell, ThreadPool};
 
 use super::{
+    meta_storage::{Get, MetaStorageClient, Put, Watch},
     metrics::*,
     util::{call_option_inner, check_resp_header, sync_request, Client, PdConnector},
-    BucketStat, Config, Error, FeatureGate, Get, MetaStorageClient, PdClient, PdFuture, Put,
-    RegionInfo, RegionStat, Result, UnixSecs, Watch, REQUEST_TIMEOUT,
+    BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
+    UnixSecs, REQUEST_TIMEOUT,
 };
 
 pub const CQ_COUNT: usize = 1;
