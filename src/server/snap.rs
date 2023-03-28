@@ -146,7 +146,7 @@ pub fn send_snap(
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
             return Err(Error::Io(IoError::new(ErrorKind::Other, e)));
         }
-        let key = SnapKey::from_region_snap(snap_data.get_region().get_id(), snap);
+        let key = SnapKey::from_region_snap(msg.get_region_id(), snap);
         let snap_start = snap_data.get_meta().get_start();
         let generate_duration_sec = snap_data.get_meta().get_generate_duration_sec();
         (key, snap_start, generate_duration_sec)
@@ -202,6 +202,7 @@ pub fn send_snap(
                 fail_point!("snapshot_delete_after_send");
                 mgr.delete_snapshot(&key, &chunks.snap, true);
                 let cost = UnixSecs::now().into_inner().saturating_sub(snap_start);
+                let send_duration_sec = timer.saturating_elapsed().as_secs();
                 // it should ignore if the duration of snapshot is less than 1s to decrease the
                 // grpc data size.
                 if cost >= 1 {
@@ -209,7 +210,7 @@ pub fn send_snap(
                     stat.set_region_id(key.region_id);
                     stat.set_transport_size(total_size);
                     stat.set_generate_duration_sec(generate_duration_sec);
-                    stat.set_send_duration_sec(timer.saturating_elapsed().as_secs());
+                    stat.set_send_duration_sec(send_duration_sec);
                     stat.set_total_duration_sec(cost);
                     mgr.collect_stat(stat);
                 }
