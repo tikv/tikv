@@ -5977,6 +5977,7 @@ dependencies = [
  "resolved_ts",
  "resource_control",
  "resource_metering",
+ "rocksdb",
  "security",
  "server",
  "slog",

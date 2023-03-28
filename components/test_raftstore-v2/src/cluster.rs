@@ -68,7 +68,7 @@ use crate::create_test_engine;
 // Sometimes, we use fixed id to test, which means the id
 // isn't allocated by pd, and node id, store id are same.
 // E,g, for node 1, the node id and store id are both 1.
-pub trait Simulator {
+pub trait Simulator<EK: KvEngine> {
     // Pass 0 to let pd allocate a node id if db is empty.
     // If node id > 0, the node must be created in db already,
     // and the node id must be the same as given argument.
@@ -78,10 +78,10 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: Config,
-        store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
         key_mgr: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
-        tablet_registry: TabletRegistry<RocksEngine>,
+        tablet_registry: TabletRegistry<EK>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64>;
 
@@ -94,7 +94,7 @@ pub trait Simulator {
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_recv_filters(&mut self, node_id: u64);
 
-    fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>>;
+    fn get_router(&self, node_id: u64) -> Option<StoreRouter<EK, RaftTestEngine>>;
     fn get_snap_dir(&self, node_id: u64) -> String;
 
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
@@ -160,7 +160,7 @@ pub trait Simulator {
         &mut self,
         request: RaftCmdRequest,
         timeout: Duration,
-    ) -> std::result::Result<RegionSnapshot<<RocksEngine as KvEngine>::Snapshot>, RaftCmdResponse>;
+    ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>;
 
     fn async_peer_msg_on_node(&self, node_id: u64, region_id: u64, msg: PeerMsg) -> Result<()>;
 
@@ -258,16 +258,16 @@ pub trait Simulator {
     }
 }
 
-pub struct Cluster<T: Simulator> {
+pub struct Cluster<T: Simulator<EK>, EK: KvEngine> {
     pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,
     pub count: usize,
 
     pub paths: Vec<TempDir>,
-    pub engines: Vec<(TabletRegistry<RocksEngine>, RaftTestEngine)>,
-    pub tablet_registries: HashMap<u64, TabletRegistry<RocksEngine>>,
+    pub engines: Vec<(TabletRegistry<EK>, RaftTestEngine)>,
+    pub tablet_registries: HashMap<u64, TabletRegistry<EK>>,
     pub raft_engines: HashMap<u64, RaftTestEngine>,
-    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta<RocksEngine>>>>,
+    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta<EK>>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IoRateLimiter>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
@@ -281,14 +281,14 @@ pub struct Cluster<T: Simulator> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
-impl<T: Simulator> Cluster<T> {
+impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
     pub fn new(
         id: u64,
         count: usize,
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
         api_version: ApiVersion,
-    ) -> Cluster<T> {
+    ) -> Cluster<T, EK> {
         Cluster {
             cfg: Config {
                 tikv: new_tikv_config_with_api_ver(id, api_version),
@@ -481,7 +481,8 @@ impl<T: Simulator> Cluster<T> {
                 if let Some(tablet) = tablet.latest() {
                     let mut tried = 0;
                     while tried < 10 {
-                        if Arc::strong_count(tablet.as_inner()) <= 3 {
+                        if Arc::strong_count(&Arc::clone(tablet.bad_downcast::<rocksdb::DB>())) <= 3
+                        {
                             break;
                         }
                         thread::sleep(Duration::from_millis(10));
@@ -577,7 +578,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn get_engine(&self, node_id: u64) -> WrapFactory {
+    pub fn get_engine(&self, node_id: u64) -> WrapFactory<EK> {
         WrapFactory::new(
             self.pd_client.clone(),
             self.raft_engines[&node_id].clone(),
@@ -1352,7 +1353,7 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().get_snap_dir(node_id)
     }
 
-    pub fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>> {
+    pub fn get_router(&self, node_id: u64) -> Option<StoreRouter<EK, RaftTestEngine>> {
         self.sim.rl().get_router(node_id)
     }
 
@@ -1477,24 +1478,24 @@ pub fn bootstrap_store<ER: RaftEngine>(
     Ok(())
 }
 
-impl<T: Simulator> Drop for Cluster<T> {
+impl<T: Simulator<EK>, EK: KvEngine> Drop for Cluster<T, EK> {
     fn drop(&mut self) {
         test_util::clear_failpoints();
         self.shutdown();
     }
 }
 
-pub struct WrapFactory {
+pub struct WrapFactory<EK: KvEngine> {
     pd_client: Arc<TestPdClient>,
     raft_engine: RaftTestEngine,
-    tablet_registry: TabletRegistry<RocksEngine>,
+    tablet_registry: TabletRegistry<EK>,
 }
 
-impl WrapFactory {
+impl<EK: KvEngine> WrapFactory<EK> {
     pub fn new(
         pd_client: Arc<TestPdClient>,
         raft_engine: RaftTestEngine,
-        tablet_registry: TabletRegistry<RocksEngine>,
+        tablet_registry: TabletRegistry<EK>,
     ) -> Self {
         Self {
             raft_engine,
@@ -1509,7 +1510,7 @@ impl WrapFactory {
         self.pd_client.get_region(key).unwrap().get_id()
     }
 
-    fn get_tablet(&self, key: &[u8]) -> Option<RocksEngine> {
+    fn get_tablet(&self, key: &[u8]) -> Option<EK> {
         // todo: unwrap
         let region_id = self.region_id_of_key(key);
         self.tablet_registry.get(region_id)?.latest().cloned()
@@ -1534,8 +1535,8 @@ impl WrapFactory {
     }
 }
 
-impl Peekable for WrapFactory {
-    type DbVector = RocksDbVector;
+impl<EK: KvEngine> Peekable for WrapFactory<EK> {
+    type DbVector = EK::DbVector;
 
     fn get_value_opt(
         &self,
@@ -1585,7 +1586,7 @@ impl Peekable for WrapFactory {
     }
 }
 
-impl SyncMutable for WrapFactory {
+impl<EK: KvEngine> SyncMutable for WrapFactory<EK> {
     fn put(&self, key: &[u8], value: &[u8]) -> engine_traits::Result<()> {
         match self.get_tablet(key) {
             Some(tablet) => tablet.put(key, value),
@@ -1628,7 +1629,7 @@ impl SyncMutable for WrapFactory {
     }
 }
 
-impl RawEngine for WrapFactory {
+impl<EK: KvEngine> RawEngine<EK> for WrapFactory<EK> {
     fn region_local_state(
         &self,
         region_id: u64,

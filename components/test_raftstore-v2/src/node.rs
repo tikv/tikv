@@ -166,7 +166,7 @@ impl NodeCluster {
     }
 }
 
-impl Simulator for NodeCluster {
+impl Simulator<RocksEngine> for NodeCluster {
     fn get_node_ids(&self) -> HashSet<u64> {
         self.nodes.keys().cloned().collect()
     }
@@ -435,13 +435,13 @@ impl Simulator for NodeCluster {
     }
 }
 
-pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
+pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster, RocksEngine> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
-pub fn new_incompatible_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
+pub fn new_incompatible_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster, RocksEngine> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
