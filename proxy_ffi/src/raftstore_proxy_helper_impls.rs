@@ -19,7 +19,6 @@ use super::{
     domain_impls::*,
     encryption_impls::*,
     engine_store_helper_impls::*,
-    interfaces_ffi,
     interfaces_ffi::{
         BaseBuffView, CppStrVecView, KVGetStatus, RaftProxyStatus, RaftStoreProxyFFIHelper,
         RaftStoreProxyPtr, RawCppPtr, RawCppStringPtr, RawRustPtr, RawVoidPtr, SSTReaderInterfaces,
@@ -93,34 +92,9 @@ unsafe extern "C" fn ffi_get_region_local_state(
     error_msg: *mut RawCppStringPtr,
 ) -> KVGetStatus {
     assert!(!proxy_ptr.is_null());
-
-    let region_state_key = keys::region_state_key(region_id);
-    let mut res = KVGetStatus::NotFound;
     proxy_ptr
         .as_ref()
-        .get_value_cf(engine_traits::CF_RAFT, &region_state_key, &mut |value| {
-            match value {
-                Ok(v) => {
-                    if let Some(buff) = v {
-                        get_engine_store_server_helper().set_pb_msg_by_bytes(
-                            interfaces_ffi::MsgPBType::RegionLocalState,
-                            data,
-                            buff.into(),
-                        );
-                        res = KVGetStatus::Ok;
-                    } else {
-                        res = KVGetStatus::NotFound;
-                    }
-                }
-                Err(e) => {
-                    let msg = get_engine_store_server_helper().gen_cpp_string(e.as_ref());
-                    *error_msg = msg;
-                    res = KVGetStatus::Error;
-                }
-            };
-        });
-
-    res
+        .get_region_local_state(region_id, data, error_msg)
 }
 
 pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: RaftStoreProxyPtr) -> RaftProxyStatus {

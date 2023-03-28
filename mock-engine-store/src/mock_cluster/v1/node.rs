@@ -261,7 +261,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
     fn run_node(
         &mut self,
         node_id: u64,
-        cfg: Config,
+        cfg: MixedClusterConfig,
         engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,

@@ -71,6 +71,7 @@ pub fn delete_kv_in_mem(region: &mut MockRegion, cf_index: usize, k: &[u8]) {
     data.remove(k);
 }
 
+// TODO adapt raftstore-v2
 pub fn copy_meta_from<EK: engine_traits::KvEngine, ER: RaftEngine + engine_traits::Peekable>(
     source_engines: &Engines<EK, ER>,
     target_engines: &Engines<EK, ER>,
@@ -113,7 +114,7 @@ pub fn copy_meta_from<EK: engine_traits::KvEngine, ER: RaftEngine + engine_trait
     let mut raft_wb = target_engines.raft.log_batch(1024);
     // raft state
     if copy_raft_state {
-        let raft_state = match get_raft_local_state(&source_engines.raft, region_id) {
+        let raft_state = match general_get_raft_local_state(&source_engines.raft, region_id) {
             Some(x) => x,
             None => return Err(box_err!("bad RaftLocalState")),
         };
@@ -124,6 +125,7 @@ pub fn copy_meta_from<EK: engine_traits::KvEngine, ER: RaftEngine + engine_trait
     Ok(())
 }
 
+// TODO adapt raftstore-v2
 pub fn copy_data_from(
     source_engines: &Engines<impl KvEngine, impl RaftEngine + engine_traits::Peekable>,
     target_engines: &Engines<impl KvEngine, impl RaftEngine>,
@@ -176,22 +178,7 @@ pub fn general_get_apply_state<EK: engine_traits::KvEngine>(
         .unwrap_or(None)
 }
 
-pub fn get_region_local_state(
-    engine: &engine_rocks::RocksEngine,
-    region_id: u64,
-) -> Option<RegionLocalState> {
-    general_get_region_local_state(engine, region_id)
-}
-
-// TODO Need refactor if moved to raft-engine
-pub fn get_apply_state(
-    engine: &engine_rocks::RocksEngine,
-    region_id: u64,
-) -> Option<RaftApplyState> {
-    general_get_apply_state(engine, region_id)
-}
-
-pub fn get_raft_local_state<ER: engine_traits::RaftEngine>(
+pub fn general_get_raft_local_state<ER: engine_traits::RaftEngine>(
     raft_engine: &ER,
     region_id: u64,
 ) -> Option<RaftLocalState> {

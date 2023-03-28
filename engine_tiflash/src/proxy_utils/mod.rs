@@ -9,6 +9,8 @@ pub use engine_ext::*;
 pub mod key_format;
 mod proxy_ext;
 pub use proxy_ext::*;
+mod cached_region_info_manager;
+pub use cached_region_info_manager::*;
 
 use crate::{mixed_engine::write_batch::RocksWriteBatchVec, util::get_cf_handle};
 

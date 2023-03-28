@@ -20,6 +20,7 @@ use crate::mock_cluster;
 
 pub struct EngineStoreServer {
     pub id: u64,
+    // TODO
     pub engines: Option<Engines<TiFlashEngine, engine_rocks::RocksEngine>>,
     pub kvstore: HashMap<RegionId, Box<MockRegion>>,
     pub mock_cfg: MockConfig,

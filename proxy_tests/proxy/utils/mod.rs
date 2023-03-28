@@ -23,12 +23,12 @@ pub use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
 };
 pub use mock_engine_store::{
-    general_get_apply_state, general_get_region_local_state, get_raft_local_state, make_new_region,
+    general_get_apply_state, general_get_raft_local_state, general_get_region_local_state,
+    make_new_region,
     mock_cluster::{
-        config::Config,
+        config::MixedClusterConfig,
         test_utils::*,
         v1::{
-            must_get_equal, must_get_none, new_learner_peer, new_peer, new_put_cmd, new_request,
             node::NodeCluster,
             transport_simulate::{
                 CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
@@ -107,7 +107,7 @@ pub fn new_mock_cluster_snap(id: u64, count: usize) -> (Cluster<NodeCluster>, Ar
 }
 
 pub fn must_put_and_check_key_with_generator<F: Fn(u64) -> (String, String)>(
-    cluster: &mut Cluster<NodeCluster>,
+    cluster: &mut impl MixedCluster,
     gen: F,
     from: u64,
     to: u64,
@@ -122,7 +122,7 @@ pub fn must_put_and_check_key_with_generator<F: Fn(u64) -> (String, String)>(
     for i in from..to {
         let (k, v) = gen(i);
         check_key(
-            &cluster,
+            cluster,
             k.as_bytes(),
             v.as_bytes(),
             in_mem,
@@ -133,7 +133,7 @@ pub fn must_put_and_check_key_with_generator<F: Fn(u64) -> (String, String)>(
 }
 
 pub fn must_put_and_check_key(
-    cluster: &mut Cluster<NodeCluster>,
+    cluster: &mut impl MixedCluster,
     from: u64,
     to: u64,
     in_mem: Option<bool>,
@@ -156,7 +156,7 @@ pub fn must_put_and_check_key(
 }
 
 pub fn check_key(
-    cluster: &Cluster<NodeCluster>,
+    cluster: &impl MixedCluster,
     k: &[u8],
     v: &[u8],
     in_mem: Option<bool>,
@@ -167,17 +167,16 @@ pub fn check_key(
     let engine_keys = {
         match engines {
             Some(e) => e.to_vec(),
-            None => get_all_store_ids(cluster),
+            None => cluster.get_all_store_ids(),
         }
     };
     for id in engine_keys {
-        let engine = cluster.get_engine(id);
         match in_disk {
             Some(b) => {
                 if b {
-                    must_get_equal(engine, k, v);
+                    cluster.must_get(id, k, Some(v));
                 } else {
-                    must_get_none(engine, k);
+                    cluster.must_get(id, k, None);
                 }
             }
             None => (),
@@ -185,9 +184,9 @@ pub fn check_key(
         match in_mem {
             Some(b) => {
                 if b {
-                    must_get_mem(&cluster.cluster_ext, id, region_id, k, Some(v));
+                    must_get_mem(cluster.get_cluster_ext(), id, region_id, k, Some(v));
                 } else {
-                    must_get_mem(&cluster.cluster_ext, id, region_id, k, None);
+                    must_get_mem(cluster.get_cluster_ext(), id, region_id, k, None);
                 }
             }
             None => (),
@@ -195,23 +194,23 @@ pub fn check_key(
     }
 }
 
-pub fn disable_auto_gen_compact_log(cluster: &mut Cluster<NodeCluster>) {
+pub fn disable_auto_gen_compact_log(cluster: &mut impl MixedCluster) {
     // Disable AUTO generated compact log.
     // This will not totally disable, so we use some failpoints later.
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100000);
-    cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500000);
-    cluster.cfg.raft_store.raft_log_gc_threshold = 10000;
+    cluster.mut_config().raft_store.raft_log_gc_count_limit = Some(1000);
+    cluster.mut_config().raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100000);
+    cluster.mut_config().raft_store.snap_apply_batch_size = ReadableSize(500000);
+    cluster.mut_config().raft_store.raft_log_gc_threshold = 10000;
 }
 
 pub fn force_compact_log(
-    cluster: &mut Cluster<NodeCluster>,
+    cluster: &mut impl MixedCluster,
     key: &[u8],
     use_nodes: Option<Vec<u64>>,
 ) -> u64 {
     let region = cluster.get_region(key);
     let region_id = region.get_id();
-    let prev_states = maybe_collect_states(&cluster.cluster_ext, region_id, None);
+    let prev_states = maybe_collect_states(cluster.get_cluster_ext(), region_id, None);
 
     let (compact_index, compact_term) = get_valid_compact_index_by(&prev_states, use_nodes);
     let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
@@ -222,14 +221,14 @@ pub fn force_compact_log(
     return compact_index;
 }
 
-pub fn stop_tiflash_node(cluster: &mut Cluster<NodeCluster>, node_id: u64) {
+pub fn stop_tiflash_node(cluster: &mut impl MixedCluster, node_id: u64) {
     info!("stop node {}", node_id);
     {
         cluster.stop_node(node_id);
     }
     {
         iter_ffi_helpers(
-            &cluster,
+            cluster,
             Some(vec![node_id]),
             &mut |_, ffi: &mut FFIHelperSet| {
                 let server = &mut ffi.engine_store_server;
@@ -239,11 +238,11 @@ pub fn stop_tiflash_node(cluster: &mut Cluster<NodeCluster>, node_id: u64) {
     }
 }
 
-pub fn restart_tiflash_node(cluster: &mut Cluster<NodeCluster>, node_id: u64) {
+pub fn restart_tiflash_node(cluster: &mut impl MixedCluster, node_id: u64) {
     info!("restored node {}", node_id);
     {
         iter_ffi_helpers(
-            &cluster,
+            cluster,
             Some(vec![node_id]),
             &mut |_, ffi: &mut FFIHelperSet| {
                 let server = &mut ffi.engine_store_server;
@@ -251,7 +250,7 @@ pub fn restart_tiflash_node(cluster: &mut Cluster<NodeCluster>, node_id: u64) {
             },
         );
     }
-    cluster.run_node(node_id).unwrap();
+    cluster.run_node(node_id);
 }
 
 pub fn must_not_merged(pd_client: Arc<TestPdClient>, from: u64, duration: Duration) {

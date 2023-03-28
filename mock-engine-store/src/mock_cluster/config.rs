@@ -17,14 +17,14 @@ pub struct MockConfig {
 }
 
 #[derive(Clone)]
-pub struct Config {
+pub struct MixedClusterConfig {
     pub tikv: TikvConfig,
     pub prefer_mem: bool,
     pub proxy_cfg: ProxyConfig,
     pub mock_cfg: MockConfig,
 }
 
-impl Deref for Config {
+impl Deref for MixedClusterConfig {
     type Target = TikvConfig;
     #[inline]
     fn deref(&self) -> &TikvConfig {
@@ -32,7 +32,7 @@ impl Deref for Config {
     }
 }
 
-impl DerefMut for Config {
+impl DerefMut for MixedClusterConfig {
     #[inline]
     fn deref_mut(&mut self) -> &mut TikvConfig {
         &mut self.tikv

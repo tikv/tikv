@@ -31,7 +31,9 @@ pub fn create_tiflash_test_engine_with_cluster_ctx<T: Simulator<TiFlashEngine>>(
         &mut cluster.cluster_ext,
         cluster_ptr,
         cluster_ext_ptr,
-        &cluster.cfg,
+        &cluster.cfg.proxy_cfg,
+        &cluster.cfg.tikv,
+        cluster.cfg.mock_cfg.clone(),
         engines,
         &key_manager,
         &router,
@@ -52,7 +54,7 @@ pub fn create_tiflash_test_engine(
     // TODO: pass it in for all cases.
     _router: Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     limiter: Option<Arc<IoRateLimiter>>,
-    cfg: &Config,
+    cfg: &MixedClusterConfig,
 ) -> (
     Engines<TiFlashEngine, engine_rocks::RocksEngine>,
     Option<Arc<DataKeyManager>>,

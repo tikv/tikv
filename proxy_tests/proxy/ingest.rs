@@ -11,7 +11,7 @@ pub fn new_ingest_sst_cmd(meta: SstMeta) -> Request {
     cmd
 }
 
-pub fn create_tmp_importer(cfg: &Config, kv_path: &str) -> (PathBuf, Arc<SstImporter>) {
+pub fn create_tmp_importer(cfg: &MixedClusterConfig, kv_path: &str) -> (PathBuf, Arc<SstImporter>) {
     let dir = Path::new(kv_path).join("import-sst");
     let importer = {
         Arc::new(

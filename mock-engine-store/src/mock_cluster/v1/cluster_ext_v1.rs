@@ -11,19 +11,6 @@ use tikv_util::{sys::SysQuota, HandyRwLock};
 use super::{common::*, Cluster, Simulator};
 
 impl<T: Simulator<TiFlashEngine>> Cluster<T> {
-    pub fn iter_ffi_helpers(
-        &self,
-        store_ids: Option<Vec<u64>>,
-        f: &mut dyn FnMut(u64, &mut FFIHelperSet),
-    ) {
-        let need_check = store_ids.is_none();
-        let ffi_side_ids = self.cluster_ext.iter_ffi_helpers(store_ids, f);
-        if need_check {
-            let cluster_side_ids = self.engines.keys().copied();
-            assert_eq!(cluster_side_ids.len(), ffi_side_ids.len());
-        }
-    }
-
     pub fn access_ffi_helpers(&self, f: &mut dyn FnMut(&mut HashMap<u64, FFIHelperSet>)) {
         self.cluster_ext.access_ffi_helpers(f)
     }
@@ -31,14 +18,15 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
     pub fn post_node_start(&mut self, node_id: u64) {
         // Since we use None to create_ffi_helper_set, we must init again.
         let router = self.sim.rl().get_router(node_id).unwrap();
-        self.iter_ffi_helpers(Some(vec![node_id]), &mut |_, ffi: &mut FFIHelperSet| {
-            ffi.proxy.set_read_index_client(Some(Box::new(
-                engine_store_ffi::ffi::read_index_helper::ReadIndexClient::new(
-                    router.clone(),
-                    SysQuota::cpu_cores_quota() as usize * 2,
-                ),
-            )));
-        });
+        self.cluster_ext
+            .iter_ffi_helpers(Some(vec![node_id]), &mut |_, ffi: &mut FFIHelperSet| {
+                ffi.proxy.set_read_index_client(Some(Box::new(
+                    engine_store_ffi::ffi::read_index_helper::ReadIndexClient::new(
+                        router.clone(),
+                        SysQuota::cpu_cores_quota() as usize * 2,
+                    ),
+                )));
+            });
     }
 
     pub fn register_ffi_helper_set(&mut self, index: Option<usize>, node_id: u64) {

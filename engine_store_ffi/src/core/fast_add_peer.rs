@@ -4,6 +4,7 @@ use crate::{
     ffi::interfaces_ffi::FastAddPeerStatus,
 };
 
+// TODO Need adapt raftstore-v2
 pub fn get_region_local_state<EK: engine_traits::KvEngine>(
     engine: &EK,
     region_id: u64,

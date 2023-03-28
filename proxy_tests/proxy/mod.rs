@@ -15,6 +15,7 @@ mod fast_add_peer;
 mod ffi;
 mod flashback;
 mod ingest;
+mod mock;
 mod normal;
 mod region;
 mod replica_read;

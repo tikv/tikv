@@ -5,12 +5,15 @@ use collections::HashSet;
 use engine_store_ffi::ffi::interfaces_ffi;
 use engine_traits::Peekable;
 use kvproto::raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent};
+pub use test_raftstore::{
+    must_get_equal, must_get_none, new_learner_peer, new_peer, new_put_cmd, new_request,
+};
 use tikv_util::error;
 
 use super::cluster_ext::*;
+pub use super::mixed_cluster::MixedCluster;
 use crate::{
-    general_get_apply_state, general_get_region_local_state, get_raft_local_state,
-    mock_cluster::v1::{node::NodeCluster, Cluster, Simulator},
+    general_get_apply_state, general_get_raft_local_state, general_get_region_local_state,
 };
 
 #[derive(Debug)]
@@ -23,19 +26,12 @@ pub struct States {
     pub ident: StoreIdent,
 }
 
-pub fn iter_ffi_helpers<C: Simulator<engine_store_ffi::TiFlashEngine>>(
-    cluster: &Cluster<C>,
+pub fn iter_ffi_helpers(
+    cluster: &impl MixedCluster,
     store_ids: Option<Vec<u64>>,
     f: &mut dyn FnMut(u64, &mut FFIHelperSet),
 ) {
     cluster.iter_ffi_helpers(store_ids, f);
-}
-
-pub fn get_all_store_ids<C: Simulator<engine_store_ffi::TiFlashEngine>>(
-    cluster: &Cluster<C>,
-) -> Vec<u64> {
-    // TODO May changed to get from ffi helpers.
-    cluster.engines.keys().copied().collect::<Vec<u64>>()
 }
 
 pub fn maybe_collect_states(
@@ -55,7 +51,7 @@ pub fn maybe_collect_states(
             };
             let apply_state = general_get_apply_state(ffi_engine, region_id);
             let region_state = general_get_region_local_state(ffi_engine, region_id);
-            let raft_state = get_raft_local_state(raft_engine, region_id);
+            let raft_state = general_get_raft_local_state(raft_engine, region_id);
             if apply_state.is_none() {
                 return;
             }
@@ -82,14 +78,12 @@ pub fn maybe_collect_states(
 }
 
 pub fn collect_all_states(cluster_ext: &ClusterExt, region_id: u64) -> HashMap<u64, States> {
+    maybe_collect_states(cluster_ext, region_id, None);
     let prev_state = maybe_collect_states(cluster_ext, region_id, None);
-    unsafe {
-        // TODO Very hack, but we need it here to protect that we won't FFIHelper and
-        // Engines are corresponding.
-        // Will replaced by a test while adapting v2.
-        let cluster = cluster_ext as *const _ as *const Cluster<NodeCluster>;
-        assert_eq!(prev_state.len(), get_all_store_ids(&*cluster).len());
-    }
+    assert_eq!(
+        prev_state.len(),
+        cluster_ext.ffi_helper_set.lock().expect("poison").len()
+    );
     prev_state
 }
 

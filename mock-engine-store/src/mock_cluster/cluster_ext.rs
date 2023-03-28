@@ -13,9 +13,9 @@ use raftstore::store::RaftRouter;
 use tikv::config::TikvConfig;
 use tikv_util::{debug, sys::SysQuota};
 
+use super::common::*;
 use crate::{
-    mock_cluster::config::{Config, MockConfig},
-    mock_store::gen_engine_store_server_helper,
+    mock_cluster::config::MockConfig, mock_store::gen_engine_store_server_helper,
     EngineStoreServer, EngineStoreServerWrap,
 };
 
@@ -45,12 +45,16 @@ pub struct TestData {
 pub struct ClusterExt {
     // Helper to set ffi_helper_set.
     pub ffi_helper_lst: Vec<FFIHelperSet>,
+    // This field should be pub(crate).
     pub(crate) ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
     pub test_data: TestData,
     pub cluster_ptr: isize,
 }
 
 impl ClusterExt {
+    pub fn get_cluster_size(&self) -> usize {
+        self.ffi_helper_set.lock().expect("poinsoned").len()
+    }
     pub fn make_ffi_helper_set_no_bind(
         id: u64,
         engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
@@ -121,7 +125,9 @@ impl ClusterExt {
         cluster_ext: &mut ClusterExt,
         cluster_ptr: isize,
         cluster_ext_ptr: isize,
-        cfg: &Config,
+        proxy_cfg: &ProxyConfig,
+        tikv_cfg: &TikvConfig,
+        mock_cfg: MockConfig,
         engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
         key_manager: &Option<Arc<DataKeyManager>>,
         router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
@@ -134,10 +140,10 @@ impl ClusterExt {
             engines,
             key_manager,
             router,
-            cfg.tikv.clone(),
+            tikv_cfg.clone(),
             cluster_ptr,
             cluster_ext_ptr,
-            cfg.mock_cfg.clone(),
+            mock_cfg,
         );
 
         // We can not use moved or cloned engines any more.
@@ -151,11 +157,11 @@ impl ClusterExt {
         };
         let engines = ffi_helper_set.engine_store_server.engines.as_mut().unwrap();
         let proxy_config_set = Arc::new(engine_tiflash::ProxyEngineConfigSet {
-            engine_store: cfg.proxy_cfg.engine_store.clone(),
+            engine_store: proxy_cfg.engine_store.clone(),
         });
         engines.kv.init(
             helper_ptr,
-            cfg.proxy_cfg.raft_store.snap_handle_pool_size,
+            proxy_cfg.raft_store.snap_handle_pool_size,
             Some(engine_store_hub),
             Some(proxy_config_set),
         );

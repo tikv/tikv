@@ -8,7 +8,11 @@ use std::sync::{
 use encryption::DataKeyManager;
 
 use super::{
-    interfaces_ffi::{ConstRawVoidPtr, RaftProxyStatus, RaftStoreProxyPtr},
+    get_engine_store_server_helper, interfaces_ffi,
+    interfaces_ffi::{
+        ConstRawVoidPtr, KVGetStatus, RaftProxyStatus, RaftStoreProxyPtr, RawCppStringPtr,
+        RawVoidPtr,
+    },
     raftstore_proxy_helper_impls::*,
     read_index_helper,
 };
@@ -39,6 +43,10 @@ impl RaftStoreProxy {
 }
 
 impl RaftStoreProxy {
+    pub fn raftstore_version(&self) -> u64 {
+        1
+    }
+
     pub fn set_kv_engine(&mut self, kv_engine: Option<Eng>) {
         let mut lock = self.raftstore_proxy_engine.write().unwrap();
         *lock = kv_engine;
@@ -62,6 +70,52 @@ impl RaftStoreProxy {
             return;
         }
         kv_engine.unwrap().get_value_cf(cf, key, cb)
+    }
+
+    pub unsafe fn get_region_local_state(
+        &self,
+        region_id: u64,
+        data: RawVoidPtr,
+        error_msg: *mut RawCppStringPtr,
+    ) -> KVGetStatus {
+        let region_state_key = keys::region_state_key(region_id);
+        let mut res = KVGetStatus::NotFound;
+        if self.raftstore_version() == 1 {
+            self.get_value_cf(engine_traits::CF_RAFT, &region_state_key, &mut |value| {
+                match value {
+                    Ok(v) => {
+                        if let Some(buff) = v {
+                            get_engine_store_server_helper().set_pb_msg_by_bytes(
+                                interfaces_ffi::MsgPBType::RegionLocalState,
+                                data,
+                                buff.into(),
+                            );
+                            res = KVGetStatus::Ok;
+                        } else {
+                            res = KVGetStatus::NotFound;
+                        }
+                    }
+                    Err(e) => {
+                        let msg = get_engine_store_server_helper().gen_cpp_string(e.as_ref());
+                        unsafe {
+                            *error_msg = msg;
+                        }
+                        res = KVGetStatus::Error;
+                    }
+                };
+            });
+        } else {
+            unreachable!()
+        }
+        res
+    }
+
+    pub fn get_raft_apply_state(&self, _region_id: u64) -> interfaces_ffi::KVGetStatus {
+        if self.raftstore_version() == 1 {
+            panic!("wrong raftstore version");
+        } else {
+            unreachable!()
+        }
     }
 }
 

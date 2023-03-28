@@ -37,7 +37,6 @@ grpcio-health = { version = "0.10", default-features = false, features = ["proto
 int-enum = "0.5"
 keys = { workspace = true, default-features = false }
 kvproto = { workspace = true, default-features = false }
-
 lazy_static = "1.3"
 log_wrappers = { workspace = true }
 pd_client = { workspace = true, default-features = false }
@@ -45,12 +44,13 @@ protobuf = "2.8.0"
 proxy_server = { workspace = true }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raftstore = { workspace = true, default-features = false }
+raftstore-v2 = { workspace = true, default-features = false }
 rand = "0.8"
 resolved_ts = { workspace = true }
-
 resource_control = { workspace = true }
 resource_metering = { workspace = true }
 security = { workspace = true, default-features = false }
+server = { workspace = true }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
