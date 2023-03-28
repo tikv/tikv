@@ -305,12 +305,17 @@ mod tests {
         insert("rejectme", "this key would be rejected by the failpoint.");
 
         fail::cfg("meta_storage_get", "4*return").unwrap();
-        let res = w(c.get_latest(Keys::Key(MetaKey::task_of("rejectme")))).expect("should success when temporary failing");
+        let res = w(c.get_latest(Keys::Key(MetaKey::task_of("rejectme"))))
+            .expect("should success when temporary failing");
         assert_eq!(res.inner.len(), 1);
-        assert_eq!(res.inner[0], kv("rejectme",  "this key would be rejected by the failpoint."));
+        assert_eq!(
+            res.inner[0],
+            kv("rejectme", "this key would be rejected by the failpoint.")
+        );
 
         // FIXME: this would take about 10s to run and influences unit tests run...
         fail::cfg("meta_storage_get", "return").unwrap();
-        w(c.get_latest(Keys::Key(MetaKey::task_of("rejectme")))).expect_err("should fail when ever failing");
+        w(c.get_latest(Keys::Key(MetaKey::task_of("rejectme"))))
+            .expect_err("should fail when ever failing");
     }
 }
