@@ -61,19 +61,15 @@ fn test_select() {
 
     let product = ProductTable::new();
     let (_, endpoint, limiter) = init_with_data_ext(&product, &data);
-    limiter.set_read_bandwidth_limit(ReadableSize::kb(1), true);
+    limiter.set_read_bandwidth_limit(ReadableSize::kb(1));
     // for dag selection
     let req = DAGSelect::from(&product).build();
     let mut resp = handle_select(&endpoint, req);
-<<<<<<< HEAD
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
-=======
     let mut total_chunk_size = 0;
     for chunk in resp.get_chunks() {
         total_chunk_size += chunk.get_rows_data().len();
     }
-    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
->>>>>>> 252b44288... make read quota limiter work for coprocessor as well (#13257)
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
