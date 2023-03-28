@@ -201,7 +201,7 @@ mod tests {
     use futures::{Future, StreamExt};
     use pd_client::{
         meta_storage::{Checked, Source, Sourced},
-        RpcClient
+        RpcClient,
     };
     use test_pd::{mocker::MetaStorage, util::*, Server as PdServer};
     use tikv_util::config::ReadableDuration;
