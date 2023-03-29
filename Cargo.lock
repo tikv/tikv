@@ -511,6 +511,7 @@ dependencies = [
  "async-compression",
  "async-trait",
  "bytes",
+ "cfg-if 1.0.0",
  "chrono",
  "concurrency_manager",
  "crossbeam",
@@ -536,6 +537,7 @@ dependencies = [
  "online_config",
  "openssl",
  "pd_client",
+ "pin-project",
  "prometheus",
  "protobuf",
  "raft",
@@ -548,6 +550,7 @@ dependencies = [
  "slog-global",
  "tempdir",
  "tempfile",
+ "test_pd",
  "test_raftstore",
  "test_util",
  "thiserror",
@@ -1792,12 +1795,12 @@ dependencies = [
 
 [[package]]
 name = "fail"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec3245a0ca564e7f3c797d20d833a6870f57a728ac967d5225b3ffdef4465011"
+checksum = "fe5e43d0f78a42ad591453aedb1d7ae631ce7ee445c7643691055a9ed8d3b01c"
 dependencies = [
- "lazy_static",
  "log",
+ "once_cell",
  "rand 0.8.5",
 ]
 
@@ -2712,7 +2715,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#b47a4830141f7c8d2719db0f0184652e692eb672"
+source = "git+https://github.com/pingcap/kvproto.git#af969693ce8a7884e5bdc5d81c728f657d33065a"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2841,7 +2844,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#a9fbe325939c166ffc5f80e63066f5d8594a1fff"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2860,7 +2863,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#a9fbe325939c166ffc5f80e63066f5d8594a1fff"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4779,7 +4782,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9e4678857e5b4c738e95c7ee1a35ee962264f4e9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#a9fbe325939c166ffc5f80e63066f5d8594a1fff"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

@@ -217,7 +217,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
             PeerTick::CompactLog => self.on_compact_log_tick(false),
             PeerTick::SplitRegionCheck => self.on_split_region_check(),
-            PeerTick::CheckMerge => unimplemented!(),
+            PeerTick::CheckMerge => self.fsm.peer_mut().on_check_merge(self.store_ctx),
             PeerTick::CheckPeerStaleState => unimplemented!(),
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict(),
             PeerTick::CheckLeaderLease => unimplemented!(),
@@ -330,6 +330,20 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .fsm
                     .peer_mut()
                     .on_cleanup_import_sst(self.store_ctx, ssts),
+                PeerMsg::AskCommitMerge(req) => {
+                    self.fsm.peer_mut().on_ask_commit_merge(self.store_ctx, req)
+                }
+                PeerMsg::AckCommitMerge { index, target_id } => {
+                    self.fsm.peer_mut().on_ack_commit_merge(index, target_id)
+                }
+                PeerMsg::RejectCommitMerge { index } => {
+                    self.fsm.peer_mut().on_reject_commit_merge(index)
+                }
+                PeerMsg::RedirectCatchUpLogs(c) => self
+                    .fsm
+                    .peer_mut()
+                    .on_redirect_catch_up_logs(self.store_ctx, c),
+                PeerMsg::CatchUpLogs(c) => self.fsm.peer_mut().on_catch_up_logs(self.store_ctx, c),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }
