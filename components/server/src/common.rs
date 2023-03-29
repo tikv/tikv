@@ -88,10 +88,9 @@ impl TikvServerCore {
             );
         }
 
-        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have
-        // enough space to do compaction and region migration when TiKV recover.
-        // This file is created in data_dir rather than db_path, because we must not
-        // increase store size of db_path.
+        // Allocate a big file to make sure that TiKV have enough space to
+        // recover from disk full errors. This file is created in data_dir rather than
+        // db_path, because we must not increase store size of db_path.
         fn calculate_reserved_space(capacity: u64, reserved_size_from_config: u64) -> u64 {
             let mut reserved_size = reserved_size_from_config;
             if reserved_size_from_config != 0 {
