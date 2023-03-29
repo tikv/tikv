@@ -146,7 +146,7 @@ pub struct Config {
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
-    #[serde(alias = "snap_max_write_bytes_per_sec")]
+    #[serde(alias = "snap-max-write-bytes-per-sec")]
     pub snap_io_max_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     #[online_config(skip)]
