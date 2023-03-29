@@ -92,7 +92,7 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    import::{ImportSstService, LocalTablets, SstImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::{
         build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
     },
@@ -112,6 +112,7 @@ use tikv::{
     storage::{
         self,
         config_manager::StorageConfigManger,
+        kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
@@ -1315,10 +1316,8 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::<RocksEngine, RaftRouter<RocksEngine, ER>>::new(
-            backup_scheduler,
-            self.router.clone(),
-        );
+        let backup_service =
+            backup::Service::<RocksEngine, ER>::with_router(backup_scheduler, self.router.clone());
         if servers
             .server
             .register_service(create_backup(backup_service))
@@ -1331,7 +1330,7 @@ where
             servers.node.id(),
             engines.engine.clone(),
             self.region_info_accessor.clone(),
-            engines.engines.kv.clone(),
+            LocalTablets::Singleton(engines.engines.kv.clone()),
             self.config.backup.clone(),
             self.concurrency_manager.clone(),
             self.config.storage.api_version(),
