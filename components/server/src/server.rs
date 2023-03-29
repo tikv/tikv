@@ -1027,7 +1027,7 @@ where
         );
 
         // Start backup stream
-        let backup_stream_scheduler = if self.config.backup_stream.enable {
+        let backup_stream_scheduler = if self.config.log_backup.enable {
             // Create backup stream.
             let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
             let backup_stream_scheduler = backup_stream_worker.scheduler();
@@ -1038,7 +1038,10 @@ where
             // Register config manager.
             cfg_controller.register(
                 tikv::config::Module::BackupStream,
-                Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
+                Box::new(BackupStreamConfigManager::new(
+                    backup_stream_worker.scheduler(),
+                    self.config.log_backup.clone(),
+                )),
             );
 
             let backup_stream_endpoint = backup_stream::Endpoint::new(
@@ -1047,7 +1050,7 @@ where
                     Arc::clone(&self.pd_client),
                     pd_client::meta_storage::Source::LogBackup,
                 ))),
-                self.config.backup_stream.clone(),
+                self.config.log_backup.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.clone(),

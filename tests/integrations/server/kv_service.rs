@@ -2430,6 +2430,7 @@ fn test_commands_write_detail() {
         // assert!(wd.get_apply_mutex_lock_nanos() > 0);
         assert!(wd.get_apply_write_wal_nanos() > 0);
         assert!(wd.get_apply_write_memtable_nanos() > 0);
+        assert!(wd.get_process_nanos() > 0);
     };
 
     let mut mutation = Mutation::default();
