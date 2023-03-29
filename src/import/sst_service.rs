@@ -12,7 +12,7 @@ use std::{
 use collections::HashSet;
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
-use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, Stream, StreamExt, TryFutureExt};
+use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -42,7 +42,10 @@ use tikv_util::{
 use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
-use super::{make_rpc_error, raft_writer, LocalTablets};
+use super::{
+    make_rpc_error,
+    raft_writer::{self, wait_write},
+};
 use crate::{
     import::duplicate_detect::DuplicateDetector,
     server::CONFIG_ROCKSDB_GAUGE,
@@ -93,15 +96,6 @@ fn convert_join_error(err: tokio::task::JoinError) -> ImportPbError {
         e.set_message(format!("panicked! {}", err))
     }
     e
-}
-
-async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> storage::Result<()> {
-    match s.next().await {
-        Some(WriteEvent::Finished(Ok(()))) => Ok(()),
-        Some(WriteEvent::Finished(Err(e))) => Err(e.into()),
-        Some(e) => Err(box_err!("unexpected event: {:?}", e)),
-        None => Err(box_err!("stream closed")),
-    }
 }
 
 /// ImportSstService provides tikv-server with the ability to ingest SST files.

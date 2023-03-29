@@ -16,7 +16,9 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::storage;
 
-async fn wait_write(mut s: impl Stream<Item = WriteEvent> + Send + Unpin) -> storage::Result<()> {
+pub async fn wait_write(
+    mut s: impl Stream<Item = WriteEvent> + Send + Unpin,
+) -> storage::Result<()> {
     match s.next().await {
         Some(WriteEvent::Finished(Ok(()))) => Ok(()),
         Some(WriteEvent::Finished(Err(e))) => Err(e.into()),
