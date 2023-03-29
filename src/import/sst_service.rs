@@ -29,7 +29,9 @@ use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, ConfigManager,
     Error, Result, SstImporter,
 };
-use tikv_kv::{Engine, Modify, SnapContext, Snapshot, SnapshotExt, WriteData, WriteEvent};
+use tikv_kv::{
+    Engine, LocalTablets, Modify, SnapContext, Snapshot, SnapshotExt, WriteData, WriteEvent,
+};
 use tikv_util::{
     config::ReadableSize,
     future::create_stream_with_buffer,
