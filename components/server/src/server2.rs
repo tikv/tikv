@@ -44,7 +44,7 @@ use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
 use kvproto::{
-    deadlock::create_deadlock, diagnosticspb::create_diagnostics,
+    brpb::create_backup, deadlock::create_deadlock, diagnosticspb::create_diagnostics,
     import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
@@ -70,7 +70,7 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    import::{ImportSstService, LocalTablets, SstImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::{
         build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
     },
@@ -88,6 +88,7 @@ use tikv::{
     storage::{
         self,
         config_manager::StorageConfigManger,
+        kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{FlowController, TabletFlowController},
         Engine, Storage,
@@ -112,8 +113,13 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    common::TikvServerCore, memory::*, raft_engine_switch::*, server::Stop, setup::*,
-    signal_handler, tikv_util::sys::thread::ThreadBuildWrapper,
+    common::{check_system_config, TikvServerCore},
+    memory::*,
+    raft_engine_switch::*,
+    server::Stop,
+    setup::*,
+    signal_handler,
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 // minimum number of core kept for background requests
@@ -191,8 +197,6 @@ pub fn run_tikv(config: TikvConfig) {
         }
     })
 }
-
-const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
@@ -826,6 +830,34 @@ where
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
 
+        // Backup service.
+        let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
+        let backup_scheduler = backup_worker.scheduler();
+        let backup_service = backup::Service::<RocksEngine, ER>::new(backup_scheduler);
+        if servers
+            .server
+            .register_service(create_backup(backup_service))
+            .is_some()
+        {
+            fatal!("failed to register backup service");
+        }
+
+        let backup_endpoint = backup::Endpoint::new(
+            self.node.as_ref().unwrap().id(),
+            engines.engine.clone(),
+            self.region_info_accessor.clone().unwrap(),
+            LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
+            self.core.config.backup.clone(),
+            self.concurrency_manager.clone(),
+            self.core.config.storage.api_version(),
+            self.causal_ts_provider.clone(),
+        );
+        self.cfg_controller.as_mut().unwrap().register(
+            tikv::config::Module::Backup,
+            Box::new(backup_endpoint.get_config_manager()),
+        );
+        backup_worker.start(backup_endpoint);
+
         // Import SST service.
         let import_service = ImportSstService::new(
             self.core.config.import.clone(),
@@ -834,6 +866,8 @@ where
             LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
             servers.importer.clone(),
         );
+        let import_cfg_mgr = import_service.get_config_manager();
+
         if servers
             .server
             .register_service(create_import_sst(import_service))
@@ -841,6 +875,11 @@ where
         {
             fatal!("failed to register import service");
         }
+
+        self.cfg_controller
+            .as_mut()
+            .unwrap()
+            .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
@@ -1449,40 +1488,6 @@ fn pre_start() {
         );
     }
 }
-
-fn check_system_config(config: &TikvConfig) {
-    info!("beginning system configuration check");
-    let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
-    if config.rocksdb.titan.enabled {
-        // Titan engine maintains yet another pool of blob files and uses the same max
-        // number of open files setup as rocksdb does. So we double the max required
-        // open files here
-        rocksdb_max_open_files *= 2;
-    }
-    if let Err(e) = tikv_util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + (rocksdb_max_open_files + config.raftdb.max_open_files) as u64,
-    ) {
-        fatal!("{}", e);
-    }
-
-    // Check RocksDB data dir
-    if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
-        warn!(
-            "check: rocksdb-data-dir";
-            "path" => &config.storage.data_dir,
-            "err" => %e
-        );
-    }
-    // Check raft data dir
-    if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
-        warn!(
-            "check: raftdb-path";
-            "path" => &config.raft_store.raftdb_path,
-            "err" => %e
-        );
-    }
-}
-
 pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
     tablet_registry: TabletRegistry<EK>,
     kv_statistics: Option<Arc<RocksStatistics>>,

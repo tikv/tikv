@@ -144,7 +144,7 @@ pub struct StopWatch(Instant);
 
 impl StopWatch {
     /// Create a new stopwatch via current time.
-    pub fn new() -> Self {
+    pub fn by_now() -> Self {
         Self(Instant::now_coarse())
     }
 
@@ -443,15 +443,6 @@ pub fn should_track_lock(l: &Lock) -> bool {
 pub struct CallbackWaitGroup {
     running: AtomicUsize,
     on_finish_all: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send + 'static>>>,
-}
-
-/// A shortcut for making an opaque future type for return type or argument
-/// type, which is sendable and not borrowing any variables.  
-///
-/// `fut![T]` == `impl Future<Output = T> + Send + 'static`
-#[macro_export(crate)]
-macro_rules! future {
-    ($t:ty) => { impl core::future::Future<Output = $t> + Send + 'static };
 }
 
 impl CallbackWaitGroup {
@@ -829,6 +820,15 @@ impl<'a> slog::KV for SlogRegion<'a> {
         )?;
         Ok(())
     }
+}
+
+/// A shortcut for making an opaque future type for return type or argument
+/// type, which is sendable and not borrowing any variables.  
+///
+/// `future![T]` == `impl Future<Output = T> + Send + 'static`
+#[macro_export]
+macro_rules! future {
+    ($t:ty) => { impl core::future::Future<Output = $t> + Send + 'static };
 }
 
 pub fn debug_iter<D: std::fmt::Debug>(t: impl Iterator<Item = D>) -> impl std::fmt::Debug {

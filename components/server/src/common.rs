@@ -88,10 +88,9 @@ impl TikvServerCore {
             );
         }
 
-        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have
-        // enough space to do compaction and region migration when TiKV recover.
-        // This file is created in data_dir rather than db_path, because we must not
-        // increase store size of db_path.
+        // Allocate a big file to make sure that TiKV have enough space to
+        // recover from disk full errors. This file is created in data_dir rather than
+        // db_path, because we must not increase store size of db_path.
         fn calculate_reserved_space(capacity: u64, reserved_size_from_config: u64) -> u64 {
             let mut reserved_size = reserved_size_from_config;
             if reserved_size_from_config != 0 {
@@ -236,4 +235,38 @@ fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
         );
     }
     f
+}
+
+const RESERVED_OPEN_FDS: u64 = 1000;
+pub fn check_system_config(config: &TikvConfig) {
+    info!("beginning system configuration check");
+    let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
+    if config.rocksdb.titan.enabled {
+        // Titan engine maintains yet another pool of blob files and uses the same max
+        // number of open files setup as rocksdb does. So we double the max required
+        // open files here
+        rocksdb_max_open_files *= 2;
+    }
+    if let Err(e) = tikv_util::config::check_max_open_fds(
+        RESERVED_OPEN_FDS + (rocksdb_max_open_files + config.raftdb.max_open_files) as u64,
+    ) {
+        fatal!("{}", e);
+    }
+
+    // Check RocksDB data dir
+    if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
+        warn!(
+            "check: rocksdb-data-dir";
+            "path" => &config.storage.data_dir,
+            "err" => %e
+        );
+    }
+    // Check raft data dir
+    if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
+        warn!(
+            "check: raftdb-path";
+            "path" => &config.raft_store.raftdb_path,
+            "err" => %e
+        );
+    }
 }

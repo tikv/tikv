@@ -28,9 +28,7 @@ use std::{
 
 use api_version::{dispatch_api_version, KvFormat};
 use backup_stream::{
-    config::BackupStreamConfigManager,
-    metadata::{ConnectionConfig, LazyEtcdClient},
-    observer::BackupStreamObserver,
+    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
@@ -59,7 +57,10 @@ use kvproto::{
     kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
-use pd_client::{PdClient, RpcClient};
+use pd_client::{
+    meta_storage::{Checked, Sourced},
+    PdClient, RpcClient,
+};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -88,7 +89,7 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    import::{ImportSstService, LocalTablets, SstImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::{
         build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
     },
@@ -108,6 +109,7 @@ use tikv::{
     storage::{
         self,
         config_manager::StorageConfigManger,
+        kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
@@ -132,7 +134,11 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    common::TikvServerCore, memory::*, raft_engine_switch::*, setup::*, signal_handler,
+    common::{check_system_config, TikvServerCore},
+    memory::*,
+    raft_engine_switch::*,
+    setup::*,
+    signal_handler,
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -211,8 +217,6 @@ pub fn run_tikv(config: TikvConfig) {
         }
     })
 }
-
-const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
@@ -867,7 +871,7 @@ where
         );
 
         // Start backup stream
-        let backup_stream_scheduler = if self.core.config.backup_stream.enable {
+        let backup_stream_scheduler = if self.core.config.log_backup.enable {
             // Create backup stream.
             let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
             let backup_stream_scheduler = backup_stream_worker.scheduler();
@@ -878,21 +882,19 @@ where
             // Register config manager.
             cfg_controller.register(
                 tikv::config::Module::BackupStream,
-                Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
+                Box::new(BackupStreamConfigManager::new(
+                    backup_stream_worker.scheduler(),
+                    self.core.config.log_backup.clone(),
+                )),
             );
 
-            let etcd_cli = LazyEtcdClient::new(
-                self.core.config.pd.endpoints.as_slice(),
-                ConnectionConfig {
-                    keep_alive_interval: self.core.config.server.grpc_keepalive_time.0,
-                    keep_alive_timeout: self.core.config.server.grpc_keepalive_timeout.0,
-                    tls: Arc::clone(&self.security_mgr),
-                },
-            );
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 node.id(),
-                etcd_cli,
-                self.core.config.backup_stream.clone(),
+                PdStore::new(Checked::new(Sourced::new(
+                    Arc::clone(&self.pd_client),
+                    pd_client::meta_storage::Source::LogBackup,
+                ))),
+                self.core.config.log_backup.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.clone(),
@@ -1100,6 +1102,8 @@ where
             LocalTablets::Singleton(engines.engines.kv.clone()),
             servers.importer.clone(),
         );
+        let import_cfg_mgr = import_service.get_config_manager();
+
         if servers
             .server
             .register_service(create_import_sst(import_service))
@@ -1107,6 +1111,11 @@ where
         {
             fatal!("failed to register import service");
         }
+
+        self.cfg_controller
+            .as_mut()
+            .unwrap()
+            .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
 
         // Debug service.
         let debug_service = DebugService::new(
@@ -1162,10 +1171,8 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::<RocksEngine, RaftRouter<RocksEngine, ER>>::new(
-            backup_scheduler,
-            self.router.clone(),
-        );
+        let backup_service =
+            backup::Service::<RocksEngine, ER>::with_router(backup_scheduler, self.router.clone());
         if servers
             .server
             .register_service(create_backup(backup_service))
@@ -1178,7 +1185,7 @@ where
             servers.node.id(),
             engines.engine.clone(),
             self.region_info_accessor.clone(),
-            engines.engines.kv.clone(),
+            LocalTablets::Singleton(engines.engines.kv.clone()),
             self.core.config.backup.clone(),
             self.concurrency_manager.clone(),
             self.core.config.storage.api_version(),
@@ -1771,39 +1778,6 @@ fn pre_start() {
     for e in tikv_util::config::check_kernel() {
         warn!(
             "check: kernel";
-            "err" => %e
-        );
-    }
-}
-
-fn check_system_config(config: &TikvConfig) {
-    info!("beginning system configuration check");
-    let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
-    if config.rocksdb.titan.enabled {
-        // Titan engine maintains yet another pool of blob files and uses the same max
-        // number of open files setup as rocksdb does. So we double the max required
-        // open files here
-        rocksdb_max_open_files *= 2;
-    }
-    if let Err(e) = tikv_util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + (rocksdb_max_open_files + config.raftdb.max_open_files) as u64,
-    ) {
-        fatal!("{}", e);
-    }
-
-    // Check RocksDB data dir
-    if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
-        warn!(
-            "check: rocksdb-data-dir";
-            "path" => &config.storage.data_dir,
-            "err" => %e
-        );
-    }
-    // Check raft data dir
-    if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
-        warn!(
-            "check: raftdb-path";
-            "path" => &config.raft_store.raftdb_path,
             "err" => %e
         );
     }

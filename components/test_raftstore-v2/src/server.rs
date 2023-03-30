@@ -15,7 +15,7 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use futures::executor::block_on;
+use futures::{executor::block_on, Future};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
 use kvproto::{
@@ -50,7 +50,7 @@ use test_pd_client::TestPdClient;
 use test_raftstore::{filter_send, AddressMap, Config, Filter};
 use tikv::{
     coprocessor, coprocessor_v2,
-    import::{ImportSstService, LocalTablets, SstImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
         gc_worker::GcWorker, load_statistics::ThreadLoadPool, lock_manager::LockManager,
@@ -60,7 +60,7 @@ use tikv::{
     },
     storage::{
         self,
-        kv::{FakeExtension, RaftExtension, SnapContext},
+        kv::{FakeExtension, LocalTablets, RaftExtension, SnapContext},
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
@@ -257,7 +257,7 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
     pd_client: Arc<TestPdClient>,
-    // raft_client: RaftClient<AddressMap, FakeExtension>,
+    raft_client: RaftClient<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
     pub pending_services: HashMap<u64, PendingServices>,
@@ -289,7 +289,7 @@ impl ServerCluster {
             worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
-        let _raft_client = RaftClient::new(conn_builder);
+        let raft_client = RaftClient::new(conn_builder);
         ServerCluster {
             metas: HashMap::default(),
             addrs: map,
@@ -301,7 +301,7 @@ impl ServerCluster {
             snap_paths: HashMap::default(),
             pending_services: HashMap::default(),
             health_services: HashMap::default(),
-            // raft_client,
+            raft_client,
             concurrency_managers: HashMap::default(),
             env,
             txn_extra_schedulers: HashMap::default(),
@@ -752,24 +752,25 @@ impl Simulator<RocksEngine> for ServerCluster {
         self.storages.remove(&node_id);
     }
 
-    fn snapshot(
+    fn async_snapshot(
         &mut self,
         request: kvproto::raft_cmdpb::RaftCmdRequest,
-        timeout: Duration,
-    ) -> std::result::Result<RegionSnapshot<<RocksEngine as KvEngine>::Snapshot>, RaftCmdResponse>
-    {
+    ) -> impl Future<
+        Output = std::result::Result<RegionSnapshot<engine_rocks::RocksSnapshot>, RaftCmdResponse>,
+    > + Send {
         let node_id = request.get_header().get_peer().get_store_id();
         let mut router = match self.metas.get(&node_id) {
             None => {
                 let mut resp = RaftCmdResponse::default();
                 let e: RaftError = box_err!("missing sender for store {}", node_id);
                 resp.mut_header().set_error(e.into());
-                return Err(resp);
+                // return async move {Err(resp)};
+                unreachable!()
             }
             Some(meta) => meta.sim_router.clone(),
         };
 
-        router.snapshot(request, timeout)
+        router.snapshot(request)
     }
 
     fn async_peer_msg_on_node(
@@ -784,6 +785,12 @@ impl Simulator<RocksEngine> for ServerCluster {
         };
 
         router.send_peer_msg(region_id, msg)
+    }
+
+    fn send_raft_msg(&mut self, msg: RaftMessage) -> raftstore::Result<()> {
+        self.raft_client.send(msg).unwrap();
+        self.raft_client.flush();
+        Ok(())
     }
 
     fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>> {
