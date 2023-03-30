@@ -10,7 +10,7 @@ use std::mem;
 
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::{
-    AssertionLevel, ExtraOp,
+    AssertionLevel, ExtraOp, PrewriteRequestForUpdateTsCheck,
     PrewriteRequestPessimisticAction::{self, *},
 };
 use tikv_kv::SnapshotExt;
@@ -283,6 +283,8 @@ command! {
             /// Assertions is a mechanism to check the constraint on the previous version of data
             /// that must be satisfied as long as data is consistent.
             assertion_level: AssertionLevel,
+            /// Constraints on the pessimistic locks that have to be checked when prewriting.
+            for_update_ts_checks: Vec<PrewriteRequestForUpdateTsCheck>,
         }
 }
 
@@ -290,7 +292,7 @@ impl std::fmt::Display for PrewritePessimistic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "kv::command::pessimistic_prewrite mutations({:?}) primary({:?}) secondary_len({:?})@ {} {} {} {} {} {} {:?}| {:?}",
+            "kv::command::pessimistic_prewrite mutations({:?}) primary({:?}) secondary_len({:?})@ {} {} {} {} {} {} {:?} (for_update_ts constraints: {:?}) | {:?}",
             self.mutations,
             log_wrappers::Value::key(self.primary.as_slice()),
             self.secondary_keys.as_ref().map(|sk| sk.len()),
@@ -301,6 +303,7 @@ impl std::fmt::Display for PrewritePessimistic {
             self.max_commit_ts,
             self.try_one_pc,
             self.assertion_level,
+            self.for_update_ts_checks,
             self.ctx,
         )
     }
@@ -331,6 +334,7 @@ impl PrewritePessimistic {
             None,
             false,
             AssertionLevel::Off,
+            vec![],
             Context::default(),
         )
     }
@@ -355,19 +359,29 @@ impl PrewritePessimistic {
             None,
             true,
             AssertionLevel::Off,
+            vec![],
             Context::default(),
         )
     }
 
-    fn into_prewriter(self) -> Prewriter<Pessimistic> {
-        Prewriter {
+    fn into_prewriter(self) -> Result<Prewriter<Pessimistic>> {
+        let mut mutations: Vec<PessimisticMutation> =
+            self.mutations.into_iter().map(Into::into).collect();
+        for item in self.for_update_ts_checks {
+            let index = item.index as usize;
+            if index >= mutations.len() {
+                return Err(ErrorInner::Other(box_err!("prewrite request invalid: for_update_ts constraint set for index {} while {} mutations were given", index, mutations.len())).into());
+            }
+            mutations[index].expected_for_update_ts = Some(item.expected_for_update_ts.into());
+        }
+        Ok(Prewriter {
             kind: Pessimistic {
                 for_update_ts: self.for_update_ts,
             },
             start_ts: self.start_ts,
             txn_size: self.txn_size,
             primary: self.primary,
-            mutations: self.mutations,
+            mutations,
 
             try_one_pc: self.try_one_pc,
             secondary_keys: self.secondary_keys,
@@ -379,7 +393,7 @@ impl PrewritePessimistic {
 
             ctx: self.ctx,
             old_values: OldValues::default(),
-        }
+        })
     }
 }
 
@@ -391,8 +405,8 @@ impl CommandExt for PrewritePessimistic {
 
     fn write_bytes(&self) -> usize {
         let mut bytes = 0;
-        for (m, _) in &self.mutations {
-            match *m {
+        for m in &self.mutations {
+            match m.mutation {
                 Mutation::Put((ref key, ref value), _)
                 | Mutation::Insert((ref key, ref value), _) => {
                     bytes += key.as_encoded().len();
@@ -412,7 +426,7 @@ impl CommandExt for PrewritePessimistic {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        self.into_prewriter().process_write(snapshot, context)
+        self.into_prewriter()?.process_write(snapshot, context)
     }
 }
 
@@ -556,6 +570,7 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         for m in mem::take(&mut self.mutations) {
             let pessimistic_action = m.pessimistic_action();
+            let expected_for_update_ts = m.pessimistic_expected_for_update_ts();
             let m = m.into_mutation();
             let key = m.key().clone();
             let mutation_type = m.mutation_type();
@@ -566,7 +581,15 @@ impl<K: PrewriteKind> Prewriter<K> {
             }
 
             let need_min_commit_ts = secondaries.is_some() || self.try_one_pc;
-            let prewrite_result = prewrite(txn, reader, &props, m, secondaries, pessimistic_action);
+            let prewrite_result = prewrite(
+                txn,
+                reader,
+                &props,
+                m,
+                secondaries,
+                pessimistic_action,
+                expected_for_update_ts,
+            );
             match prewrite_result {
                 Ok((ts, old_value)) if !(need_min_commit_ts && ts.is_zero()) => {
                     if need_min_commit_ts && final_min_commit_ts < ts {
@@ -791,7 +814,7 @@ struct Pessimistic {
 }
 
 impl PrewriteKind for Pessimistic {
-    type Mutation = (Mutation, PrewriteRequestPessimisticAction);
+    type Mutation = PessimisticMutation;
 
     fn txn_kind(&self) -> TransactionKind {
         TransactionKind::Pessimistic(self.for_update_ts)
@@ -806,6 +829,7 @@ impl PrewriteKind for Pessimistic {
 /// The action also implies the type of the lock status.
 trait MutationLock {
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction;
+    fn pessimistic_expected_for_update_ts(&self) -> Option<TimeStamp>;
     fn into_mutation(self) -> Mutation;
 }
 
@@ -814,18 +838,59 @@ impl MutationLock for Mutation {
         SkipPessimisticCheck
     }
 
+    fn pessimistic_expected_for_update_ts(&self) -> Option<TimeStamp> {
+        None
+    }
+
     fn into_mutation(self) -> Mutation {
         self
     }
 }
 
-impl MutationLock for (Mutation, PrewriteRequestPessimisticAction) {
+// impl MutationLock for (Mutation, PrewriteRequestPessimisticAction) {
+//     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction {
+//         self.1
+//     }
+//
+//     fn into_mutation(self) -> Mutation {
+//         self.0
+//     }
+// }
+
+#[derive(Debug)]
+pub struct PessimisticMutation {
+    pub mutation: Mutation,
+    pub pessimistic_action: PrewriteRequestPessimisticAction,
+    pub expected_for_update_ts: Option<TimeStamp>,
+}
+
+impl MutationLock for PessimisticMutation {
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction {
         self.1
     }
 
+    fn pessimistic_expected_for_update_ts(&self) -> Option<TimeStamp> {
+        self.expected_for_update_ts
+    }
+
     fn into_mutation(self) -> Mutation {
-        self.0
+        self.mutation
+    }
+}
+
+impl PessimisticMutation {
+    pub fn new(mutation: Mutation, pessimistic_action: PrewriteRequestPessimisticAction) -> Self {
+        Self {
+            mutation,
+            pessimistic_action,
+            expected_for_update_ts: None,
+        }
+    }
+}
+
+impl From<(Mutation, PrewriteRequestPessimisticAction)> for PessimisticMutation {
+    fn from(value: (Mutation, PrewriteRequestPessimisticAction)) -> Self {
+        PessimisticMutation::new(value.0, value.1)
     }
 }
 
@@ -1451,6 +1516,7 @@ mod tests {
             Some(vec![]),
             false,
             AssertionLevel::Off,
+            vec![],
             Context::default(),
         );
 
@@ -1491,6 +1557,7 @@ mod tests {
             Some(vec![k2.to_vec()]),
             false,
             AssertionLevel::Off,
+            vec![],
             Context::default(),
         );
 
@@ -1697,6 +1764,7 @@ mod tests {
                     secondary_keys,
                     case.one_pc,
                     AssertionLevel::Off,
+                    vec![],
                     Context::default(),
                 )
             } else {
@@ -1937,6 +2005,7 @@ mod tests {
             Some(vec![]),
             false,
             AssertionLevel::Off,
+            vec![],
             Context::default(),
         );
         let context = WriteContext {
@@ -2076,6 +2145,7 @@ mod tests {
                 secondary_keys,
                 false,
                 AssertionLevel::Off,
+                vec![],
                 ctx,
             );
             prewrite_command(engine, cm.clone(), statistics, cmd)
@@ -2546,6 +2616,7 @@ mod tests {
             Some(vec![]),
             false,
             AssertionLevel::Off,
+            vec![],
             Context::default(),
         );
         let res = prewrite_command(&mut engine, cm, &mut statistics, cmd).unwrap();

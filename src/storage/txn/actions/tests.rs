@@ -163,6 +163,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
         mutation,
         secondary_keys,
         pessimistic_action,
+        None,
     )
     .unwrap();
     write(engine, &ctx, txn.into_modifies());
@@ -567,6 +568,7 @@ pub fn must_prewrite_put_err_impl_with_should_not_exist<E: Engine>(
         mutation,
         &None,
         pessimistic_action,
+        None,
     )
     .unwrap_err()
 }
@@ -703,6 +705,7 @@ fn must_prewrite_delete_impl<E: Engine>(
         mutation,
         &None,
         pessimistic_action,
+        None,
     )
     .unwrap();
 
@@ -781,6 +784,7 @@ fn must_prewrite_lock_impl<E: Engine>(
         mutation,
         &None,
         pessimistic_action,
+        None,
     )
     .unwrap();
 
@@ -817,6 +821,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
         Mutation::make_lock(Key::from_raw(key)),
         &None,
         SkipPessimisticCheck,
+        None,
     )
     .unwrap_err();
 }

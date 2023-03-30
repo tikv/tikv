@@ -36,6 +36,7 @@ pub fn prewrite<S: Snapshot>(
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
     pessimistic_action: PrewriteRequestPessimisticAction,
+    expected_for_update_ts: Option<TimeStamp>,
 ) -> Result<(TimeStamp, OldValue)> {
     let mut mutation =
         PrewriteMutation::from_mutation(mutation, secondary_keys, pessimistic_action, txn_props)?;
@@ -63,7 +64,7 @@ pub fn prewrite<S: Snapshot>(
     let mut lock_amended = false;
 
     let lock_status = match reader.load_lock(&mutation.key)? {
-        Some(lock) => mutation.check_lock(lock, pessimistic_action)?,
+        Some(lock) => mutation.check_lock(lock, pessimistic_action, expected_for_update_ts)?,
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
             amend_pessimistic_lock(&mut mutation, reader)?;
             lock_amended = true;
@@ -309,6 +310,7 @@ impl<'a> PrewriteMutation<'a> {
         &mut self,
         lock: Lock,
         pessimistic_action: PrewriteRequestPessimisticAction,
+        expected_for_update_ts: Option<TimeStamp>,
     ) -> Result<LockStatus> {
         if lock.ts != self.txn_props.start_ts {
             // Abort on lock belonging to other transaction if
@@ -342,6 +344,40 @@ impl<'a> PrewriteMutation<'a> {
                     pessimistic: true,
                 }
                 .into());
+            }
+
+            if let Some(ts) = expected_for_update_ts && lock.for_update_ts > ts {
+                // The constraint on for_update_ts of the pessimistic lock is violated.
+                // Consider the following case:
+
+                // 1. A pessimistic lock of transaction `T1` succeeded with`WakeUpModeForceLock`
+                //    enabled, then it returns to the client and the client continues its
+                //    execution.
+                // 2. The lock is lost for some reason such as pipelined locking or in-memory
+                //    pessimistic lock.
+                // 3. Another transaction `T2` writes the key and committed.
+                // 4. The key then receives a stale pessimistic lock request of `T1` that has
+                //    been received in step 1 (maybe because of retrying due to network issue
+                //    in step 1). Since it allows locking with conflict, though there's a newer
+                //    version that's later than the request's `for_update_ts`, the request can
+                //    still acquire the lock. However no one will check the response, which
+                //    tells the latest commit_ts it met.
+                // 5. The transaction `T1` commits. When it prewrites it checks if each key is
+                //    pessimistic-locked.
+                //
+                // Transaction `T1` won't notice anything wrong without this check since it
+                // does have a pessimistic lock of the same transaction. However, actually
+                // one of the key is locked in a larger version than that the client would
+                // expect. As a result, the conflict between transaction `T1` and `T2` is
+                // missed.
+                // To avoid this problem, we check the for_update_ts written on the
+                // pessimistic locks that's acquired in force-locking mode. If it's larger
+                // than the one known by the client, the lock will be regarded as lost.
+                warn!("pessimistic lock have larger for_update_ts than expected. the expected lock must have been lost";
+                    "key" => %self.key,
+                    "start_ts" => self.txn_props.start_ts,
+                    "expected_for_update_ts" => ts,
+                    "actual_for_update_ts" => lock.for_update_ts);
             }
 
             // The lock is pessimistic and owned by this txn, go through to overwrite it.
@@ -869,6 +905,7 @@ pub mod tests {
             Mutation::make_insert(Key::from_raw(key), value.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )?;
         // Insert must be None if the key is not lock, or be Unspecified if the
         // key is already locked.
@@ -900,6 +937,7 @@ pub mod tests {
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
             DoPessimisticCheck,
+            None,
         )?;
         assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
@@ -922,6 +960,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(old_value, OldValue::None);
@@ -935,6 +974,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &Some(vec![]),
             SkipPessimisticCheck,
+            None,
         )
         .unwrap_err();
         assert!(matches!(
@@ -970,6 +1010,7 @@ pub mod tests {
             Mutation::make_check_not_exists(Key::from_raw(b"k0")),
             &Some(vec![]),
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert!(min_ts > props.start_ts);
@@ -990,6 +1031,7 @@ pub mod tests {
             Mutation::make_check_not_exists(Key::from_raw(b"k0")),
             &Some(vec![]),
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(cm.max_ts(), props.start_ts);
@@ -1005,6 +1047,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert!(min_ts > 42.into());
@@ -1028,6 +1071,7 @@ pub mod tests {
                 mutation.clone(),
                 &Some(vec![b"k4".to_vec()]),
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             assert!(min_ts > 44.into());
@@ -1050,6 +1094,7 @@ pub mod tests {
                     mutation.clone(),
                     &Some(vec![b"k6".to_vec()]),
                     SkipPessimisticCheck,
+                    None,
                 )
                 .unwrap();
                 assert!(min_ts > 45.into());
@@ -1069,6 +1114,7 @@ pub mod tests {
                 mutation.clone(),
                 &Some(vec![b"k8".to_vec()]),
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             assert!(min_ts >= 46.into());
@@ -1099,6 +1145,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(old_value, OldValue::None);
@@ -1112,6 +1159,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap_err();
         assert!(matches!(
@@ -1159,6 +1207,7 @@ pub mod tests {
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
             SkipPessimisticCheck,
+            None,
         )?;
         assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
@@ -1197,6 +1246,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
             DoPessimisticCheck,
+            None,
         )
         .unwrap();
         // Pessimistic txn skips constraint check, does not read previous write.
@@ -1211,6 +1261,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &Some(vec![]),
             DoPessimisticCheck,
+            None,
         )
         .unwrap_err();
     }
@@ -1248,6 +1299,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &None,
             DoPessimisticCheck,
+            None,
         )
         .unwrap();
         // Pessimistic txn skips constraint check, does not read previous write.
@@ -1262,6 +1314,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &None,
             DoPessimisticCheck,
+            None,
         )
         .unwrap_err();
     }
@@ -1369,6 +1422,7 @@ pub mod tests {
                 Mutation::make_check_not_exists(Key::from_raw(key)),
                 &None,
                 SkipPessimisticCheck,
+                None,
             );
             if success {
                 let res = res.unwrap();
@@ -1384,6 +1438,7 @@ pub mod tests {
                 Mutation::make_insert(Key::from_raw(key), b"value".to_vec()),
                 &None,
                 SkipPessimisticCheck,
+                None,
             );
             if success {
                 let res = res.unwrap();
@@ -1440,6 +1495,7 @@ pub mod tests {
                 Mutation::make_put(key.clone(), b"value".to_vec()),
                 &None,
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             assert_eq!(&old_value, expected_value, "key: {}", key);
@@ -1694,6 +1750,7 @@ pub mod tests {
                 Mutation::make_put(Key::from_raw(b"k1"), b"value".to_vec()),
                 &None,
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -1749,6 +1806,7 @@ pub mod tests {
             Mutation::make_insert(Key::from_raw(b"k1"), b"v2".to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(old_value, OldValue::None);
@@ -1887,6 +1945,7 @@ pub mod tests {
                     Mutation::make_put(Key::from_raw(key), b"v2".to_vec()),
                     &None,
                     SkipPessimisticCheck,
+                    None,
                 )?;
                 Ok(old_value)
             })],
@@ -1924,6 +1983,7 @@ pub mod tests {
                     Mutation::make_insert(Key::from_raw(key), b"v2".to_vec()),
                     &None,
                     SkipPessimisticCheck,
+                    None,
                 )?;
                 Ok(old_value)
             })],

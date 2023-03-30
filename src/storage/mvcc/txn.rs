@@ -815,6 +815,7 @@ pub(crate) mod tests {
             Mutation::make_put(key.clone(), v.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -859,6 +860,7 @@ pub(crate) mod tests {
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap_err();
 
@@ -872,6 +874,7 @@ pub(crate) mod tests {
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
     }
@@ -1312,6 +1315,7 @@ pub(crate) mod tests {
                 mutation,
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -1370,6 +1374,7 @@ pub(crate) mod tests {
                 mutation,
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 DoPessimisticCheck,
+                None,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -1439,6 +1444,7 @@ pub(crate) mod tests {
             mutation,
             &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
             DoPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(min_commit_ts.into_inner(), 100);
