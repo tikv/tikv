@@ -15,8 +15,8 @@ use super::{
     checkpoint_cache::CheckpointCache,
     keys::{self, KeyValue, MetaKey},
     store::{
-        CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot,
-        Subscription, Transaction, WithRevision,
+        CondTransaction, Condition, Keys, KvEvent, KvEventType, MetaStore, Snapshot, Subscription,
+        Transaction, WithRevision,
     },
 };
 use crate::{
@@ -48,6 +48,7 @@ impl Debug for StreamTask {
             .field("table_filter", &self.info.table_filter)
             .field("start_ts", &self.info.start_ts)
             .field("end_ts", &self.info.end_ts)
+            .field("is_paused", &self.is_paused)
             .finish()
     }
 }
@@ -292,8 +293,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
     ) -> Result<Option<StreamBackupError>> {
         let key = MetaKey::last_error_of(name, store_id);
 
-        let s = self.meta_store.snapshot().await?;
-        let r = s.get(Keys::Key(key)).await?;
+        let r = self.meta_store.get_latest(Keys::Key(key)).await?.inner;
         if r.is_empty() {
             return Ok(None);
         }
@@ -304,8 +304,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
 
     /// check whether the task is paused.
     pub async fn check_task_paused(&self, name: &str) -> Result<bool> {
-        let snap = self.meta_store.snapshot().await?;
-        let kvs = snap.get(Keys::Key(MetaKey::pause_of(name))).await?;
+        let kvs = self
+            .meta_store
+            .get_latest(Keys::Key(MetaKey::pause_of(name)))
+            .await?
+            .inner;
         Ok(!kvs.is_empty())
     }
 
@@ -317,8 +320,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     pub async fn get_tasks_pause_status(&self) -> Result<HashMap<Vec<u8>, bool>> {
-        let snap = self.meta_store.snapshot().await?;
-        let kvs = snap.get(Keys::Prefix(MetaKey::pause_prefix())).await?;
+        let kvs = self
+            .meta_store
+            .get_latest(Keys::Prefix(MetaKey::pause_prefix()))
+            .await?
+            .inner;
         let mut pause_hash = HashMap::new();
         let prefix_len = MetaKey::pause_prefix_len();
 
@@ -338,10 +344,9 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
         let items = self
             .meta_store
-            .snapshot()
+            .get_latest(Keys::Key(MetaKey::task_of(name)))
             .await?
-            .get(Keys::Key(MetaKey::task_of(name)))
-            .await?;
+            .inner;
         if items.is_empty() {
             return Ok(None);
         }
@@ -362,11 +367,13 @@ impl<Store: MetaStore> MetadataClient<Store> {
                 "faild to connect etcd client".to_string(),
             ))
         });
-        let snap = self.meta_store.snapshot().await?;
-        let kvs = snap.get(Keys::Prefix(MetaKey::tasks())).await?;
+        let kvs = self
+            .meta_store
+            .get_latest(Keys::Prefix(MetaKey::tasks()))
+            .await?;
 
-        let mut tasks = Vec::with_capacity(kvs.len());
-        for kv in kvs {
+        let mut tasks = Vec::with_capacity(kvs.inner.len());
+        for kv in kvs.inner {
             let t = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(kv.value())?;
             let paused = self.check_task_paused(t.get_name()).await?;
             tasks.push(StreamTask {
@@ -376,7 +383,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
         Ok(WithRevision {
             inner: tasks,
-            revision: snap.revision(),
+            revision: kvs.revision,
         })
     }
 
@@ -458,13 +465,14 @@ impl<Store: MetaStore> MetadataClient<Store> {
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
         }
-        let snap = self.meta_store.snapshot().await?;
-        let ts = snap
-            .get(Keys::Key(MetaKey::storage_checkpoint_of(
+        let ts = self
+            .meta_store
+            .get_latest(Keys::Key(MetaKey::storage_checkpoint_of(
                 task_name,
                 self.store_id,
             )))
-            .await?;
+            .await?
+            .inner;
 
         match ts.as_slice() {
             [ts, ..] => Ok(TimeStamp::new(parse_ts_from_bytes(ts.value())?)),
@@ -491,13 +499,14 @@ impl<Store: MetaStore> MetadataClient<Store> {
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
         }
-        let snap = self.meta_store.snapshot().await?;
-        let ts = snap
-            .get(Keys::Key(MetaKey::next_backup_ts_of(
+        let ts = self
+            .meta_store
+            .get_latest(Keys::Key(MetaKey::next_backup_ts_of(
                 task_name,
                 self.store_id,
             )))
-            .await?;
+            .await?
+            .inner;
 
         match ts.as_slice() {
             [ts, ..] => Ok(TimeStamp::new(parse_ts_from_bytes(ts.value())?)),
@@ -510,96 +519,16 @@ impl<Store: MetaStore> MetadataClient<Store> {
         &self,
         task_name: &str,
     ) -> Result<WithRevision<Vec<(Vec<u8>, Vec<u8>)>>> {
-        let snap = self.meta_store.snapshot().await?;
-        let ranges = snap
-            .get(Keys::Prefix(MetaKey::ranges_of(task_name)))
+        let ranges = self
+            .meta_store
+            .get_latest(Keys::Prefix(MetaKey::ranges_of(task_name)))
             .await?;
 
-        Ok(WithRevision {
-            revision: snap.revision(),
-            inner: ranges
-                .into_iter()
+        Ok(ranges.map(|rs| {
+            rs.into_iter()
                 .map(|mut kv: KeyValue| kv.take_range(task_name))
-                .collect(),
-        })
-    }
-
-    /// Perform a two-phase bisection search algorithm for the intersection of
-    /// all ranges and the specificated range (usually region range.)
-    /// TODO: explain the algorithm?
-    pub async fn range_overlap_of_task(
-        &self,
-        task_name: &str,
-        (start_key, end_key): (Vec<u8>, Vec<u8>),
-    ) -> Result<WithRevision<Vec<(Vec<u8>, Vec<u8>)>>> {
-        let now = Instant::now();
-        defer! {
-            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_range_search"]).observe(now.saturating_elapsed().as_secs_f64())
-        }
-        let snap = self.meta_store.snapshot().await?;
-
-        let mut prev = snap
-            .get_extra(
-                Keys::Range(
-                    MetaKey::ranges_of(task_name),
-                    MetaKey::range_of(task_name, &start_key),
-                ),
-                GetExtra {
-                    desc_order: true,
-                    limit: 1,
-                    ..Default::default()
-                },
-            )
-            .await?;
-        let all = snap
-            .get(Keys::Range(
-                MetaKey::range_of(task_name, &start_key),
-                MetaKey::range_of(task_name, &end_key),
-            ))
-            .await?;
-
-        let mut result = Vec::with_capacity(all.len() + 1);
-        if !prev.kvs.is_empty() {
-            let kv = &mut prev.kvs[0];
-            if kv.value() > start_key.as_slice() {
-                result.push(kv.take_range(task_name));
-            }
-        }
-        for mut kv in all {
-            result.push(kv.take_range(task_name));
-        }
-        Ok(WithRevision {
-            revision: snap.revision(),
-            inner: result,
-        })
-    }
-
-    /// access the next backup ts of some task and some region.
-    pub async fn progress_of_task(&self, task_name: &str) -> Result<u64> {
-        let now = Instant::now();
-        defer! {
-            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_progress_get"]).observe(now.saturating_elapsed().as_secs_f64())
-        }
-        let task = self.get_task(task_name).await?;
-        if task.is_none() {
-            return Err(Error::NoSuchTask {
-                task_name: task_name.to_owned(),
-            });
-        }
-
-        let timestamp = self.meta_store.snapshot().await?;
-        let items = timestamp
-            .get(Keys::Key(MetaKey::next_backup_ts_of(
-                task_name,
-                self.store_id,
-            )))
-            .await?;
-        if items.is_empty() {
-            Ok(task.unwrap().info.start_ts)
-        } else {
-            assert_eq!(items.len(), 1);
-            parse_ts_from_bytes(items[0].1.as_slice())
-        }
+                .collect()
+        }))
     }
 
     pub async fn checkpoints_of(&self, task_name: &str) -> Result<Vec<Checkpoint>> {
@@ -607,10 +536,10 @@ impl<Store: MetaStore> MetadataClient<Store> {
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["checkpoints_of"]).observe(now.saturating_elapsed().as_secs_f64())
         }
-        let snap = self.meta_store.snapshot().await?;
-        let checkpoints = snap
-            .get(Keys::Prefix(MetaKey::next_backup_ts(task_name)))
+        let checkpoints = self.meta_store
+            .get_latest(Keys::Prefix(MetaKey::next_backup_ts(task_name)))
             .await?
+            .inner
             .iter()
             .filter_map(|kv| {
                 Checkpoint::from_kv(kv)
@@ -677,6 +606,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
 
     /// remove some task, without the ranges.
     /// only for testing.
+    #[cfg(test)]
     pub async fn remove_task(&self, name: &str) -> Result<()> {
         self.meta_store
             .delete(Keys::Key(MetaKey::task_of(name)))
@@ -725,8 +655,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
             return Ok(c);
         }
         let key = MetaKey::next_bakcup_ts_of_region(task, region);
-        let s = self.meta_store.snapshot().await?;
-        let r = s.get(Keys::Key(key.clone())).await?;
+        let r = self
+            .meta_store
+            .get_latest(Keys::Key(key.clone()))
+            .await?
+            .inner;
         let cp = match r.len() {
             0 => {
                 let global_cp = self.global_checkpoint_of(task).await?;

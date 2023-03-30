@@ -29,9 +29,7 @@ use std::{
 
 use api_version::{dispatch_api_version, KvFormat};
 use backup_stream::{
-    config::BackupStreamConfigManager,
-    metadata::{ConnectionConfig, LazyEtcdClient},
-    observer::BackupStreamObserver,
+    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
@@ -62,7 +60,10 @@ use kvproto::{
     kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
-use pd_client::{PdClient, RpcClient};
+use pd_client::{
+    meta_storage::{Checked, Sourced},
+    PdClient, RpcClient,
+};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -91,7 +92,7 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    import::{ImportSstService, LocalTablets, SstImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::{
         build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
     },
@@ -111,6 +112,7 @@ use tikv::{
     storage::{
         self,
         config_manager::StorageConfigManger,
+        kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
@@ -1025,7 +1027,7 @@ where
         );
 
         // Start backup stream
-        let backup_stream_scheduler = if self.config.backup_stream.enable {
+        let backup_stream_scheduler = if self.config.log_backup.enable {
             // Create backup stream.
             let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
             let backup_stream_scheduler = backup_stream_worker.scheduler();
@@ -1036,21 +1038,19 @@ where
             // Register config manager.
             cfg_controller.register(
                 tikv::config::Module::BackupStream,
-                Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
+                Box::new(BackupStreamConfigManager::new(
+                    backup_stream_worker.scheduler(),
+                    self.config.log_backup.clone(),
+                )),
             );
 
-            let etcd_cli = LazyEtcdClient::new(
-                self.config.pd.endpoints.as_slice(),
-                ConnectionConfig {
-                    keep_alive_interval: self.config.server.grpc_keepalive_time.0,
-                    keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
-                    tls: Arc::clone(&self.security_mgr),
-                },
-            );
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 node.id(),
-                etcd_cli,
-                self.config.backup_stream.clone(),
+                PdStore::new(Checked::new(Sourced::new(
+                    Arc::clone(&self.pd_client),
+                    pd_client::meta_storage::Source::LogBackup,
+                ))),
+                self.config.log_backup.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.clone(),
@@ -1319,10 +1319,8 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::<RocksEngine, RaftRouter<RocksEngine, ER>>::new(
-            backup_scheduler,
-            self.router.clone(),
-        );
+        let backup_service =
+            backup::Service::<RocksEngine, ER>::with_router(backup_scheduler, self.router.clone());
         if servers
             .server
             .register_service(create_backup(backup_service))
@@ -1335,7 +1333,7 @@ where
             servers.node.id(),
             engines.engine.clone(),
             self.region_info_accessor.clone(),
-            engines.engines.kv.clone(),
+            LocalTablets::Singleton(engines.engines.kv.clone()),
             self.config.backup.clone(),
             self.concurrency_manager.clone(),
             self.config.storage.api_version(),

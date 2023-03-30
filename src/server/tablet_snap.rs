@@ -60,6 +60,7 @@ use tikv_util::{
     config::{ReadableSize, Tracker, VersionTrack},
     time::Instant,
     worker::Runnable,
+    DeferContext,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
@@ -81,7 +82,11 @@ fn is_sst(file_name: &str) -> bool {
 
 async fn read_to(f: &mut File, to: &mut Vec<u8>, size: usize, limiter: &Limiter) -> Result<()> {
     // It's likely in page cache already.
-    limiter.consume(size / 2).await;
+    let cost = size / 2;
+    limiter.consume(cost).await;
+    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+        .send
+        .inc_by(cost as u64);
     to.clear();
     to.reserve_exact(size);
     let mut buf: BorrowedBuf<'_> = to.spare_capacity_mut().into();
@@ -310,6 +315,9 @@ async fn accept_one_file(
             ));
         }
         limiter.consume(chunk_len).await;
+        SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+            .recv
+            .inc_by(chunk_len as u64);
         digest.write(&chunk.data);
         f.write_all(&chunk.data)?;
         if exp_size == file_size {
@@ -604,9 +612,6 @@ async fn send_snap_files(
     let mut req = TabletSnapshotRequest::default();
     req.mut_end().set_checksum(checksum);
     sender.send((req, WriteFlags::default())).await?;
-    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
-        .send
-        .inc_by(total_sent);
     info!("sent all snap file finish"; "snap_key" => %key, "region_id" => region_id, "to_peer" => to_peer);
     sender.close().await?;
     Ok(total_sent)
@@ -633,6 +638,10 @@ pub fn send_snap(
         msg.get_to_peer().get_id(),
         msg.get_message().get_snapshot(),
     );
+    let deregister = {
+        let (mgr, key) = (mgr.clone(), key.clone());
+        DeferContext::new(move || mgr.finish_snapshot(key.clone(), timer))
+    };
 
     let cb = ChannelBuilder::new(env)
         .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
@@ -652,6 +661,7 @@ pub fn send_snap(
         let recv_result = receiver.next().await;
         send_timer.observe_duration();
         drop(client);
+        drop(deregister);
         mgr.delete_snapshot(&key);
         match recv_result {
             None => Ok(SendStat {

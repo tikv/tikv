@@ -1,6 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod lazy_etcd;
+cfg_if::cfg_if! {
+    if #[cfg(feature = "metastore-etcd")] {
+        pub mod etcd;
+        pub mod lazy_etcd;
+        pub use etcd::EtcdStore;
+    }
+}
 
 // Note: these mods also used for integration tests,
 //       so we cannot compile them only when `#[cfg(test)]`.
@@ -9,11 +15,11 @@ pub mod lazy_etcd;
 pub mod slash_etc;
 pub use slash_etc::SlashEtcStore;
 
-pub mod etcd;
+pub mod pd;
+
 use std::{cmp::Ordering, future::Future, pin::Pin, time::Duration};
 
 use async_trait::async_trait;
-pub use etcd::EtcdStore;
 use tokio_stream::Stream;
 
 // ==== Generic interface definition ====
@@ -22,6 +28,7 @@ use crate::errors::Result;
 
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+pub use pd::PdStore;
 
 #[derive(Debug, Default)]
 pub struct Transaction {
@@ -108,10 +115,19 @@ pub struct WithRevision<T> {
     pub inner: T,
 }
 
+impl<T> WithRevision<T> {
+    pub fn map<R>(self, f: impl FnOnce(T) -> R) -> WithRevision<R> {
+        WithRevision {
+            revision: self.revision,
+            inner: f(self.inner),
+        }
+    }
+}
+
 /// The key set for getting.
 /// I guess there should be a `&[u8]` in meta key,
 /// but the etcd client requires Into<Vec<u8>> :(
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Keys {
     Prefix(MetaKey),
     Range(MetaKey, MetaKey),
@@ -160,7 +176,7 @@ pub trait Snapshot: Send + Sync + 'static {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum KvEventType {
     Put,
     Delete,
@@ -206,5 +222,14 @@ pub trait MetaStore: Clone + Send + Sync {
     /// Delete some keys.
     async fn delete(&self, keys: Keys) -> Result<()> {
         self.txn(Transaction::default().delete(keys)).await
+    }
+    /// Get the latest version of some keys.
+    async fn get_latest(&self, keys: Keys) -> Result<WithRevision<Vec<KeyValue>>> {
+        let s = self.snapshot().await?;
+        let keys = s.get(keys).await?;
+        Ok(WithRevision {
+            revision: s.revision(),
+            inner: keys,
+        })
     }
 }
