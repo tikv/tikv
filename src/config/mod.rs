@@ -5356,7 +5356,7 @@ mod tests {
             &cache,
             no_limiter.as_ref(),
             provider,
-            for_engine, 
+            for_engine,
         );
         assert_eq!(
             config.target_file_size_base(),
@@ -5376,7 +5376,7 @@ mod tests {
             &cache,
             no_limiter.as_ref(),
             provider,
-            for_engine, 
+            for_engine,
         );
         assert_eq!(
             config.target_file_size_base(),
@@ -5398,7 +5398,7 @@ mod tests {
             &cache,
             no_limiter.as_ref(),
             provider,
-            for_engine,  
+            for_engine,
         );
         assert_eq!(
             config.compaction_guard_max_output_file_size.0,
