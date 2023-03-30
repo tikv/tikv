@@ -1422,7 +1422,7 @@ mod test {
             request_collector.accept(CF_DEFAULT, default_req(&i.to_ne_bytes(), b"egg", i as _));
         }
 
-        let pws = request_collector.pending_writes;
+        let pws = request_collector.drain_pending_writes(true);
         for w in pws {
             let req_size = convert_write_batch_to_request_raftkv1(&fake_ctx(), w).compute_size();
             assert!(req_size < 1024, "{}", req_size);
@@ -1443,11 +1443,15 @@ mod test {
                 request_collector.accept(CF_DEFAULT, default_req(&i.to_ne_bytes(), b"egg", i as _));
             }
         }
-        let pws = request_collector.pending_writes;
+        let pws = request_collector.drain_pending_writes(true);
+        let mut total = 0;
         for w in pws {
-            let req_size = convert_write_batch_to_request_raftkv1(&fake_ctx(), w).compute_size();
+            let req = convert_write_batch_to_request_raftkv1(&fake_ctx(), w);
+            let req_size = req.compute_size();
+            total += req.get_requests().len();
             assert!(req_size < 2048, "{}", req_size);
         }
+        assert_eq!(total, 100);
     }
 
     #[test]
@@ -1469,10 +1473,14 @@ mod test {
                 );
             }
         }
-        let pws = request_collector.pending_writes;
+        let pws = request_collector.drain_pending_writes(true);
+        let mut total = 0;
         for w in pws {
-            let req_size = convert_write_batch_to_request_raftkv1(&fake_ctx(), w).compute_size();
+            let req = convert_write_batch_to_request_raftkv1(&fake_ctx(), w);
+            let req_size = req.compute_size();
+            total += req.get_requests().len();
             assert!(req_size < 1024, "{}", req_size);
         }
+        assert_eq!(total, 100);
     }
 }
