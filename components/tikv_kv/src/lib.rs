@@ -225,7 +225,7 @@ impl PessimisticLockPair for Modify {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct WriteData {
     pub modifies: Vec<Modify>,
     pub extra: TxnExtra,
