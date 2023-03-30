@@ -194,6 +194,40 @@ impl Store {
         }
     }
 
+    #[inline]
+    pub fn on_ask_commit_merge<EK, ER, T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        req: RaftCmdRequest,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+        T: Transport,
+    {
+        let region_id = req.get_header().get_region_id();
+        let mut raft_msg = Box::<RaftMessage>::default();
+        raft_msg.set_region_id(region_id);
+        raft_msg.set_region_epoch(req.get_header().get_region_epoch().clone());
+        raft_msg.set_to_peer(req.get_header().get_peer().clone());
+
+        // It will create the peer if it does not exist
+        self.on_raft_message(ctx, raft_msg);
+
+        if let Err(SendError(PeerMsg::AskCommitMerge(req))) = ctx
+            .router
+            .force_send(region_id, PeerMsg::AskCommitMerge(req))
+        {
+            let commit_merge = req.get_admin_request().get_commit_merge();
+            let source_id = commit_merge.get_source().get_id();
+            let _ = ctx.router.force_send(
+                source_id,
+                PeerMsg::RejectCommitMerge {
+                    index: commit_merge.get_commit(),
+                },
+            );
+        }
+    }
+
     /// When a message's recipient doesn't exist, it will be redirected to
     /// store. Store is responsible for checking if it's neccessary to create
     /// a peer to handle the message.
@@ -256,10 +290,12 @@ impl Store {
             }
             if msg.has_extra_msg() {
                 let extra_msg = msg.get_extra_msg();
+                // Only the direct request has `is_tombstone` set to false. We are certain this
+                // message needs to be forwarded.
                 if extra_msg.get_type() == ExtraMessageType::MsgGcPeerRequest
                     && extra_msg.has_check_gc_peer()
                 {
-                    forward_destroy_source_peer(ctx, &msg);
+                    forward_destroy_to_source_peer(ctx, &msg);
                     return;
                 }
             }
@@ -356,7 +392,7 @@ fn build_peer_destroyed_report(tombstone_msg: &mut RaftMessage) -> Option<RaftMe
 }
 
 /// Forward the destroy request from target peer to merged source peer.
-fn forward_destroy_source_peer<EK, ER, T>(ctx: &mut StoreContext<EK, ER, T>, msg: &RaftMessage)
+fn forward_destroy_to_source_peer<EK, ER, T>(ctx: &mut StoreContext<EK, ER, T>, msg: &RaftMessage)
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -373,6 +409,8 @@ where
     tombstone_msg.set_region_epoch(check_gc_peer.get_check_region_epoch().clone());
     tombstone_msg.set_is_tombstone(true);
     // No need to set epoch as we don't know what it is.
+    // This message will not be handled by `on_gc_peer_request` due to
+    // `is_tombstone` being true.
     tombstone_msg
         .mut_extra_msg()
         .set_type(ExtraMessageType::MsgGcPeerRequest);
@@ -455,7 +493,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        forward_destroy_source_peer(ctx, msg);
+        forward_destroy_to_source_peer(ctx, msg);
     }
 
     /// A peer confirms it's destroyed.

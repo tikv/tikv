@@ -13,11 +13,11 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Iterable, KvEngine, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch,
-    ReadOptions, SyncMutable, TabletRegistry, CF_DEFAULT,
+    Iterable, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, ReadOptions,
+    SyncMutable, TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
-use futures::{compat::Future01CompatExt, executor::block_on, select, FutureExt};
+use futures::{compat::Future01CompatExt, executor::block_on, select, Future, FutureExt};
 use keys::{data_key, validate_data_key, DATA_PREFIX_KEY};
 use kvproto::{
     errorpb::Error as PbError,
@@ -27,7 +27,10 @@ use kvproto::{
         AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RegionDetailResponse, Request,
         Response, StatusCmdType,
     },
-    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+        RegionLocalState, StoreIdent,
+    },
 };
 use pd_client::PdClient;
 use raftstore::{
@@ -46,8 +49,8 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
     is_error_response, new_admin_request, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd,
-    new_peer, new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd, new_request,
-    new_snap_cmd, new_status_request, new_store, new_tikv_config_with_api_ver,
+    new_peer, new_prepare_merge, new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd,
+    new_request, new_snap_cmd, new_status_request, new_store, new_tikv_config_with_api_ver,
     new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
     RawEngine,
 };
@@ -96,71 +99,93 @@ pub trait Simulator {
 
     fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>>;
     fn get_snap_dir(&self, node_id: u64) -> String;
+    fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
 
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
+        let timeout_f = GLOBAL_TIMER_HANDLE
+            .delay(std::time::Instant::now() + timeout)
+            .compat();
+        futures::executor::block_on(async move {
+            futures::select! {
+                res = self.async_read(request).fuse() => res,
+                e = timeout_f.fuse() => {
+                    Err(Error::Timeout(format!("request timeout for {:?}: {:?}", timeout,e)))
+                },
+            }
+        })
+    }
+
+    fn async_read(
+        &mut self,
+        request: RaftCmdRequest,
+    ) -> impl Future<Output = Result<RaftCmdResponse>> + Send {
         let mut req_clone = request.clone();
         req_clone.clear_requests();
         req_clone.mut_requests().push(new_snap_cmd());
-        match self.snapshot(req_clone, timeout) {
-            Ok(snap) => {
-                let requests = request.get_requests();
-                let mut response = RaftCmdResponse::default();
-                let mut responses = Vec::with_capacity(requests.len());
-                for req in requests {
-                    let cmd_type = req.get_cmd_type();
-                    match cmd_type {
-                        CmdType::Get => {
-                            let mut resp = Response::default();
-                            let key = req.get_get().get_key();
-                            let cf = req.get_get().get_cf();
-                            let region = snap.get_region();
+        let snap = self.async_snapshot(req_clone);
+        async move {
+            match snap.await {
+                Ok(snap) => {
+                    let requests = request.get_requests();
+                    let mut response = RaftCmdResponse::default();
+                    let mut responses = Vec::with_capacity(requests.len());
+                    for req in requests {
+                        let cmd_type = req.get_cmd_type();
+                        match cmd_type {
+                            CmdType::Get => {
+                                let mut resp = Response::default();
+                                let key = req.get_get().get_key();
+                                let cf = req.get_get().get_cf();
+                                let region = snap.get_region();
 
-                            if let Err(e) = check_key_in_region(key, region) {
-                                return Ok(cmd_resp::new_error(e));
-                            }
+                                if let Err(e) = check_key_in_region(key, region) {
+                                    return Ok(cmd_resp::new_error(e));
+                                }
 
-                            let res = if cf.is_empty() {
-                                snap.get_value(key).unwrap_or_else(|e| {
-                                    panic!(
-                                        "[region {}] failed to get {} with cf {}: {:?}",
-                                        snap.get_region().get_id(),
-                                        log_wrappers::Value::key(key),
-                                        cf,
-                                        e
-                                    )
-                                })
-                            } else {
-                                snap.get_value_cf(cf, key).unwrap_or_else(|e| {
-                                    panic!(
-                                        "[region {}] failed to get {}: {:?}",
-                                        snap.get_region().get_id(),
-                                        log_wrappers::Value::key(key),
-                                        e
-                                    )
-                                })
-                            };
-                            if let Some(res) = res {
-                                resp.mut_get().set_value(res.to_vec());
+                                let res = if cf.is_empty() {
+                                    snap.get_value(key).unwrap_or_else(|e| {
+                                        panic!(
+                                            "[region {}] failed to get {} with cf {}: {:?}",
+                                            snap.get_region().get_id(),
+                                            log_wrappers::Value::key(key),
+                                            cf,
+                                            e
+                                        )
+                                    })
+                                } else {
+                                    snap.get_value_cf(cf, key).unwrap_or_else(|e| {
+                                        panic!(
+                                            "[region {}] failed to get {}: {:?}",
+                                            snap.get_region().get_id(),
+                                            log_wrappers::Value::key(key),
+                                            e
+                                        )
+                                    })
+                                };
+                                if let Some(res) = res {
+                                    resp.mut_get().set_value(res.to_vec());
+                                }
+                                resp.set_cmd_type(cmd_type);
+                                responses.push(resp);
                             }
-                            resp.set_cmd_type(cmd_type);
-                            responses.push(resp);
+                            _ => unimplemented!(),
                         }
-                        _ => unimplemented!(),
                     }
-                }
-                response.set_responses(responses.into());
+                    response.set_responses(responses.into());
 
-                Ok(response)
+                    Ok(response)
+                }
+                Err(e) => Ok(e),
             }
-            Err(e) => Ok(e),
         }
     }
 
-    fn snapshot(
+    fn async_snapshot(
         &mut self,
         request: RaftCmdRequest,
-        timeout: Duration,
-    ) -> std::result::Result<RegionSnapshot<<RocksEngine as KvEngine>::Snapshot>, RaftCmdResponse>;
+    ) -> impl Future<
+        Output = std::result::Result<RegionSnapshot<engine_rocks::RocksSnapshot>, RaftCmdResponse>,
+    > + Send;
 
     fn async_peer_msg_on_node(&self, node_id: u64, region_id: u64, msg: PeerMsg) -> Result<()>;
 
@@ -252,9 +277,39 @@ pub trait Simulator {
                 // todo: unwrap?
                 res = sub.result().fuse() => Ok(res.unwrap()),
                 _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request timeout for {:?}", timeout))),
-
             }
         })
+    }
+
+    fn async_command_on_node(&self, node_id: u64, mut request: RaftCmdRequest) {
+        let region_id = request.get_header().get_region_id();
+
+        let (msg, _sub) = if request.has_admin_request() {
+            PeerMsg::admin_command(request)
+        } else {
+            let requests = request.get_requests();
+            let mut write_encoder = SimpleWriteEncoder::with_capacity(64);
+            for req in requests {
+                match req.get_cmd_type() {
+                    CmdType::Put => {
+                        let put = req.get_put();
+                        write_encoder.put(put.get_cf(), put.get_key(), put.get_value());
+                    }
+                    CmdType::Delete => {
+                        let delete = req.get_delete();
+                        write_encoder.delete(delete.get_cf(), delete.get_key());
+                    }
+                    CmdType::DeleteRange => {
+                        unimplemented!()
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            PeerMsg::simple_write(Box::new(request.take_header()), write_encoder.encode())
+        };
+
+        self.async_peer_msg_on_node(node_id, region_id, msg)
+            .unwrap();
     }
 }
 
@@ -666,6 +721,10 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {
+        self.sim.wl().send_raft_msg(msg)
+    }
+
     pub fn call_command_on_node(
         &self,
         node_id: u64,
@@ -976,6 +1035,10 @@ impl<T: Simulator> Cluster<T> {
             region_end_key
         };
 
+        if amended_start_key > amended_end_key {
+            return Ok(());
+        }
+
         tablet.scan(cf, amended_start_key, amended_end_key, fill_cache, f)
     }
 
@@ -1003,6 +1066,27 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(status_resp.get_cmd_type(), StatusCmdType::RegionDetail);
         assert!(status_resp.has_region_detail());
         status_resp.take_region_detail()
+    }
+
+    pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
+        self.apply_state(region_id, store_id).take_truncated_state()
+    }
+
+    pub fn wait_log_truncated(&self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let truncated_state = self.truncated_state(region_id, store_id);
+            if truncated_state.get_index() >= index {
+                return;
+            }
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not truncated to {}: {:?} on store {}",
+                    region_id, index, truncated_state, store_id,
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
@@ -1348,6 +1432,73 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
+        let region = block_on(self.pd_client.get_region_by_id(target))
+            .unwrap()
+            .unwrap();
+        let prepare_merge = new_prepare_merge(region);
+        let source_region = block_on(self.pd_client.get_region_by_id(source))
+            .unwrap()
+            .unwrap();
+        new_admin_request(
+            source_region.get_id(),
+            source_region.get_region_epoch(),
+            prepare_merge,
+        )
+    }
+
+    pub fn merge_region(&mut self, source: u64, target: u64, _cb: Callback<RocksSnapshot>) {
+        // FIXME: callback is ignored.
+        let mut req = self.new_prepare_merge(source, target);
+        let leader = self.leader_of_region(source).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        self.sim
+            .rl()
+            .async_command_on_node(leader.get_store_id(), req);
+    }
+
+    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+        self.call_command_on_leader(
+            self.new_prepare_merge(source, target),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+    }
+
+    pub fn must_try_merge(&mut self, source: u64, target: u64) {
+        let resp = self.try_merge(source, target);
+        if is_error_response(&resp) {
+            panic!(
+                "{} failed to try merge to {}, resp {:?}",
+                source, target, resp
+            );
+        }
+    }
+
+    /// Make sure region not exists on that store.
+    pub fn must_region_not_exist(&mut self, region_id: u64, store_id: u64) {
+        let mut try_cnt = 0;
+        loop {
+            let status_cmd = new_region_detail_cmd();
+            let peer = new_peer(store_id, 0);
+            let req = new_status_request(region_id, peer, status_cmd);
+            let resp = self.call_command(req, Duration::from_secs(5)).unwrap();
+            if resp.get_header().has_error() && resp.get_header().get_error().has_region_not_found()
+            {
+                return;
+            }
+
+            if try_cnt > 250 {
+                panic!(
+                    "region {} still exists on store {} after {} tries: {:?}",
+                    region_id, store_id, try_cnt, resp
+                );
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
     }
@@ -1426,6 +1577,10 @@ impl<T: Simulator> Cluster<T> {
         self.get_engine(store_id)
             .raft_local_state(region_id)
             .unwrap()
+    }
+
+    pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> RaftLocalState {
+        self.get_raft_local_state(region_id, store_id).unwrap()
     }
 
     pub fn shutdown(&mut self) {
