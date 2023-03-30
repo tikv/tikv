@@ -408,14 +408,29 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
                 .build(true /* enable_statistics */),
         ));
         for id in 1..self.count + 1 {
-            self.create_engine(Some((self.id(), id as u64)));
+            self.create_engine(Some((self.id(), id as u64)), create_test_engine);
         }
     }
 
     // id indicates cluster id store_id
-    fn create_engine(&mut self, id: Option<(u64, u64)>) {
+    fn create_engine<F>(&mut self, id: Option<(u64, u64)>, f: F)
+    where
+        F: Fn(
+            Option<(u64, u64)>,
+            Option<Arc<IoRateLimiter>>,
+            &Config,
+        ) -> (
+            TabletRegistry<EK>,
+            RaftTestEngine,
+            Option<Arc<DataKeyManager>>,
+            TempDir,
+            LazyWorker<String>,
+            Arc<RocksStatistics>,
+            Option<Arc<RocksStatistics>>,
+        ),
+    {
         let (reg, raft_engine, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            create_test_engine(id, self.io_rate_limiter.clone(), &self.cfg);
+            f(id, self.io_rate_limiter.clone(), &self.cfg);
         self.engines.push((reg, raft_engine));
         self.key_managers.push(key_manager);
         self.paths.push(dir);
@@ -438,7 +453,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         // Try start new nodes.
         for id in self.raft_engines.len()..self.count {
             let id = id as u64 + 1;
-            self.create_engine(Some((self.id(), id)));
+            self.create_engine(Some((self.id(), id)), create_test_engine);
             let (tablet_registry, raft_engine) = self.engines.last().unwrap().clone();
 
             let key_mgr = self.key_managers.last().unwrap().clone();
