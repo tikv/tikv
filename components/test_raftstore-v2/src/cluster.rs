@@ -311,6 +311,20 @@ pub trait Simulator<EK: KvEngine> {
     }
 }
 
+pub type EngineCreator<EK: KvEngine> =
+Fn(
+    Option<(u64, u64)>,
+    Option<Arc<IoRateLimiter>>,
+    &Config,
+) -> (
+    TabletRegistry<EK>,
+    RaftTestEngine,
+    Option<Arc<DataKeyManager>>,
+    TempDir,
+    LazyWorker<String>,
+    Arc<RocksStatistics>,
+    Option<Arc<RocksStatistics>>,
+);
 pub struct Cluster<T: Simulator<EK>, EK: KvEngine> {
     pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,
@@ -332,6 +346,7 @@ pub struct Cluster<T: Simulator<EK>, EK: KvEngine> {
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    pub engine_creator: EngineCreator<EK>,
 }
 
 impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
@@ -341,6 +356,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
         api_version: ApiVersion,
+        engine_creator: EngineCreator<EK>,
     ) -> Cluster<T, EK> {
         Cluster {
             cfg: Config {
@@ -365,6 +381,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             sim,
             pd_client,
+            engine_creator,
         }
     }
 
@@ -413,24 +430,10 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
     }
 
     // id indicates cluster id store_id
-    fn create_engine<F>(&mut self, id: Option<(u64, u64)>, f: F)
-    where
-        F: Fn(
-            Option<(u64, u64)>,
-            Option<Arc<IoRateLimiter>>,
-            &Config,
-        ) -> (
-            TabletRegistry<EK>,
-            RaftTestEngine,
-            Option<Arc<DataKeyManager>>,
-            TempDir,
-            LazyWorker<String>,
-            Arc<RocksStatistics>,
-            Option<Arc<RocksStatistics>>,
-        ),
+    fn create_engine(&mut self, id: Option<(u64, u64)>)
     {
         let (reg, raft_engine, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            f(id, self.io_rate_limiter.clone(), &self.cfg);
+            self.engine_creator(id, self.io_rate_limiter.clone(), &self.cfg);
         self.engines.push((reg, raft_engine));
         self.key_managers.push(key_manager);
         self.paths.push(dir);
