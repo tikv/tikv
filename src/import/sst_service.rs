@@ -2,6 +2,7 @@
 
 use std::{
     collections::{HashMap, VecDeque},
+    convert::identity,
     future::Future,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -11,8 +12,12 @@ use std::{
 use collections::HashSet;
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
+<<<<<<< HEAD
 use futures::{sink::SinkExt, stream::TryStreamExt, TryFutureExt};
 use futures_executor::{ThreadPool, ThreadPoolBuilder};
+=======
+use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
+>>>>>>> 7e6dac46bf (sst_import: make apply asynchronous (#14363))
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -44,10 +49,68 @@ use tikv_util::{
 use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
+<<<<<<< HEAD
 use super::make_rpc_error;
 use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_GAUGE};
 
 const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
+=======
+use super::{
+    make_rpc_error,
+    raft_writer::{self, wait_write},
+};
+use crate::{
+    import::duplicate_detect::DuplicateDetector,
+    server::CONFIG_ROCKSDB_GAUGE,
+    storage::{self, errors::extract_region_error_from_error},
+};
+
+/// The concurrency of sending raft request for every `apply` requests.
+/// This value `16` would mainly influence the speed of applying a huge file:
+/// when we downloading the files into disk, loading all of them into memory may
+/// lead to OOM. This would be able to back-pressure them.
+/// (only log files greater than 16 * 7M = 112M would be throttled by this.)
+/// NOTE: Perhaps add a memory quota for download to disk mode and get rid of
+/// this value?
+const REQUEST_WRITE_CONCURRENCY: usize = 16;
+/// The extra bytes required by the wire encoding.
+/// Generally, a field (and a embedded message) would introduce 2 extra
+/// bytes. In detail, they are:
+/// - 2 bytes for the request type (Tag+Value).
+/// - 2 bytes for every string or bytes field (Tag+Length), they are:
+/// .  + the key field
+/// .  + the value field
+/// .  + the CF field (None for CF_DEFAULT)
+/// - 2 bytes for the embedded message field `PutRequest` (Tag+Length).
+/// In fact, the length field is encoded by varint, which may grow when the
+/// content length is greater than 128, however when the length is greater than
+/// 128, the extra 1~4 bytes can be ignored.
+const WIRE_EXTRA_BYTES: usize = 10;
+/// The interval of running the GC for
+/// [`raft_writer::ThrottledTlsEngineWriter`]. There aren't too many items held
+/// in the writer. So we can run the GC less frequently.
+const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
+
+fn transfer_error(err: storage::Error) -> ImportPbError {
+    let mut e = ImportPbError::default();
+    if let Some(region_error) = extract_region_error_from_error(&err) {
+        e.set_store_error(region_error);
+    }
+    e.set_message(format!("failed to complete raft command: {:?}", err));
+    e
+}
+
+fn convert_join_error(err: tokio::task::JoinError) -> ImportPbError {
+    let mut e = ImportPbError::default();
+    if err.is_cancelled() {
+        e.set_message("task canceled, probably runtime is shutting down.".to_owned());
+    }
+    if err.is_panic() {
+        e.set_message(format!("panicked! {}", err))
+    }
+    e
+}
+>>>>>>> 7e6dac46bf (sst_import: make apply asynchronous (#14363))
 
 /// ImportSstService provides tikv-server with the ability to ingest SST files.
 ///
@@ -62,16 +125,12 @@ where
     engine: E,
     router: Router,
     threads: Arc<Runtime>,
-    // For now, PiTR cannot be executed in the tokio runtime because it is synchronous and may
-    // blocks. (tokio is so strict... it panics if we do insane things like blocking in an async
-    // context.)
-    // We need to execute these code in a context which allows blocking.
-    // FIXME: Make PiTR restore asynchronous. Get rid of this pool.
-    block_threads: Arc<ThreadPool>,
     importer: Arc<SstImporter>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
+
+    writer: raft_writer::ThrottledTlsEngineWriter,
 }
 
 pub struct SnapshotResult<E: KvEngine> {
@@ -247,6 +306,7 @@ where
         importer: Arc<SstImporter>,
     ) -> ImportSstService<E, Router> {
         let props = tikv_util::thread_group::current_properties();
+        let eng = Mutex::new(engine.clone());
         let threads = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(cfg.num_threads)
             .enable_all()
@@ -255,10 +315,16 @@ where
                 tikv_util::thread_group::set_properties(props.clone());
                 tikv_alloc::add_thread_memory_accessor();
                 set_io_type(IoType::Import);
+                tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
             })
-            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
+            .before_stop_wrapper(move || {
+                tikv_alloc::remove_thread_memory_accessor();
+                // SAFETY: we have set the engine at some lines above with type `E`.
+                unsafe { tikv_kv::destroy_tls_engine::<E>() };
+            })
             .build()
             .unwrap();
+<<<<<<< HEAD
         let props = tikv_util::thread_group::current_properties();
         let block_threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
@@ -273,17 +339,38 @@ where
             .unwrap();
         importer.start_switch_mode_check(threads.handle(), engine.clone());
         threads.spawn(Self::tick(importer.clone()));
+=======
+        if let LocalTablets::Singleton(tablet) = &tablets {
+            importer.start_switch_mode_check(threads.handle(), tablet.clone());
+        }
+
+        let writer = raft_writer::ThrottledTlsEngineWriter::default();
+        let gc_handle = writer.clone();
+        threads.spawn(async move {
+            while gc_handle.try_gc() {
+                tokio::time::sleep(WRITER_GC_INTERVAL).await;
+            }
+        });
+
+        let cfg_mgr = ConfigManager::new(cfg);
+        threads.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
+>>>>>>> 7e6dac46bf (sst_import: make apply asynchronous (#14363))
 
         ImportSstService {
             cfg,
             engine,
             threads: Arc::new(threads),
+<<<<<<< HEAD
             block_threads: Arc::new(block_threads),
             router,
+=======
+            engine,
+>>>>>>> 7e6dac46bf (sst_import: make apply asynchronous (#14363))
             importer,
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+            writer,
         }
     }
 
@@ -434,7 +521,11 @@ where
     async fn apply_imp(
         mut req: ApplyRequest,
         importer: Arc<SstImporter>,
+<<<<<<< HEAD
         router: Router,
+=======
+        writer: raft_writer::ThrottledTlsEngineWriter,
+>>>>>>> 7e6dac46bf (sst_import: make apply asynchronous (#14363))
         limiter: Limiter,
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {
@@ -478,13 +569,15 @@ where
 
         let mut tasks = metas.iter().zip(rules.iter()).peekable();
         while let Some((meta, rule)) = tasks.next() {
-            let buff = importer.read_from_kv_file(
-                meta,
-                rule,
-                ext_storage.clone(),
-                req.get_storage_backend(),
-                &limiter,
-            )?;
+            let buff = importer
+                .read_from_kv_file(
+                    meta,
+                    rule,
+                    ext_storage.clone(),
+                    req.get_storage_backend(),
+                    &limiter,
+                )
+                .await?;
             if let Some(mut r) = importer.do_apply_kv_file(
                 meta.get_start_key(),
                 meta.get_end_key(),
@@ -502,6 +595,7 @@ where
             }
 
             let is_last_task = tasks.peek().is_none();
+<<<<<<< HEAD
             for req in collector.drain_raft_reqs(is_last_task) {
                 while inflight_futures.len() >= MAX_INFLIGHT_RAFT_MSGS {
                     handle_raft_write(inflight_futures.pop_front().unwrap()).await?;
@@ -515,13 +609,37 @@ where
                         e.set_message(msg);
                         return Err(e);
                     }
+=======
+            for w in collector.drain_pending_writes(is_last_task) {
+                // Record the start of a task would greatly help us to inspect pending
+                // tasks.
+                APPLIER_EVENT.with_label_values(&["begin_req"]).inc();
+                // SAFETY: we have registered the thread local storage engine into the thread
+                // when creating them.
+                let task = unsafe {
+                    writer
+                        .write::<E>(w, context.clone())
+                        .map_err(transfer_error)
+                };
+                inflight_futures.push_back(
+                    tokio::spawn(task)
+                        .map_err(convert_join_error)
+                        .map(|x| x.and_then(identity)),
+                );
+                if inflight_futures.len() >= REQUEST_WRITE_CONCURRENCY {
+                    inflight_futures.pop_front().unwrap().await?;
+>>>>>>> 7e6dac46bf (sst_import: make apply asynchronous (#14363))
                 }
             }
         }
         assert!(collector.is_empty());
+<<<<<<< HEAD
         for fut in inflight_futures {
             handle_raft_write(fut).await?;
         }
+=======
+        futures::future::try_join_all(inflight_futures).await?;
+>>>>>>> 7e6dac46bf (sst_import: make apply asynchronous (#14363))
 
         Ok(range)
     }
@@ -698,7 +816,6 @@ where
             sst_importer::metrics::IMPORTER_APPLY_DURATION
                 .with_label_values(&[label])
                 .observe(start.saturating_elapsed().as_secs_f64());
-
             crate::send_rpc_response!(Ok(resp), sink, label, timer);
         };
         self.threads.spawn(handle_task);
@@ -710,9 +827,13 @@ where
         let label = "apply";
         let start = Instant::now();
         let importer = self.importer.clone();
+<<<<<<< HEAD
         let router = self.router.clone();
+=======
+>>>>>>> 7e6dac46bf (sst_import: make apply asynchronous (#14363))
         let limiter = self.limiter.clone();
         let max_raft_size = self.raft_entry_max_size.0 as usize;
+        let applier = self.writer.clone();
 
         let handle_task = async move {
             // Records how long the apply task waits to be scheduled.
@@ -722,7 +843,11 @@ where
 
             let mut resp = ApplyResponse::default();
 
+<<<<<<< HEAD
             match Self::apply_imp(req, importer, router, limiter, max_raft_size).await {
+=======
+            match Self::apply_imp(req, importer, applier, limiter, max_raft_size).await {
+>>>>>>> 7e6dac46bf (sst_import: make apply asynchronous (#14363))
                 Ok(Some(r)) => resp.set_range(r),
                 Err(e) => resp.set_error(e),
                 _ => {}
@@ -731,7 +856,7 @@ where
             debug!("finished apply kv file with {:?}", resp);
             crate::send_rpc_response!(Ok(resp), sink, label, start);
         };
-        self.block_threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Downloads the file and performs key-rewrite for later ingesting.
