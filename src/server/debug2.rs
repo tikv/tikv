@@ -437,10 +437,10 @@ fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8]) -> &'a [u8] {
 mod tests {
     use std::path::Path;
 
-    use engine_test::raft::RaftTestEngine;
     use engine_traits::{RaftLogBatch, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use kvproto::{metapb, raft_serverpb::*};
     use raft::prelude::EntryType;
+    use raft_log_engine::RaftLogEngine;
 
     use super::*;
     use crate::{
@@ -452,7 +452,7 @@ mod tests {
     const INITIAL_TABLET_INDEX: u64 = 5;
     const INITIAL_APPLY_INDEX: u64 = 5;
 
-    fn new_debugger(path: &Path) -> DebuggerV2<RaftTestEngine> {
+    fn new_debugger(path: &Path) -> DebuggerV2<RaftLogEngine> {
         let mut cfg = TikvConfig::default();
         cfg.storage.data_dir = path.to_str().unwrap().to_string();
         cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
@@ -466,7 +466,7 @@ mod tests {
         let factory = KvEngineFactoryBuilder::new(env, &cfg, cache).build();
         let reg = TabletRegistry::new(Box::new(factory), path).unwrap();
 
-        let raft_engine = RaftTestEngine::new(cfg.raft_engine.config(), None, None).unwrap();
+        let raft_engine = RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
 
         DebuggerV2::new(reg, raft_engine, ConfigController::default())
     }
@@ -496,7 +496,7 @@ mod tests {
         let factory = KvEngineFactoryBuilder::new(env, &cfg, cache).build();
         let reg = TabletRegistry::new(Box::new(factory), path).unwrap();
 
-        let raft_engine = RaftTestEngine::new(cfg.raft_engine.config(), None, None).unwrap();
+        let raft_engine = RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
         let mut wb = raft_engine.log_batch(5);
         for i in 0..3 {
             let mut region = metapb::Region::default();
